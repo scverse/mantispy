@@ -1,0 +1,25 @@
+# Temp files
+.DS_Store
+*~
+buck-out/
+
+# Compiled files
+.venv/
+uv.lock
+__pycache__/
+.*cache/
+
+# Distribution / packaging
+/dist/
+
+# Tests and coverage
+/data/
+/node_modules/
+/.coverage*
+
+# docs
+/docs/generated/
+/docs/_build/
+
+# planning docs kept out of the repo
+mantispy_release_plan.md
