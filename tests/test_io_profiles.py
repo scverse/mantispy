@@ -6,6 +6,7 @@ from typing import Literal, cast
 import numpy as np
 import pandas as pd
 import pytest
+from _testdata import write_export_to_spreadsheet
 
 import mantispy as mt
 
@@ -145,3 +146,48 @@ def test_refused_inputs(
 
     with pytest.raises(ValueError, match=match):
         mt.io.read_profiles(paths, on_column_mismatch=on_column_mismatch)
+
+
+@pytest.mark.parametrize("prefix", ["", "MyExpt_"], ids=["unprefixed", "prefixed"])
+def test_an_export_to_spreadsheet_directory_joins_its_objects(tmp_path: Path, prefix: str) -> None:
+    directory = write_export_to_spreadsheet(tmp_path / "run", prefix=prefix)
+
+    adata = mt.io.read_profiles(directory)
+
+    assert adata.n_obs == 4
+    assert "Cells_AreaShape_Area" in adata.var_names
+    assert "Nuclei_AreaShape_Area" in adata.var_names
+    assert "Cytoplasm_AreaShape_Area" in adata.var_names
+    assert not [name for name in adata.var_names if "ObjectNumber" in name or name.startswith("Parent_")]
+
+    cells = np.asarray(adata[:, "Cells_AreaShape_Area"].X).ravel()
+    nuclei = np.asarray(adata[:, "Nuclei_AreaShape_Area"].X).ravel()
+    assert cells.tolist() == [100.0, 200.0, 300.0, 400.0]
+    assert nuclei.tolist() == [40.0, 30.0, 20.0, 10.0]
+
+    obs = cast("pd.DataFrame", adata.obs)
+    assert obs["Plate"].tolist() == ["BR00000001"] * 4
+    assert obs[["ImageNumber", "ObjectNumber"]].iloc[0].tolist() == [1, 1]
+    assert adata.uns["image_table"]["ImageQuality_FocusScore_DNA"].tolist() == [0.42]
+    assert not [name for name in adata.var_names if name.startswith("ImageQuality_")]
+
+
+def test_export_directories_stack_like_files(tmp_path: Path) -> None:
+    sites = [write_export_to_spreadsheet(tmp_path / f"site{n}", n_cells=n + 1) for n in (1, 2)]
+
+    adata = mt.io.read_profiles(sites, path_columns={"Metadata_Site": 1})
+
+    assert adata.n_obs == 5
+    assert cast("pd.DataFrame", adata.obs)["Site"].tolist() == ["site1"] * 2 + ["site2"] * 3
+    assert adata.uns["image_table"].shape[0] == 2
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [({"primary_object": "Nope"}, "no Nope.csv"), ({"objects": ["Nope"]}, r"no \['Nope'\]")],
+)
+def test_an_export_directory_that_cannot_be_read(tmp_path: Path, kwargs: dict, match: str) -> None:
+    directory = write_export_to_spreadsheet(tmp_path / "run")
+
+    with pytest.raises(FileNotFoundError, match=match):
+        mt.io.read_profiles(directory, **kwargs)

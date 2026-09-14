@@ -214,3 +214,37 @@ def build_export(tmp_path: Path, *, plate: str = PLATE, failed: str | None = Non
     (folder / "tables").mkdir(parents=True, exist_ok=True)
     adata.write_h5ad(folder / "tables" / f"{PREFIX}.h5ad")
     return folder
+
+
+def write_export_to_spreadsheet(directory: Path, *, prefix: str = "", n_cells: int = 4) -> Path:
+    """One directory as the ExportToSpreadsheet CellProfiler module writes it.
+
+    Cells carry a `Parent_Nuclei` link and Cytoplasm a `Parent_Cells` one, so both join directions are covered.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    numbers = np.arange(1, n_cells + 1)
+    pd.DataFrame(
+        {
+            "ImageNumber": 1,
+            "ObjectNumber": numbers,
+            "AreaShape_Area": numbers * 100.0,
+            "Intensity_MeanIntensity_DNA": numbers / 10,
+            "Parent_Nuclei": numbers[::-1],
+        }
+    ).to_csv(directory / f"{prefix}Cells.csv", index=False)
+    pd.DataFrame(
+        {"ImageNumber": 1, "ObjectNumber": numbers, "AreaShape_Area": numbers * 10.0, "Children_Cells_Count": 1}
+    ).to_csv(directory / f"{prefix}Nuclei.csv", index=False)
+    pd.DataFrame(
+        {"ImageNumber": 1, "ObjectNumber": numbers, "AreaShape_Area": numbers * 5.0, "Parent_Cells": numbers}
+    ).to_csv(directory / f"{prefix}Cytoplasm.csv", index=False)
+    pd.DataFrame(
+        {
+            "ImageNumber": [1],
+            "Metadata_Plate": ["BR00000001"],
+            "Metadata_Well": ["A01"],
+            "ImageQuality_FocusScore_DNA": [0.42],
+            "Count_Cells": [n_cells],
+        }
+    ).to_csv(directory / f"{prefix}Image.csv", index=False)
+    return directory
