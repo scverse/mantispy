@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from mantispy.io._cellprofiler import export_plate_dirs, read_cellprofiler_export
+from mantispy.io._cellprofiler import export_plate_dirs, is_export_plate_dir, read_cellprofiler_export
 from mantispy.io._gallery import read_gallery_plate
 
 if TYPE_CHECKING:
@@ -16,22 +16,23 @@ Layout = Literal["gallery", "cellprofiler"]
 def _detect_layout(path: Path) -> Layout:
     """Tell a Cell Painting Gallery source from a CellProfiler export by what sits under `path`.
 
-    A gallery source holds the accession ``images/`` and ``workspace/`` trees.
-    An export holds one ``tables/`` directory per plate, either directly or one level down.
+    A gallery source is the one with a ``workspace/`` tree, and that is checked first: a source that has been
+    read once also holds SpatialData zarr stores, which carry a ``tables/`` directory like an export does.
+    An export plate folder has its table in ``tables/`` and is looked for at `path` and one level below it.
     """
-    if (path / "tables").is_dir() or export_plate_dirs(path):
-        return "cellprofiler"
-    if (path / "workspace").is_dir() or (path / "images").is_dir():
+    if (path / "workspace").is_dir():
         return "gallery"
+    if is_export_plate_dir(path) or export_plate_dirs(path):
+        return "cellprofiler"
     msg = (
-        f"{path} is neither a Cell Painting Gallery source, which holds 'images/' and 'workspace/', nor a "
-        "CellProfiler export, which holds a 'tables/' directory per plate. Pass layout= to say which it is."
+        f"{path} is neither a Cell Painting Gallery source, which holds a 'workspace/' tree, nor a "
+        "CellProfiler export, which holds a table under 'tables/' per plate. Pass layout= to say which it is."
     )
     raise ValueError(msg)
 
 
 def _export_plate_dir(root: Path, plate: str | None) -> Path:
-    if (root / "tables").is_dir():
+    if is_export_plate_dir(root):
         if plate is not None and root.name != plate:
             msg = f"{root} is the plate folder of {root.name!r}, not of {plate!r}"
             raise ValueError(msg)

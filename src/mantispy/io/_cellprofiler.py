@@ -120,6 +120,14 @@ def read_cellprofiler_export(path: Path | str, *, lazy: bool = True) -> SpatialD
     return SpatialData(images=images, labels=labels, tables=tables)
 
 
+def is_export_plate_dir(path: Path) -> bool:
+    """Whether `path` is one plate folder of an export.
+
+    A SpatialData zarr store also holds a ``tables/`` directory, so the table itself has to be there.
+    """
+    return path.is_dir() and any((path / "tables").glob("*.h5ad"))
+
+
 def export_plate_dirs(root: Path | str) -> list[Path]:
     """The plate folders of one export root, sorted by name.
 
@@ -132,4 +140,4 @@ def export_plate_dirs(root: Path | str) -> list[Path]:
     root = Path(root)
     if not root.is_dir():
         return []
-    return sorted(path for path in root.iterdir() if (path / "tables").is_dir())
+    return sorted(path for path in root.iterdir() if is_export_plate_dir(path))
