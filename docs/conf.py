@@ -135,5 +135,6 @@ katex_prerender = shutil.which(katex.NODEJS_BINARY) is not None
 nitpick_ignore = [
     # If building the documentation fails because of a missing link that is outside your control,
     # you can add an exception to this list.
-    ("py:class", "optional"),  # scverse_misc writes it into the generated Settings.reset signature
+    # scverse-misc 0.1.6 renders `optional` as a type in the Settings.reset signature it generates
+    ("py:class", "optional"),
 ]

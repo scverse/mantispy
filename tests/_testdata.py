@@ -13,7 +13,7 @@ from skimage.segmentation import find_boundaries
 BATCH = "2020_01_01_TEST"
 PLATES = ("BR00000001", "BR00000002")
 PLATE, OVERLAY_PLATE = PLATES
-CHANNELS = ("DNA", "RNA")
+CELL_PAINTING_CHANNELS = ("DNA", "RNA")
 SHAPE = (32, 32)
 PIXEL_SIZE = 1e-6
 
@@ -67,7 +67,7 @@ def write_plate(root: Path, plate: str, *, overlay: bool, located: bool) -> None
     for well, (row, column) in (("A01", (1, 1)), ("B02", (2, 2))):
         for site, (x, y) in enumerate([(-8e-6, 8e-6), (8e-6, -8e-6)], start=1):
             urls = {}
-            for index, channel in enumerate(CHANNELS, start=1):
+            for index, channel in enumerate(CELL_PAINTING_CHANNELS, start=1):
                 name = f"r{row:02d}c{column:02d}f{site:02d}p01-ch{index}.tiff"
                 iio.imwrite(images / name, np.full(SHAPE, index * 100, np.uint16))
                 urls[f"URL_Orig{channel}"] = f"s3://bucket/acc/source_1/images/{BATCH}/images/{folder}/Images/{name}"
@@ -158,7 +158,9 @@ def build_export(tmp_path: Path, *, plate: str = PLATE, failed: str | None = Non
         broken = field == failed
         error = "RuntimeError: the cycle failed" if broken else ""
         if not broken:
-            _write_h5(folder / "images" / f"{field}.h5", np.full((len(CHANNELS), *EXPORT_SHAPE), 0.5, "float32"))
+            _write_h5(
+                folder / "images" / f"{field}.h5", np.full((len(CELL_PAINTING_CHANNELS), *EXPORT_SHAPE), 0.5, "float32")
+            )
         rows.append(
             {
                 "sample_key": field,
@@ -166,7 +168,7 @@ def build_export(tmp_path: Path, *, plate: str = PLATE, failed: str | None = Non
                 "element_type": "image",
                 "element_name": "",
                 "path": f"images/{field}.h5",
-                "shape": "" if broken else f"{len(CHANNELS)},{EXPORT_SHAPE[0]},{EXPORT_SHAPE[1]}",
+                "shape": "" if broken else f"{len(CELL_PAINTING_CHANNELS)},{EXPORT_SHAPE[0]},{EXPORT_SHAPE[1]}",
                 "element_dtype": "" if broken else "float32",
                 "region_key_value": "",
                 "status": "failed" if broken else "ok",
@@ -200,7 +202,9 @@ def build_export(tmp_path: Path, *, plate: str = PLATE, failed: str | None = Non
     adata.obs_names = [f"{str(row['region_key']).rsplit('__', 1)[0]}_{row['label_id']}" for row in obs]
     adata.uns["cellprofiler_mapping"] = {
         "elements": pd.DataFrame(rows, columns=list(ELEMENT_COLUMNS)),
-        "image_channels": pd.DataFrame({"channel": list(CHANNELS), "stack_index": range(len(CHANNELS))}),
+        "image_channels": pd.DataFrame(
+            {"channel": list(CELL_PAINTING_CHANNELS), "stack_index": range(len(CELL_PAINTING_CHANNELS))}
+        ),
     }
     adata.uns["spatialdata_attrs"] = {
         "region": sorted(set(adata.obs["region_key"])),
