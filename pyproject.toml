@@ -34,7 +34,7 @@ dependencies = [
   "pooch>=1.8",
   "scanpy>=1.12",
   "scipy>=1.11",
-  "scverse-misc[datasets]>=0.1.2",
+  "scverse-misc[datasets]>=0.1.6",
   # for debug logging (referenced from the issue template)
   "session-info2",
 ]
@@ -75,7 +75,7 @@ doc = [
   "mantispy[spatial]",
   "myst-nb>=1.1",
   "pandas",
-  "scverse-misc[sphinx]>=0.1.2",
+  "scverse-misc[sphinx]>=0.1.6",
   "sphinx>=8.1",
   "sphinx-autodoc-typehints",
   "sphinx-book-theme>=1",

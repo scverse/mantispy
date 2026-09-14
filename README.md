@@ -28,8 +28,8 @@ pip install 'mantispy[spatial]'
 `mantispy.ds` has a synthetic plate to try things on and a few real ones to download:
 
 ```python
-sdata = mt.ds.blobs()  # synthetic, no download
-adata = mt.ds.lincs()  # two LINCS plates from the Cell Painting Gallery
+sdata = mt.ds.blobs()
+adata = mt.ds.lincs()
 ```
 
 ## Getting started
