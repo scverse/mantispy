@@ -1,19 +1,21 @@
-# Datasets mantispy can download, all of them from the Cell Painting Gallery.
-# https://github.com/broadinstitute/cellpainting-gallery
 base_url: https://cellpainting-gallery.s3.amazonaws.com
 
 datasets:
-  caie:
-    type: profiles
-    doc_header: Caie drug response, compounds annotated with a mechanism of action.
+  bbbc021:
+    type: bbbc021
+    doc_header: BBBC021, 632 wells of compounds annotated with a mechanism of action.
     accession: cpg0010-caie-drugresponse
     shape: [632, 516]
-    read:
-      index_columns: ["Plate", "Well"]
     files:
       - name: ljosa_2013__analysis_batch_stable__ljosa_2013.csv
         s3_key: cpg0010-caie-drugresponse/broad-az/workspace/backend/ljosa_2013/analysis_batch_stable/ljosa_2013.csv
         sha256: d356eec41bce816e19f7a2d2768949d1d7600702af3d8fde08770e30504f646d
+      - name: BBBC021_v1_image.csv
+        url: https://data.broadinstitute.org/bbbc/BBBC021/BBBC021_v1_image.csv
+        sha256: 7fd8a9363970548736a03eba3e14bd2b737c967f0e0fdf436bc91004676f50e7
+      - name: BBBC021_v1_moa.csv
+        url: https://data.broadinstitute.org/bbbc/BBBC021/BBBC021_v1_moa.csv
+        sha256: cddb6c6b72c043fd25f3a41d84624d4817927a1d76fe87dc829674181dd62719
 
   pooled_rare:
     type: profiles
