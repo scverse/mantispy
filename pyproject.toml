@@ -19,6 +19,7 @@ classifiers = [
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Typing :: Typed",
 ]
 dependencies = [
@@ -44,10 +45,10 @@ dev = [
 ]
 test = [
   "coverage>=7.10",
-  "pytest",
-  "pytest-cov",     # For VS Code’s coverage functionality
   # Reference implementations, used only to assert equivalence. Never imported from src/.
   "pycytominer==1.7.1",
+  "pytest",
+  "pytest-cov",         # For VS Code’s coverage functionality
 ]
 doc = [
   "ipykernel",
@@ -142,12 +143,12 @@ files = [ "src", "tests" ]
 addopts = [
   "--import-mode=importlib", # allow using test files with same name
 ]
-strict = true
-testpaths = [ "tests" ]
 markers = [
   "network: requires network access (deselect with -m 'not network')",
   "slow: long-running integration test",
 ]
+strict = true
+testpaths = [ "tests" ]
 
 [tool.coverage]
 run.source = [ "mantispy" ]
