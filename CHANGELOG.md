@@ -14,6 +14,6 @@ and this project adheres to [Semantic Versioning][].
 
 - `mantispy.io.read_profiles`, reading CellProfiler well- and cell-level profiles into `AnnData`
 - `mantispy.io.read_plate`, reading a Cell Painting Gallery source or a CellProfiler `ExportForSpatialData` plate folder into `SpatialData`
-- `mantispy.ds`, with the synthetic `blobs` and `blobs_profiles` and the downloadable `cpjump1` and `lincs`
+- `mantispy.ds`, with the synthetic `blobs` and `blobs_profiles` and twelve Cell Painting Gallery accessions
 - `mantispy.settings`, holding the cache directory the datasets download into
 - Basic tool, preprocessing and plotting functions

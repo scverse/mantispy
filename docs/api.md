@@ -24,8 +24,18 @@
 
     ds.blobs
     ds.blobs_profiles
-    ds.cpjump1
-    ds.lincs
+    ds.agnp
+    ds.amish
+    ds.caie
+    ds.chroma
+    ds.jump_crispr
+    ds.luad
+    ds.miami
+    ds.neuropainting
+    ds.oasis_pilot
+    ds.pki
+    ds.pooled_rare
+    ds.rohban
 ```
 
 ## Preprocessing

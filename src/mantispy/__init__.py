@@ -1,4 +1,4 @@
 from . import ds, io, pl, pp, tl
-from ._settings import MantispySettings, settings
+from ._settings import settings
 
-__all__ = ["MantispySettings", "ds", "io", "pl", "pp", "settings", "tl"]
+__all__ = ["ds", "io", "pl", "pp", "settings", "tl"]

@@ -64,26 +64,15 @@ def read_plate(
 
     Two layouts are read, told apart by what sits under `path` unless `layout` says which it is.
 
-    **Cell Painting Gallery** (``layout="gallery"``, needs `batch` and `plate`).
-    Fields of view become Images, one element per field with a channel per ``URL_Orig*`` or ``FileName_Orig*`` column of ``load_data.csv``.
-    The CellProfiler Nuclei, Cells and Cytoplasm segmentations become Labels carrying CellProfiler's object numbers, reconstructed from the published one-pixel outlines.
-    Cytoplasm is the cell mask minus the nucleus mask, as CellProfiler defines it, and needs no files of its own.
-    The wells become Shapes, and the well- and cell-level measurements the Tables ``wells`` and ``cells``.
+    A **Cell Painting Gallery** source (``layout="gallery"``, needs `batch` and `plate`) gives fields of view as Images, the CellProfiler Nuclei, Cells and Cytoplasm segmentations as Labels, the wells as Shapes, and the ``wells`` and ``cells`` Tables.
+    The gallery publishes one-pixel outlines, not masks, so the Labels are reconstructed and only unambiguous objects survive.
+    Element names carry the plate barcode, so two plates concatenate without renaming.
 
-    Where the source recorded stage coordinates and a pixel size, every element sits in three coordinate systems, ``{plate}_{well}_s{site}``, ``{plate}_{well}`` and ``{plate}``, laying the fields of a well out as a mosaic and the wells as a plate map.
-    Where it did not, each field sits in its own frame and the well shapes are left out with the plate frame they would have lived in.
-    Element names carry the plate barcode either way, so two plates concatenate without renaming.
+    A **CellProfiler export** (``layout="cellprofiler"``) is a folder from the ``ExportForSpatialData`` module and is read from the manifest in its table's ``uns``, so nothing is reconstructed and a folder that was moved still reads.
 
-    The gallery is uneven about what it publishes.
-    A field contributes an image whether or not CellProfiler output exists for it, and labels only when that output includes usable outlines.
-    Cell table rows whose object did not survive the reconstruction are dropped, so every row points at a label that exists.
-
-    **CellProfiler export** (``layout="cellprofiler"``).
-    The ``ExportForSpatialData`` module writes one folder per plate, holding an image stack and a label array per field of view and one table for the plate, with a manifest in the table's ``uns``.
-    Nothing is reconstructed on this path: the module writes real label arrays and a per-cell table already joined across compartments.
-    The reader builds only what the manifest names, resolving each path relative to the folder, so it never walks the folder or parses a file name and a folder that was moved still reads.
-    Arrays the module recorded as failed are skipped with the rows that annotate them.
-    The module does not export stage coordinates yet, so every element of a field sits in one coordinate system named after that field and the fields are not placed relative to each other.
+    Where a source recorded stage coordinates and a pixel size, every element sits in three coordinate systems, ``{plate}_{well}_s{site}``, ``{plate}_{well}`` and ``{plate}``.
+    Where it did not, each field sits in its own frame.
+    See :doc:`the tutorial </tutorials/reading_plates>` for what each layout publishes and what is dropped.
 
     Args:
         path: A Cell Painting Gallery source directory, or an export root or one of its plate folders.

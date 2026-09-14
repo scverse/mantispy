@@ -6,12 +6,7 @@
 [badge-tests]: https://img.shields.io/github/actions/workflow/status/scverse/mantispy/test.yaml?branch=main
 [badge-docs]: https://app.readthedocs.org/projects/mantispy/badge/
 
-Image-based profiling on AnnData.
-
-`mantispy.io` reads image-based profiling data into scverse structures.
-`read_profiles` turns the tables a CellProfiler or pycytominer pipeline writes into an `AnnData` of observations by features.
-`read_plate` turns the images and segmentations behind them into a `SpatialData` object, from a [Cell Painting Gallery](https://github.com/broadinstitute/cellpainting-gallery) source or from a plate folder written by the `ExportForSpatialData` CellProfiler module.
-`mantispy.ds` has a synthetic plate and a few real ones to download.
+mantispy brings Cell Painting and other image-based profiling data into the scverse ecosystem, from reading what a pipeline wrote through quality control, normalization and batch correction to evaluating what survived.
 
 ## Getting started
 
