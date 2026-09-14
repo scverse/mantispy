@@ -8,6 +8,8 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
+from mantispy.io._spreadsheet import is_export_directory, read_export_directory
+
 METADATA_PREFIXES: Sequence[str] = ("Image_Metadata_", "Metadata_", "metadata_", "meta_")
 
 CHANNEL_ALIASES: Mapping[str, str] = {
@@ -60,6 +62,11 @@ def _annotate_features(var: pd.DataFrame, *, aliases: Mapping[str, str] = CHANNE
     var["n_channels"] = np.array([len(c) for c in matched], dtype=np.int8)
 
 
+def _ancestor_name(path: Path, depth: int) -> str:
+    base = path if path.is_dir() else path.parent
+    return base.name if depth == 1 else base.parents[depth - 2].name
+
+
 def _align_columns(
     frames: Sequence[pd.DataFrame], on_column_mismatch: Literal["raise", "intersect"]
 ) -> list[pd.DataFrame]:
@@ -86,11 +93,17 @@ def read_profiles(
     on_column_mismatch: Literal["raise", "intersect"] = "raise",
     path_columns: Mapping[str, int] | None = None,
     annotate_features: bool = True,
+    primary_object: str = "Cells",
+    objects: Sequence[str] | None = None,
 ) -> ad.AnnData:
     """Read CellProfiler profiles into an :class:`~anndata.AnnData` of observations × features.
 
     Numeric columns become the feature matrix, everything else :attr:`~anndata.AnnData.obs`.
     What has differed between Cell Painting datasets is a parameter, not an assumption: missing-value sentinels, metadata prefixes, and columns that disagree across plates.
+
+    A path may be a file or a directory an ``ExportToSpreadsheet`` run wrote.
+    A directory is read per object rather than per well: the rows are the objects of `primary_object`, every other object table is joined onto it through the ``Parent_`` column linking the two, and ``Image.csv`` contributes its ``Metadata_`` columns.
+    Its ``ImageQuality_`` measurements go to ``uns["image_table"]`` so that they never reach the feature matrix.
 
     Args:
         paths: One profile file, or several to stack row-wise.
@@ -101,8 +114,10 @@ def read_profiles(
         sentinels: Values in the feature matrix standing for missing, replaced with ``NaN``.
         index_columns: Metadata columns, named as they are after prefix stripping, joined with ``:`` into the observation index.
         on_column_mismatch: What to do when the files disagree on columns: ``"raise"``, or ``"intersect"`` to keep the shared columns in the column order of the first file.
-        path_columns: Metadata columns taken from the file path, mapping each column name to how many directories up from the file to read the name of.
+        path_columns: Metadata columns taken from the path, mapping each column name to how many directories up to read the name of, counting the directory holding the file, or the directory itself when one was given.
         annotate_features: Annotate :attr:`~anndata.AnnData.var` with the compartment, family and channels each feature name encodes.
+        primary_object: For a directory, the object whose rows become observations.
+        objects: For a directory, which object tables to read, defaulting to every CSV beside ``Image.csv``.
 
     Returns:
         An :class:`~anndata.AnnData` whose ``X`` is ``float32``, whose ``obs`` holds the metadata, and whose ``var`` is indexed by feature name.
@@ -134,7 +149,14 @@ def read_profiles(
         msg = "no profile files given"
         raise ValueError(msg)
 
-    frames = [_read_parquet_or_csv(path) for path in files]
+    frames, quality = [], []
+    for path in files:
+        if is_export_directory(path):
+            frame, measured = read_export_directory(path, primary_object=primary_object, objects=objects)
+            quality.append(measured)
+        else:
+            frame = _read_parquet_or_csv(path)
+        frames.append(frame)
     # a file with no rows is read as all-object and would drag the dtypes of the others with it through concat
     kept = [index for index, frame in enumerate(frames) if len(frame)]
     if kept and len(kept) < len(frames):
@@ -145,7 +167,7 @@ def read_profiles(
     if path_columns:
         lengths = [len(frame) for frame in frames]
         derived = {
-            name: np.repeat([path.parents[depth - 1].name for path in files], lengths)
+            name: np.repeat([_ancestor_name(path, depth) for path in files], lengths)
             for name, depth in path_columns.items()
         }
         df = pd.concat([df, pd.DataFrame(derived, index=df.index)], axis=1)
@@ -182,4 +204,7 @@ def read_profiles(
     var = pd.DataFrame(index=pd.Index(feature_columns, name="feature"))
     if annotate_features:
         _annotate_features(var)
-    return ad.AnnData(X=x, obs=obs, var=var)
+    adata = ad.AnnData(X=x, obs=obs, var=var)
+    if quality:
+        adata.uns["image_table"] = pd.concat(quality)
+    return adata
