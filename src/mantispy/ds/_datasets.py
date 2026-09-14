@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
+import pandas as pd
 from scverse_misc.datasets import fetch, parse_registry, register_loader
 
 from mantispy._settings import settings
@@ -24,15 +26,40 @@ def _load_profiles(entry: DatasetEntry, target: Path, download: DownloadCB, /, *
     return read_profiles(paths, **{**entry.metadata.get("read", {}), **kwargs})
 
 
+@register_loader("bbbc021")
+def _load_bbbc021(entry: DatasetEntry, target: Path, download: DownloadCB, /, **kwargs: Any) -> AnnData:
+    """Read the Ljosa profiles and annotate every well with its compound, dose and mechanism of action."""
+    profiles, images, moa = (download(entry.file(name=file.name)) for file in entry.files)
+    adata = read_profiles(profiles, index_columns=("Plate", "Well"), **kwargs)
+
+    wells = (
+        pd.read_csv(images, usecols=lambda c: c.startswith("Image_Metadata_"))
+        .rename(columns=lambda c: c.removeprefix("Image_Metadata_").removesuffix("_DAPI"))
+        .drop_duplicates(subset=["Plate", "Well"])
+    )
+    annotation = wells.merge(
+        pd.read_csv(moa).rename(columns=str.title).rename(columns={"Moa": "MOA"}),
+        on=["Compound", "Concentration"],
+        how="left",
+    ).set_index(wells["Plate"].astype(str) + ":" + wells["Well"].astype(str))
+
+    for column in ("Compound", "Concentration", "MOA"):
+        adata.obs[column] = annotation[column].reindex(adata.obs_names)
+    adata.obs["Control"] = np.asarray(adata.obs["Compound"] == "DMSO")
+    return adata
+
+
 def _fetch(name: str, cache_dir: str | Path | None, **kwargs: Any) -> AnnData:
     return fetch(_DATASETS[name], cache_dir or settings.cache_dir, base_url=_BASE_URL, **kwargs)
 
 
-def caie(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
-    """Caie drug response, 632 wells of compounds annotated with a mechanism of action.
+def bbbc021(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
+    """BBBC021, 632 wells of compounds annotated with a mechanism of action.
 
-    ``cpg0010-caie-drugresponse``, the whole accession as one file.
-        ``Metadata_Well`` and the plate map carry the compound and its concentration.
+    The reference benchmark for image-based profiling.
+    The profiles are the Ljosa reanalysis published as ``cpg0010-caie-drugresponse``, annotated here with the
+    compound, dose and mechanism of action that the Broad Bioimage Benchmark Collection publishes separately.
+    ``obs`` gains ``Compound``, ``Concentration``, ``MOA`` and ``Control``, the last marking the 330 DMSO wells.
 
     Args:
         cache_dir: Where to keep the download.
@@ -40,12 +67,13 @@ def caie(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
         kwargs: Passed to :func:`mantispy.io.read_profiles`.
 
     Returns:
-        Wells by features, with the perturbation and plate metadata in ``obs``.
+        Wells by features, indexed by plate and well.
 
     References:
-        Ljosa et al. (2013), *Comparison of methods for image-based profiling of cellular morphological states*, Journal of Biomolecular Screening.
+        Caie et al. (2010), *High-content phenotypic profiling of drug response signatures across distinct cancer cells*, Molecular Cancer Therapeutics.
+        Ljosa et al. (2012), *Annotated high-throughput microscopy image sets for validation*, Nature Methods.
     """
-    return _fetch("caie", cache_dir, **kwargs)
+    return _fetch("bbbc021", cache_dir, **kwargs)
 
 
 def pooled_rare(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:

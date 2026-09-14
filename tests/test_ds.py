@@ -59,9 +59,8 @@ def test_blobs_profiles_carry_a_treatment_effect_and_a_plate_effect() -> None:
 def test_every_registered_dataset_has_a_loader_and_hashed_files(name: str) -> None:
     entry = _DATASETS[name]
 
-    assert entry.type == "profiles"
     assert entry.files
-    assert all(file.sha256 and file.s3_key for file in entry.files)
+    assert all(file.sha256 and (file.s3_key or file.url) for file in entry.files)
     assert getattr(mt.ds, name)
 
 
@@ -73,3 +72,6 @@ def test_the_downloads_read_back_at_the_shape_the_registry_claims(name: str, tmp
 
     assert list(adata.shape) == _DATASETS[name].metadata["shape"]
     assert adata.obs_names.is_unique
+    if name == "bbbc021":
+        assert adata.obs["MOA"].notna().all()
+        assert adata.obs["Control"].sum() == 330

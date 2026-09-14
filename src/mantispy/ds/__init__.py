@@ -2,7 +2,7 @@ from mantispy.ds._blobs import blobs, blobs_profiles
 from mantispy.ds._datasets import (
     agnp,
     amish,
-    caie,
+    bbbc021,
     chroma,
     jump_crispr,
     luad,
@@ -17,9 +17,9 @@ from mantispy.ds._datasets import (
 __all__ = [
     "agnp",
     "amish",
+    "bbbc021",
     "blobs",
     "blobs_profiles",
-    "caie",
     "chroma",
     "jump_crispr",
     "luad",
