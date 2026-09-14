@@ -8,12 +8,8 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
-#: Column-name prefixes that mark a profile column as metadata rather than as a feature.
-#: Sources disagree on which of them they use, so all are recognised and the matching one is stripped.
 METADATA_PREFIXES: Sequence[str] = ("Image_Metadata_", "Metadata_", "metadata_", "meta_")
 
-#: Maps a lower-cased feature-name token to the Cell Painting channel it stands for.
-#: Datasets name the same dye differently, so the aliases keep their features comparable.
 CHANNEL_ALIASES: Mapping[str, str] = {
     "dna": "dna",
     "hoechst": "dna",
@@ -29,15 +25,13 @@ CHANNEL_ALIASES: Mapping[str, str] = {
 }
 
 
-def _read_frame(path: Path) -> pd.DataFrame:
-    """Read one profile file, parquet by suffix and CSV otherwise."""
+def _read_parquet_or_csv(path: Path) -> pd.DataFrame:
     if path.suffix == ".parquet":
         return pd.read_parquet(path)
     return pd.read_csv(path)
 
 
-def _strip_prefix(name: str, prefixes: Sequence[str]) -> str:
-    """Strip the longest matching metadata prefix from a column name."""
+def _strip_longest_prefix(name: str, prefixes: Sequence[str]) -> str:
     for prefix in sorted(prefixes, key=len, reverse=True):
         if name.startswith(prefix):
             return name[len(prefix) :]
@@ -70,7 +64,6 @@ def _annotate_features(var: pd.DataFrame, *, aliases: Mapping[str, str] = CHANNE
 def _align_columns(
     frames: Sequence[pd.DataFrame], on_column_mismatch: Literal["raise", "intersect"]
 ) -> list[pd.DataFrame]:
-    """Bring frames onto a common set of columns, in the column order of the first frame."""
     if len({tuple(frame.columns) for frame in frames}) == 1:
         return list(frames)
     if on_column_mismatch == "raise":
@@ -149,7 +142,7 @@ def read_profiles(
         msg = "no profile files given"
         raise ValueError(msg)
 
-    frames = [_read_frame(path) for path in files]
+    frames = [_read_parquet_or_csv(path) for path in files]
     # a file with no rows is read as all-object and would drag the dtypes of the others with it through concat
     kept = [index for index, frame in enumerate(frames) if len(frame)]
     if kept and len(kept) < len(frames):
@@ -181,7 +174,7 @@ def read_profiles(
         values = [sentinels] if isinstance(sentinels, int | float) else list(sentinels)
         x[np.isin(x, np.asarray(values, dtype=x.dtype))] = np.nan
 
-    obs = df[meta_columns].rename(columns=lambda c: _strip_prefix(c, prefixes))
+    obs = df[meta_columns].rename(columns=lambda c: _strip_longest_prefix(c, prefixes))
     for column in obs.select_dtypes(include=["object", "str"]).columns:
         obs[column] = obs[column].astype("string")
     obs.index = obs.index.astype(str)

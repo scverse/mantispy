@@ -26,16 +26,15 @@ The plans are the task breakdown. **Where this file disagrees with a plan, this 
 
 **Next action:** 0.1 Task 2 (`_core/plate.py`).
 
-**Binding decision (2026-09-14):** the IO module was ported from
-[cell-painting-io](https://github.com/scverse/cell-painting-io) (issue #4) ahead of the plan order, and it
-supersedes the `read_cellprofiler` design in Task 9 of the 0.1 plan. `mantispy.io` exposes exactly two public
-functions — `read_profiles` and `read_plate` — and `read_plate` dispatches on the layout it finds, so the
-Cell Painting Gallery reader and the `ExportForSpatialData` reader are one entry point. It does not depend on
-`_core/`; wire it up when `_core` lands. Docstrings are Google style throughout, not numpydoc.
+**Binding decision (2026-09-14):** the IO module was ported from [cell-painting-io](https://github.com/scverse/cell-painting-io) (issue #4) ahead of the plan order.
+It supersedes the `read_cellprofiler` design in Task 9 of the 0.1 plan.
+`mantispy.io` exposes exactly two public functions, `read_profiles` and `read_plate`, and `read_plate` dispatches on the layout it finds, so the Cell Painting Gallery reader and the `ExportForSpatialData` reader are one entry point.
+It does not depend on `_core/`; wire it up when `_core` lands.
+Docstrings are Google style throughout, not numpydoc.
 
-`mantispy.ds` was added at the same time: `blobs`/`blobs_profiles` are synthetic, `cpjump1`/`lincs` download
-from the Cell Painting Gallery through `scverse_misc.datasets` off `src/mantispy/ds/registry.yaml`. Never write
-raw pooch — go through scverse-misc.
+`mantispy.ds` was added at the same time.
+`blobs`/`blobs_profiles` are synthetic, `cpjump1`/`lincs` download from the Cell Painting Gallery through `scverse_misc.datasets` off `src/mantispy/ds/registry.yaml`.
+Never write raw pooch, go through scverse-misc.
 
 ### Task ledger — 0.1
 

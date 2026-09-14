@@ -12,18 +12,15 @@ if TYPE_CHECKING:
     import numpy.typing as npt
     from spatialdata import SpatialData
 
-#: The five Cell Painting channels, in the order the protocol images them.
-CHANNELS = ("DNA", "RNA", "AGP", "ER", "Mito")
-
-#: Pixel size and well pitch of the simulated plate, in metres, matching a 96-well plate imaged at 20x.
-PIXEL_SIZE = 1e-6
-WELL_PITCH = 9.0e-3
+CELL_PAINTING_CHANNELS = ("DNA", "RNA", "AGP", "ER", "Mito")
+PIXEL_SIZE_METRES = 1e-6
+WELL_PITCH_METRES = 9.0e-3
+WELL_RADIUS_METRES = 1.65e-3
 
 _COMPARTMENTS = ("Cells", "Nuclei", "Cytoplasm")
 
 
 def _wells(n_wells: int) -> list[str]:
-    """The first `n_wells` wells of a 96-well plate, read across the rows."""
     return [f"{chr(ord('A') + index // 12)}{index % 12 + 1:02d}" for index in range(n_wells)]
 
 
@@ -55,8 +52,8 @@ def _draw_image(
 ) -> npt.NDArray[np.float32]:
     """Stain the objects: DNA in the nucleus, the other channels in the cytoplasm, over a noisy background."""
     cytoplasm = (cells > 0) & (nuclei == 0)
-    image = rng.normal(0.05, 0.01, (len(CHANNELS), *cells.shape)).astype(np.float32)
-    for index, channel in enumerate(CHANNELS):
+    image = rng.normal(0.05, 0.01, (len(CELL_PAINTING_CHANNELS), *cells.shape)).astype(np.float32)
+    for index, channel in enumerate(CELL_PAINTING_CHANNELS):
         brightness = 0.9 if channel == "DNA" else 0.3
         image[index][nuclei > 0] += brightness
         image[index][cytoplasm] += 0.1 if channel == "DNA" else 0.6 * rng.uniform(0.5, 1.0)
@@ -70,7 +67,7 @@ def _measure(image: npt.NDArray, masks: dict[str, npt.NDArray], numbers: npt.NDA
     columns = {}
     for compartment, mask in masks.items():
         columns[f"{compartment}_AreaShape_Area"] = np.bincount(mask.ravel(), minlength=numbers.max() + 1)[numbers]
-        for index, channel in enumerate(CHANNELS):
+        for index, channel in enumerate(CELL_PAINTING_CHANNELS):
             means = ndi.mean(image[index], labels=mask, index=numbers)
             columns[f"{compartment}_Intensity_MeanIntensity_{channel}"] = np.nan_to_num(means)
     dna, rna = columns["Cells_Intensity_MeanIntensity_DNA"], columns["Cells_Intensity_MeanIntensity_RNA"]
@@ -132,14 +129,14 @@ def blobs(
             image = _draw_image(cells, nuclei, rng)
 
             offset = np.array([(site - 1) // columns, (site - 1) % columns]) * np.array(shape)
-            plate_offset = offset + np.array([row, column]) * (WELL_PITCH / PIXEL_SIZE)
+            plate_offset = offset + np.array([row, column]) * (WELL_PITCH_METRES / PIXEL_SIZE_METRES)
             transformations = {
                 field: Identity(),
                 f"{plate}_{well}": Translation(offset.astype(float), axes=("y", "x")),
                 plate: Translation(plate_offset, axes=("y", "x")),
             }
             images[f"{field}_image"] = Image2DModel.parse(
-                image, dims=("c", "y", "x"), c_coords=list(CHANNELS), transformations=transformations
+                image, dims=("c", "y", "x"), c_coords=list(CELL_PAINTING_CHANNELS), transformations=transformations
             )
             for name, mask in masks.items():
                 labels[f"{field}_{name}"] = Labels2DModel.parse(mask, dims=("y", "x"), transformations=transformations)
@@ -177,11 +174,11 @@ def blobs(
     }
 
     points = [
-        Point(column * WELL_PITCH / PIXEL_SIZE, row * WELL_PITCH / PIXEL_SIZE)
+        Point(column * WELL_PITCH_METRES / PIXEL_SIZE_METRES, row * WELL_PITCH_METRES / PIXEL_SIZE_METRES)
         for row in range(8)
         for column in range(12)
     ]
-    shapes = GeoDataFrame({"radius": 1.65e-3 / PIXEL_SIZE}, geometry=points, index=np.arange(96))
+    shapes = GeoDataFrame({"radius": WELL_RADIUS_METRES / PIXEL_SIZE_METRES}, geometry=points, index=np.arange(96))
     return SpatialData(
         images=images,
         labels=labels,
@@ -191,7 +188,6 @@ def blobs(
 
 
 def _well_table(cells: ad.AnnData, *, var: pd.DataFrame, plate: str, wells: list[str]) -> ad.AnnData:
-    """Aggregate the per-cell features to one profile per well, the way a real pipeline does."""
     from spatialdata.models import TableModel
 
     frame = pd.DataFrame(np.asarray(cells.X), columns=cells.var_names)
@@ -249,7 +245,7 @@ def blobs_profiles(
     while len(names) < n_features:
         compartment = _COMPARTMENTS[index % len(_COMPARTMENTS)]
         family, suffix = families[index // len(_COMPARTMENTS) % len(families)]
-        channel = CHANNELS[index % len(CHANNELS)]
+        channel = CELL_PAINTING_CHANNELS[index % len(CELL_PAINTING_CHANNELS)]
         names.append(f"{compartment}_{family}_{index}{'_' + channel if suffix else ''}")
         index += 1
 

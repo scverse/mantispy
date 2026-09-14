@@ -31,7 +31,6 @@ LABEL_DTYPE = np.uint32
 
 
 def _table_path(plate: Path) -> Path:
-    """The one ``.h5ad`` an export plate folder holds."""
     tables = sorted((plate / "tables").glob("*.h5ad"))
     if not tables:
         msg = f"no table under {plate / 'tables'}; is {plate} a plate folder of an export?"
@@ -43,7 +42,6 @@ def _table_path(plate: Path) -> Path:
 
 
 def _manifest(adata: ad.AnnData, plate: Path) -> tuple[pd.DataFrame, list[str]]:
-    """The element manifest the exporter put in the table's ``uns``, and the channel stacking order."""
     mapping = adata.uns.get(MANIFEST, {})
     if ELEMENTS not in mapping:
         msg = (
@@ -56,7 +54,6 @@ def _manifest(adata: ad.AnnData, plate: Path) -> tuple[pd.DataFrame, list[str]]:
 
 
 def _read_array(path: Path, *, lazy: bool) -> npt.NDArray | da.Array:
-    """Read one HDF5 array, eagerly or through dask."""
     import h5py
 
     if not lazy:
@@ -80,8 +77,8 @@ def read_cellprofiler_export(path: Path | str, *, lazy: bool = True) -> SpatialD
         lazy: Read arrays through dask, one HDF5 dataset per element, instead of loading them into memory.
 
     Returns:
-        The plate, with the Images and Labels the manifest lists as written and a ``cells`` Table annotating
-        them.
+        The plate as a :class:`~spatialdata.SpatialData` object, with the Images and Labels the manifest lists
+        as written and a ``cells`` Table annotating them.
 
     Raises:
         FileNotFoundError: No table under ``path/tables``, or the manifest names an array that is not there.

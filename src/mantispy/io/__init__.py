@@ -12,7 +12,6 @@ _LAZY = {"read_plate": "mantispy.io._plate"}
 
 
 def __getattr__(name: str) -> Any:
-    """Import the spatial readers only when they are first asked for."""
     if name in _LAZY:
         from importlib import import_module
 

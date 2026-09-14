@@ -15,11 +15,9 @@ adata = mt.io.read_profiles("BR00116991_normalized.csv.gz", index_columns=("Plat
 sdata = mt.io.read_plate("cpg0000-jump-pilot/source_4", "BR00116991", batch="2020_11_04_CPJUMP1")
 ```
 
-`mantispy.io` reads image-based profiling data into scverse structures: `read_profiles` turns the tables a
-CellProfiler or pycytominer pipeline writes into an `AnnData` of observations × features, and `read_plate`
-turns the images and segmentations behind them into a `SpatialData` object — from a
-[Cell Painting Gallery](https://github.com/broadinstitute/cellpainting-gallery) source or from a plate folder
-written by the `ExportForSpatialData` CellProfiler module.
+`mantispy.io` reads image-based profiling data into scverse structures.
+`read_profiles` turns the tables a CellProfiler or pycytominer pipeline writes into an `AnnData` of observations by features.
+`read_plate` turns the images and segmentations behind them into a `SpatialData` object, from a [Cell Painting Gallery](https://github.com/broadinstitute/cellpainting-gallery) source or from a plate folder written by the `ExportForSpatialData` CellProfiler module.
 
 Reading images needs the spatial stack, which is an extra:
 

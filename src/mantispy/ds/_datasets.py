@@ -25,7 +25,6 @@ def _load_profiles(entry: DatasetEntry, target: Path, download: DownloadCB, /, *
 
 
 def _fetch(name: str, cache_dir: str | Path | None, **kwargs: Any) -> AnnData:
-    """Download `name` if it is not cached already and read it."""
     return fetch(_DATASETS[name], cache_dir or settings.cache_dir, base_url=_BASE_URL, **kwargs)
 
 

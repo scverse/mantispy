@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, NamedTuple, cast
 
 import anndata as ad
 import numpy as np
@@ -16,15 +16,20 @@ if TYPE_CHECKING:
     from geopandas import GeoDataFrame
     from spatialdata import SpatialData
 
-#: Rows, columns and well pitch in metres of the standard microtitre plate formats.
-PLATE_FORMATS: Mapping[int, tuple[int, int, float]] = {
-    96: (8, 12, 9.0e-3),
-    384: (16, 24, 4.5e-3),
-    1536: (32, 48, 2.25e-3),
+
+class PlateFormat(NamedTuple):
+    n_rows: int
+    n_columns: int
+    well_pitch_metres: float
+
+
+PLATE_FORMATS: Mapping[int, PlateFormat] = {
+    96: PlateFormat(8, 12, 9.0e-3),
+    384: PlateFormat(16, 24, 4.5e-3),
+    1536: PlateFormat(32, 48, 2.25e-3),
 }
 
-#: Nominal radius of a well in metres, used to draw the well shapes.
-WELL_RADIUS: float = 1.65e-3
+WELL_RADIUS_METRES: float = 1.65e-3
 
 _WELL = re.compile(r"([A-Za-z]+)(\d+)")
 
@@ -86,12 +91,14 @@ def _fov_offsets(positions: pd.DataFrame, *, pixel_size: float, plate_format: in
         if plate_format not in PLATE_FORMATS:
             msg = f"unknown plate format {plate_format}; known: {sorted(PLATE_FORMATS)}"
             raise ValueError(msg)
-        n_rows, n_cols, pitch = PLATE_FORMATS[plate_format]
+        layout = PLATE_FORMATS[plate_format]
         grid = np.array([_parse_well(well) for well in positions["well"]])
-        if (grid < 0).any() or (grid >= [n_rows, n_cols]).any():
+        if (grid < 0).any() or (grid >= [layout.n_rows, layout.n_columns]).any():
             msg = f"wells fall outside a {plate_format}-well plate"
             raise ValueError(msg)
-        offsets[["plate_y", "plate_x"]] = offsets[["well_y", "well_x"]].to_numpy() + grid * (pitch / pixel_size)
+        offsets[["plate_y", "plate_x"]] = offsets[["well_y", "well_x"]].to_numpy() + grid * (
+            layout.well_pitch_metres / pixel_size
+        )
     return offsets
 
 
@@ -176,7 +183,6 @@ def _labels_from_outlines(
 
 
 def _load_data(root: Path, batch: str, plate: str) -> pd.DataFrame:
-    """Read the ``load_data.csv`` that names every field of view of a plate."""
     frame = pd.read_csv(root / "workspace/load_data_csv" / batch / plate / "load_data.csv")
     if "Metadata_Well" not in frame.columns:
         msg = "load_data.csv does not name the well of each field"
@@ -185,7 +191,6 @@ def _load_data(root: Path, batch: str, plate: str) -> pd.DataFrame:
 
 
 def _pixel_size(load_data: pd.DataFrame) -> float:
-    """The one pixel size the plate was imaged at."""
     sizes = np.unique(load_data[["Metadata_ImageResolutionX", "Metadata_ImageResolutionY"]].to_numpy().round(12))
     if sizes.size != 1:
         msg = f"the plate mixes pixel sizes: {sizes}"
@@ -224,14 +229,12 @@ def _image_path(root: Path, batch: str, row: pd.Series, prefix: str, channel: st
 
 
 def _read_fov(root: Path, batch: str, row: pd.Series, prefix: str, channels: Sequence[str]) -> npt.NDArray:
-    """Stack the channels of one field of view into a ``(c, y, x)`` array."""
     import imageio.v3 as iio
 
     return np.stack([iio.imread(_image_path(root, batch, row, prefix, channel)) for channel in channels])
 
 
 def _site_dir(root: Path, batch: str, plate: str, well: str, site: int) -> Path:
-    """The analysis directory CellProfiler wrote for one field of view."""
     return root / "workspace/analysis" / batch / plate / "analysis" / f"{plate}-{well}-{site}"
 
 
@@ -271,7 +274,6 @@ def _outline_candidates(image: npt.NDArray) -> list[npt.NDArray[np.bool_]]:
 
 
 def _centre_columns(objects: pd.DataFrame) -> tuple[str, str]:
-    """The pair of columns holding the object centroids, under either of the names CellProfiler uses."""
     for prefix in ("Location_Center", "AreaShape_Center"):
         if {f"{prefix}_X", f"{prefix}_Y"}.issubset(objects.columns):
             return f"{prefix}_X", f"{prefix}_Y"
@@ -280,7 +282,6 @@ def _centre_columns(objects: pd.DataFrame) -> tuple[str, str]:
 
 
 def _site_labels(directory: Path, well: str, site: int) -> dict[str, npt.NDArray[np.uint32]]:
-    """Reconstruct the nuclei, cell and cytoplasm masks of one field, or nothing if they cannot be."""
     import imageio.v3 as iio
 
     masks = {}
@@ -302,7 +303,6 @@ def _site_labels(directory: Path, well: str, site: int) -> dict[str, npt.NDArray
 
 
 def _well_shapes(load_data: pd.DataFrame, *, pixel_size: float, plate_format: int, system: str) -> GeoDataFrame:
-    """One circle per well of the plate, on the nominal grid of the format."""
     from geopandas import GeoDataFrame
     from shapely import Point
     from spatialdata.models import ShapesModel
@@ -312,18 +312,19 @@ def _well_shapes(load_data: pd.DataFrame, *, pixel_size: float, plate_format: in
     y = load_data["Metadata_PositionY"].to_numpy(float) / pixel_size
     height, width = int(load_data["Metadata_ImageSizeY"].iloc[0]), int(load_data["Metadata_ImageSizeX"].iloc[0])
     centre = (y.max() + height / 2, -x.min() + width / 2)
-    n_rows, n_cols, pitch = PLATE_FORMATS[plate_format]
-    rows, columns = np.divmod(np.arange(n_rows * n_cols), n_cols)
+    layout = PLATE_FORMATS[plate_format]
+    n_wells = layout.n_rows * layout.n_columns
+    pitch = layout.well_pitch_metres
+    rows, columns = np.divmod(np.arange(n_wells), layout.n_columns)
     points = [
         Point(centre[1] + c * pitch / pixel_size, centre[0] + r * pitch / pixel_size)
         for r, c in zip(rows, columns, strict=True)
     ]
-    frame = GeoDataFrame({"radius": WELL_RADIUS / pixel_size}, geometry=points, index=np.arange(n_rows * n_cols))
+    frame = GeoDataFrame({"radius": WELL_RADIUS_METRES / pixel_size}, geometry=points, index=np.arange(n_wells))
     return ShapesModel.parse(frame, transformations={system: Identity()})
 
 
 def _well_table(path: Path, *, region: str | None, plate_format: int) -> ad.AnnData:
-    """The well-level profile of the plate, annotating the well shapes where they exist."""
     from spatialdata import sanitize_table
     from spatialdata.models import TableModel
 
@@ -333,13 +334,12 @@ def _well_table(path: Path, *, region: str | None, plate_format: int) -> ad.AnnD
     if region is None:
         return TableModel.parse(adata)
     grid = np.array([_parse_well(well) for well in adata.obs["Well"]])
-    adata.obs["well_index"] = grid[:, 0] * PLATE_FORMATS[plate_format][1] + grid[:, 1]
+    adata.obs["well_index"] = grid[:, 0] * PLATE_FORMATS[plate_format].n_columns + grid[:, 1]
     adata.obs["region"] = pd.Categorical([region] * adata.n_obs)
     return TableModel.parse(adata, region=region, region_key="region", instance_key="well_index")
 
 
 def _cell_table(files: Sequence[Path], masks: Mapping[str, npt.NDArray]) -> ad.AnnData:
-    """The per-cell measurements of the analysed fields, restricted to objects that have a label."""
     from spatialdata import sanitize_table
     from spatialdata.models import TableModel
 

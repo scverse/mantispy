@@ -31,7 +31,6 @@ def _detect_layout(path: Path) -> Layout:
 
 
 def _export_plate_dir(root: Path, plate: str | None) -> Path:
-    """The one plate folder of an export to read."""
     if (root / "tables").is_dir():
         if plate is not None and root.name != plate:
             msg = f"{root} is the plate folder of {root.name!r}, not of {plate!r}"
