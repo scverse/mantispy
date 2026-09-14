@@ -1,0 +1,357 @@
+# Datasets mantispy can download, all of them from the Cell Painting Gallery.
+# https://github.com/broadinstitute/cellpainting-gallery
+base_url: https://cellpainting-gallery.s3.amazonaws.com
+
+datasets:
+  caie:
+    type: profiles
+    doc_header: Caie drug response, compounds annotated with a mechanism of action.
+    accession: cpg0010-caie-drugresponse
+    shape: [632, 516]
+    read:
+      index_columns: ["Plate", "Well"]
+    files:
+      - name: ljosa_2013__analysis_batch_stable__ljosa_2013.csv
+        s3_key: cpg0010-caie-drugresponse/broad-az/workspace/backend/ljosa_2013/analysis_batch_stable/ljosa_2013.csv
+        sha256: d356eec41bce816e19f7a2d2768949d1d7600702af3d8fde08770e30504f646d
+
+  pooled_rare:
+    type: profiles
+    doc_header: Pooled rare variants, one row per barcode rather than per well.
+    accession: cpg0032-pooled-rare
+    shape: [290, 4445]
+    files:
+      - name: 2023_06_05_24W_RD3_poscon__2023_06_05_24W_RD3_poscon_gene_normalized_ALLBATCHES___ALLPLATES___ALLWELLS.csv.gz
+        s3_key: cpg0032-pooled-rare/broad/workspace/profiles/2023_06_05_24W_RD3_poscon/2023_06_05_24W_RD3_poscon_gene_normalized_ALLBATCHES___ALLPLATES___ALLWELLS.csv.gz
+        sha256: 93d1f3dec58676b266fece87d950945cdc31da91e22b8c8101218091198d6eab
+
+  rohban:
+    type: profiles
+    doc_header: TA-ORF, 323 genes overexpressed in U2OS cells.
+    accession: cpg0017-rohban-pathways
+    shape: [1918, 848]
+    read:
+      on_column_mismatch: "intersect"
+      index_columns: ["Plate", "Well"]
+    files:
+      - name: 2013_10_11_SIGMA2_Pilot__41744__41744_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0017-rohban-pathways/broad/workspace/profiles/2013_10_11_SIGMA2_Pilot/41744/41744_normalized_feature_select_batch.csv.gz
+        sha256: b052f64b0ffa4acabc8694d3a412398c2f6a1c82b161ad4810243173b117dca9
+      - name: 2013_10_11_SIGMA2_Pilot__41754__41754_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0017-rohban-pathways/broad/workspace/profiles/2013_10_11_SIGMA2_Pilot/41754/41754_normalized_feature_select_batch.csv.gz
+        sha256: 0db7164426d4ffc1387ad9245ac44a5e5914a2e30b326d11dc6f86f902f3a7f7
+      - name: 2013_10_11_SIGMA2_Pilot__41755__41755_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0017-rohban-pathways/broad/workspace/profiles/2013_10_11_SIGMA2_Pilot/41755/41755_normalized_feature_select_batch.csv.gz
+        sha256: 2f74c3fd3a2c8b5f7dab7578fc1ae19847d5f32e1734be105fa7c03d4ebd34ea
+      - name: 2013_10_11_SIGMA2_Pilot__41756__41756_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0017-rohban-pathways/broad/workspace/profiles/2013_10_11_SIGMA2_Pilot/41756/41756_normalized_feature_select_batch.csv.gz
+        sha256: f7839e4f3de2c1b53c22bf609921ca65d5d36d17d987c6aa26a1220e777a4e8c
+      - name: 2013_10_11_SIGMA2_Pilot__41757__41757_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0017-rohban-pathways/broad/workspace/profiles/2013_10_11_SIGMA2_Pilot/41757/41757_normalized_feature_select_batch.csv.gz
+        sha256: 43b375cdee4996c98229de03dd4c59bbafc430e30f5e334d4ec255c18ddc5ca8
+
+  luad:
+    type: profiles
+    doc_header: LUAD alleles, wild-type against mutant.
+    accession: cpg0031-caicedo-cmvip
+    shape: [6144, 566]
+    read:
+      on_column_mismatch: "intersect"
+      index_columns: ["Plate", "Well"]
+    files:
+      - name: BBBC043__52649__52649_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0031-caicedo-cmvip/broad/workspace/profiles/BBBC043/52649/52649_normalized_feature_select_batch.csv.gz
+        sha256: 6365ed8d626f4d1aad4c866118021cecff2695495fba28b19592b7e2832cdcca
+      - name: BBBC043__52651__52651_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0031-caicedo-cmvip/broad/workspace/profiles/BBBC043/52651/52651_normalized_feature_select_batch.csv.gz
+        sha256: 26b3fbc0f30b76972d49a8bf7bbb5f563bb24012d353acb8d07a8afa5a0e424c
+      - name: BBBC043__52652__52652_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0031-caicedo-cmvip/broad/workspace/profiles/BBBC043/52652/52652_normalized_feature_select_batch.csv.gz
+        sha256: 601125cec9638ffeeb4f9dc7275483f570db90ba9190635f4ac6aaea076b96ce
+      - name: BBBC043__52653__52653_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0031-caicedo-cmvip/broad/workspace/profiles/BBBC043/52653/52653_normalized_feature_select_batch.csv.gz
+        sha256: 0f5a5ed749c4ce4a43242b53a576aae2db0fb4054031b846d3168367e3651f98
+      - name: BBBC043__52654__52654_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0031-caicedo-cmvip/broad/workspace/profiles/BBBC043/52654/52654_normalized_feature_select_batch.csv.gz
+        sha256: d4e2ef2cb19223344c44ffe75ba335d1d96c56ea583ff66d2d8eb84341040649
+      - name: BBBC043__52657__52657_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0031-caicedo-cmvip/broad/workspace/profiles/BBBC043/52657/52657_normalized_feature_select_batch.csv.gz
+        sha256: 52f1b311ccf47c07efda744a90c2d018ad39ba152413e17e88cd502d53dd19b2
+      - name: BBBC043__52662__52662_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0031-caicedo-cmvip/broad/workspace/profiles/BBBC043/52662/52662_normalized_feature_select_batch.csv.gz
+        sha256: c5f1f0b53eb76e75b75e63f245774a5f513aa5846a120edd86e0f2a701892d84
+      - name: BBBC043__52663__52663_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0031-caicedo-cmvip/broad/workspace/profiles/BBBC043/52663/52663_normalized_feature_select_batch.csv.gz
+        sha256: 89ee046325aaeedfeea0476952625bfb666903822fb54e6eac564d669f663fbf
+      - name: BBBC043__52664__52664_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0031-caicedo-cmvip/broad/workspace/profiles/BBBC043/52664/52664_normalized_feature_select_batch.csv.gz
+        sha256: a83233e1f12616a3efba9e8896376fae08790b77d13bbcaa893daed2e0e5dd13
+      - name: BBBC043__52665__52665_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0031-caicedo-cmvip/broad/workspace/profiles/BBBC043/52665/52665_normalized_feature_select_batch.csv.gz
+        sha256: d7ab43555c9ce82bd88133a0d41425af4f8ce562759da8d66632813af5b851ea
+      - name: BBBC043__52666__52666_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0031-caicedo-cmvip/broad/workspace/profiles/BBBC043/52666/52666_normalized_feature_select_batch.csv.gz
+        sha256: ef424024478fe6b3f17434f11157ace779d177b6fb4677bc9fed3f5e3e3d955d
+      - name: BBBC043__52671__52671_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0031-caicedo-cmvip/broad/workspace/profiles/BBBC043/52671/52671_normalized_feature_select_batch.csv.gz
+        sha256: cded964c5bb4c9294c1196afc4cf9fead433f37fe65275972b5a0740ed48bb64
+      - name: BBBC043__52672__52672_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0031-caicedo-cmvip/broad/workspace/profiles/BBBC043/52672/52672_normalized_feature_select_batch.csv.gz
+        sha256: 7c7a7ca9d661c1b69f4225ac2c7bffaadc9219fff840f8bfda6b068dc1fc2b8d
+      - name: BBBC043__52673__52673_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0031-caicedo-cmvip/broad/workspace/profiles/BBBC043/52673/52673_normalized_feature_select_batch.csv.gz
+        sha256: 3adecc015fed4047ab076f11d18cd629c9bb186d3ff03a7f276fe779e64c5183
+      - name: BBBC043__52674__52674_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0031-caicedo-cmvip/broad/workspace/profiles/BBBC043/52674/52674_normalized_feature_select_batch.csv.gz
+        sha256: bbef5e893518a4c64488a45f29582f3fcde3c0902fce065e0ff4742d6ce0b68d
+      - name: BBBC043__52675__52675_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0031-caicedo-cmvip/broad/workspace/profiles/BBBC043/52675/52675_normalized_feature_select_batch.csv.gz
+        sha256: a6390d76323737f5580f38ee031769dc5fe98be5273c8e696553496805fc3110
+
+  agnp:
+    type: profiles
+    doc_header: Silver nanoparticles at four sizes and three doses.
+    accession: cpg0040-garcia-fossa-AgNP
+    shape: [180, 112]
+    read:
+      on_column_mismatch: "intersect"
+      index_columns: ["Plate", "Well"]
+    files:
+      - name: 2022_06_02_LiveCellPainting__220602_145121_Plate_1__220602_145121_Plate_1_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0040-garcia-fossa-AgNP/unicamp/workspace/profiles/2022_06_02_LiveCellPainting/220602_145121_Plate_1/220602_145121_Plate_1_normalized_feature_select_batch.csv.gz
+        sha256: 61f9536f5a47c03b4f7c013c3cb04599639db79a8dae2e1fc10e3a6dd6133b56
+      - name: 2022_06_02_LiveCellPainting__220616_143137_Plate_1__220616_143137_Plate_1_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0040-garcia-fossa-AgNP/unicamp/workspace/profiles/2022_06_02_LiveCellPainting/220616_143137_Plate_1/220616_143137_Plate_1_normalized_feature_select_batch.csv.gz
+        sha256: d93cc1eb6e625b39cbd2a78dc9195eae66edfba4671e73506f4b38aec8017f1e
+      - name: 2022_06_05_CellPainting__220605_085428_Plate_1__220605_085428_Plate_1_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0040-garcia-fossa-AgNP/unicamp/workspace/profiles/2022_06_05_CellPainting/220605_085428_Plate_1/220605_085428_Plate_1_normalized_feature_select_batch.csv.gz
+        sha256: 88065fdae016d07d38672524b8d859616e5c2903e3dbcdfa0a0e00729c25616b
+      - name: 2022_06_05_CellPainting__220617_134428_Plate_1__220617_134428_Plate_1_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0040-garcia-fossa-AgNP/unicamp/workspace/profiles/2022_06_05_CellPainting/220617_134428_Plate_1/220617_134428_Plate_1_normalized_feature_select_batch.csv.gz
+        sha256: 05b7dcc71933ff57668ea5386aecc791ce85054e810702021bce35e3d17dd5c3
+
+  neuropainting:
+    type: profiles
+    doc_header: Astrocytes and neurons imaged at 20x and 63x.
+    accession: cpg0038-tegtmeyer-neuropainting
+    shape: [1691, 204]
+    read:
+      on_column_mismatch: "intersect"
+    files:
+      - name: NCP_ASTROCYTES_1__PE_PP_Plate2__PE_PP_Plate2_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0038-tegtmeyer-neuropainting/broad/workspace/profiles/NCP_ASTROCYTES_1/PE_PP_Plate2/PE_PP_Plate2_normalized_feature_select_batch.csv.gz
+        sha256: 31673fc7914dbad3a39504cf3af790bb4843256ab5274b1d81f4a5ab53abc684
+      - name: NCP_ASTROCYTES_1__Plate1_PE_PP96__Plate1_PE_PP96_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0038-tegtmeyer-neuropainting/broad/workspace/profiles/NCP_ASTROCYTES_1/Plate1_PE_PP96/Plate1_PE_PP96_normalized_feature_select_batch.csv.gz
+        sha256: 5162b59d30e8283009b3090443c88127b4cd4b0a33305f6c0afd28c5d467c65e
+      - name: NCP_NEURONS_2_20x__BR00132672__BR00132672_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0038-tegtmeyer-neuropainting/broad/workspace/profiles/NCP_NEURONS_2_20x/BR00132672/BR00132672_normalized_feature_select_batch.csv.gz
+        sha256: 0165fbbcea1d632a21c4956096458240d8396ac7e32cd59dd9aa5e021ecff5e6
+      - name: NCP_NEURONS_2_20x__BR00132673__BR00132673_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0038-tegtmeyer-neuropainting/broad/workspace/profiles/NCP_NEURONS_2_20x/BR00132673/BR00132673_normalized_feature_select_batch.csv.gz
+        sha256: 3ec6ad3ee138423fd8ca1d751739d7c081b9040f3ef19452d90823da444df5d1
+      - name: NCP_NEURONS_2_63x__BR00132672__BR00132672_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0038-tegtmeyer-neuropainting/broad/workspace/profiles/NCP_NEURONS_2_63x/BR00132672/BR00132672_normalized_feature_select_batch.csv.gz
+        sha256: 895fd4179cd4815e281308e6ee0363546ad3af774117a93e4536ea6e05c075c1
+      - name: NCP_NEURONS_2_63x__BR00132673__BR00132673_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0038-tegtmeyer-neuropainting/broad/workspace/profiles/NCP_NEURONS_2_63x/BR00132673/BR00132673_normalized_feature_select_batch.csv.gz
+        sha256: 41cee30b1c7386b27d157f5c23dc9ee22afcc6e24cbf5395c2f04289dfb858ef
+
+  amish:
+    type: profiles
+    doc_header: An Amish cohort, varying seeding density and timepoint.
+    accession: cpg0047-amish
+    shape: [468, 794]
+    read:
+      on_column_mismatch: "intersect"
+      index_columns: ["Plate", "Well"]
+    files:
+      - name: 20260310_AmishBD_CP_CellDensity__BR00143056__BR00143056_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0047-amish/broad/workspace/profiles/20260310_AmishBD_CP_CellDensity/BR00143056/BR00143056_normalized_feature_select_batch.csv.gz
+        sha256: 132e73063a9af2156888451a82da966de58f8a184788de0f718d0abbc6e1a1ac
+      - name: 20260310_AmishBD_CP_CellDensity__BR00143057__BR00143057_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0047-amish/broad/workspace/profiles/20260310_AmishBD_CP_CellDensity/BR00143057/BR00143057_normalized_feature_select_batch.csv.gz
+        sha256: 605cc08b3c6c580b8ddb2ec9624d65ed2c73892e7374a8593584e46a1fcfcbf2
+      - name: 20260310_AmishBD_CP_CellDensity__BR00143059__BR00143059_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0047-amish/broad/workspace/profiles/20260310_AmishBD_CP_CellDensity/BR00143059/BR00143059_normalized_feature_select_batch.csv.gz
+        sha256: 7db5b6d6a53422e46e3d276ae4d7ee6feec292219a982d6344ca2dbf3f963b66
+
+  chroma:
+    type: profiles
+    doc_header: Alternative dyes across eight channels.
+    accession: cpg0029-chroma-pilot
+    shape: [3455, 71]
+    read:
+      on_column_mismatch: "intersect"
+    files:
+      - name: 2023_05_15_Batch1__BR00122246__BR00122246_normalized_feature_select_negcon_batch.csv.gz
+        s3_key: cpg0029-chroma-pilot/broad/workspace/profiles/2023_05_15_Batch1/BR00122246/BR00122246_normalized_feature_select_negcon_batch.csv.gz
+        sha256: 5e52d57b610b4aa8781d61f99dcdb9bb596234025e054a3de7e8ddb96f09e456
+      - name: 2023_05_15_Batch1__BR00122250__BR00122250_normalized_feature_select_negcon_batch.csv.gz
+        s3_key: cpg0029-chroma-pilot/broad/workspace/profiles/2023_05_15_Batch1/BR00122250/BR00122250_normalized_feature_select_negcon_batch.csv.gz
+        sha256: c87baf97075f387e110b6dff028d3b7e2ad967cec543494806dce008341c384c
+      - name: 2023_05_17_Batch2__BR00122247__BR00122247_normalized_feature_select_negcon_batch.csv.gz
+        s3_key: cpg0029-chroma-pilot/broad/workspace/profiles/2023_05_17_Batch2/BR00122247/BR00122247_normalized_feature_select_negcon_batch.csv.gz
+        sha256: 87233dba57aea261702d228459eefff92c8ad30e74da6c49a4984de614222dac
+      - name: 2023_05_17_Batch3__BR00122248__BR00122248_normalized_feature_select_negcon_batch.csv.gz
+        s3_key: cpg0029-chroma-pilot/broad/workspace/profiles/2023_05_17_Batch3/BR00122248/BR00122248_normalized_feature_select_negcon_batch.csv.gz
+        sha256: a36eca666545466856d5dc02771b22833827167ad4e5ef1026b9034a341552a5
+      - name: 2023_08_02_Batch5__BR00122249__BR00122249_normalized_feature_select_negcon_batch.csv.gz
+        s3_key: cpg0029-chroma-pilot/broad/workspace/profiles/2023_08_02_Batch5/BR00122249/BR00122249_normalized_feature_select_negcon_batch.csv.gz
+        sha256: cadac099f6559ee611b2e8af90c43ad01917887079c8f97d925336ddfbf6f183
+      - name: 2023_08_15_Batch6__BR00122248__BR00122248_normalized_feature_select_negcon_batch.csv.gz
+        s3_key: cpg0029-chroma-pilot/broad/workspace/profiles/2023_08_15_Batch6/BR00122248/BR00122248_normalized_feature_select_negcon_batch.csv.gz
+        sha256: a0697ed429717690594f2c1d7756b57d3d1e6ce9afd7ba09568c6e00a7a260da
+      - name: 2023_08_15_Batch6__BR00122248_24h__BR00122248_24h_normalized_feature_select_negcon_batch.csv.gz
+        s3_key: cpg0029-chroma-pilot/broad/workspace/profiles/2023_08_15_Batch6/BR00122248_24h/BR00122248_24h_normalized_feature_select_negcon_batch.csv.gz
+        sha256: e6e844ff2f47f4a653e91a2f5c1814889a9feb2fef63650ab2320c622eb443a2
+      - name: 2024_02_02_Batch8__BR00122249_24h__BR00122249_24h_normalized_feature_select_negcon_batch.csv.gz
+        s3_key: cpg0029-chroma-pilot/broad/workspace/profiles/2024_02_02_Batch8/BR00122249_24h/BR00122249_24h_normalized_feature_select_negcon_batch.csv.gz
+        sha256: 7c7e6614065275f995c24e43c162588c0e959462be289a83993d4a56b0cb76f0
+      - name: 2024_02_02_Batch8__BR00122249_4h__BR00122249_4h_normalized_feature_select_negcon_batch.csv.gz
+        s3_key: cpg0029-chroma-pilot/broad/workspace/profiles/2024_02_02_Batch8/BR00122249_4h/BR00122249_4h_normalized_feature_select_negcon_batch.csv.gz
+        sha256: f6c4b24b702070b1fb434b4a4482eb1be6041c50060de3b16a3582d2713ab474
+
+  oasis_pilot:
+    type: profiles
+    doc_header: OASIS pilot, U2OS and HepaRG.
+    accession: cpg0033-oasis-pilot
+    shape: [4604, 140]
+    read:
+      on_column_mismatch: "intersect"
+      index_columns: ["Plate", "Well"]
+    files:
+      - name: 2024_03_29_OASIS_U2OS_AssayDev__BR00142737__BR00142737_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0033-oasis-pilot/broad/workspace/profiles/2024_03_29_OASIS_U2OS_AssayDev/BR00142737/BR00142737_normalized_feature_select_batch.csv.gz
+        sha256: ca1897c1e8a48670565ac03615c29b6e15d7d119f71226409f466d938e1fa711
+      - name: 2024_03_29_OASIS_U2OS_AssayDev__BR00142738__BR00142738_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0033-oasis-pilot/broad/workspace/profiles/2024_03_29_OASIS_U2OS_AssayDev/BR00142738/BR00142738_normalized_feature_select_batch.csv.gz
+        sha256: 074ad346a69d72f5ff29c79ea073f3daffcb24a8eba95a1ba8a07ce7a816acb3
+      - name: 2024_11_15_OASIS_HepaRG_AD__BR00145690__BR00145690_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0033-oasis-pilot/broad/workspace/profiles/2024_11_15_OASIS_HepaRG_AD/BR00145690/BR00145690_normalized_feature_select_batch.csv.gz
+        sha256: 2f86b2276cda8108398a48fc1b545d548a00c25ecfcce348b3ab09cad0a46715
+      - name: 2024_11_15_OASIS_HepaRG_AD__BR00145691__BR00145691_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0033-oasis-pilot/broad/workspace/profiles/2024_11_15_OASIS_HepaRG_AD/BR00145691/BR00145691_normalized_feature_select_batch.csv.gz
+        sha256: 31e0b934c05a0a4802c6b8bb3d58678da932107b12012537214195c1f08ab61e
+      - name: 2024_11_15_OASIS_HepaRG_AD__BR00145692__BR00145692_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0033-oasis-pilot/broad/workspace/profiles/2024_11_15_OASIS_HepaRG_AD/BR00145692/BR00145692_normalized_feature_select_batch.csv.gz
+        sha256: 5722527527946461bcc87519874f29ce3b2b859929c50fc703928a5944d630f4
+      - name: 2024_11_15_OASIS_HepaRG_AD__BR00145693__BR00145693_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0033-oasis-pilot/broad/workspace/profiles/2024_11_15_OASIS_HepaRG_AD/BR00145693/BR00145693_normalized_feature_select_batch.csv.gz
+        sha256: bef668aadf3afffad1e5afcfa4025215d712e05ba8945e2a9d6e37f1f09ae0be
+      - name: 2024_11_15_OASIS_HepaRG_AD__BR00145694__BR00145694_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0033-oasis-pilot/broad/workspace/profiles/2024_11_15_OASIS_HepaRG_AD/BR00145694/BR00145694_normalized_feature_select_batch.csv.gz
+        sha256: 97b74130104dd2ed039e59069c632d34c5aa697b465c143a3e79a90ad6ec7140
+      - name: 2024_11_15_OASIS_HepaRG_AD__BR00145695__BR00145695_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0033-oasis-pilot/broad/workspace/profiles/2024_11_15_OASIS_HepaRG_AD/BR00145695/BR00145695_normalized_feature_select_batch.csv.gz
+        sha256: 341532a2a51f454b4d6a94fcf67eb3389630ab37845376794753b1309a5b70e3
+      - name: 2024_11_15_OASIS_U2OS_AD__BR00144577__BR00144577_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0033-oasis-pilot/broad/workspace/profiles/2024_11_15_OASIS_U2OS_AD/BR00144577/BR00144577_normalized_feature_select_batch.csv.gz
+        sha256: 1411e2297f2c64c52918ff3b7f3ab1c26549e94fac7812a82a4c177068c07928
+      - name: 2024_11_15_OASIS_U2OS_AD__BR00144582__BR00144582_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0033-oasis-pilot/broad/workspace/profiles/2024_11_15_OASIS_U2OS_AD/BR00144582/BR00144582_normalized_feature_select_batch.csv.gz
+        sha256: 99cf6ac92d6f0fd24007baa933166f4a60979a9e4d91b77c558576389b477b57
+      - name: 2025_07_29_OASIS_HepaRG_Ptx_AD2__BR00147878__BR00147878_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0033-oasis-pilot/broad/workspace/profiles/2025_07_29_OASIS_HepaRG_Ptx_AD2/BR00147878/BR00147878_normalized_feature_select_batch.csv.gz
+        sha256: 72734506046c989c0a9ec5253dfaa7c1b555efe7b80312c04ddaf2830087f2f1
+      - name: 2025_07_29_OASIS_HepaRG_Ptx_AD2__BR00147879__BR00147879_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0033-oasis-pilot/broad/workspace/profiles/2025_07_29_OASIS_HepaRG_Ptx_AD2/BR00147879/BR00147879_normalized_feature_select_batch.csv.gz
+        sha256: d0a8962619c21f27ddf18cc14631e7abccc021936c7842aca77f82b4ef1d9cd9
+
+  miami:
+    type: profiles
+    doc_header: MIAMI, compounds in U2OS cells.
+    accession: cpg0006-miami
+    shape: [2775, 100]
+    read:
+      on_column_mismatch: "intersect"
+      index_columns: ["Plate", "Well"]
+    files:
+      - name: 2021_08_23_Batch12__BR00126102__BR00126102_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0006-miami/broad/workspace/profiles/2021_08_23_Batch12/BR00126102/BR00126102_normalized_feature_select_batch.csv.gz
+        sha256: 2e3013ebc2297b031d5600bdea8cc4a4b15a7027aee1f7d6eec4dc0deb322fc1
+      - name: 2021_08_23_Batch12__BR00126103__BR00126103_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0006-miami/broad/workspace/profiles/2021_08_23_Batch12/BR00126103/BR00126103_normalized_feature_select_batch.csv.gz
+        sha256: 0ad9d2899375cb2bc587ad5af129ebbaea8b81c6da5c1af31c3302c98b630bba
+      - name: 2021_08_23_Batch12__BR00126104__BR00126104_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0006-miami/broad/workspace/profiles/2021_08_23_Batch12/BR00126104/BR00126104_normalized_feature_select_batch.csv.gz
+        sha256: 529d5c5e1c4bbd81f4c22ef214b79baefa6442d21a99976f11f1adb23e69f70c
+      - name: 2021_08_23_Batch12__BR00126105__BR00126105_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0006-miami/broad/workspace/profiles/2021_08_23_Batch12/BR00126105/BR00126105_normalized_feature_select_batch.csv.gz
+        sha256: 6eea880cf34d6832f2b6271afec5eec35da2b1234dec4d58bd771d4866134b35
+      - name: 2021_08_23_Batch12__BR00126106__BR00126106_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0006-miami/broad/workspace/profiles/2021_08_23_Batch12/BR00126106/BR00126106_normalized_feature_select_batch.csv.gz
+        sha256: e0f980259eeac5fc0dca7d4fcb02a7f1713d9f0d12d6e55862c5a7670599e644
+      - name: 2021_08_23_Batch12__BR00126113__BR00126113_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0006-miami/broad/workspace/profiles/2021_08_23_Batch12/BR00126113/BR00126113_normalized_feature_select_batch.csv.gz
+        sha256: 223924561bb29360ad010e1a74d2cfd839ddd3315c230792becc5738b98d57ef
+      - name: 2021_08_23_Batch12__BR00126707__BR00126707_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0006-miami/broad/workspace/profiles/2021_08_23_Batch12/BR00126707/BR00126707_normalized_feature_select_batch.csv.gz
+        sha256: 0fdb3fb8c85147c16c9c5a91439ee2379516fc8b5da40fae3d91d6608a895555
+      - name: 2021_08_30_Batch13__BR00123538__BR00123538_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0006-miami/broad/workspace/profiles/2021_08_30_Batch13/BR00123538/BR00123538_normalized_feature_select_batch.csv.gz
+        sha256: beac9ff1531058328a30f2681e7b7439c82fbc494480caf9a92b03117dbb8a0c
+      - name: 2021_08_30_Batch13__BR00127149__BR00127149_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0006-miami/broad/workspace/profiles/2021_08_30_Batch13/BR00127149/BR00127149_normalized_feature_select_batch.csv.gz
+        sha256: af68b89fa209f4bcd5e8566f21ec63df4e22daefba45b4f06f198bbecbd637c6
+      - name: 2021_08_30_Batch13__BR00127150__BR00127150_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0006-miami/broad/workspace/profiles/2021_08_30_Batch13/BR00127150/BR00127150_normalized_feature_select_batch.csv.gz
+        sha256: eb0fa7a4600d8f7ef7ee64615fb843913da0cf5eeb4df8673ba4e358893b1d62
+      - name: 2021_08_30_Batch13__BR00127151__BR00127151_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0006-miami/broad/workspace/profiles/2021_08_30_Batch13/BR00127151/BR00127151_normalized_feature_select_batch.csv.gz
+        sha256: bb82f4032639a420a43e18f1f7351264a27a27a9294abb7d088666236b3b6af0
+      - name: 2021_08_30_Batch13__BR00127152__BR00127152_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0006-miami/broad/workspace/profiles/2021_08_30_Batch13/BR00127152/BR00127152_normalized_feature_select_batch.csv.gz
+        sha256: 476a234f156519606b227e33ed26bc83ab8a4227cf9cba0407ae94f6a23f0795
+      - name: 2021_08_30_Batch13__BR00127153__BR00127153_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0006-miami/broad/workspace/profiles/2021_08_30_Batch13/BR00127153/BR00127153_normalized_feature_select_batch.csv.gz
+        sha256: fde293b9b07abe2020c6d070ed85e54164806f366616f34ad45e4971224c253e
+      - name: 2021_08_30_Batch13__BR00127154__BR00127154_normalized_feature_select_batch.csv.gz
+        s3_key: cpg0006-miami/broad/workspace/profiles/2021_08_30_Batch13/BR00127154/BR00127154_normalized_feature_select_batch.csv.gz
+        sha256: d2f1bbcd914825e82cea73d254b2bde2a2da11239d6b358e3a2b4bfcf0613143
+
+  pki:
+    type: profiles
+    doc_header: Kinase inhibitors with a dose and a mechanism of action.
+    accession: cpg0008-pki
+    shape: [3072, 1061]
+    read:
+      on_column_mismatch: "intersect"
+      index_columns: ["Plate", "Well"]
+    files:
+      - name: 2021_04_07_Batch1__BR00122970__BR00122970_normalized_feature_select_negcon_batch.csv.gz
+        s3_key: cpg0008-pki/broad/workspace/profiles/2021_04_07_Batch1/BR00122970/BR00122970_normalized_feature_select_negcon_batch.csv.gz
+        sha256: 94980bb92955b0d11080d4ab308b0d4618967f700507a04c535910a8aabf2d4b
+      - name: 2021_04_07_Batch1__BR00122971__BR00122971_normalized_feature_select_negcon_batch.csv.gz
+        s3_key: cpg0008-pki/broad/workspace/profiles/2021_04_07_Batch1/BR00122971/BR00122971_normalized_feature_select_negcon_batch.csv.gz
+        sha256: 0b46b36b346e52b3e9dd982bc6e53d958fbf3f145475a9703c9523baa4eb5f38
+      - name: 2021_04_07_Batch1__BR00122972__BR00122972_normalized_feature_select_negcon_batch.csv.gz
+        s3_key: cpg0008-pki/broad/workspace/profiles/2021_04_07_Batch1/BR00122972/BR00122972_normalized_feature_select_negcon_batch.csv.gz
+        sha256: 628f7defca4bf16ac0fbd08d7829ef19b0297585fe0cca93c602295ee4106828
+      - name: 2021_04_07_Batch1__BR00122973__BR00122973_normalized_feature_select_negcon_batch.csv.gz
+        s3_key: cpg0008-pki/broad/workspace/profiles/2021_04_07_Batch1/BR00122973/BR00122973_normalized_feature_select_negcon_batch.csv.gz
+        sha256: f820d0f3f0129fc0f52dc14dd46462eae765220e6067eb55a1d5df0e5c78c9d5
+      - name: 2021_04_07_Batch1__BR00122974__BR00122974_normalized_feature_select_negcon_batch.csv.gz
+        s3_key: cpg0008-pki/broad/workspace/profiles/2021_04_07_Batch1/BR00122974/BR00122974_normalized_feature_select_negcon_batch.csv.gz
+        sha256: 9de60012c29104783b04b157afa2a92dbd602c3cc63128c8b2330351496a4a90
+      - name: 2021_04_07_Batch1__BR00122975__BR00122975_normalized_feature_select_negcon_batch.csv.gz
+        s3_key: cpg0008-pki/broad/workspace/profiles/2021_04_07_Batch1/BR00122975/BR00122975_normalized_feature_select_negcon_batch.csv.gz
+        sha256: c16f741770881ef874cf78e66f56ae36649b97f9b317b050a6317dd9ae35a077
+      - name: 2021_04_07_Batch1__BR00122977__BR00122977_normalized_feature_select_negcon_batch.csv.gz
+        s3_key: cpg0008-pki/broad/workspace/profiles/2021_04_07_Batch1/BR00122977/BR00122977_normalized_feature_select_negcon_batch.csv.gz
+        sha256: 39ae32573d2789e2ac6f6194e521b0039cf2600223e51647fcfd9ddac3c2ff5b
+      - name: 2021_04_07_Batch1__BR00122978__BR00122978_normalized_feature_select_negcon_batch.csv.gz
+        s3_key: cpg0008-pki/broad/workspace/profiles/2021_04_07_Batch1/BR00122978/BR00122978_normalized_feature_select_negcon_batch.csv.gz
+        sha256: 915fe5bb2e3e60e14a4dc9216391eddb9e0dcb95a035730c3ad47d6916da2169
+
+  jump_crispr:
+    type: profiles
+    doc_header: The assembled JUMP CRISPR arm, 51,185 wells of knockouts.
+    accession: cpg0016-jump-assembled
+    shape: [51185, 599]
+    read:
+      index_columns: ["Plate", "Well"]
+    files:
+      - name: profiles_wellpos_cc_var_mad_outlier_featselect.parquet
+        s3_key: cpg0016-jump-assembled/source_all/workspace/profiles_assembled/CRISPR/v1.0a/profiles_wellpos_cc_var_mad_outlier_featselect.parquet
+        sha256: 2f52c600db35d9cc23645d6d94685ceb0df986c23d48c81499bf5f76df7b43b2

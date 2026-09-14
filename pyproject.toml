@@ -10,9 +10,11 @@ readme = "README.md"
 license = { file = "LICENSE" }
 maintainers = [
   { name = "Tim Treis", email = "tim.treis@outlook.de" },
+  { name = "Lukas Heumos", email = "lukas.heumos@scverse.org" },
 ]
 authors = [
   { name = "Tim Treis" },
+  { name = "Lukas Heumos" },
 ]
 requires-python = ">=3.12"
 classifiers = [
@@ -28,11 +30,24 @@ dependencies = [
   "numba>=0.60",
   "numpy>=1.26",
   "pandas>=2.1",
+  "platformdirs>=4",
   "pooch>=1.8",
+  "pyarrow>=16",
   "scanpy>=1.12",
   "scipy>=1.11",
+  "scverse-misc[datasets]>=0.1.6",
   # for debug logging (referenced from the issue template)
   "session-info2",
+]
+optional-dependencies.spatial = [
+  "dask>=2024.4",
+  "geopandas>=1",
+  "h5py>=3.10",
+  "imagecodecs>=2024.1",
+  "imageio>=2.34",
+  "scikit-image>=0.24",
+  "shapely>=2",
+  "spatialdata>=0.3",
 ]
 # https://docs.pypi.org/project_metadata/#project-urls
 urls.Documentation = "https://mantispy.readthedocs.io/"
@@ -45,6 +60,7 @@ dev = [
 ]
 test = [
   "coverage>=7.10",
+  "mantispy[spatial]",
   # Reference implementations, used only to assert equivalence. Never imported from src/.
   "pycytominer==1.7.1",
   "pytest",
@@ -53,9 +69,10 @@ test = [
 doc = [
   "ipykernel",
   "ipython",
+  "mantispy[spatial]",
   "myst-nb>=1.1",
   "pandas",
-  "scverse-misc[sphinx]>=0.1.2",
+  "scverse-misc[sphinx]>=0.1.6",
   "sphinx>=8.1",
   "sphinx-autodoc-typehints",
   "sphinx-book-theme>=1",
@@ -87,9 +104,9 @@ envs.hatch-check-types.scripts.check = [ "mypy" ]
 envs.hatch-check-types.dependency-groups = [ "typecheck", "test" ]
 envs.hatch-test.matrix = [
   # Test the lowest and highest supported Python versions with normal deps
-  { deps = [ "stable" ], python = [ "3.12", "3.13" ] },
+  { deps = [ "stable" ], python = [ "3.12", "3.14" ] },
   # Test the newest supported Python version also with pre-release deps
-  { deps = [ "pre" ], python = [ "3.13" ] },
+  { deps = [ "pre" ], python = [ "3.14" ] },
 ]
 # If the matrix variable `deps` is set to "pre",
 # set the environment variable `UV_PRERELEASE` to "allow".
@@ -134,21 +151,36 @@ lint.ignore = [
 lint.per-file-ignores."*/__init__.py" = [ "F401" ]
 lint.per-file-ignores."docs/*" = [ "I" ]
 lint.per-file-ignores."tests/*" = [ "D" ]
-lint.pydocstyle.convention = "numpy"
+lint.pydocstyle.convention = "google"
 
 [tool.mypy]
 files = [ "src", "tests" ]
 
-[tool.pytest]
-addopts = [
-  "--import-mode=importlib", # allow using test files with same name
+[[tool.mypy.overrides]]
+module = [
+  "dask.*",
+  "geopandas.*",
+  "h5py.*",
+  "imageio.*",
+  "scipy.*",
+  "shapely.*",
+  "skimage.*",
+  "spatialdata.*",
 ]
-markers = [
+ignore_missing_imports = true
+
+[tool.pytest]
+ini_options.testpaths = [ "tests" ]
+ini_options.pythonpath = [ "tests" ]
+ini_options.addopts = [
+  "--import-mode=importlib", # allow using test files with same name
+  "-m not network",
+]
+ini_options.markers = [
   "network: requires network access (deselect with -m 'not network')",
   "slow: long-running integration test",
 ]
-strict = true
-testpaths = [ "tests" ]
+ini_options.strict = true
 
 [tool.coverage]
 run.source = [ "mantispy" ]

@@ -6,7 +6,7 @@
 [badge-tests]: https://img.shields.io/github/actions/workflow/status/scverse/mantispy/test.yaml?branch=main
 [badge-docs]: https://app.readthedocs.org/projects/mantispy/badge/
 
-Image-based profiling on AnnData
+mantispy brings Cell Painting and other image-based profiling data into the scverse ecosystem, from reading what a pipeline wrote through quality control, normalization and batch correction to evaluating what survived.
 
 ## Getting started
 
@@ -43,6 +43,12 @@ Choose from the options below to install mantispy:
    ```bash
    pip install git+https://github.com/scverse/mantispy.git  # (or `uv add`)
    ```
+
+Reading images needs the spatial stack, which is an extra:
+
+```bash
+pip install 'mantispy[spatial]'
+```
 
 ## Release notes
 

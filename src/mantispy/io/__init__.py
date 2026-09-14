@@ -1,0 +1,19 @@
+from typing import TYPE_CHECKING, Any
+
+from mantispy.io._profiles import CHANNEL_ALIASES, METADATA_PREFIXES, read_profiles
+
+if TYPE_CHECKING:
+    from mantispy.io._plate import read_plate
+
+__all__ = ["CHANNEL_ALIASES", "METADATA_PREFIXES", "read_plate", "read_profiles"]
+
+_LAZY = {"read_plate": "mantispy.io._plate"}
+
+
+def __getattr__(name: str) -> Any:
+    if name in _LAZY:
+        from importlib import import_module
+
+        return getattr(import_module(_LAZY[name]), name)
+    msg = f"module {__name__!r} has no attribute {name!r}"
+    raise AttributeError(msg)

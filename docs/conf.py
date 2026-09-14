@@ -69,8 +69,8 @@ extensions = [
 autosummary_generate = True
 autodoc_member_order = "groupwise"
 default_role = "literal"
-napoleon_google_docstring = False
-napoleon_numpy_docstring = True
+napoleon_google_docstring = True
+napoleon_numpy_docstring = False
 napoleon_include_init_with_doc = False
 napoleon_use_rtype = True  # having a separate entry generally helps readability
 napoleon_use_param = True
@@ -101,12 +101,14 @@ intersphinx_mapping = {
     "anndata": ("https://anndata.scverse.org/en/stable/", None),
     "scanpy": ("https://scanpy.scverse.org/en/stable/", None),
     "numpy": ("https://numpy.org/doc/stable/", None),
+    "pandas": ("https://pandas.pydata.org/docs/", None),
+    "spatialdata": ("https://spatialdata.scverse.org/en/stable/", None),
 }
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This pattern also affects html_static_path and html_extra_path.
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "**.ipynb_checkpoints"]
+exclude_patterns = ["_build", "superpowers", "Thumbs.db", ".DS_Store", "**.ipynb_checkpoints"]
 
 
 # -- Options for HTML output -------------------------------------------------
@@ -133,5 +135,6 @@ katex_prerender = shutil.which(katex.NODEJS_BINARY) is not None
 nitpick_ignore = [
     # If building the documentation fails because of a missing link that is outside your control,
     # you can add an exception to this list.
-    #     ("py:class", "igraph.Graph"),
+    # scverse-misc 0.1.6 renders `optional` as a type in the Settings.reset signature it generates
+    ("py:class", "optional"),
 ]

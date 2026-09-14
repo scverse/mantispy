@@ -11,5 +11,6 @@ changelog.md
 contributing.md
 references.md
 
+tutorials/index
 notebooks/example
 ```
