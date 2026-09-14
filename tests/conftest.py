@@ -21,6 +21,9 @@ def gallery(tmp_path: Path) -> Path:
     """A minimal gallery source: two plates, two wells each, one well analysed, the second plate using overlays."""
     for plate in PLATES:
         write_plate(tmp_path, plate, overlay=plate == OVERLAY_PLATE, located=True)
+    # a source that has been read once holds zarr stores, which carry a tables/ directory like an export does
+    (tmp_path / f"{PLATE}.zarr" / "tables").mkdir(parents=True)
+    (tmp_path / f"{PLATE}.zarr" / "tables" / "table.h5ad").write_bytes(b"")
     return tmp_path
 
 

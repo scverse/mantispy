@@ -307,15 +307,6 @@ def test_a_layout_that_cannot_be_read(gallery: Path, tmp_path: Path) -> None:
         mt.io.read_plate(blank)
 
 
-def test_a_source_that_was_read_once_is_still_a_gallery_source(gallery: Path) -> None:
-    """Reading a source leaves SpatialData zarr stores in it, and those carry a tables/ directory."""
-    store = gallery / f"{PLATE}.zarr" / "tables"
-    store.mkdir(parents=True)
-    (store / "table.h5ad").write_bytes(b"")
-
-    assert mt.io.read_plate(gallery, PLATE, batch=BATCH, profile="test").images
-
-
 @pytest.mark.parametrize("layout", ["gallery", "cellprofiler"])
 def test_the_layout_can_be_stated_outright(gallery: Path, export: Path, layout: Layout) -> None:
     kwargs: dict[str, Any] = {"batch": BATCH, "plate": PLATE, "profile": "test"} if layout == "gallery" else {}
