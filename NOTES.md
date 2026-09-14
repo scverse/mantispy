@@ -28,7 +28,8 @@ The plans are the task breakdown. **Where this file disagrees with a plan, this 
 
 **Binding decision (2026-09-14):** the IO module was ported from [cell-painting-io](https://github.com/scverse/cell-painting-io) (issue #4) ahead of the plan order.
 It supersedes the `read_cellprofiler` design in Task 9 of the 0.1 plan.
-`mantispy.io` exposes exactly two public functions, `read_profiles` and `read_plate`, and `read_plate` dispatches on the layout it finds, so the Cell Painting Gallery reader and the `ExportForSpatialData` reader are one entry point.
+`mantispy.io` exposes two public functions, `read_profiles` and `read_plate`.
+`read_plate` dispatches on the layout it finds, so the gallery reader and the `ExportForSpatialData` reader are one entry point.
 It does not depend on `_core/`; wire it up when `_core` lands.
 Docstrings are Google style throughout, not numpydoc.
 

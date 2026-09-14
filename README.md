@@ -11,7 +11,7 @@ Image-based profiling on AnnData.
 `mantispy.io` reads image-based profiling data into scverse structures.
 `read_profiles` turns the tables a CellProfiler or pycytominer pipeline writes into an `AnnData` of observations by features.
 `read_plate` turns the images and segmentations behind them into a `SpatialData` object, from a [Cell Painting Gallery](https://github.com/broadinstitute/cellpainting-gallery) source or from a plate folder written by the `ExportForSpatialData` CellProfiler module.
-`mantispy.ds` has a synthetic plate to try things on and a few real ones to download.
+`mantispy.ds` has a synthetic plate and a few real ones to download.
 
 ## Getting started
 

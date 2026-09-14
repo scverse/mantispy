@@ -27,7 +27,7 @@ def _wells(n_wells: int) -> list[str]:
 def _draw_field(
     shape: tuple[int, int], n_cells: int, rng: np.random.Generator
 ) -> tuple[npt.NDArray[np.uint32], npt.NDArray[np.uint32]]:
-    """Place `n_cells` round cells with a concentric nucleus, none of them overlapping."""
+    """Place `n_cells` non-overlapping round cells, each with a concentric nucleus."""
     cells = np.zeros(shape, np.uint32)
     nuclei = np.zeros(shape, np.uint32)
     grid_y, grid_x = np.mgrid[: shape[0], : shape[1]]
@@ -50,7 +50,7 @@ def _draw_field(
 def _draw_image(
     cells: npt.NDArray[np.uint32], nuclei: npt.NDArray[np.uint32], rng: np.random.Generator
 ) -> npt.NDArray[np.float32]:
-    """Stain the objects: DNA in the nucleus, the other channels in the cytoplasm, over a noisy background."""
+    """Stain the objects: DNA in the nucleus, the rest in the cytoplasm, over a noisy background."""
     cytoplasm = (cells > 0) & (nuclei == 0)
     image = rng.normal(0.05, 0.01, (len(CELL_PAINTING_CHANNELS), *cells.shape)).astype(np.float32)
     for index, channel in enumerate(CELL_PAINTING_CHANNELS):
@@ -61,7 +61,7 @@ def _draw_image(
 
 
 def _measure(image: npt.NDArray, masks: dict[str, npt.NDArray], numbers: npt.NDArray) -> pd.DataFrame:
-    """Per-object features named the way CellProfiler names them."""
+    """Per-object features under CellProfiler names."""
     from scipy import ndimage as ndi
 
     columns = {}
@@ -84,14 +84,12 @@ def blobs(
     plate: str = "BLOBS01",
     seed: int = 0,
 ) -> SpatialData:
-    """A small synthetic Cell Painting plate, laid out the way :func:`mantispy.io.read_plate` lays a real one out.
+    """A small synthetic Cell Painting plate, laid out like one :func:`mantispy.io.read_plate` returns.
 
-    Round cells with a concentric nucleus are stained in the five Cell Painting channels and measured, so the
-    object is complete -- Images, Labels for the three compartments, well Shapes, and ``cells`` and ``wells``
-    Tables whose features carry CellProfiler's own names -- without a download.
+    Round cells with a concentric nucleus are stained in the five Cell Painting channels and measured.
+    The result is complete without a download: Images, Labels for the three compartments, well Shapes, and ``cells`` and ``wells`` Tables whose features carry CellProfiler names.
 
-    Every element sits in three coordinate systems, ``{plate}_{well}_s{site}``, ``{plate}_{well}`` and
-    ``{plate}``, so the fields of a well lay out as a mosaic and the wells as a plate map.
+    Every element sits in three coordinate systems, ``{plate}_{well}_s{site}``, ``{plate}_{well}`` and ``{plate}``, laying the fields of a well out as a mosaic and the wells as a plate map.
 
     Args:
         n_wells: Wells to simulate, filled across the rows of a 96-well plate from ``A01``.
@@ -99,7 +97,8 @@ def blobs(
         n_cells: Cells per field, or as many as fit without overlapping.
         shape: Pixel height and width of one field.
         plate: Plate barcode, which every element name is prefixed with.
-        seed: Seed of the random generator, so that two calls give the same plate.
+        seed: Seed of the random generator.
+            Two calls with one seed give the same plate.
 
     Returns:
         The plate.
@@ -215,20 +214,19 @@ def blobs_profiles(
 ) -> ad.AnnData:
     """Synthetic well-level profiles, with a plate effect laid over a treatment effect.
 
-    The features are named the way CellProfiler names them and are annotated as such, so anything that keys off
-    the compartment or the channel of a feature has something to key off.
-    Four treatments, one of them ``DMSO``, differ in a third of the features; every plate adds its own offset on
-    top, which is what a batch correction has to remove and an evaluation has to notice.
+    The features carry CellProfiler names and are annotated as such, so anything keying off the compartment or the channel of a feature has something to key off.
+    Four treatments, one of them ``DMSO``, differ in a third of the features.
+    Every plate adds its own offset on top: that offset is what a batch correction has to remove.
 
     Args:
         n_plates: Number of plates, each a batch of its own.
         n_wells: Wells per plate, filled across the rows of a 96-well plate from ``A01``.
         n_features: Number of features, spread over the compartments and channels.
-        seed: Seed of the random generator, so that two calls give the same profiles.
+        seed: Seed of the random generator.
+            Two calls with one seed give the same profiles.
 
     Returns:
-        An :class:`~anndata.AnnData` of ``n_plates * n_wells`` observations, with ``Plate``, ``Well`` and
-        ``treatment`` in ``obs``.
+        An :class:`~anndata.AnnData` of ``n_plates * n_wells`` observations, with ``Plate``, ``Well`` and ``treatment`` in ``obs``.
 
     Examples:
         >>> import mantispy as mt

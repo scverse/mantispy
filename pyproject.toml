@@ -22,6 +22,7 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: 3.15",
   "Typing :: Typed",
 ]
 dependencies = [
@@ -38,7 +39,6 @@ dependencies = [
   # for debug logging (referenced from the issue template)
   "session-info2",
 ]
-# Reading images and segmentations needs the spatial stack; reading profiles does not.
 optional-dependencies.spatial = [
   "dask>=2024.4",
   "geopandas>=1",
@@ -61,7 +61,6 @@ dev = [
 ]
 test = [
   "coverage>=7.10",
-  # The io tests build gallery and CellProfiler-export trees on disk, which needs the spatial stack.
   "mantispy[spatial]",
   # Reference implementations, used only to assert equivalence. Never imported from src/.
   "pycytominer==1.7.1",
@@ -71,7 +70,6 @@ test = [
 doc = [
   "ipykernel",
   "ipython",
-  # the API page documents the spatial readers, which autosummary has to import
   "mantispy[spatial]",
   "myst-nb>=1.1",
   "pandas",
@@ -159,7 +157,6 @@ lint.pydocstyle.convention = "google"
 [tool.mypy]
 files = [ "src", "tests" ]
 
-# the image and spatial stack ships no type information
 [[tool.mypy.overrides]]
 module = [
   "dask.*",
@@ -178,7 +175,7 @@ ini_options.testpaths = [ "tests" ]
 ini_options.pythonpath = [ "tests" ]
 ini_options.addopts = [
   "--import-mode=importlib", # allow using test files with same name
-  "-m not network",          # run the downloads with `pytest -m network`
+  "-m not network",
 ]
 ini_options.markers = [
   "network: requires network access (deselect with -m 'not network')",

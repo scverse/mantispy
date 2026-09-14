@@ -12,8 +12,6 @@ if TYPE_CHECKING:
     import numpy.typing as npt
     from spatialdata import SpatialData
 
-# Names the ExportForSpatialData CellProfiler module writes. Kept here rather than imported, because
-# the exporter is a CellProfiler plugin and is not installable alongside this package.
 DATASET = "data"
 MANIFEST = "cellprofiler_mapping"
 ELEMENTS = "elements"
@@ -24,9 +22,7 @@ STATUS_OK = "ok"
 REGION_KEY = "region_key"
 INSTANCE_KEY = "label_id"
 
-# Labels are cast to one type on the way in. CellProfiler narrows its own label arrays to fit the
-# object count, so a field with 102 objects arrives as int8 and a busier one as int16, which would
-# otherwise make two fields of the same plate disagree on dtype.
+# CellProfiler narrows label arrays to the object count, so fields of one plate would otherwise disagree.
 LABEL_DTYPE = np.uint32
 
 
@@ -61,8 +57,7 @@ def _read_array(path: Path, *, lazy: bool) -> npt.NDArray | da.Array:
             return handle[DATASET][()]
     import dask.array as da
 
-    # The file stays open for as long as the dask array holds the dataset. `lock` serialises the
-    # reads, which HDF5 needs when dask runs them on several threads.
+    # lock: HDF5 is not thread-safe and dask reads on several threads.
     dataset = h5py.File(path, "r")[DATASET]
     return da.from_array(dataset, chunks=dataset.chunks or "auto", lock=True)
 
@@ -77,13 +72,11 @@ def read_cellprofiler_export(path: Path | str, *, lazy: bool = True) -> SpatialD
         lazy: Read arrays through dask, one HDF5 dataset per element, instead of loading them into memory.
 
     Returns:
-        The plate as a :class:`~spatialdata.SpatialData` object, with the Images and Labels the manifest lists
-        as written and a ``cells`` Table annotating them.
+        The plate as a :class:`~spatialdata.SpatialData` object, with the Images and Labels the manifest lists as written and a ``cells`` Table annotating them.
 
     Raises:
         FileNotFoundError: No table under ``path/tables``, or the manifest names an array that is not there.
-        ValueError: Several tables under ``path/tables``, or the table carries no element manifest, or it has
-            no ``region_key`` column to join its rows onto the label arrays.
+        ValueError: Several tables under ``path/tables``, or the table carries no element manifest, or it has no ``region_key`` column to join its rows onto the label arrays.
     """
     from spatialdata import SpatialData
     from spatialdata.models import Image2DModel, Labels2DModel, TableModel
@@ -121,9 +114,7 @@ def read_cellprofiler_export(path: Path | str, *, lazy: bool = True) -> SpatialD
         regions = sorted(set(named.tolist()) & set(labels))
         table = adata[np.isin(named, regions)].copy()
         table.obs[REGION_KEY] = pd.Categorical(np.asarray(table.obs[REGION_KEY], dtype=str), categories=regions)
-        # The exporter names every region it wrote, including the ones whose arrays failed, which this reader
-        # leaves out. The region list therefore has to be rebuilt from the elements that exist, and
-        # TableModel.parse refuses to run while the key is still set.
+        # TableModel.parse refuses to run while ATTRS_KEY is still set.
         table.uns.pop(TableModel.ATTRS_KEY, None)
         tables["cells"] = TableModel.parse(table, region=regions, region_key=REGION_KEY, instance_key=INSTANCE_KEY)
     return SpatialData(images=images, labels=labels, tables=tables)

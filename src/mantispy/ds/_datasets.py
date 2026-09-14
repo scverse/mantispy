@@ -31,12 +31,12 @@ def _fetch(name: str, cache_dir: str | Path | None, **kwargs: Any) -> AnnData:
 def cpjump1(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
     """One plate of the JUMP pilot, 384 wells of compounds profiled in U2OS cells.
 
-    Plate ``BR00116991`` of batch ``2020_11_04_CPJUMP1`` of ``cpg0000-jump-pilot``, as the gallery publishes it:
-    normalized against the negative controls of the batch and feature-selected.
+    Plate ``BR00116991`` of batch ``2020_11_04_CPJUMP1`` of ``cpg0000-jump-pilot``, as the gallery publishes it: normalized against the negative controls of the batch and feature-selected.
     The perturbation of each well is in ``obs``, ``Metadata_pert_iname`` naming the compound.
 
     Args:
-        cache_dir: Where to keep the download. Defaults to :attr:`mantispy.settings.cache_dir`.
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
         kwargs: Passed to :func:`mantispy.io.read_profiles`.
 
     Returns:
@@ -57,12 +57,12 @@ def lincs(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
     """Two plates of the LINCS Cell Painting dataset, compounds at six doses in A549 cells.
 
     Plates ``SQ00015116`` and ``SQ00015117`` of batch ``2016_04_01_a549_48hr_batch1`` of ``cpg0004-lincs``.
-    Feature selection ran per plate, so the two disagree on their columns and are read down to the features
-    they share -- which is what reading more than one plate of a real screen usually comes to.
+    Feature selection ran per plate, so the two disagree on their columns and are read down to the features they share, as reading more than one plate of a real screen usually requires.
     ``Metadata_mmoles_per_liter`` holds the dose and ``Metadata_pert_iname`` the compound.
 
     Args:
-        cache_dir: Where to keep the download. Defaults to :attr:`mantispy.settings.cache_dir`.
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
         kwargs: Passed to :func:`mantispy.io.read_profiles`.
 
     Returns:

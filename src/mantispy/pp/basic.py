@@ -28,8 +28,7 @@ def elaborate_example(
     r"""A method with a more complex docstring.
 
     This is where you add more details.
-    Try to support general container classes such as Sequence, Mapping, or Collection
-    where possible to ensure that your functions can be widely used.
+    Try to support general container classes such as Sequence, Mapping, or Collection where possible to ensure that your functions can be widely used.
 
     Data science means there’s lots of math too:
 

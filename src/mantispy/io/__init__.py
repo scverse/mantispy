@@ -7,7 +7,6 @@ if TYPE_CHECKING:
 
 __all__ = ["CHANNEL_ALIASES", "METADATA_PREFIXES", "read_plate", "read_profiles"]
 
-# read_plate pulls in spatialdata and the image stack; importing mantispy must not pay for them.
 _LAZY = {"read_plate": "mantispy.io._plate"}
 
 

@@ -16,8 +16,8 @@ Layout = Literal["gallery", "cellprofiler"]
 def _detect_layout(path: Path) -> Layout:
     """Tell a Cell Painting Gallery source from a CellProfiler export by what sits under `path`.
 
-    A gallery source holds the accession's own ``images/`` and ``workspace/`` trees; an export holds one
-    ``tables/`` directory per plate, either directly or one level down.
+    A gallery source holds the accession ``images/`` and ``workspace/`` trees.
+    An export holds one ``tables/`` directory per plate, either directly or one level down.
     """
     if (path / "tables").is_dir() or export_plate_dirs(path):
         return "cellprofiler"
@@ -65,68 +65,55 @@ def read_plate(
     Two layouts are read, told apart by what sits under `path` unless `layout` says which it is.
 
     **Cell Painting Gallery** (``layout="gallery"``, needs `batch` and `plate`).
-    Fields of view become Images, one element per field with a channel per ``URL_Orig*`` or ``FileName_Orig*``
-    column of ``load_data.csv``.
-    The CellProfiler Nuclei, Cells and Cytoplasm segmentations become Labels, reconstructed from the published
-    outlines and carrying CellProfiler's own object numbers -- the gallery publishes one-pixel outlines rather
-    than masks, so a component is only accepted as an object when exactly one centroid falls in it and its area
-    is close to the area CellProfiler measured.
-    Cytoplasm is the cell mask minus the nucleus mask, as CellProfiler defines it, so it needs no files of its
-    own.
-    The wells of the plate become Shapes, and the well- and cell-level measurements become the Tables ``wells``
-    and ``cells``, each annotating the elements above.
+    Fields of view become Images, one element per field with a channel per ``URL_Orig*`` or ``FileName_Orig*`` column of ``load_data.csv``.
+    The CellProfiler Nuclei, Cells and Cytoplasm segmentations become Labels carrying CellProfiler's object numbers, reconstructed from the published one-pixel outlines.
+    Cytoplasm is the cell mask minus the nucleus mask, as CellProfiler defines it, and needs no files of its own.
+    The wells become Shapes, and the well- and cell-level measurements the Tables ``wells`` and ``cells``.
 
-    Where the source recorded stage coordinates and the pixel size to convert them with, every element sits in
-    three coordinate systems, named ``{plate}_{well}_s{site}``, ``{plate}_{well}`` and ``{plate}``, so the
-    fields of a well lay out as a mosaic and the wells as a plate map.
-    Where it did not, each field can only sit in its own frame, and the reader degrades to that rather than
-    inventing a layout; the well shapes are then left out along with the plate frame they would live in.
+    Where the source recorded stage coordinates and a pixel size, every element sits in three coordinate systems, ``{plate}_{well}_s{site}``, ``{plate}_{well}`` and ``{plate}``, laying the fields of a well out as a mosaic and the wells as a plate map.
+    Where it did not, each field sits in its own frame and the well shapes are left out with the plate frame they would have lived in.
     Element names carry the plate barcode either way, so two plates concatenate without renaming.
 
     The gallery is uneven about what it publishes.
-    A field contributes an image whether or not CellProfiler output exists for it, and labels only when that
-    output includes outlines the reader can use.
-    Rows of the cell table whose object did not survive the outline reconstruction are dropped, so that every
-    row points at a label that exists.
+    A field contributes an image whether or not CellProfiler output exists for it, and labels only when that output includes usable outlines.
+    Cell table rows whose object did not survive the reconstruction are dropped, so every row points at a label that exists.
 
     **CellProfiler export** (``layout="cellprofiler"``).
-    The ``ExportForSpatialData`` module writes one folder per plate, holding an image stack and a label array
-    per field of view and one table for the plate, with a manifest in the table's ``uns``.
-    Nothing is reconstructed here, unlike the gallery path: the module writes real label arrays and a per-cell
-    table already joined across compartments.
-    The reader builds only what the manifest names and resolves each path relative to the folder, so it never
-    walks the folder or parses a file name, and a folder that was moved still reads.
-    Arrays the module recorded as failed are skipped, along with the rows that annotate them.
-    The module does not export stage coordinates yet, so every element of a field sits in one coordinate system
-    named after that field and the fields are not placed relative to each other.
+    The ``ExportForSpatialData`` module writes one folder per plate, holding an image stack and a label array per field of view and one table for the plate, with a manifest in the table's ``uns``.
+    Nothing is reconstructed on this path: the module writes real label arrays and a per-cell table already joined across compartments.
+    The reader builds only what the manifest names, resolving each path relative to the folder, so it never walks the folder or parses a file name and a folder that was moved still reads.
+    Arrays the module recorded as failed are skipped with the rows that annotate them.
+    The module does not export stage coordinates yet, so every element of a field sits in one coordinate system named after that field and the fields are not placed relative to each other.
 
     Args:
         path: A Cell Painting Gallery source directory, or an export root or one of its plate folders.
-        plate: Plate barcode. Required for a gallery source; for an export root it picks one of the plate
-            folders, and may be left out when the root holds one.
-        batch: Batch name, the directory below ``images/`` and ``workspace/analysis/``. Gallery sources only.
-        layout: Which layout `path` holds, detected from `path` when left out.
-        wells: Wells to read images and labels for. Defaults to every well whose images are present under
-            `path`, so that a partial download reads back as itself. The well table always covers the whole
-            plate. Gallery sources only.
-        plane: Which ``Metadata_PlaneID`` to read where a source imaged a z stack. Required in that case, since
-            there is no reason to prefer one plane over another and taking one silently would hide the rest.
+        plate: Plate barcode.
+            Required for a gallery source; for an export root it picks one of the plate folders, and may be left out when the root holds one.
+        batch: Batch name, the directory below ``images/`` and ``workspace/analysis/``.
             Gallery sources only.
-        profile: Variant of the well-level profile, read as
-            ``workspace/profiles/{batch}/{plate}/{plate}_{profile}.csv.gz``. Sources that publish the profile
-            under another name, ``{plate}.parquet`` among them, take a :class:`~pathlib.Path` instead. Pass
-            ``None`` to leave out the well table and the well shapes. Gallery sources only.
-        plate_format: Number of wells on the plate, used to place the wells on their nominal grid. Gallery
-            sources only.
-        lazy: Read arrays through dask instead of loading them into memory. Exports only.
+        layout: Which layout `path` holds, detected from `path` when left out.
+        wells: Wells to read images and labels for.
+            Defaults to every well whose images are present under `path`, so a partial download reads back as itself.
+            The well table always covers the whole plate.
+            Gallery sources only.
+        plane: Which ``Metadata_PlaneID`` to read where a source imaged a z stack.
+            Required in that case: no plane is preferable to another, and picking one silently would hide the rest.
+            Gallery sources only.
+        profile: Variant of the well-level profile, read as ``workspace/profiles/{batch}/{plate}/{plate}_{profile}.csv.gz``.
+            Sources that publish the profile under another name, ``{plate}.parquet`` among them, take a :class:`~pathlib.Path` instead.
+            Pass ``None`` to leave out the well table and the well shapes.
+            Gallery sources only.
+        plate_format: Number of wells on the plate, used to place the wells on their nominal grid.
+            Gallery sources only.
+        lazy: Read arrays through dask instead of loading them into memory.
+            Exports only.
 
     Returns:
-        The plate. A table or element group is left out when nothing it would hold was read.
+        The plate.
+        A table or element group is left out when nothing it would hold was read.
 
     Raises:
-        ValueError: The layout cannot be told from `path`, an argument does not apply to the layout that was
-            read, the plate mixes pixel sizes, ``load_data.csv`` names its images in an unknown way, or an image
-            does not sit in the gallery layout.
+        ValueError: The layout cannot be told from `path`, an argument does not apply to the layout that was read, the plate mixes pixel sizes, ``load_data.csv`` names its images in an unknown way, or an image does not sit in the gallery layout.
         FileNotFoundError: ``load_data.csv``, the requested profile, or the named plate folder is missing.
 
     Examples:

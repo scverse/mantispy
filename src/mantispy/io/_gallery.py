@@ -37,8 +37,7 @@ _WELL = re.compile(r"([A-Za-z]+)(\d+)")
 def _parse_well(well: str) -> tuple[int, int]:
     """Split a well name into its zero-based row and column.
 
-    Rows count the way spreadsheet columns do, so ``A`` is 0, ``Z`` is 25 and ``AA`` is 26, which is how
-    1536-well plates are named.
+    Rows count like spreadsheet columns: ``A`` is 0, ``Z`` is 25, ``AA`` is 26, as 1536-well plates are named.
 
     Args:
         well: A well name such as ``A01``, ``P24`` or ``AF48``.
@@ -63,23 +62,17 @@ def _parse_well(well: str) -> tuple[int, int]:
 def _fov_offsets(positions: pd.DataFrame, *, pixel_size: float, plate_format: int | None = 384) -> pd.DataFrame:
     """Pixel offsets of the top-left corner of each field of view, within its well and within the plate.
 
-    The offsets have ``y`` pointing down, unlike the stage coordinates they come from, so that they can be used
-    directly as ``(y, x)`` translations of an image whose row index grows downwards.
-    Their origin is the top-left corner of the top-left field of a well, which is shared across wells, so every
-    well of a plate is laid out in one frame.
+    ``y`` points down, unlike in the stage coordinates, so the offsets serve directly as ``(y, x)`` translations of an image whose row index grows downwards.
+    The origin is the top-left corner of a well's top-left field, shared across wells, which lays every well of a plate out in one frame.
 
     Args:
-        positions: One row per field of view, with columns ``well``, and ``x`` and ``y`` holding the stage
-            coordinates of the field centre in metres, relative to the centre of its well and with ``y``
-            pointing up.
+        positions: One row per field of view, with columns ``well``, and ``x`` and ``y`` holding the stage coordinates of the field centre in metres, relative to the centre of its well and with ``y`` pointing up.
         pixel_size: Size of a pixel in metres, as ``Metadata_ImageResolutionX`` records it.
-        plate_format: Number of wells on the plate, used to place the wells on their nominal grid. This assumes
-            the standard well pitch of that format rather than anything measured; pass ``None`` to leave the
-            plate offsets out.
+        plate_format: Number of wells on the plate, used to place the wells on their nominal grid.
+            This assumes the standard well pitch of that format rather than anything measured; pass ``None`` to leave the plate offsets out.
 
     Returns:
-        The offsets in pixels, indexed like `positions`, with columns ``well_y`` and ``well_x``, and ``plate_y``
-        and ``plate_x`` unless `plate_format` is ``None``.
+        The offsets in pixels, indexed like `positions`, with columns ``well_y`` and ``well_x``, and ``plate_y`` and ``plate_x`` unless `plate_format` is ``None``.
 
     Raises:
         ValueError: The plate format is unknown, or a well falls outside a plate of that format.
@@ -114,20 +107,14 @@ def _labels_from_outlines(
 ) -> npt.NDArray[np.uint32]:
     """Turn a CellProfiler outline image back into a label image carrying the CellProfiler object numbers.
 
-    The Cell Painting Gallery publishes outlines rather than segmentation masks.
-    Outlines are one pixel wide and shared between touching objects, so filling them and labelling connected
-    components recovers the object interiors separately.
-    Each component takes the object number of the centroid that falls inside it, and components without one --
-    the background, and anything else the outlines close off -- are dropped.
-    The boundary is then grown back one pixel, which reproduces the CellProfiler areas to well under a percent.
+    The gallery publishes outlines, not masks.
+    Outlines are one pixel wide and shared between touching objects, so filling them and labelling connected components separates the interiors.
+    Each component takes the object number of the centroid inside it; components with no centroid are dropped.
+    Growing the boundary back one pixel reproduces the CellProfiler areas to under a percent.
 
-    A component is only taken when it unambiguously belongs to one object: exactly one centroid falls in it, and
-    its area is within `max_area_ratio` of the area CellProfiler measured.
-    That rejects the two ways an unclosed outline goes wrong -- two objects merging into one component, and a
-    centroid landing in the background or in a fragment of its object -- so every label in the result stands for
-    one CellProfiler object rather than for a guess.
-    Objects whose component was rejected are absent; compare the number of labels against the number of
-    centroids.
+    A component is accepted only when exactly one centroid falls in it and its area is within `max_area_ratio` of the area CellProfiler measured.
+    This rejects the two failures of an unclosed outline: two objects merging into one component, and a centroid landing in the background or in a fragment.
+    Objects whose component was rejected are absent, so compare the label count against the centroid count.
 
     Args:
         outlines: A 2D outline image, anything above zero being outline.
@@ -135,10 +122,10 @@ def _labels_from_outlines(
         x_column: Column of `centres` holding the centroid column index.
         y_column: Column of `centres` holding the centroid row index.
         object_column: Column of `centres` holding the object number, which becomes the label value.
-        area_column: Column of `centres` holding the area CellProfiler measured, used to reject components that
-            cannot be the object. Pass ``None``, or leave the column out of `centres`, to skip that check.
-        max_area_ratio: How far a component's area may differ from the measured area, either way, and still be
-            accepted. Reconstruction is exact to a fraction of a percent when it works, so the default is tight.
+        area_column: Column of `centres` holding the area CellProfiler measured, used to reject components that cannot be the object.
+            Pass ``None``, or leave the column out of `centres`, to skip that check.
+        max_area_ratio: How far a component's area may differ from the measured area, either way, and still be accepted.
+            Reconstruction is exact to a fraction of a percent when it works, so the default is tight.
 
     Returns:
         A label image the shape of `outlines`, zero outside objects.
@@ -163,8 +150,7 @@ def _labels_from_outlines(
     areas = centres[area_column].to_numpy(float) if area_column is not None and area_column in centres else None
     hit = components[rows, columns]
     if areas is not None:
-        # an interior is always smaller than the object, so only the upper bound means anything here; it is what
-        # catches a centroid that landed in the background
+        # An interior is always smaller than the object, so only the upper bound can reject anything.
         sizes = np.bincount(components.ravel(), minlength=n_components + 1)
         hit = np.where(sizes[hit] > max_area_ratio * areas, 0, hit)
     claims = np.bincount(hit, minlength=n_components + 1)
@@ -212,9 +198,8 @@ def _channels(load_data: pd.DataFrame) -> tuple[str, list[str]]:
 def _image_path(root: Path, batch: str, row: pd.Series, prefix: str, channel: str) -> Path:
     """Locate a channel of one field under `root`.
 
-    Sources record images either as an ``URL_*`` S3 URI or as a ``FileName_*``/``PathName_*`` pair whose path is
-    wherever the images sat when CellProfiler ran.
-    Both end in the gallery's own ``<batch>/images/<acquisition>/Images/`` layout, which is what is matched on.
+    Sources record images either as an ``URL_*`` S3 URI or as a ``FileName_*``/``PathName_*`` pair pointing at wherever the images sat when CellProfiler ran.
+    Both end in the gallery ``<batch>/images/<acquisition>/Images/`` layout, and that suffix is what is matched.
     """
     if prefix.startswith("URL_"):
         location = str(row[f"{prefix}{channel}"])
@@ -241,8 +226,7 @@ def _site_dir(root: Path, batch: str, plate: str, well: str, site: int) -> Path:
 def _outline_file(directory: Path, well: str, site: int, kind: str) -> Path | None:
     """Find one outline image, whatever the source called it.
 
-    Seen across the gallery: ``outlines/A01_s1--cell_outlines.png``, ``outlines/a01_1--cell_outlines.png`` and,
-    in a directory named after the plate, ``A01_s1_cell_outlines.tiff``.
+    Seen across the gallery: ``outlines/A01_s1--cell_outlines.png``, ``outlines/a01_1--cell_outlines.png``, and ``A01_s1_cell_outlines.tiff`` in a directory named after the plate.
     """
     for stem in (
         f"{well}_s{site}--{kind}_outlines",
@@ -257,9 +241,9 @@ def _outline_file(directory: Path, well: str, site: int, kind: str) -> Path | No
 def _outline_candidates(image: npt.NDArray) -> list[npt.NDArray[np.bool_]]:
     """The ways an outline image might encode its outlines, best guess first.
 
-    Most sources publish the outlines on their own. Some draw them in colour over the greyscale image, in which
-    case the outline is what is not grey -- but a single image can carry two object types in two colours, so each
-    colour is also offered on its own and the caller keeps whichever reconstructs the most objects.
+    Most sources publish the outlines alone.
+    Some draw them in colour over the greyscale image, where the outline is whatever is not grey.
+    One image can carry two object types in two colours, so each colour is offered separately and the caller keeps whichever reconstructs the most objects.
     """
     if image.ndim == 2:
         return [image > 0]

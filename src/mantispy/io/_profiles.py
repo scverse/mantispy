@@ -43,13 +43,12 @@ def _annotate_features(var: pd.DataFrame, *, aliases: Mapping[str, str] = CHANNE
 
     Names follow ``<compartment>_<family>_<measurement>[_<channel>][_<parameters>]``.
     Compartment and family are read positionally, channels are the name tokens that match a known channel.
-    ``Correlation`` features measure colocalization between a pair of channels, hence two channel columns;
-    ``AreaShape`` and ``Neighbors`` are geometry and have none.
+    ``Correlation`` features measure colocalization between a pair of channels, hence two channel columns; ``AreaShape`` and ``Neighbors`` are geometry and have none.
     The measurement itself and its parameters are not extracted.
 
     Args:
-        var: The feature table to annotate, indexed by feature name. Gains the columns ``compartment``,
-            ``family``, ``channel``, ``channel_2`` and ``n_channels``.
+        var: The feature table to annotate, indexed by feature name.
+            Gains the columns ``compartment``, ``family``, ``channel``, ``channel_2`` and ``n_channels``.
         aliases: Maps a lower-cased name token to the channel it stands for.
     """
     tokens = [name.lower().split("_") for name in var.index]
@@ -90,33 +89,26 @@ def read_profiles(
 ) -> ad.AnnData:
     """Read CellProfiler profiles into an :class:`~anndata.AnnData` of observations × features.
 
-    Numeric columns become the feature matrix, everything else becomes :attr:`~anndata.AnnData.obs`.
-    Everything that has differed between Cell Painting datasets is a parameter rather than an assumption:
-    missing-value sentinels, metadata prefixes, and columns that disagree across plates.
+    Numeric columns become the feature matrix, everything else :attr:`~anndata.AnnData.obs`.
+    What has differed between Cell Painting datasets is a parameter, not an assumption: missing-value sentinels, metadata prefixes, and columns that disagree across plates.
 
     Args:
-        paths: One profile file, or several to stack row-wise. ``.parquet`` is read as parquet, anything else
-            as CSV.
-        metadata_prefixes: Column-name prefixes marking metadata. The matching prefix is stripped from the
-            ``obs`` column name.
+        paths: One profile file, or several to stack row-wise.
+            ``.parquet`` is read as parquet, anything else as CSV.
+        metadata_prefixes: Column-name prefixes marking metadata.
+            The matching prefix is stripped from the ``obs`` column name.
         metadata_columns: Columns to treat as metadata even though they are numeric and unprefixed.
         sentinels: Values in the feature matrix standing for missing, replaced with ``NaN``.
-        index_columns: Metadata columns, named as they are after prefix stripping, joined with ``:`` into the
-            observation index.
-        on_column_mismatch: What to do when the files disagree on columns: ``"raise"``, or ``"intersect"`` to
-            keep the shared columns in the column order of the first file.
-        path_columns: Metadata columns taken from the file path, mapping each column name to how many
-            directories up from the file to read the name of.
-        annotate_features: Annotate :attr:`~anndata.AnnData.var` with the compartment, family and channels
-            each feature name encodes.
+        index_columns: Metadata columns, named as they are after prefix stripping, joined with ``:`` into the observation index.
+        on_column_mismatch: What to do when the files disagree on columns: ``"raise"``, or ``"intersect"`` to keep the shared columns in the column order of the first file.
+        path_columns: Metadata columns taken from the file path, mapping each column name to how many directories up from the file to read the name of.
+        annotate_features: Annotate :attr:`~anndata.AnnData.var` with the compartment, family and channels each feature name encodes.
 
     Returns:
-        An :class:`~anndata.AnnData` whose ``X`` is ``float32``, whose ``obs`` holds the metadata, and whose
-        ``var`` is indexed by feature name.
+        An :class:`~anndata.AnnData` whose ``X`` is ``float32``, whose ``obs`` holds the metadata, and whose ``var`` is indexed by feature name.
 
     Raises:
-        ValueError: No files were given, the files share no columns, they disagree on columns while
-            `on_column_mismatch` is ``"raise"``, or `index_columns` do not identify observations uniquely.
+        ValueError: No files were given, the files share no columns, they disagree on columns while `on_column_mismatch` is ``"raise"``, or `index_columns` do not identify observations uniquely.
         KeyError: A name in `metadata_columns` or `index_columns` is not in the data.
 
     Examples:
@@ -151,7 +143,6 @@ def read_profiles(
     frames = _align_columns(frames, on_column_mismatch)
     df = pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
     if path_columns:
-        # one concat rather than a per-file insert, which fragments a wide frame badly
         lengths = [len(frame) for frame in frames]
         derived = {
             name: np.repeat([path.parents[depth - 1].name for path in files], lengths)
