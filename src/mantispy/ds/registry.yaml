@@ -1,0 +1,33 @@
+# Datasets mantispy can download, all of them from the Cell Painting Gallery.
+# https://github.com/broadinstitute/cellpainting-gallery
+base_url: https://cellpainting-gallery.s3.amazonaws.com
+
+datasets:
+  cpjump1:
+    type: profiles
+    doc_header: One plate of the JUMP pilot, 384 wells of compounds.
+    accession: cpg0000-jump-pilot
+    shape: [384, 904]
+    read:
+      index_columns: [Plate, Well]
+    files:
+      - name: BR00116991_normalized_feature_select_negcon_batch.csv.gz
+        s3_key: cpg0000-jump-pilot/source_4/workspace/profiles/2020_11_04_CPJUMP1/BR00116991/BR00116991_normalized_feature_select_negcon_batch.csv.gz
+        sha256: 0dcb95c3ce07f2010e9cdd9408d6ca558d9cde54cd683128aaa14e486cba537f
+
+  lincs:
+    type: profiles
+    doc_header: Two plates of LINCS, 1,571 compounds at six doses in A549 cells.
+    accession: cpg0004-lincs
+    shape: [768, 291]
+    read:
+      index_columns: [Plate, Well]
+      # feature selection ran per plate, so the two plates do not agree on their columns
+      on_column_mismatch: intersect
+    files:
+      - name: SQ00015116_normalized_feature_select.csv.gz
+        s3_key: cpg0004-lincs/broad/workspace/profiles/2016_04_01_a549_48hr_batch1/SQ00015116/SQ00015116_normalized_feature_select.csv.gz
+        sha256: e9a3856989316b41565feebc997910f36cdc011ac3232a8191a65052933847d8
+      - name: SQ00015117_normalized_feature_select.csv.gz
+        s3_key: cpg0004-lincs/broad/workspace/profiles/2016_04_01_a549_48hr_batch1/SQ00015117/SQ00015117_normalized_feature_select.csv.gz
+        sha256: 961044d95cd0535f40a1c8c7521af1adc9e021215f5e6342d3f45842f33d433a

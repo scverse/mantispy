@@ -8,6 +8,32 @@
 
 Image-based profiling on AnnData
 
+```python
+import mantispy as mt
+
+adata = mt.io.read_profiles("BR00116991_normalized.csv.gz", index_columns=("Plate", "Well"))
+sdata = mt.io.read_plate("cpg0000-jump-pilot/source_4", "BR00116991", batch="2020_11_04_CPJUMP1")
+```
+
+`mantispy.io` reads image-based profiling data into scverse structures: `read_profiles` turns the tables a
+CellProfiler or pycytominer pipeline writes into an `AnnData` of observations × features, and `read_plate`
+turns the images and segmentations behind them into a `SpatialData` object — from a
+[Cell Painting Gallery](https://github.com/broadinstitute/cellpainting-gallery) source or from a plate folder
+written by the `ExportForSpatialData` CellProfiler module.
+
+Reading images needs the spatial stack, which is an extra:
+
+```bash
+pip install 'mantispy[spatial]'
+```
+
+`mantispy.ds` has a synthetic plate to try things on and a few real ones to download:
+
+```python
+sdata = mt.ds.blobs()  # synthetic, no download
+adata = mt.ds.lincs()  # two LINCS plates from the Cell Painting Gallery
+```
+
 ## Getting started
 
 Please refer to the [documentation][],

@@ -24,7 +24,18 @@ The plans are the task breakdown. **Where this file disagrees with a plan, this 
 | 0.3 Batch correction + evaluation | not started |
 | 0.3 refactor | not started |
 
-**Next action:** 0.1 Task 1 (repo scaffold), then Task 2 (`_core/plate.py`).
+**Next action:** 0.1 Task 2 (`_core/plate.py`).
+
+**Binding decision (2026-09-14):** the IO module was ported from
+[cell-painting-io](https://github.com/scverse/cell-painting-io) (issue #4) ahead of the plan order, and it
+supersedes the `read_cellprofiler` design in Task 9 of the 0.1 plan. `mantispy.io` exposes exactly two public
+functions — `read_profiles` and `read_plate` — and `read_plate` dispatches on the layout it finds, so the
+Cell Painting Gallery reader and the `ExportForSpatialData` reader are one entry point. It does not depend on
+`_core/`; wire it up when `_core` lands. Docstrings are Google style throughout, not numpydoc.
+
+`mantispy.ds` was added at the same time: `blobs`/`blobs_profiles` are synthetic, `cpjump1`/`lincs` download
+from the Cell Painting Gallery through `scverse_misc.datasets` off `src/mantispy/ds/registry.yaml`. Never write
+raw pooch — go through scverse-misc.
 
 ### Task ledger — 0.1
 
@@ -36,8 +47,8 @@ The plans are the task breakdown. **Where this file disagrees with a plan, this 
 - [ ] 6 `datasets/_synthetic.py`
 - [ ] 7 `_core/_numba.py`
 - [ ] 8 `_core/_chunks.py`
-- [ ] 9 `io/_cellprofiler.py`
-- [ ] 10 `io/_profiles.py`
+- [x] 9 `io/_cellprofiler.py` — ported from cell-painting-io as `io/_plate.py` + `_gallery.py` + `_cellprofiler.py`
+- [x] 10 `io/_profiles.py`
 - [ ] 11 `pp/_qc.py`
 - [ ] 12 `pp/_normalize.py`
 - [ ] 13 `tl/_aggregate.py`
@@ -45,7 +56,7 @@ The plans are the task breakdown. **Where this file disagrees with a plan, this 
 - [ ] 15 `pl/`
 - [ ] 16 pycytominer equivalence
 - [ ] 17 BBBC021 loader
-- [ ] 18 tutorials 01–02
+- [x] 18 tutorials — `docs/tutorials/reading_profiles` and `reading_plates`
 - [ ] 19 (skipped — no releases)
 
 ---

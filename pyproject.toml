@@ -10,15 +10,19 @@ readme = "README.md"
 license = { file = "LICENSE" }
 maintainers = [
   { name = "Tim Treis", email = "tim.treis@outlook.de" },
+  { name = "Lukas Heumos", email = "lukas.heumos@scverse.org" },
 ]
 authors = [
   { name = "Tim Treis" },
+  { name = "Lukas Heumos" },
 ]
 requires-python = ">=3.12"
 classifiers = [
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: 3.15",
   "Typing :: Typed",
 ]
 dependencies = [
@@ -27,11 +31,25 @@ dependencies = [
   "numba>=0.60",
   "numpy>=1.26",
   "pandas>=2.1",
+  "platformdirs>=4",
   "pooch>=1.8",
   "scanpy>=1.12",
   "scipy>=1.11",
+  "scverse-misc[datasets]>=0.1.2",
   # for debug logging (referenced from the issue template)
   "session-info2",
+]
+# Reading images and segmentations needs the spatial stack; reading profiles does not.
+optional-dependencies.spatial = [
+  "dask>=2024.4",
+  "geopandas>=1",
+  "h5py>=3.10",
+  "imagecodecs>=2024.1",
+  "imageio>=2.34",
+  "pyarrow>=16",
+  "scikit-image>=0.24",
+  "shapely>=2",
+  "spatialdata>=0.3",
 ]
 # https://docs.pypi.org/project_metadata/#project-urls
 urls.Documentation = "https://mantispy.readthedocs.io/"
@@ -44,14 +62,18 @@ dev = [
 ]
 test = [
   "coverage>=7.10",
-  "pytest",
-  "pytest-cov",     # For VS Code’s coverage functionality
+  # The io tests build gallery and CellProfiler-export trees on disk, which needs the spatial stack.
+  "mantispy[spatial]",
   # Reference implementations, used only to assert equivalence. Never imported from src/.
   "pycytominer==1.7.1",
+  "pytest",
+  "pytest-cov",         # For VS Code’s coverage functionality
 ]
 doc = [
   "ipykernel",
   "ipython",
+  # the API page documents the spatial readers, which autosummary has to import
+  "mantispy[spatial]",
   "myst-nb>=1.1",
   "pandas",
   "scverse-misc[sphinx]>=0.1.2",
@@ -133,21 +155,38 @@ lint.ignore = [
 lint.per-file-ignores."*/__init__.py" = [ "F401" ]
 lint.per-file-ignores."docs/*" = [ "I" ]
 lint.per-file-ignores."tests/*" = [ "D" ]
-lint.pydocstyle.convention = "numpy"
+lint.pydocstyle.convention = "google"
 
 [tool.mypy]
 files = [ "src", "tests" ]
 
-[tool.pytest]
-addopts = [
-  "--import-mode=importlib", # allow using test files with same name
+# the image and spatial stack ships no type information
+[[tool.mypy.overrides]]
+module = [
+  "dask.*",
+  "geopandas.*",
+  "h5py.*",
+  "imageio.*",
+  "scipy.*",
+  "shapely.*",
+  "skimage.*",
+  "spatialdata.*",
 ]
-strict = true
-testpaths = [ "tests" ]
-markers = [
+ignore_missing_imports = true
+
+[tool.pytest]
+ini_options.testpaths = [ "tests" ]
+# the fixtures build Cell Painting trees on disk; the builders live in tests/_testdata.py
+ini_options.pythonpath = [ "tests" ]
+ini_options.addopts = [
+  "--import-mode=importlib", # allow using test files with same name
+  "-m not network",          # run the downloads with `pytest -m network`
+]
+ini_options.markers = [
   "network: requires network access (deselect with -m 'not network')",
   "slow: long-running integration test",
 ]
+ini_options.strict = true
 
 [tool.coverage]
 run.source = [ "mantispy" ]

@@ -1,0 +1,91 @@
+from __future__ import annotations
+
+import numpy as np
+import pytest
+import spatialdata as sd
+
+import mantispy as mt
+from mantispy.ds._datasets import _DATASETS
+
+
+@pytest.mark.parametrize(("n_wells", "n_sites"), [(1, 1), (4, 2)])
+def test_blobs_is_a_plate_with_everything_on_it(n_wells: int, n_sites: int) -> None:
+    sdata = mt.ds.blobs(n_wells=n_wells, n_sites=n_sites)
+
+    assert len(sdata.images) == n_wells * n_sites
+    assert len(sdata.labels) == n_wells * n_sites * 3
+    assert set(sdata.tables) == {"cells", "wells"}
+    assert sdata.tables["wells"].n_obs == n_wells
+    assert len(sdata.shapes["BLOBS01_wells"]) == 96
+
+
+def test_blobs_lays_its_fields_out_in_three_frames() -> None:
+    sdata = mt.ds.blobs(n_wells=2, n_sites=2)
+
+    assert {"BLOBS01", "BLOBS01_A01", "BLOBS01_A01_s1"} <= set(sdata.coordinate_systems)
+    extent = sd.get_extent(sdata["BLOBS01_A02_s1_image"], coordinate_system="BLOBS01")
+    assert extent["x"][0] == pytest.approx(9000.0)
+
+
+def test_blobs_labels_nest_the_way_cellprofiler_objects_do() -> None:
+    sdata = mt.ds.blobs(n_wells=1, n_sites=1)
+
+    cells = sdata["BLOBS01_A01_s1_cells"].to_numpy()
+    nuclei = sdata["BLOBS01_A01_s1_nuclei"].to_numpy()
+    cytoplasm = sdata["BLOBS01_A01_s1_cytoplasm"].to_numpy()
+    assert set(np.unique(nuclei)) <= set(np.unique(cells))
+    assert np.array_equal(cytoplasm, np.where(nuclei > 0, 0, cells))
+
+
+def test_blobs_features_carry_cellprofiler_names() -> None:
+    var = mt.ds.blobs(n_wells=1, n_sites=1).tables["cells"].var
+
+    assert "Cells_Intensity_MeanIntensity_DNA" in var.index
+    assert var.loc["Cells_Intensity_MeanIntensity_DNA", "channel"] == "dna"
+    assert var.loc["Cells_Correlation_Correlation_DNA_RNA", "n_channels"] == 2
+
+
+@pytest.mark.parametrize("dataset", ["blobs", "blobs_profiles"])
+def test_the_same_seed_gives_the_same_data(dataset: str) -> None:
+    build = getattr(mt.ds, dataset)
+    first, second = build(seed=1), build(seed=1)
+    if dataset == "blobs":
+        first, second = first.tables["cells"], second.tables["cells"]
+
+    assert np.array_equal(first.X, second.X)
+    assert not np.array_equal(
+        first.X, build(seed=2).X if dataset == "blobs_profiles" else build(seed=2).tables["cells"].X
+    )
+
+
+def test_blobs_profiles_carry_a_treatment_effect_and_a_plate_effect() -> None:
+    adata = mt.ds.blobs_profiles(n_plates=3, n_wells=48)
+
+    assert adata.shape == (144, 60)
+    assert set(adata.obs["Plate"].cat.categories) == {"BLOBS01", "BLOBS02", "BLOBS03"}
+    treated = np.asarray(adata[adata.obs["treatment"] == "compound_c"].X).mean()
+    assert treated > np.asarray(adata[adata.obs["treatment"] == "DMSO"].X).mean()
+    plate_means = [
+        np.asarray(adata[adata.obs["Plate"] == plate].X).mean() for plate in adata.obs["Plate"].cat.categories
+    ]
+    assert len(set(np.round(plate_means, 3))) == 3
+
+
+@pytest.mark.parametrize("name", sorted(_DATASETS))
+def test_every_registered_dataset_has_a_loader_and_hashed_files(name: str) -> None:
+    entry = _DATASETS[name]
+
+    assert entry.type == "profiles"
+    assert entry.files
+    assert all(file.sha256 and file.s3_key for file in entry.files)
+    assert getattr(mt.ds, name)
+
+
+@pytest.mark.network
+@pytest.mark.slow
+@pytest.mark.parametrize("name", sorted(_DATASETS))
+def test_the_downloads_read_back_at_the_shape_the_registry_claims(name: str, tmp_path) -> None:
+    adata = getattr(mt.ds, name)(cache_dir=tmp_path)
+
+    assert list(adata.shape) == _DATASETS[name].metadata["shape"]
+    assert adata.obs_names.is_unique
