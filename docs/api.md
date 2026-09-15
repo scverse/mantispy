@@ -237,6 +237,57 @@ biological separation trade off against each other and neither is meaningful alo
 Accessors do not modify the object. `get.to_dataframe` returns the flat table that
 pycytominer and similar tools expect.
 
+## Plotting
+
+```{eval-rst}
+.. module:: mantispy.pl
+.. currentmodule:: mantispy
+
+.. autosummary::
+    :toctree: generated
+
+    pl.plate
+    pl.cell_counts
+    pl.feature_distributions
+    pl.nan_matrix
+    pl.qc
+    pl.plate_effects
+    pl.image_qc
+    pl.control_drift
+    pl.outliers
+    pl.feature_correlation
+    pl.feature_groups
+    pl.feature_signature
+    pl.map
+    pl.replicate_correlation
+    pl.hits
+    pl.effect_sizes
+    pl.feature_volcano
+    pl.dose_response
+    pl.moa_confusion
+    pl.moa_enrichment
+    pl.distance_heatmap
+    pl.setting_agreement
+    pl.transport
+    pl.sets_heatmap
+    pl.cluster_composition
+    pl.cell_cycle
+    pl.density
+    pl.subpopulation_hits
+    pl.replicate_saturation
+    pl.cytotoxicity
+    pl.pathway_coherence
+    pl.batch_variance
+    pl.metrics
+    pl.similarity
+```
+
+There is no dedicated function for a plate map of a per-well flag, which is
+`mt.pl.plate(adata, color="qc_well_pass")`, or for embeddings side by side, which is a loop
+over `sc.pl.embedding`.
+
+Plotting functions return Matplotlib axes and do not modify the object.
+
 ## Datasets
 
 ```{eval-rst}
@@ -300,6 +351,23 @@ dataset-dependent on `rohban` and `pki`.
 
 Both settings, `verbosity` and `cache_dir`, are also read from `MANTISPY_VERBOSITY` and `MANTISPY_CACHE_DIR`, and
 `with mt.settings.override(verbosity=2):` changes one for a block.
+
+## Relative to scmorph
+
+`scmorph` is the other AnnData-based morphological profiling package. mantispy covers its
+functionality with two exceptions:
+
+| scmorph | here |
+| --- | --- |
+| reading CellProfiler CSV output | `io.read_profiles`, on an `ExportToSpreadsheet` directory or on published tables |
+| reading a CellProfiler SQLite database | not yet (planned) |
+| quality control, batch correction, aggregation | `pp` and `tl.aggregate` |
+| feature selection | `pp.feature_select` (pycytominer-equivalent), `pp.feature_select_chatterjee`, `pp.feature_reproducibility` |
+| trajectory inference (`slingshot`, differential progression) | out of scope: a trajectory through morphology space needs an ordering the assay rarely justifies, and scanpy's `sc.tl.paga` and `sc.tl.dpt` already work on these objects |
+
+Hit calling, effect sizes, dose response, mechanism retrieval, feature-set and pathway
+enrichment, cell-state composition, replicate power and cytotoxicity have no counterpart in
+scmorph.
 
 ## Not reimplemented here
 
@@ -371,6 +439,24 @@ that the results are identical to the in-memory path. For a per-plate median on 
 x 500 features, backed mode peaks at 44 MB against a 200 MB resident matrix in memory, and
 takes 3.5 s against 0.8 s. That is about four times the runtime for four times less memory,
 so use it only on data that does not fit in memory.
+
+## Performance
+
+`benchmarks/` holds a suite that is not part of the test run; run it with `pytest benchmarks -s`.
+Measured on a laptop, 100 000 cells by 500 features (`X` is 200 MB):
+
+| operation | time | peak |
+|---|---|---|
+| `np.median` over the whole matrix (the floor) | 0.86 s | 200 MB |
+| `pp.normalize`, per plate | 2.06 s | 232 MB |
+| `pp.feature_select` | 0.41 s | 458 MB |
+| `tl.aggregate` to 7680 wells | 0.39 s | 78 MB |
+| `pp.sphere` on those wells | 0.48 s | 227 MB |
+| `tl.hit_calling`, 1000 permutations | 0.21 s | 7 MB |
+| `tl.map` (copairs) | 65 s | 2465 MB |
+
+At 500 000 cells the preprocessing scales linearly: normalize 12.7 s, aggregate 2.0 s.
+`tl.map` is by far the most expensive step, in both time and memory.
 
 ## Stability
 

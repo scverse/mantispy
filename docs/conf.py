@@ -146,6 +146,3 @@ nitpick_ignore = [
     # scverse-misc 0.1.6 renders `optional` as a type in the Settings.reset signature it generates
     ("py:class", "optional"),
 ]
-
-# Until the rest of the stack lands, docstrings may link to namespaces this branch does not have yet.
-nitpick_ignore_regex = [("py:.*", r"mantispy\.(pl)(\..*)?")]
