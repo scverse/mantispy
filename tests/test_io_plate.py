@@ -59,7 +59,7 @@ def test_stage_coordinates_lay_the_fields_out_in_three_frames(sdata: sd.SpatialD
 
 
 def test_without_stage_coordinates_each_field_sits_in_its_own_frame(unlocated_gallery: Path) -> None:
-    """Nothing places the fields relative to each other, and the reader must degrade rather than invent one."""
+    """Without stage coordinates each field keeps its own frame; the reader does not invent a layout."""
     sdata = mt.io.read_plate(unlocated_gallery, PLATE, batch=BATCH, profile="test")
 
     assert set(sdata.coordinate_systems) == {f"{PLATE}_{w}_s{s}" for w in ("A01", "B02") for s in (1, 2)}
@@ -83,7 +83,7 @@ def test_reading_part_of_a_plate(gallery: Path, kwargs: dict[str, Any], images: 
 
 
 def test_two_plates_concatenate(sdata: sd.SpatialData, gallery: Path) -> None:
-    """Element names carry the plate barcode, which is what lets two plates merge without renaming."""
+    """Element names carry the plate barcode, so two plates merge without renaming."""
     other = mt.io.read_plate(gallery, OVERLAY_PLATE, batch=BATCH, profile="test")
     assert not set(sdata.images) & set(other.images)
 
@@ -208,7 +208,7 @@ def test_an_export_reads_whole(export: Path) -> None:
     assert set(sdata.coordinate_systems) == set(FIELDS)
     assert table.shape == (4, 3)
     assert list(sdata.images[f"{FIELDS[0]}_image"].coords["c"].values) == list(CELL_PAINTING_CHANNELS)
-    # an image and the labels of one field are the same pixel grid, which is what makes overlay work
+    # an image and the labels of one field share a pixel grid, so overlays line up
     named = {name for _, name, _ in sdata.filter_by_coordinate_system(FIELDS[0]).gen_spatial_elements()}
     assert named == {f"{FIELDS[0]}_image", f"{FIELDS[0]}__Nuclei", f"{FIELDS[0]}__Cells"}
 

@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from mantispy.io._cellprofiler import export_plate_dirs, is_export_plate_dir, read_cellprofiler_export
+from mantispy.io._export import export_plate_dirs, is_export_plate_dir, read_cellprofiler_export
 from mantispy.io._gallery import read_gallery_plate
 
 if TYPE_CHECKING:

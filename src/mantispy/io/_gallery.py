@@ -9,7 +9,8 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
-from mantispy.io._profiles import read_profiles
+from mantispy.io._cellprofiler import _prefix
+from mantispy.io._profiles import from_dataframe, read_profiles
 
 if TYPE_CHECKING:
     import numpy.typing as npt
@@ -312,12 +313,12 @@ def _well_table(path: Path, *, region: str | None, plate_format: int) -> ad.AnnD
     from spatialdata import sanitize_table
     from spatialdata.models import TableModel
 
-    adata = read_profiles(path, index_columns=("Plate", "Well"))
+    adata = read_profiles(path, index_columns=("Metadata_Plate", "Metadata_Well"))
     # some sources annotate wells with column names SpatialData rejects, "Common Name" among them
     sanitize_table(adata)
     if region is None:
         return TableModel.parse(adata)
-    grid = np.array([_parse_well(well) for well in adata.obs["Well"]])
+    grid = np.array([_parse_well(well) for well in adata.obs["Metadata_Well"].astype(str)])
     adata.obs["well_index"] = grid[:, 0] * PLATE_FORMATS[plate_format].n_columns + grid[:, 1]
     adata.obs["region"] = pd.Categorical([region] * adata.n_obs)
     return TableModel.parse(adata, region=region, region_key="region", instance_key="well_index")
@@ -327,16 +328,21 @@ def _cell_table(files: Sequence[Path], masks: Mapping[str, npt.NDArray]) -> ad.A
     from spatialdata import sanitize_table
     from spatialdata.models import TableModel
 
-    adata = read_profiles(files, metadata_columns=("ImageNumber", "ObjectNumber"), path_columns={"Metadata_Key": 1})
+    # The analysis tables name their columns without the object, as ExportToSpreadsheet writes them.
+    frame = pd.concat(
+        [_prefix(pd.read_csv(file), "Cells").assign(Metadata_Key=file.parent.name) for file in files],
+        ignore_index=True,
+    ).rename(columns={"ImageNumber": "Metadata_ImageNumber", "ObjectNumber": "Metadata_ObjectNumber"})
+    adata = from_dataframe(frame, resolution="cell")
     obs = cast("pd.DataFrame", adata.obs)
-    keys = obs.pop("Key").str.rsplit("-", n=2, expand=True)
+    keys = obs.pop("Metadata_Key").astype(str).str.rsplit("-", n=2, expand=True)
     plates, wells, sites = (keys[i].astype(str) for i in range(3))
-    obs["Well"] = pd.Categorical(wells)
-    obs["Site"] = sites.astype(int)
+    obs["Metadata_Well"] = pd.Categorical(wells)
+    obs["Metadata_Site"] = sites.astype(int)
     obs["region"] = pd.Categorical(plates + "_" + wells + "_s" + sites + "_cells")
-    adata.obs_names = (obs["region"].astype(str) + ":" + obs["ObjectNumber"].astype(str)).tolist()
+    adata.obs_names = (obs["region"].astype(str) + ":" + obs["Metadata_ObjectNumber"].astype(str)).tolist()
 
-    numbers = adata.obs["ObjectNumber"].to_numpy()
+    numbers = adata.obs["Metadata_ObjectNumber"].to_numpy()
     keep = np.zeros(adata.n_obs, bool)
     for region, mask in masks.items():
         rows = (adata.obs["region"] == region).to_numpy()
@@ -345,7 +351,10 @@ def _cell_table(files: Sequence[Path], masks: Mapping[str, npt.NDArray]) -> ad.A
     adata.obs["region"] = adata.obs["region"].cat.remove_unused_categories()
     sanitize_table(adata)
     return TableModel.parse(
-        adata, region=sorted(adata.obs["region"].cat.categories), region_key="region", instance_key="ObjectNumber"
+        adata,
+        region=sorted(adata.obs["region"].cat.categories),
+        region_key="region",
+        instance_key="Metadata_ObjectNumber",
     )
 
 

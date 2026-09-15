@@ -85,7 +85,13 @@ myst_enable_extensions = [
 ]
 myst_url_schemes = ("http", "https", "mailto")
 nb_output_stderr = "remove"
+# The tutorials claim things -- "it found exactly the images that were degraded" -- that the reader can only
+# believe if the output is there, so the outputs are committed and rendered as they are, and the Read the Docs
+# build downloads nothing. CI's "Tutorials run" job executes every notebook (-D nb_execution_mode=cache), so a
+# committed output cannot silently stop matching the code.
 nb_execution_mode = "off"
+nb_execution_timeout = 900
+nb_execution_raise_on_error = True
 nb_merge_streams = True
 typehints_defaults = "braces"
 always_use_bars_union = True  # use `|` instead of `Union` in types even when building with Python ≤3.14
@@ -103,6 +109,7 @@ intersphinx_mapping = {
     "numpy": ("https://numpy.org/doc/stable/", None),
     "pandas": ("https://pandas.pydata.org/docs/", None),
     "spatialdata": ("https://spatialdata.scverse.org/en/stable/", None),
+    "matplotlib": ("https://matplotlib.org/stable/", None),
 }
 
 # List of patterns, relative to source directory, that match files and
@@ -135,6 +142,10 @@ katex_prerender = shutil.which(katex.NODEJS_BINARY) is not None
 nitpick_ignore = [
     # If building the documentation fails because of a missing link that is outside your control,
     # you can add an exception to this list.
+    #     ("py:class", "igraph.Graph"),
     # scverse-misc 0.1.6 renders `optional` as a type in the Settings.reset signature it generates
     ("py:class", "optional"),
 ]
+
+# Until the rest of the stack lands, docstrings may link to namespaces this branch does not have yet.
+nitpick_ignore_regex = [("py:.*", r"mantispy\.(tl|pl|metrics)(\..*)?")]

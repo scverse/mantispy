@@ -12,5 +12,4 @@ contributing.md
 references.md
 
 tutorials/index
-notebooks/example
 ```

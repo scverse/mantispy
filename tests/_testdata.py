@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+from collections.abc import Sequence
 from pathlib import Path
 
 import anndata as ad
@@ -147,10 +148,10 @@ def _export_labels(n: int, dtype: str) -> np.ndarray:
 
 
 def build_export(tmp_path: Path, *, plate: str = PLATE, failed: str | None = None, label_dtype: str = "int8") -> Path:
-    """Build one plate folder as ExportForSpatialData writes it, manifest and all.
+    """Build one plate folder as ExportForSpatialData writes it, including the manifest.
 
-    `failed` names a field whose arrays are not written, the way a cycle that raised leaves them, so its
-    manifest rows carry a status of `failed` and an error.
+    `failed` names a field whose arrays are not written, as when a cycle raises, so its manifest rows carry a
+    status of `failed` and an error.
     """
     folder = tmp_path / f"{PREFIX}_export" / plate
     rows, obs = [], []
@@ -216,35 +217,70 @@ def build_export(tmp_path: Path, *, plate: str = PLATE, failed: str | None = Non
     return folder
 
 
-def write_export_to_spreadsheet(directory: Path, *, prefix: str = "", n_cells: int = 4) -> Path:
+CHANNELS = ("DNA", "ER")
+
+
+def write_cellprofiler_dir(
+    directory: Path,
+    n_images: int = 4,
+    n_cells: int = 6,
+    channels: Sequence[str] = CHANNELS,
+    link_on: str = "child",
+    one_to_one: bool = True,
+    prefix: str = "",
+) -> Path:
     """One directory as the ExportToSpreadsheet CellProfiler module writes it.
 
-    Cells carry a `Parent_Nuclei` link and Cytoplasm a `Parent_Cells` one, so both join directions are covered.
+    Columns inside an object table do not carry the object's name, and every file carries `prefix`, the way a run
+    configured with ``MyExpt_`` writes ``MyExpt_Image.csv``. `link_on` says where the parent/child link lives:
+    ``"child"`` writes ``Parent_Cells`` on Nuclei, ``"primary"`` writes ``Parent_Nuclei`` on Cells, and CellProfiler
+    emits both depending on the pipeline. ``one_to_one=False`` gives one cell a second nucleus.
     """
+    rng = np.random.default_rng(0)
     directory.mkdir(parents=True, exist_ok=True)
-    numbers = np.arange(1, n_cells + 1)
-    pd.DataFrame(
+
+    image = pd.DataFrame(
         {
-            "ImageNumber": 1,
-            "ObjectNumber": numbers,
-            "AreaShape_Area": numbers * 100.0,
-            "Intensity_MeanIntensity_DNA": numbers / 10,
-            "Parent_Nuclei": numbers[::-1],
+            "ImageNumber": np.arange(1, n_images + 1),
+            "Metadata_Plate": ["P1"] * n_images,
+            "Metadata_Well": (["A01", "A01", "A02", "A02"] * n_images)[:n_images],
+            "Metadata_Site": ([1, 2] * n_images)[:n_images],
+            "Count_Cells": [n_cells] * n_images,
         }
-    ).to_csv(directory / f"{prefix}Cells.csv", index=False)
-    pd.DataFrame(
-        {"ImageNumber": 1, "ObjectNumber": numbers, "AreaShape_Area": numbers * 10.0, "Children_Cells_Count": 1}
-    ).to_csv(directory / f"{prefix}Nuclei.csv", index=False)
-    pd.DataFrame(
-        {"ImageNumber": 1, "ObjectNumber": numbers, "AreaShape_Area": numbers * 5.0, "Parent_Cells": numbers}
-    ).to_csv(directory / f"{prefix}Cytoplasm.csv", index=False)
-    pd.DataFrame(
-        {
-            "ImageNumber": [1],
-            "Metadata_Plate": ["BR00000001"],
-            "Metadata_Well": ["A01"],
-            "ImageQuality_FocusScore_DNA": [0.42],
-            "Count_Cells": [n_cells],
-        }
-    ).to_csv(directory / f"{prefix}Image.csv", index=False)
+    )
+    for channel in channels:
+        image[f"ImageQuality_FocusScore_{channel}"] = rng.normal(0.5, 0.05, n_images)
+        image[f"ImageQuality_PowerLogLogSlope_{channel}"] = rng.normal(-2.0, 0.1, n_images)
+        image[f"FileName_{channel}"] = [f"img{i}_{channel}.tif" for i in range(n_images)]
+        image[f"PathName_{channel}"] = ["/data"] * n_images
+
+    image_no = np.repeat(np.arange(1, n_images + 1), n_cells)
+    object_no = np.tile(np.arange(1, n_cells + 1), n_images)
+    n = len(image_no)
+
+    cells = pd.DataFrame({"ImageNumber": image_no, "ObjectNumber": object_no})
+    cells["AreaShape_Area"] = rng.normal(500, 50, n)
+    cells["AreaShape_Perimeter"] = rng.normal(90, 5, n)
+    for channel in channels:
+        cells[f"Intensity_MeanIntensity_{channel}"] = rng.normal(0.3, 0.05, n)
+        cells[f"Texture_Contrast_{channel}_3_00_256"] = rng.normal(1.0, 0.2, n)
+    cells["Location_Center_X"] = rng.uniform(0, 1024, n)
+    cells["Location_Center_Y"] = rng.uniform(0, 1024, n)
+    cells["Number_Object_Number"] = object_no
+
+    nuclei = pd.DataFrame({"ImageNumber": image_no, "ObjectNumber": object_no})
+    nuclei["AreaShape_Area"] = rng.normal(200, 20, n)
+    for channel in channels:
+        nuclei[f"Intensity_MeanIntensity_{channel}"] = rng.normal(0.4, 0.05, n)
+
+    if link_on == "child":
+        nuclei["Parent_Cells"] = object_no
+        cells["Children_Nuclei_Count"] = 1
+    else:
+        cells["Parent_Nuclei"] = object_no
+    if not one_to_one:  # one cell gains a second nucleus
+        nuclei = pd.concat([nuclei, nuclei.iloc[[0]]], ignore_index=True)
+
+    for name, frame in (("Image", image), ("Cells", cells), ("Nuclei", nuclei)):
+        frame.to_csv(directory / f"{prefix}{name}.csv", index=False)
     return directory

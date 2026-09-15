@@ -12,8 +12,7 @@ and this project adheres to [Semantic Versioning][].
 
 ### Added
 
-- `mantispy.io.read_profiles`, reading CellProfiler well- and cell-level profiles into `AnnData`, including an `ExportToSpreadsheet` directory joined across its objects
-- `mantispy.io.read_plate`, reading a Cell Painting Gallery source or a CellProfiler `ExportForSpatialData` plate folder into `SpatialData`
-- `mantispy.ds`, with the synthetic `blobs` and `blobs_profiles` and twelve Cell Painting Gallery accessions, BBBC021 among them
-- `mantispy.settings`, holding the cache directory the datasets download into
-- Basic tool, preprocessing and plotting functions
+- `mantispy.io`: `read_profiles` for profile files, CellProfiler `ExportToSpreadsheet` directories and CytoTable parquet parts; `read_plate` for a Cell Painting Gallery source or an `ExportForSpatialData` plate folder as `SpatialData`; `read_jump`, `read`, `write` and `validate`
+- `mantispy.ds`: the generated `synthetic_plate` and `blobs`; `bbbc021`, `rohban`, `pki` and `jump_target2` with the annotations the analyses need; nine further Cell Painting Gallery accessions
+- `mantispy.get`, for reading features, controls and flat tables out of an object
+- `mantispy.settings`, holding the verbosity and the cache directory the datasets download into

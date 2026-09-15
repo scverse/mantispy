@@ -1,0 +1,158 @@
+import pandas as pd
+import pytest
+
+from mantispy._core.features import COLUMNS, load_blocklist, parse_feature_names
+
+CHANNELS = ["DNA", "ER", "RNA", "AGP", "Mito"]
+
+
+def _row(name, channels=CHANNELS):
+    return parse_feature_names([name], channels=channels).loc[name]
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("Cells_AreaShape_Area", {"object": "Cells", "feature_group": "AreaShape", "feature": "Area", "channel": None}),
+        (
+            "Cells_Intensity_MeanIntensity_DNA",
+            {"object": "Cells", "feature_group": "Intensity", "feature": "MeanIntensity", "channel": "DNA"},
+        ),
+        (
+            "Nuclei_Texture_Contrast_ER_3_00_256",
+            {
+                "object": "Nuclei",
+                "feature_group": "Texture",
+                "feature": "Contrast",
+                "channel": "ER",
+                "scale": 3.0,
+                "angle": 0.0,
+                "gray_levels": 256.0,
+            },
+        ),
+        (
+            "Nuclei_Texture_Contrast_ER_3",
+            {"feature": "Contrast", "channel": "ER", "scale": 3.0, "angle": None, "gray_levels": None},
+        ),
+        (
+            "Cells_RadialDistribution_FracAtD_Mito_1of4",
+            {"feature_group": "RadialDistribution", "feature": "FracAtD", "channel": "Mito", "radial_bin": "1of4"},
+        ),
+        (
+            "Cells_Granularity_3_AGP",
+            {"feature_group": "Granularity", "feature": "Granularity", "channel": "AGP", "scale": 3.0},
+        ),
+        (
+            "Cells_Correlation_Correlation_DNA_ER",
+            {"feature_group": "Correlation", "feature": "Correlation", "channel": "DNA|ER"},
+        ),
+        (
+            "Cytoplasm_Neighbors_NumberOfNeighbors_Adjacent",
+            {"object": "Cytoplasm", "feature_group": "Neighbors", "feature": "NumberOfNeighbors_Adjacent"},
+        ),
+    ],
+)
+def test_parses_feature_names(name, expected):
+    row = _row(name)
+    assert row["is_feature"]
+    for key, value in expected.items():
+        actual = row[key]
+        if value is None:
+            assert pd.isna(actual), f"{key}: expected NA, got {actual!r}"
+        else:
+            assert actual == value, f"{key}: expected {value!r}, got {actual!r}"
+
+
+def test_zernike_orders_stay_distinct():
+    """Keeping only the first numeric token collapses Zernike_2_0 and Zernike_2_2."""
+    names = ["Cells_AreaShape_Zernike_2_0", "Cells_AreaShape_Zernike_2_2"]
+    parsed = parse_feature_names(names, channels=CHANNELS)
+    assert parsed["params"].tolist() == ["2_0", "2_2"]
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "ImageNumber",
+        "ObjectNumber",
+        "Nuclei_ObjectNumber",
+        "Metadata_Plate",
+        "Cells_Number_Object_Number",
+        "Cells_Location_Center_X",
+        "Cells_Parent_Nuclei",
+        "Cells_Children_Cytoplasm_Count",
+        "Image_Count_Cells",
+        "Image_FileName_DNA",
+        "Image_ExecutionTime_05IdentifyPrimaryObjects",
+    ],
+)
+def test_non_features_flagged(name):
+    assert not _row(name)["is_feature"]
+
+
+def test_unprefixed_names_have_na_object():
+    row = _row("AreaShape_Area")
+    assert pd.isna(row["object"])
+    assert row["feature_group"] == "AreaShape"
+    assert row["is_feature"]
+
+
+def test_channel_inference_without_explicit_channels():
+    names = [
+        "Cells_Intensity_MeanIntensity_DNA",
+        "Cells_Intensity_MaxIntensity_DNA",
+        "Cells_Intensity_MeanIntensity_ER",
+        "Cells_Intensity_MaxIntensity_ER",
+    ]
+    assert set(parse_feature_names(names)["channel"]) == {"DNA", "ER"}
+
+
+@pytest.mark.parametrize(
+    ("channels", "name", "expected_channel"),
+    [
+        (["Hoechst", "GFP"], "Cells_Intensity_MeanIntensity_Hoechst", "Hoechst"),
+        (["Hoechst", "GFP"], "Cells_Correlation_Correlation_Hoechst_GFP", "Hoechst|GFP"),
+        (["w1"], "Cells_Intensity_MeanIntensity_w1", "w1"),
+        (["Ch1", "Ch2", "Ch3"], "Nuclei_Texture_Entropy_Ch3_5_00_256", "Ch3"),
+        (["DAPI"], "Cells_AreaShape_Area", None),  # channel-free feature stays channel-free
+    ],
+)
+def test_parser_is_channel_vocabulary_agnostic(channels, name, expected_channel):
+    """CellProfiler grammar is the default; the channel names are not baked in."""
+    row = _row(name, channels=channels)
+    assert row["is_feature"]
+    if expected_channel is None:
+        assert pd.isna(row["channel"])
+    else:
+        assert row["channel"] == expected_channel
+
+
+def test_unknown_group_is_still_treated_as_a_feature():
+    """cp_measure and new CellProfiler modules emit groups the parser does not know."""
+    row = _row("Cells_SomeNewModule_SomeStatistic_GFP", channels=["GFP"])
+    assert row["is_feature"]
+    assert row["feature_group"] == "SomeNewModule"
+    assert row["channel"] == "GFP"
+
+
+def test_frame_shape_and_dtypes():
+    names = ["Cells_AreaShape_Area", "Nuclei_AreaShape_Area"]
+    parsed = parse_feature_names(names, channels=CHANNELS)
+    assert list(parsed.index) == names
+    assert list(parsed.columns) == COLUMNS
+    # category dtype keeps all-missing columns writable to h5ad
+    assert str(parsed["channel"].dtype) == "category"
+    assert parsed["is_feature"].dtype == bool
+
+
+def test_blocklist_loads():
+    blocklist = load_blocklist()
+    assert len(blocklist) == 55
+    assert all(isinstance(name, str) for name in blocklist)
+    assert any("Manders" in name for name in blocklist)
+    assert not any(name.startswith("#") for name in blocklist)
+
+
+def test_blocklist_rejects_unknown_name():
+    with pytest.raises(ValueError, match="unknown blocklist"):
+        load_blocklist("nope")
