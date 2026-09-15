@@ -1,0 +1,239 @@
+"""Experimental design diagnostics: replicate saturation and cytotoxicity."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+
+import numpy as np
+import pandas as pd
+from anndata import AnnData
+
+from mantispy._core._numba import MEDIAN, grouped_stat
+from mantispy._core._reduce import group_codes, representation
+from mantispy._core._utils import as_frame, get_logger, inplace_or_copy, reference_mask
+
+
+def signature_stability(
+    profiles: np.ndarray, members: list[np.ndarray], depth: int, generator: np.random.Generator
+) -> float:
+    """Median correlation between two independent ``depth``-replicate signatures per group.
+
+    Draws ``2 * depth`` replicates per group, splits them into halves and correlates the two
+    medians. This shows at what depth a signature stops changing when a different set of
+    wells is drawn. It needs no labels and is defined from a depth of one.
+    """
+    scores = []
+    for rows in members:
+        if rows.size < 2 * depth:
+            continue
+        drawn = generator.choice(rows, size=2 * depth, replace=False)
+        # Both halves in one grouped-median call. np.nanmedian dispatches per feature slice,
+        # and this runs n_draws times for every depth of every group.
+        halves = grouped_stat(profiles[drawn], np.repeat([0, 1], depth).astype(np.int32), 2, MEDIAN)
+        left, right = halves[0], halves[1]
+        usable = np.isfinite(left) & np.isfinite(right)
+        if usable.sum() < 2 or np.ptp(left[usable]) == 0 or np.ptp(right[usable]) == 0:
+            continue
+        scores.append(float(np.corrcoef(left[usable], right[usable])[0, 1]))
+    return float(np.median(scores)) if scores else float("nan")
+
+
+def signature_convergence(
+    profiles: np.ndarray, members: list[np.ndarray], depth: int, generator: np.random.Generator
+) -> float:
+    """Median correlation between a ``depth``-replicate signature and the full one.
+
+    Defined up to one less than the group size, whereas ``signature_stability`` needs twice
+    the depth and gives a single point at three replicates per treatment, as in BBBC021.
+    The subset is part of the full set it is compared against, so the correlation is
+    optimistic. Read the shape of the curve rather than its height.
+    """
+    scores = []
+    for rows in members:
+        if rows.size <= depth:
+            continue
+        whole = grouped_stat(profiles[rows], np.zeros(rows.size, dtype=np.int32), 1, MEDIAN)[0]
+        drawn = generator.choice(rows, size=depth, replace=False)
+        part = grouped_stat(profiles[drawn], np.zeros(depth, dtype=np.int32), 1, MEDIAN)[0]
+        usable = np.isfinite(whole) & np.isfinite(part)
+        if usable.sum() < 2 or np.ptp(whole[usable]) == 0 or np.ptp(part[usable]) == 0:
+            continue
+        scores.append(float(np.corrcoef(whole[usable], part[usable])[0, 1]))
+    return float(np.median(scores)) if scores else float("nan")
+
+
+METRICS = {"signature_stability": signature_stability, "convergence": signature_convergence}
+
+
+@inplace_or_copy(expects=("well", "perturbation"))
+def replicate_saturation(
+    adata: AnnData,
+    groupby: str = "Metadata_Perturbation",
+    metric: str | Callable[[np.ndarray, np.ndarray, int, np.random.Generator], float] = "signature_stability",
+    max_replicates: int | None = None,
+    min_groups: int = 3,
+    n_draws: int = 5,
+    use_rep: str | None = None,
+    seed: int = 0,
+    key_added: str = "replicate_saturation",
+    copy: bool = False,
+) -> AnnData | None:
+    """Score how much a group's signature improves with each additional replicate.
+
+    Args:
+        adata: Well-level profiles with several replicates per group.
+        groupby: The column whose groups are the replicate sets.
+        metric: ``"signature_stability"`` correlates two disjoint subsets of this depth. It is
+            unbiased but needs ``2 * depth`` replicates, so it stops early on a screen with three.
+            ``"convergence"`` correlates a subset of this depth with the group's full signature.
+            It is defined up to one less than the group size and optimistic by construction.
+            A callable ``(profiles, codes, depth, generator) -> float`` can score anything else,
+            such as MOA retrieval or mAP.
+        max_replicates: Deepest subset to try. ``None`` derives it from ``min_groups``.
+        min_groups: Number of groups that must be able to supply a depth for it to be scored.
+            The statistic is a median over the contributing groups, and the largest group is
+            usually the negative controls. On 132 JUMP plates, taking the range from the largest
+            group gives 4252 depths, and past about 66 only DMSO contributes.
+            ``min_groups=1`` takes the range from the largest group.
+        n_draws: Random subsets per depth. The spread across draws is reported as ``std``.
+        use_rep: Score ``obsm[use_rep]`` instead of ``X``.
+        seed: Seed for reproducibility.
+        key_added: Name for the output table.
+        copy: Return a modified copy instead of mutating in place.
+
+    Returns:
+        ``None``, or the modified copy. Writes ``uns["mantispy"][key_added]`` with
+        ``n_replicates``, ``mean``, ``std`` and ``n_draws``.
+
+    Notes:
+        A curve that still climbs steeply at the deepest depth means the screen is
+        under-replicated, which informs the design of the next experiment. Three replicates, as
+        in BBBC021, give one point with the default metric and two with ``"convergence"``.
+    """
+    profiles = representation(adata, use_rep)
+    codes, keys = group_codes(adata, groupby)
+    sizes = np.bincount(codes, minlength=len(keys))
+    if isinstance(metric, str) and metric not in METRICS:
+        raise ValueError(f"metric must be one of {tuple(METRICS)} or a callable, got {metric!r}")
+
+    if max_replicates is not None:
+        deepest = max_replicates
+    else:
+        # The deepest depth that `min_groups` groups can still supply. The largest group is
+        # usually the negative controls, 8505 wells on JUMP against a median group size of 132.
+        ranked = np.sort(sizes)[::-1]
+        pivot = int(ranked[min(min_groups, ranked.size) - 1]) if ranked.size else 0
+        deepest = max(pivot - 1 if metric == "convergence" else pivot // 2, 1)
+
+    # Group the rows once; `codes == group` inside the loop is an O(n_obs) scan per group,
+    # repeated n_draws * deepest times.
+    order = np.argsort(codes, kind="stable")
+    starts = np.cumsum(np.concatenate([[0], sizes]))
+    members: list[np.ndarray] = [order[starts[group] : starts[group + 1]] for group in range(len(keys))]
+
+    records = []
+    for depth in range(1, deepest + 1):
+        generator = np.random.default_rng(seed + depth)
+        if isinstance(metric, str):
+            values = np.array([METRICS[metric](profiles, members, depth, generator) for _ in range(n_draws)])
+        else:
+            values = np.array([metric(profiles, codes, depth, generator) for _ in range(n_draws)])
+        if np.isnan(values).all():
+            get_logger().info("replicate_saturation: no group has enough replicates at depth %d; stopping", depth)
+            break
+        records.append(
+            {
+                "n_replicates": depth,
+                "mean": float(np.nanmean(values)),
+                "std": float(np.nanstd(values)),
+                "n_draws": int(np.isfinite(values).sum()),
+            }
+        )
+
+    adata.uns.setdefault("mantispy", {})[key_added] = pd.DataFrame(
+        records, columns=["n_replicates", "mean", "std", "n_draws"]
+    )
+    return None
+
+
+@inplace_or_copy(expects=("well", "perturbation"))
+def cytotoxicity(
+    adata: AnnData,
+    groupby: str = "Metadata_Perturbation",
+    reference: str | None = "negcon",
+    count_key: str = "Metadata_CellCount",
+    distance_key: str = "hits_distance",
+    min_viability: float = 0.7,
+    key_added: str = "cytotoxicity",
+    copy: bool = False,
+) -> AnnData | None:
+    """Flag perturbations that both lost cells and moved away from the controls.
+
+    Args:
+        adata: Profiles carrying a per-well cell count and a per-row distance from the controls.
+        groupby: The column defining a perturbation.
+        reference: Rows whose median cell count defines a viability of 1.0.
+        count_key: ``obs`` column holding the cell count.
+        distance_key: ``obs`` column holding the distance from the controls, as written by
+            :func:`~mantispy.tl.hit_calling`.
+        min_viability: Fraction of the control cell count below which a group counts as having lost cells.
+        key_added: Name for the outputs.
+        copy: Return a modified copy instead of mutating in place.
+
+    Returns:
+        ``None``, or the modified copy. Writes ``uns["mantispy"][key_added]`` with ``group``,
+        ``viability``, ``distance``, ``n_obs`` and ``suspect``, and broadcasts
+        ``obs[key_added + "_suspect"]``.
+
+    Notes:
+        A group is suspect when its viability is below ``min_viability`` and its median
+        distance is above that of the controls. Cell loss alone is a phenotype, and a large
+        distance alone is a hit. Together they are suspect because a well with a fifth of its
+        cells has a noisier median and drifts from the controls regardless of the biology. On
+        a synthetic plate with one purely cytotoxic perturbation and its morphology effect
+        removed, that perturbation's distance was 21.1 against 7.0 for the controls.
+
+        The flag is a diagnostic and does not correct the distances. How much cytotoxicity
+        confounds a screen varies. Over the pki dose series, the rank correlation between
+        phenotype distance and cell loss is +0.79 (p < 1e-8) and the four strongest hits have
+        viabilities of 0.27 to 0.68. Over rohban2017's ORF overexpression the same correlation
+        is +0.00 (p = 0.95). Measure it on your own screen.
+    """
+    obs = as_frame(adata.obs)
+    if count_key not in obs:
+        raise KeyError(f"obs has no column {count_key!r}; mt.tl.aggregate writes Metadata_CellCount")
+    if distance_key not in obs:
+        raise KeyError(
+            f"obs has no column {distance_key!r}; run mt.tl.hit_calling first, which writes "
+            "obs['hits_distance'], or name another column"
+        )
+
+    is_control = reference_mask(adata, reference)
+    counts = obs[count_key].to_numpy(dtype=float)
+    distances = obs[distance_key].to_numpy(dtype=float)
+    control_count = float(np.nanmedian(counts[is_control]))
+    control_distance = float(np.nanmedian(distances[is_control]))
+    if not np.isfinite(control_count) or control_count <= 0:
+        raise ValueError(f"the reference rows have no usable {count_key!r} to normalize viability against")
+
+    codes, keys = group_codes(adata, groupby)
+    records = []
+    for index, key in enumerate(keys):
+        rows = np.flatnonzero(codes == index)
+        viability = float(np.nanmedian(counts[rows])) / control_count
+        distance = float(np.nanmedian(distances[rows]))
+        records.append(
+            {
+                "group": str(key),
+                "n_obs": int(rows.size),
+                "viability": viability,
+                "distance": distance,
+                "suspect": bool(viability < min_viability and distance > control_distance),
+            }
+        )
+
+    table = pd.DataFrame(records)
+    adata.uns.setdefault("mantispy", {})[key_added] = table
+    adata.obs[f"{key_added}_suspect"] = table.set_index("group")["suspect"].reindex(obs[groupby].astype(str)).to_numpy()
+    get_logger().info("cytotoxicity flagged %d of %d groups as suspect", int(table["suspect"].sum()), len(table))
+    return None

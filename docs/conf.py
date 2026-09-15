@@ -148,4 +148,4 @@ nitpick_ignore = [
 ]
 
 # Until the rest of the stack lands, docstrings may link to namespaces this branch does not have yet.
-nitpick_ignore_regex = [("py:.*", r"mantispy\.(tl|pl|metrics)(\..*)?")]
+nitpick_ignore_regex = [("py:.*", r"mantispy\.(pl)(\..*)?")]
