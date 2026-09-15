@@ -54,6 +54,67 @@ pip install 'mantispy[spatial]'
     :members:
 ```
 
+## Preprocessing
+
+```{eval-rst}
+.. module:: mantispy.pp
+.. currentmodule:: mantispy
+
+.. autosummary::
+    :toctree: generated
+
+    pp.annotate_controls
+    pp.annotate_jump
+    pp.find_perturbation_key
+    pp.calculate_qc_metrics
+    pp.filter_cells
+    pp.filter_features
+    pp.normalize
+    pp.feature_select
+    pp.subset_features
+    pp.outliers
+    pp.image_qc
+    pp.filter_images
+    pp.well_qc
+    pp.standardize_feature_names
+    pp.sphere
+    pp.correct_plate_position
+    pp.regress_out
+    pp.harmony
+    pp.rank_int
+    pp.downsample
+    pp.feature_select_chatterjee
+    pp.feature_reproducibility
+    pp.feature_batch_sensitivity
+```
+
+| Function | Stores |
+| --- | --- |
+| `pp.annotate_controls` | `obs["Metadata_Control"]`, and `obs["Metadata_Control_Type"]` when `poscon` is given |
+| `pp.annotate_jump` | `obs`: `Metadata_JCP2022`, `Metadata_Perturbation`, `Metadata_InChIKey`, `Metadata_Control` |
+| `pp.calculate_qc_metrics` | `obs`: `qc_n_nan_features`, `qc_nan_fraction`, `qc_is_border`, `qc_area_outlier`, `qc_pass`; `var`: `qc_n_nan`, `qc_variance`, `qc_n_unique` |
+| `pp.filter_cells` | subsets `obs` in place |
+| `pp.filter_features` | subsets `var` in place |
+| `pp.normalize` | `X`, or `layers[key_added]`; `layers["raw"]` when `keep_raw=True` |
+| `pp.feature_select` | `var[key_added]`, `uns["mantispy"]["feature_select"]` |
+| `pp.outliers` | `obs[key_added]`, `obs[key_added + "_score"]` |
+| `pp.image_qc` | `uns["mantispy"]["image_qc"]`, `obs["qc_image_pass"]` |
+| `pp.well_qc` | `uns["mantispy"]["well_qc"]`, `obs["qc_well_pass"]` |
+| `pp.standardize_feature_names` | `var_names`, `var["original_name"]` |
+| `pp.sphere` | `X`, or `layers[key_added]` |
+| `pp.correct_plate_position` | `X` or `layers[key_added]`, `uns["mantispy"]["plate_position"]` |
+| `pp.regress_out` | `X`, or `layers[key_added]` |
+| `pp.harmony` | `obsm[key_added]`; needs `mantispy[harmony]` |
+| `pp.rank_int` | `X`, or `layers[key_added]` |
+| `pp.downsample` | returns a new object holding the sampled rows |
+| `pp.feature_select_chatterjee` | `var[key_added]`, `var["chatterjee_xi"]` |
+| `pp.feature_reproducibility` | `var[key_added]`, `var[key_added + "_selected"]` |
+| `pp.feature_batch_sensitivity` | `var[key_added + "_pvalue"]`, `_qvalue`, `_sensitive` |
+
+`pp.normalize` also writes `var["degenerate_scale"]`, flagging features with no spread in
+some group. Those are divided by `epsilon` rather than by zero and come back at ~1e17;
+drop them before computing anything from distances.
+
 ## Accessors
 
 ```{eval-rst}
@@ -136,6 +197,29 @@ dataset-dependent on `rohban` and `pki`.
 
 Both settings, `verbosity` and `cache_dir`, are also read from `MANTISPY_VERBOSITY` and `MANTISPY_CACHE_DIR`, and
 `with mt.settings.override(verbosity=2):` changes one for a block.
+
+## Not reimplemented here
+
+Dimensionality reduction, neighborhood graphs, embeddings and clustering come from scanpy.
+Call them directly on the same object:
+
+```python
+import scanpy as sc
+
+sc.pp.pca(wells, n_comps=50)
+sc.pp.neighbors(wells)
+sc.tl.umap(wells)
+```
+
+Harmony is wrapped as `pp.harmony`. It is the last step of the JUMP consortium's recipe and
+the best performer in Arevalo et al. (2024). It needs the optional extra:
+
+```bash
+pip install 'mantispy[harmony]'
+```
+
+It corrects an embedding rather than the features, so run `sc.pp.pca` first. The other
+corrections are `pp.sphere`, `pp.correct_plate_position` and `pp.regress_out`.
 
 ## The data contract
 

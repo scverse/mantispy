@@ -16,3 +16,4 @@ and this project adheres to [Semantic Versioning][].
 - `mantispy.ds`: the generated `synthetic_plate` and `blobs`; `bbbc021`, `rohban`, `pki` and `jump_target2` with the annotations the analyses need; nine further Cell Painting Gallery accessions
 - `mantispy.get`, for reading features, controls and flat tables out of an object
 - `mantispy.settings`, holding the verbosity and the cache directory the datasets download into
+- `mantispy.pp`: quality control at cell, image and well level, normalization, feature selection, outlier detection, sphering, plate-position correction and Harmony
