@@ -69,7 +69,7 @@ test = [
   "coverage>=7.10",
   # pp.harmony; harmonypy has no Python 3.14 wheel yet and its source build fails on Linux
   "harmonypy>=2; python_version<'3.14'",
-  # sc.tl.leiden needs both. scib currently pulls them in too, but that is not a guarantee.
+  # sc.tl.leiden needs both.
   "igraph",
   "leidenalg",
   "mantispy[spatial]",
@@ -77,21 +77,12 @@ test = [
   "pyod>=2",
   "pytest",
   "pytest-cov",                          # For VS Code’s coverage functionality
-  "scib>=1.1",
   "scmorph>=0.1",                        # Chatterjee/XIM parity
 ]
 doc = [
-  "copairs>=0.5",                # tutorials 04/08/09 call tl.map; needs envs.docs.python = "3.12" below
-  "harmonypy>=2",                # tutorial 9 calls pp.harmony
-  # tutorial 7 clusters with sc.tl.leiden, which needs both.
-  "igraph",
-  "ipykernel",
-  "ipython",
-  "leidenalg",
-  "mantispy[spatial]",
+  "ipython",                     # conf.py enables IPython.sphinxext.ipython_console_highlighting
+  "mantispy[spatial]",           # autodoc imports io._plate
   "myst-nb>=1.1",
-  "nbconvert>=7",
-  "pandas",
   "scverse-misc[sphinx]>=0.1.6",
   "sphinx>=8.1",
   "sphinx-autodoc-typehints",
@@ -102,6 +93,16 @@ doc = [
   "sphinxcontrib-katex",
   "sphinxext-opengraph",
 ]
+# Executing the notebooks needs what they call. copairs caps itself below Python 3.13, which is why the
+# tutorials environment pins 3.12 while the docs build itself runs on any version.
+tutorials = [
+  { include-group = "doc" },
+  "copairs>=0.5",
+  "harmonypy>=2",
+  "igraph",
+  "ipykernel",
+  "leidenalg",
+]
 typecheck = [
   "mypy",
   "pandas-stubs",
@@ -111,9 +112,7 @@ typecheck = [
 [tool.hatch]
 envs.default.installer = "uv"
 envs.default.dependency-groups = [ "dev" ]
-# copairs (tl.map, used by tutorials 04/08/09) declares requires-python <3.13. The docs build
-# executes those tutorials, so it is pinned to Python 3.12.
-envs.docs.python = "3.12"
+# The docs build renders the notebook outputs committed with them, so it downloads and executes nothing.
 envs.docs.scripts.build = "sphinx-build -M html docs docs/_build -W {args}"
 envs.docs.scripts.clean = "git clean -fdX -- {args:docs}"
 envs.docs.scripts.open = "python -m webbrowser -t docs/_build/html/index.html"
@@ -138,6 +137,10 @@ envs.hatch-test.overrides.matrix.deps.env-vars = [
   { value = "allow", key = "UV_PRERELEASE", if = [ "pre" ] },
 ]
 envs.hatch-test.dependency-groups = [ "dev", "test" ]
+# CI executes every notebook here, which keeps the committed outputs honest. Pinned to 3.12 for copairs.
+envs.tutorials.python = "3.12"
+envs.tutorials.scripts.run = "sphinx-build -M html docs docs/_build -W -D nb_execution_mode=cache {args}"
+envs.tutorials.dependency-groups = [ "tutorials" ]
 
 [tool.ruff]
 line-length = 120

@@ -12,7 +12,8 @@ import numpy as np
 import pandas as pd
 
 from mantispy._core._reduce import get_matrix
-from mantispy._core._utils import as_frame, reference_mask
+from mantispy._core.frames import as_frame
+from mantispy._core.masks import reference_mask
 from mantispy._core.plate import well_col, well_row
 
 if TYPE_CHECKING:

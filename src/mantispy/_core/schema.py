@@ -16,8 +16,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from ._utils import get_logger
 from .features import COLUMNS as VAR_COLUMNS
+from .logging import get_logger
 from .plate import normalize_well
 
 if TYPE_CHECKING:

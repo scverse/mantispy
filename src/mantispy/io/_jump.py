@@ -22,7 +22,7 @@ from pathlib import Path
 import pandas as pd
 from anndata import AnnData
 
-from mantispy._core._utils import get_logger
+from mantispy._core.logging import get_logger
 from mantispy.io._profiles import read_profiles
 
 #: JUMP's annotation tables, pinned by sha256 in the dataset registry because the upstream repository is mutable.

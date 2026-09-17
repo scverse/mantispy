@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from mantispy._core._reduce import get_matrix
-from mantispy._core._utils import as_frame
+from mantispy._core.frames import as_frame
 from mantispy._core.plate import PLATE_FORMATS, detect_plate_format, row_label, well_col, well_row
 
 if TYPE_CHECKING:

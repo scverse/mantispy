@@ -11,7 +11,9 @@ from collections.abc import Sequence
 import numpy as np
 from anndata import AnnData
 
-from mantispy._core._utils import as_frame, categorize_metadata, get_logger, inplace_or_copy
+from mantispy._core.frames import as_frame, categorize_metadata
+from mantispy._core.logging import get_logger
+from mantispy._core.mutation import inplace_or_copy
 
 #: Columns checked, in order, when the perturbation column is not named explicitly.
 PERTURBATION_KEYS = (

@@ -22,7 +22,8 @@ from scipy import stats
 
 from mantispy._core._reduce import get_matrix, group_codes
 from mantispy._core._stats import benjamini_hochberg
-from mantispy._core._utils import as_frame, reference_mask
+from mantispy._core.frames import as_frame
+from mantispy._core.masks import reference_mask
 from mantispy._core.schema import get_resolution, stamp
 
 #: How far the observed null rate may exceed the nominal one before it is a failure.

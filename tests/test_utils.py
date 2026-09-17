@@ -5,7 +5,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from mantispy._core._utils import inplace_or_copy, record_params, warn_resolution
+from mantispy._core.mutation import inplace_or_copy, warn_resolution
+from mantispy._core.provenance import record_params
 
 
 def _adata():

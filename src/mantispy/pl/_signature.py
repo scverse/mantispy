@@ -11,7 +11,7 @@ from scipy.cluster import hierarchy
 from scipy.spatial import distance
 
 from mantispy._core._reduce import get_matrix
-from mantispy._core._utils import as_frame
+from mantispy._core.frames import as_frame
 
 
 def feature_signature(

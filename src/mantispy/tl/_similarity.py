@@ -7,7 +7,8 @@ import pandas as pd
 from anndata import AnnData
 
 from mantispy._core._reduce import group_codes, representation
-from mantispy._core._utils import inplace_or_copy, reference_mask
+from mantispy._core.masks import reference_mask
+from mantispy._core.mutation import inplace_or_copy
 
 METRICS = ("cosine", "pearson")
 

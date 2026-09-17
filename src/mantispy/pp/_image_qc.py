@@ -13,7 +13,9 @@ import numpy as np
 import pandas as pd
 from anndata import AnnData
 
-from mantispy._core._utils import as_frame, get_logger, inplace_or_copy, report_drop
+from mantispy._core.frames import as_frame
+from mantispy._core.logging import get_logger, report_drop
+from mantispy._core.mutation import inplace_or_copy
 
 #: Metrics MeasureImageQuality writes that say something about usable image quality.
 DEFAULT_METRICS = ("FocusScore", "PowerLogLogSlope", "PercentMaximal", "PercentMinimal", "Saturation")

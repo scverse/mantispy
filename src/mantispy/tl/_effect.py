@@ -18,7 +18,9 @@ from scipy.stats import mannwhitneyu, wasserstein_distance
 from mantispy._core._numba import _wasserstein_against
 from mantispy._core._reduce import get_matrix, group_codes
 from mantispy._core._stats import MAD_TO_SIGMA, benjamini_hochberg, mannwhitney_pvalues, sorted_control
-from mantispy._core._utils import get_logger, inplace_or_copy, reference_mask
+from mantispy._core.logging import get_logger
+from mantispy._core.masks import reference_mask
+from mantispy._core.mutation import inplace_or_copy
 
 METHODS = ("cohens_d", "robust_z")
 

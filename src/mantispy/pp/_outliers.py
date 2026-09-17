@@ -8,7 +8,9 @@ from anndata import AnnData
 from mantispy._core._ecod import ecod_scores
 from mantispy._core._reduce import get_matrix, group_codes
 from mantispy._core._stats import robust_zscore
-from mantispy._core._utils import feature_mask, get_logger, inplace_or_copy
+from mantispy._core.logging import get_logger
+from mantispy._core.masks import feature_mask
+from mantispy._core.mutation import inplace_or_copy
 
 METHODS = ("ecod", "isolation_forest", "mad")
 

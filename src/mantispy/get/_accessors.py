@@ -9,8 +9,9 @@ import pandas as pd
 from anndata import AnnData
 
 from mantispy._core._reduce import get_matrix
-from mantispy._core._utils import as_frame, feature_mask, reference_mask
 from mantispy._core.features import canonical_channel
+from mantispy._core.frames import as_frame
+from mantispy._core.masks import feature_mask, reference_mask
 
 
 def features(

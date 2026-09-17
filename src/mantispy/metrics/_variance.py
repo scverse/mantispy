@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-from mantispy._core._utils import as_frame
+from mantispy._core.frames import as_frame
 from mantispy.metrics._common import embedding, r_squared, tidy
 
 if TYPE_CHECKING:

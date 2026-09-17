@@ -6,7 +6,8 @@ import numpy as np
 import pandas as pd
 from anndata import AnnData
 
-from mantispy._core._utils import as_frame, inplace_or_copy
+from mantispy._core.frames import as_frame
+from mantispy._core.mutation import inplace_or_copy
 
 TARGETS = ("cp_measure",)
 

@@ -11,8 +11,10 @@ from anndata import AnnData
 from mantispy._core._corr import CHUNK_BYTES
 from mantispy._core._numba import MAD, MEDIAN, grouped_stat
 from mantispy._core._reduce import get_matrix, group_codes
-from mantispy._core._utils import as_frame, get_logger, inplace_or_copy, report_drop
 from mantispy._core.features import blocklist_hits
+from mantispy._core.frames import as_frame
+from mantispy._core.logging import get_logger, report_drop
+from mantispy._core.mutation import inplace_or_copy
 
 #: Robust z above which a cell's area is called an outlier.
 AREA_Z_CUTOFF = 5.0

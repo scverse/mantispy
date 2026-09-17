@@ -10,7 +10,8 @@ import pandas as pd
 
 from mantispy._core._corr import corr_matrix
 from mantispy._core._reduce import get_matrix
-from mantispy._core._utils import as_frame, feature_mask
+from mantispy._core.frames import as_frame
+from mantispy._core.masks import feature_mask
 
 if TYPE_CHECKING:
     from anndata import AnnData

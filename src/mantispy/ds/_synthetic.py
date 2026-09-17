@@ -15,8 +15,8 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
-from mantispy._core._utils import categorize_metadata
 from mantispy._core.features import parse_feature_names
+from mantispy._core.frames import categorize_metadata
 from mantispy._core.plate import PLATE_FORMATS, well_col, well_name, well_row
 from mantispy._core.schema import stamp
 

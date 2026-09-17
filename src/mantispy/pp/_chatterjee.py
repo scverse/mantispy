@@ -17,7 +17,8 @@ import numpy as np
 from anndata import AnnData
 
 from mantispy._core._reduce import get_matrix, group_codes
-from mantispy._core._utils import get_logger, inplace_or_copy
+from mantispy._core.logging import get_logger
+from mantispy._core.mutation import inplace_or_copy
 
 
 def chatterjee_xi(x: np.ndarray, y: np.ndarray, m: int = 1, seed: int = 0) -> np.ndarray:

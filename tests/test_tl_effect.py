@@ -129,7 +129,7 @@ def test_effect_size_pvalues_are_unchanged_by_the_fast_path(perturbed):
     from scipy.stats import mannwhitneyu
 
     from mantispy._core._reduce import get_matrix, group_codes
-    from mantispy._core._utils import reference_mask
+    from mantispy._core.masks import reference_mask
 
     mt.tl.effect_size(perturbed)
     values = get_matrix(perturbed).astype(np.float64)
@@ -169,7 +169,7 @@ def test_the_pre_sorted_wasserstein_matches_scipy(kind):
 def test_wasserstein_features_is_unchanged_by_the_pre_sorted_path(perturbed):
     """End to end: the same distances the per-group path would have written."""
     from mantispy._core._reduce import get_matrix, group_codes
-    from mantispy._core._utils import reference_mask
+    from mantispy._core.masks import reference_mask
 
     mt.tl.wasserstein_features(perturbed)
     values = get_matrix(perturbed)

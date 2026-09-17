@@ -12,7 +12,9 @@ from anndata import AnnData
 
 from mantispy._core._numba import MEAN, MEDIAN
 from mantispy._core._reduce import group_codes, reduce_grouped
-from mantispy._core._utils import as_frame, categorize_metadata, get_logger, record_params
+from mantispy._core.frames import as_frame, categorize_metadata
+from mantispy._core.logging import get_logger
+from mantispy._core.provenance import record_params
 from mantispy._core.schema import stamp
 
 #: Aggregation functions, mapped to the kernel selector that computes them.

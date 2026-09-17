@@ -10,7 +10,10 @@ from anndata import AnnData
 
 from mantispy._core._numba import MEDIAN, grouped_stat
 from mantispy._core._reduce import group_codes, representation
-from mantispy._core._utils import as_frame, get_logger, inplace_or_copy, reference_mask
+from mantispy._core.frames import as_frame
+from mantispy._core.logging import get_logger
+from mantispy._core.masks import reference_mask
+from mantispy._core.mutation import inplace_or_copy
 
 
 def signature_stability(

@@ -18,7 +18,8 @@ from scipy.special import ndtri
 from scipy.stats import rankdata
 
 from mantispy._core._reduce import get_matrix, group_codes
-from mantispy._core._utils import get_logger, inplace_or_copy
+from mantispy._core.logging import get_logger
+from mantispy._core.mutation import inplace_or_copy
 
 #: Blom's constant, the default the field uses for the quantile estimate.
 BLOM = 3.0 / 8.0

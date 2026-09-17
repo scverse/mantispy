@@ -8,7 +8,8 @@ from scipy.stats import kruskal
 
 from mantispy._core._reduce import get_matrix, group_codes
 from mantispy._core._stats import benjamini_hochberg
-from mantispy._core._utils import get_logger, inplace_or_copy
+from mantispy._core.logging import get_logger
+from mantispy._core.mutation import inplace_or_copy
 
 
 def intraclass_correlation(X: np.ndarray, codes: np.ndarray, n_groups: int) -> np.ndarray:

@@ -19,7 +19,7 @@ from platformdirs import user_cache_dir
 from pydantic import Field, field_validator
 from scverse_misc import Settings
 
-from mantispy._core._utils import get_logger
+from mantispy._core.logging import get_logger
 
 #: Verbosity to logging level, matching ``scanpy.settings.verbosity``.
 LEVELS = {0: logging.ERROR, 1: logging.WARNING, 2: logging.INFO, 3: logging.DEBUG}

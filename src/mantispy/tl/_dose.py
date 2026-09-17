@@ -11,7 +11,9 @@ from scipy.optimize import OptimizeWarning, curve_fit
 from scipy.stats import ConstantInputWarning, spearmanr
 
 from mantispy._core._stats import benjamini_hochberg
-from mantispy._core._utils import as_frame, get_logger, inplace_or_copy
+from mantispy._core.frames import as_frame
+from mantispy._core.logging import get_logger
+from mantispy._core.mutation import inplace_or_copy
 
 
 def four_parameter_logistic(

@@ -19,7 +19,10 @@ from scipy.stats import chisquare
 from mantispy._core._distance import pairwise_sqeuclidean
 from mantispy._core._reduce import get_matrix, group_codes, representation
 from mantispy._core._stats import benjamini_hochberg
-from mantispy._core._utils import as_frame, get_logger, inplace_or_copy, reference_mask
+from mantispy._core.frames import as_frame
+from mantispy._core.logging import get_logger
+from mantispy._core.masks import reference_mask
+from mantispy._core.mutation import inplace_or_copy
 from mantispy._core.schema import stamp
 from mantispy.tl._aggregate import _group_obs
 from mantispy.tl._hits import ks_statistic

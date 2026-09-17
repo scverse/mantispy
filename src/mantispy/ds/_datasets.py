@@ -14,7 +14,8 @@ import numpy as np
 import pandas as pd
 from scverse_misc.datasets import fetch, parse_registry, register_loader
 
-from mantispy._core._utils import as_frame, get_logger
+from mantispy._core.frames import as_frame
+from mantispy._core.logging import get_logger
 from mantispy._settings import settings
 from mantispy.io._jump import read_jump
 from mantispy.io._profiles import from_dataframe, read_profiles

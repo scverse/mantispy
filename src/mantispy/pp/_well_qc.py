@@ -7,7 +7,9 @@ import pandas as pd
 from anndata import AnnData
 
 from mantispy._core._reduce import get_matrix, group_codes
-from mantispy._core._utils import feature_mask, get_logger, inplace_or_copy, reference_mask
+from mantispy._core.logging import get_logger
+from mantispy._core.masks import feature_mask, reference_mask
+from mantispy._core.mutation import inplace_or_copy
 
 
 @inplace_or_copy()

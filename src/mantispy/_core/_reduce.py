@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 
 from ._numba import MAD, MEAN, MEDIAN, QUANTILE, STD, group_counts, grouped_stat
-from ._utils import as_frame
+from .frames import as_frame
 
 if TYPE_CHECKING:
     from anndata import AnnData

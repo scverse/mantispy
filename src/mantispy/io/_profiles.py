@@ -17,9 +17,11 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
-from mantispy._core._utils import as_frame, categorize_metadata, get_logger, record_params, report_drop
 from mantispy._core.features import _infer_channels, parse_feature_names
+from mantispy._core.frames import as_frame, categorize_metadata
+from mantispy._core.logging import get_logger, report_drop
 from mantispy._core.plate import normalize_well
+from mantispy._core.provenance import record_params
 from mantispy._core.schema import SCHEMA_VERSION, SUPPORTED_VERSIONS, migrate, stamp, validate
 from mantispy.io._cellprofiler import export_prefix, read_export
 

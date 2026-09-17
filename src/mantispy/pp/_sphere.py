@@ -12,7 +12,8 @@ import numpy as np
 from anndata import AnnData
 
 from mantispy._core._reduce import get_matrix, group_codes
-from mantispy._core._utils import inplace_or_copy, reference_mask
+from mantispy._core.masks import reference_mask
+from mantispy._core.mutation import inplace_or_copy
 
 METHODS = ("ZCA", "ZCA-cor", "PCA", "PCA-cor")
 

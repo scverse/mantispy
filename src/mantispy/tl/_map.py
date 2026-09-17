@@ -16,7 +16,9 @@ import pandas as pd
 from anndata import AnnData
 
 from mantispy._core._reduce import representation
-from mantispy._core._utils import as_frame, inplace_or_copy, reference_mask
+from mantispy._core.frames import as_frame
+from mantispy._core.masks import reference_mask
+from mantispy._core.mutation import inplace_or_copy
 
 #: Column added under ``mode="activity"``, holding the row index for each control and -1 for
 #: every other row. It keeps controls out of the queries and makes a perturbation's

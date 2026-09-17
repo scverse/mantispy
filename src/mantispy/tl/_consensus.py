@@ -26,7 +26,9 @@ from scipy.stats import rankdata
 
 from mantispy._core._numba import MEDIAN
 from mantispy._core._reduce import get_matrix, group_codes, reduce_grouped
-from mantispy._core._utils import as_frame, record_params, report_drop
+from mantispy._core.frames import as_frame
+from mantispy._core.logging import report_drop
+from mantispy._core.provenance import record_params
 from mantispy._core.schema import stamp
 from mantispy.tl._aggregate import _group_obs
 from mantispy.tl._similarity import similarity_matrix

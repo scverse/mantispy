@@ -11,7 +11,8 @@ from mantispy._core._numba import MAD as MAD_STAT
 from mantispy._core._numba import MEAN, MEDIAN, QUANTILE, STD
 from mantispy._core._reduce import get_matrix, group_codes, reduce_grouped, transform_grouped
 from mantispy._core._stats import MAD_TO_SIGMA
-from mantispy._core._utils import inplace_or_copy, reference_mask
+from mantispy._core.masks import reference_mask
+from mantispy._core.mutation import inplace_or_copy
 
 METHODS = ("mad_robustize", "standardize", "robustize")
 

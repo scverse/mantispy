@@ -13,7 +13,9 @@ import numpy as np
 from anndata import AnnData
 
 from mantispy._core._reduce import group_codes
-from mantispy._core._utils import as_frame, get_logger, record_params
+from mantispy._core.frames import as_frame
+from mantispy._core.logging import get_logger
+from mantispy._core.provenance import record_params
 
 
 def downsample(

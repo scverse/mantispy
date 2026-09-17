@@ -11,7 +11,9 @@ from anndata import AnnData
 from mantispy._core._distance import energy_distance, pairwise_sqeuclidean
 from mantispy._core._reduce import group_codes, representation
 from mantispy._core._stats import benjamini_hochberg, permutation_pvalue, split_reference
-from mantispy._core._utils import get_logger, inplace_or_copy, reference_mask
+from mantispy._core.logging import get_logger
+from mantispy._core.masks import reference_mask
+from mantispy._core.mutation import inplace_or_copy
 
 
 def _energy_from_membership(membership: np.ndarray, distances: np.ndarray, size: int) -> np.ndarray:
