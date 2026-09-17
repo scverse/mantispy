@@ -13,8 +13,7 @@ maintainers = [
   { name = "Lukas Heumos", email = "lukas.heumos@scverse.org" },
 ]
 authors = [
-  { name = "Tim Treis" },
-  { name = "Lukas Heumos" },
+  { name = "scverse" },
 ]
 requires-python = ">=3.12"
 classifiers = [

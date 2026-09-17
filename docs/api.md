@@ -382,8 +382,9 @@ sc.pp.neighbors(wells)
 sc.tl.umap(wells)
 ```
 
-Harmony is wrapped as `pp.harmony`. It is the last step of the JUMP consortium's recipe and
-the best performer in Arevalo et al. (2024). It needs the optional extra:
+Harmony is wrapped as `pp.harmony`. It is the last step of the JUMP consortium's recipe
+{cite:p}`Chandrasekaran_2024` and the best performer in {cite:t}`Arevalo_2024`. It needs the
+optional extra:
 
 ```bash
 pip install 'mantispy[harmony]'
