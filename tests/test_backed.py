@@ -92,6 +92,30 @@ def test_a_backed_object_can_still_be_flagged_in_place(backed):
     assert "qc_pass" in backed.obs
 
 
+def test_key_added_normalizes_a_backed_object_without_rewriting_x(backed):
+    """io.read documents key_added= as one of the two ways out for a backed object, and the
+    guard refused it for a call that writes a layer and never touches X."""
+    mt.pp.normalize(backed, by="Metadata_Plate", reference="negcon", key_added="normalized")
+
+    assert type(backed.X).__name__ == "Dataset", "X must still be the one on disk"
+    np.testing.assert_allclose(
+        np.asarray(backed.layers["normalized"]),
+        np.asarray(mt.pp.normalize(backed, by="Metadata_Plate", reference="negcon", copy=True).X),
+        rtol=1e-6,
+    )
+
+
+@pytest.mark.parametrize("name", ["filter_cells", "filter_features", "filter_images"])
+def test_filtering_a_backed_object_names_the_way_out(backed, name):
+    """These take no key_added, so the guard skipped them and anndata refused the subset with
+    a message that names .to_memory() but not copy=True."""
+    mt.pp.calculate_qc_metrics(backed)
+    backed.obs["qc_image_pass"] = True
+
+    with pytest.raises(ValueError, match="copy=True"):
+        getattr(mt.pp, name)(backed)
+
+
 @pytest.mark.parametrize("container", ["dense", "sparse", "backed"])
 def test_an_empty_group_has_no_statistic_whichever_path_reduces_it(container, tmp_path):
     """A group with no rows gets NaN on every path, since zero would read as a measurement.

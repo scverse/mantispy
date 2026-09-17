@@ -36,8 +36,11 @@ def chatterjee_xi(x: np.ndarray, y: np.ndarray, m: int = 1, seed: int = 0) -> np
         One xi per column of ``y``.
 
     Notes:
-        Ties in ``x`` are broken at random, as the coefficient requires. A group label is
-        almost all ties, and breaking them by row order would score the row order as structure.
+        Ties in both ``x`` and ``y`` are broken at random, as the coefficient requires. A group
+        label is almost all ties, and breaking them by row order would score the row order as
+        structure. Ties in ``y`` matter just as much: breaking them in ``x``-order scores an
+        all-zero column at 0.996 instead of 0.007, which is what a zero-inflated Zernike,
+        Granularity or RadialDistribution column looks like.
     """
     if m < 1:
         raise ValueError(f"m must be at least 1, got {m}")
@@ -50,8 +53,13 @@ def chatterjee_xi(x: np.ndarray, y: np.ndarray, m: int = 1, seed: int = 0) -> np
     shuffled = generator.permutation(n)
     order = shuffled[np.argsort(x[shuffled], kind="stable")]
 
-    # Ranks of y, read in the order x puts the rows in.
-    ranks = np.argsort(np.argsort(values[order], axis=0, kind="stable"), axis=0) + 1
+    # Ranks of y, read in the order x puts the rows in. Ties in y are broken at random too:
+    # a stable sort breaks them by position in x-order, which reads the x ordering back out of
+    # a tied column and scores a constant feature as a perfect function of x.
+    jumble = generator.permutation(n)
+    jumbled = np.argsort(np.argsort(values[order][jumble], axis=0, kind="stable"), axis=0) + 1
+    ranks = np.empty_like(jumbled)
+    ranks[jumble] = jumbled
 
     total = np.zeros(values.shape[1])
     for step in range(1, m + 1):
@@ -101,7 +109,10 @@ def feature_select_chatterjee(
         With shuffled group labels on the same data, the largest xi is 0.035 at ``m=1`` and
         0.018 at ``m=5``, while the largest real value barely changes (0.322 and 0.321).
         ``m=1`` is the default because the threshold was calibrated there. scmorph uses
-        ``m=5``, and the two implementations agree to 1e-9 (``tests/test_equivalence_scmorph.py``).
+        ``m=5``, and on input free of ties the two implementations agree to 1e-9. Tied input
+        cannot agree that closely, because each breaks its ties from its own draws, so what is
+        pinned there is that neither reads structure out of the ties
+        (``tests/test_equivalence_scmorph.py``).
     """
     codes, keys = group_codes(adata, groupby)
     if len(keys) < 2:

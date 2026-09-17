@@ -73,3 +73,16 @@ def test_an_infinite_feature_value_is_flagged_not_hidden(adata):
     mt.pp.outliers(adata, method="mad", contamination=0.05)
     assert adata.obs["qc_outlier"].to_numpy()[7]
     assert np.isinf(adata.obs["qc_outlier_score"].to_numpy()[7])
+
+
+def test_contamination_bounds_the_flagged_fraction_within_small_groups(adata):
+    """Rounding the per-group count up flags at least one cell in every group, so
+    contamination stopped meaning anything below 1/group_size: 0.01 and 0.001 both flagged
+    24 of 360 cells with by='Metadata_Well', a 6.7x overshoot."""
+    mt.pp.outliers(adata, method="ecod", contamination=0.01, by="Metadata_Well")
+    sparse = int(adata.obs["qc_outlier"].sum())
+    mt.pp.outliers(adata, method="ecod", contamination=0.10, by="Metadata_Well")
+    dense = int(adata.obs["qc_outlier"].sum())
+
+    assert sparse <= 0.02 * adata.n_obs, "contamination has to bound the flagged fraction"
+    assert sparse < dense

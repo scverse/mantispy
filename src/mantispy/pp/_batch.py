@@ -151,10 +151,20 @@ def regress_out(
         fitted value at an anchor: the mean over the whole object for a numeric covariate,
         and the group's own mean for a categorical one. This keeps the units of the data.
 
+    Raises:
+        KeyError: If any of ``keys`` is not an ``obs`` column.
+        ValueError: If a categorical covariate has missing values.
+
     Notes:
         Missing values stay missing, and a feature with gaps is fitted on the rows where it
         was measured. A group with no more rows than design columns is left uncorrected and
         logged.
+
+        A numeric covariate with a missing value does not vary within that group, so it is
+        dropped from the group's design and the group is left uncorrected, with a warning. A
+        categorical covariate with a missing label is refused instead: the all-zero encoding
+        of a missing category is also the encoding of the level ``drop_first`` removed, so
+        those rows would be corrected as the reference level and take every other row with them.
     """
     missing = [key for key in keys if key not in adata.obs]
     if missing:
@@ -164,7 +174,7 @@ def regress_out(
     codes, keys_index = group_codes(adata, by)
     out = np.array(X, dtype=np.float32)
 
-    design_all, is_numeric = _design_matrix(adata, keys)
+    design_all, is_numeric, sources = _design_matrix(adata, keys)
     # nanmean, so one missing covariate value does not make the pooled anchor NaN. A column
     # whose pooled mean is still non-finite (all missing, or holding an inf) falls back to
     # each group's own mean, as dummies do.
@@ -180,6 +190,20 @@ def regress_out(
         # information; its effect stays in the intercept.
         varying = np.ptp(block_design, axis=0) > 0
         varying[0] = True
+        # np.ptp is NaN for a column holding a NaN and NaN > 0 is False, so a covariate with one
+        # missing value reads as non-varying and is dropped, which leaves the group uncorrected.
+        # Leaving it alone is the conservative choice; doing so silently is not, and the log line
+        # below reports the covariate as removed either way.
+        incomplete = sorted({str(name) for name in sources[np.isnan(block_design).any(axis=0)] if name})
+        if incomplete:
+            scope = f" within {by}={keys_index[group]!r}" if by is not None else ""
+            warnings.warn(
+                f"regress_out: {incomplete} has missing values{scope}, so it reads as non-varying and "
+                "is dropped from the design; nothing is regressed out for it there. Fill the column or "
+                "drop those rows to correct that group.",
+                UserWarning,
+                stacklevel=3,
+            )
         selected = np.flatnonzero(varying)[_independent(block_design[:, varying])]
         design = block_design[:, selected]
         if rows.size <= design.shape[1]:
@@ -233,22 +257,38 @@ def regress_out(
     return None
 
 
-def _design_matrix(adata: AnnData, keys: Sequence[str]) -> tuple[np.ndarray, np.ndarray]:
-    """Build the design over every row, and a mask of which of its columns are numeric.
+def _design_matrix(adata: AnnData, keys: Sequence[str]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Build the design over every row, a numeric mask over its columns, and each column's key.
 
     Built once for the whole object, so a group's design is a row slice and each column
     means the same in every group, which lets residuals be re-expressed at a common
     covariate value. The mask is needed because numeric columns are anchored at their
-    pooled mean and dummies at the group's own mean.
+    pooled mean and dummies at the group's own mean. The key names let a column that cannot
+    be fitted be reported under the name the caller passed.
+
+    Raises:
+        ValueError: If a categorical covariate has missing values, which ``pd.get_dummies``
+            encodes as all-zero: the same encoding as the level ``drop_first`` removes.
     """
     obs = as_frame(adata.obs)
-    columns, numeric = [np.ones(adata.n_obs)], [False]  # the intercept is not a covariate
+    # The intercept is not a covariate, and belongs to no key.
+    columns, numeric, sources = [np.ones(adata.n_obs)], [False], [""]
     for key in keys:
         values = obs[key]
         if pd.api.types.is_numeric_dtype(values) and not isinstance(values.dtype, pd.CategoricalDtype):
             columns.append(values.to_numpy(dtype=float))
             numeric.append(True)
+            sources.append(key)
         else:
+            missing = int(values.isna().sum())
+            if missing:
+                raise ValueError(
+                    f"obs[{key!r}] has {missing} missing value(s), and a missing category is encoded "
+                    "all-zero: exactly the encoding of the reference level that drop_first removes. "
+                    "Those rows would be corrected as if they carried the reference level, and every "
+                    "correctly labelled row would move with them. Fill the column (an unmatched "
+                    "platemap row is the usual cause), drop those rows, or leave the key out."
+                )
             # get_dummies emits a column for every declared level, observed or not, and an
             # all-zero column looks like collinearity to np.linalg.matrix_rank.
             if isinstance(values.dtype, pd.CategoricalDtype):
@@ -256,7 +296,8 @@ def _design_matrix(adata: AnnData, keys: Sequence[str]) -> tuple[np.ndarray, np.
             dummies = pd.get_dummies(values, drop_first=True, dtype=float).to_numpy().T
             columns.extend(dummies)
             numeric.extend([False] * len(dummies))
-    return np.column_stack(columns), np.array(numeric)
+            sources.extend([key] * len(dummies))
+    return np.column_stack(columns), np.array(numeric), np.array(sources)
 
 
 def _independent(design: np.ndarray) -> np.ndarray:

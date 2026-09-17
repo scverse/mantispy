@@ -59,6 +59,7 @@ def edistance(
             group-by-group distance matrix is written to ``uns["mantispy"][key_added + "_pairwise"]``
             as a square frame labeled by group, without p-values. Its cost is quadratic in the
             number of groups, which is expensive for a whole screen at cell level.
+            ``max_reference`` and ``seed`` apply on this path too, capping the rows taken from each group.
         use_rep: Score ``obsm[use_rep]`` instead of ``X``.
         n_permutations: Number of label permutations in the null.
         threshold: q-value below which a group is marked ``is_hit``.
@@ -86,9 +87,23 @@ def edistance(
     """
     values = representation(adata, use_rep)
     codes, keys = group_codes(adata, groupby)
+    generator = np.random.default_rng(seed)
 
     if reference is None:
-        blocks = [values[codes == index] for index in range(len(keys))]
+        blocks = []
+        for index in range(len(keys)):
+            rows = np.flatnonzero(codes == index)
+            # Each pair builds a distance matrix quadratic in the two groups, so the cap applies
+            # here as well; without it this path had no memory bound.
+            if rows.size > max_reference:
+                get_logger().info(
+                    "edistance sampled %d of %d rows of %r for the pairwise matrix",
+                    max_reference,
+                    rows.size,
+                    keys[index],
+                )
+                rows = np.sort(generator.choice(rows, size=max_reference, replace=False))
+            blocks.append(values[rows])
         matrix = np.zeros((len(keys), len(keys)))
         for i in range(len(keys)):
             for j in range(i + 1, len(keys)):
@@ -105,7 +120,6 @@ def edistance(
             f"e-distance needs at least two reference rows, reference={reference!r} selects {int(is_control.sum())}"
         )
 
-    generator = np.random.default_rng(seed)
     control_rows = np.flatnonzero(is_control)
     if control_rows.size > max_reference:
         get_logger().info("edistance sampled %d of %d reference rows for the null", max_reference, control_rows.size)

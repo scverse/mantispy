@@ -150,7 +150,7 @@ def _mwu_moments(treated, control, n_control, control_ties):
 
     ``treated`` and ``control`` are ``(n_vars, n_obs)``, feature-major so each row is
     contiguous for the binary search. ``control`` is sorted ascending with missing values
-    last, ``n_control`` is how many of each row are finite, and ``control_ties`` is that
+    last, ``n_control`` is how many of each row were measured, and ``control_ties`` is that
     row's ``sum(c ** 3 - c)`` over its runs of equal values.
 
     The control is the same for every group, but ``scipy.stats.mannwhitneyu`` called per

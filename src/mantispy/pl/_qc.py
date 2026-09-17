@@ -21,8 +21,17 @@ if TYPE_CHECKING:
 _axes = axes
 
 
-def cell_counts(adata: AnnData, groupby: str = "Metadata_Plate", ax: plt.Axes | None = None):
-    """Distribution of cells per well, split by ``groupby``."""
+def cell_counts(adata: AnnData, groupby: str = "Metadata_Plate", ax: plt.Axes | None = None) -> plt.Axes:
+    """Distribution of cells per well, split by ``groupby``.
+
+    Args:
+        adata: Object at cell resolution.
+        groupby: ``obs`` column whose groups become the boxes.
+        ax: Axes to draw on, or ``None`` for a new figure.
+
+    Returns:
+        The axes drawn on.
+    """
     ax = _axes(ax, (6, 4))
     codes, keys = group_codes(adata, ["Metadata_Plate", "Metadata_Well"])
     counts = np.bincount(codes, minlength=len(keys))
@@ -42,13 +51,22 @@ def feature_distributions(
     groupby: str = "Metadata_Plate",
     layer_before: str | None = "raw",
     kind: str = "ecdf",
-):
+) -> np.ndarray:
     """Per-feature distributions, before and after normalization when ``layer_before`` exists.
 
-    ``kind`` is ``"ecdf"``, ``"hist"`` or ``"ridge"`` (one offset filled density per group,
-    easier to read with many groups).
+    Args:
+        adata: Object holding the features to draw.
+        features: ``var_names`` to draw, one column of panels each.
+        groupby: ``obs`` column whose groups are drawn separately within each panel.
+        layer_before: Layer holding the values before normalization, or ``None`` to draw only the current ones.
+            A layer that the object does not hold is skipped in the same way.
+        kind: ``"ecdf"``, ``"hist"``, or ``"ridge"`` for one offset filled density per group, which is easier to read with many groups.
 
-    Returns a 2-D array of axes with one row per layer shown and one column per feature.
+    Returns:
+        A 2-D array of axes with one row per layer shown and one column per feature.
+
+    Raises:
+        ValueError: ``kind`` is not one of the three accepted values.
     """
     if kind not in {"ecdf", "hist", "ridge"}:
         raise ValueError(f"kind must be 'ecdf', 'hist' or 'ridge', got {kind!r}")
@@ -91,8 +109,17 @@ def _ridge(axis: plt.Axes, values: np.ndarray, offset: int, label: str) -> None:
     axis.fill_between(grid, offset, offset + density, alpha=0.7, lw=0.6, edgecolor="black", label=label)
 
 
-def nan_matrix(adata: AnnData, max_features: int = 200, ax: plt.Axes | None = None):
-    """Fraction of missing values per feature, per plate."""
+def nan_matrix(adata: AnnData, max_features: int = 200, ax: plt.Axes | None = None) -> plt.Axes:
+    """Fraction of missing values per feature, per plate.
+
+    Args:
+        adata: Object to measure the missing values of.
+        max_features: How many features to draw, taken in ``var_names`` order.
+        ax: Axes to draw on, or ``None`` for a new figure.
+
+    Returns:
+        The axes drawn on.
+    """
     ax = _axes(ax, (8, 4))
     missing = np.isnan(get_matrix(adata))
     codes, keys = group_codes(adata, "Metadata_Plate")
@@ -106,8 +133,18 @@ def nan_matrix(adata: AnnData, max_features: int = 200, ax: plt.Axes | None = No
     return ax
 
 
-def qc(adata: AnnData, figsize: tuple[float, float] = (12, 8)):
-    """Two-by-two summary of the QC metrics :func:`~mantispy.pp.calculate_qc_metrics` writes."""
+def qc(adata: AnnData, figsize: tuple[float, float] = (12, 8)) -> np.ndarray:
+    """Two-by-two summary of the QC metrics :func:`~mantispy.pp.calculate_qc_metrics` writes.
+
+    Each panel is drawn only if the object holds what it needs, so a partial run still gives a figure.
+
+    Args:
+        adata: Object carrying the QC annotations.
+        figsize: Size of the whole figure, in inches.
+
+    Returns:
+        The two-by-two array of axes.
+    """
     figure, axes = plt.subplots(2, 2, figsize=figsize)
     cell_counts(adata, ax=axes[0, 0])
 
@@ -134,11 +171,21 @@ def qc(adata: AnnData, figsize: tuple[float, float] = (12, 8)):
     return axes
 
 
-def replicate_saturation(adata: AnnData, key: str = "replicate_saturation", ax: plt.Axes | None = None):
+def replicate_saturation(adata: AnnData, key: str = "replicate_saturation", ax: plt.Axes | None = None) -> plt.Axes:
     """The saturation curve with its spread across draws.
 
-    A curve still rising at the right edge means the screen is under-replicated, which
-    informs the design of the next experiment.
+    A curve still rising at the right edge means the screen is under-replicated, which informs the design of the next experiment.
+
+    Args:
+        adata: Object holding the table :func:`~mantispy.tl.replicate_saturation` wrote.
+        key: Name of that table in ``uns["mantispy"]``.
+        ax: Axes to draw on, or ``None`` for a new figure.
+
+    Returns:
+        The axes drawn on.
+
+    Raises:
+        KeyError: ``uns["mantispy"]`` holds no table under ``key``.
     """
     store = adata.uns.get("mantispy", {})
     if key not in store:
@@ -153,10 +200,23 @@ def replicate_saturation(adata: AnnData, key: str = "replicate_saturation", ax: 
     return ax
 
 
-def cytotoxicity(adata: AnnData, key: str = "cytotoxicity", label_top: int = 8, ax: plt.Axes | None = None):
+def cytotoxicity(adata: AnnData, key: str = "cytotoxicity", label_top: int = 8, ax: plt.Axes | None = None) -> plt.Axes:
     """Distance from the controls against viability, with the suspect groups marked.
 
     Groups in the upper left are far from the controls and have lost most of their cells.
+    The dashed line is the minimum viability the run used.
+
+    Args:
+        adata: Object holding the table :func:`~mantispy.tl.cytotoxicity` wrote.
+        key: Name of that table in ``uns["mantispy"]``.
+        label_top: How many of the most distant suspect groups to label.
+        ax: Axes to draw on, or ``None`` for a new figure.
+
+    Returns:
+        The axes drawn on.
+
+    Raises:
+        KeyError: ``uns["mantispy"]`` holds no table under ``key``.
     """
     store = adata.uns.get("mantispy", {})
     if key not in store:

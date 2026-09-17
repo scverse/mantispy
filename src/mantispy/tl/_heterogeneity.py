@@ -18,7 +18,7 @@ from scipy.stats import chisquare
 
 from mantispy._core._distance import pairwise_sqeuclidean
 from mantispy._core._reduce import get_matrix, group_codes, representation
-from mantispy._core._stats import benjamini_hochberg
+from mantispy._core._stats import benjamini_hochberg, split_reference
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy._core.masks import reference_mask
@@ -55,6 +55,13 @@ def cluster_composition(
         A well with few cells has a noisy composition. The chi-square test is computed on
         counts and accounts for this, but the fractions in ``X`` do not. Filter with
         :func:`~mantispy.pp.well_qc` first.
+
+        Clusters no control cell reached are left out of the test, since the controls give them no expected frequency.
+        Their fractions stay in ``X``, and :func:`subpopulation_hits` compares within a cluster.
+
+        The test holds one row per well, in the order of the rows of the returned object.
+        A well with no cells in the clusters the controls occupy gets ``NaN``, as does every well when the controls
+        occupy fewer than two clusters, since a composition cannot then differ from theirs.
     """
     if cluster_key not in adata.obs:
         raise KeyError(f"obs has no column {cluster_key!r}; cluster first, e.g. sc.tl.leiden(adata)")
@@ -97,8 +104,24 @@ def _composition_test(composition: AnnData, counts: np.ndarray, reference: str |
     if not is_control.any():
         return empty
 
-    share = counts[is_control].sum(axis=0)
-    share = np.where(share == 0, 1e-9, share) / max(share.sum(), 1e-9)
+    # A cluster no control cell reached has no expected frequency. Flooring it at epsilon made
+    # a single treated cell there a chi-square of 1e10 and p exactly zero, and with enough such
+    # clusters the expected counts stopped summing to the observed ones, which scipy refuses.
+    pooled = counts[is_control].sum(axis=0)
+    reached = pooled > 0
+    comparable = int(reached.sum()) >= 2
+    share = pooled[reached] / pooled[reached].sum() if reached.any() else pooled[reached]
+    if not comparable:
+        get_logger().info(
+            "cluster_composition: the controls occupy %d cluster(s), too few for another composition to differ "
+            "from theirs, so the test is NaN",
+            int(reached.sum()),
+        )
+    elif not reached.all():
+        get_logger().info(
+            "cluster_composition: %d cluster(s) hold no control cells, so the composition test leaves them out",
+            int((~reached).sum()),
+        )
 
     labels = as_frame(composition.obs)
     naming = [column for column in ("Metadata_Plate", "Metadata_Well") if column in labels]
@@ -110,10 +133,12 @@ def _composition_test(composition: AnnData, counts: np.ndarray, reference: str |
 
     records = []
     for row in range(composition.n_obs):
-        observed = counts[row]
-        if observed.sum() < 1:
-            continue
-        statistic, pvalue = chisquare(observed, share * observed.sum())
+        observed = counts[row][reached]
+        statistic, pvalue = np.nan, np.nan
+        # A well with no cells in the clusters the controls occupy has no composition to set
+        # against theirs. Its fractions are still in X.
+        if comparable and observed.sum() >= 1:
+            statistic, pvalue = chisquare(observed, share * observed.sum())
         records.append({"group": str(names[row]), "statistic": float(statistic), "pvalue": float(pvalue)})
 
     table = pd.DataFrame(records)
@@ -214,6 +239,7 @@ def subpopulation_hits(
     reference: str | None = "negcon",
     use_rep: str | None = None,
     min_cells: int = 3,
+    seed: int = 0,
     key_added: str = "subpopulation_hits",
     copy: bool = False,
 ) -> AnnData | None:
@@ -229,6 +255,9 @@ def subpopulation_hits(
         reference: Which rows are the controls, ``"negcon"`` or the name of a boolean ``obs`` column.
         use_rep: Measure in ``obsm[use_rep]`` instead of ``X``.
         min_cells: Skip a (cluster, group) pair with fewer cells than this on either side.
+            A cluster needs twice as many controls, and at least four, since half of them place
+            the centroid and half supply the distances tested against.
+        seed: Seed for the split of a cluster's controls.
         key_added: Name for the output table.
         copy: Return a modified copy instead of mutating in place.
 
@@ -241,6 +270,13 @@ def subpopulation_hits(
         cluster, and a KS test compares the treated cells' distances with the controls'. This
         is close to ``hit_calling(method="ks")``, restricted to comparable cells. A distance is
         used rather than a single feature so that the test means the same on every dataset.
+
+        A cluster's controls are split in half, as in :func:`~mantispy.tl.hit_calling`.
+        One half places the centroid and the other supplies the distances tested against, so the null is out of sample.
+        Controls measured against a centroid they defined themselves sit closer to it than any other group can.
+        That bias grows with features per control, which is the shape of real Cell Painting data.
+        On pure noise with 36 controls and 120 features, the in-sample null called 0.40 of pseudo-treatments at
+        raw ``p < 0.05``, and the split called none.
     """
     if cluster_key not in adata.obs:
         raise KeyError(f"obs has no column {cluster_key!r}; cluster first, e.g. sc.tl.leiden(adata)")
@@ -251,16 +287,23 @@ def subpopulation_hits(
     clusters = obs[cluster_key].astype(str).to_numpy()
     groups = obs[groupby].astype(str).to_numpy()
 
+    generator = np.random.default_rng(seed)
+    # Half the controls place the centroid and half form the distances tested against, so the
+    # null is out of sample like every group. Cells measured against a centroid they defined
+    # themselves sit too close to it, and pure noise is called (see Notes).
+    needed = max(2 * min_cells, 4)
+
     records = []
     for cluster in pd.unique(clusters):
         in_cluster = np.flatnonzero(clusters == cluster)
         controls = in_cluster[is_control[in_cluster]]
-        if controls.size < min_cells:
+        if controls.size < needed:
             continue
 
-        centre = np.nanmean(values[controls], axis=0, keepdims=True)
+        fit_rows, null_rows = split_reference(controls, generator)
+        centre = np.nanmean(values[fit_rows], axis=0, keepdims=True)
         distance = np.sqrt(pairwise_sqeuclidean(np.nan_to_num(values[in_cluster]), np.nan_to_num(centre))).ravel()
-        control_distance = distance[is_control[in_cluster]]
+        control_distance = distance[np.isin(in_cluster, null_rows)]
 
         for group in pd.unique(groups[in_cluster]):
             treated = distance[groups[in_cluster] == group]
@@ -283,9 +326,10 @@ def subpopulation_hits(
     table = pd.DataFrame(records, columns=["cluster", "group", "n_cells", "statistic", "pvalue"])
     if table.empty or int(table.groupby("cluster")["group"].nunique().max()) <= 1:
         warnings.warn(
-            f"no cluster held at least {min_cells} controls and {min_cells} cells of another group, so nothing "
-            "was compared. The clustering separates the perturbations, leaving no shared cell state to compare "
-            "within. Cluster on fewer components, or test whole populations with mt.tl.edistance.",
+            f"no cluster held at least {needed} controls, half to place its centroid and half to test against, "
+            f"and {min_cells} cells of another group, so nothing was compared. The clustering separates the "
+            "perturbations, leaving no shared cell state to compare within. Cluster on fewer components, or "
+            "test whole populations with mt.tl.edistance.",
             UserWarning,
             stacklevel=3,
         )

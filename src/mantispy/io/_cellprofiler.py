@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from mantispy._core.logging import get_logger
+
 _KEYS = ("ImageNumber", "ObjectNumber")
 _FILENAME_RE = re.compile(r"^(?:Image_)?FileName_(.+)$")
 _NOT_OBJECTS = ("Image", "Experiment")
@@ -102,6 +104,8 @@ def read_export(
         The joined table, with identifiers, image metadata and the primary object's centroid as ``Metadata_``
         columns and every measurement prefixed by its object; the ``Image.csv`` table; and the channels its
         ``FileName_`` columns name.
+        Where an object table and ``Image.csv`` both carry the same ``Metadata_`` column, the ``Image.csv``
+        value is the one kept.
 
     Raises:
         FileNotFoundError: There is no table for `primary_object`.
@@ -131,6 +135,12 @@ def read_export(
     }
     renames |= {c: c for c in image.columns if c.startswith("Metadata_")}
     per_image = image[["ImageNumber", *renames]].rename(columns=renames)
+    # ExportToSpreadsheet can copy the image metadata into the object tables as well. Merging
+    # both copies would suffix the pair Metadata_Plate_x/_y and leave the schema's own columns
+    # missing, so the object table's copy goes and the per-image value stays.
+    if shared := [c for c in per_image.columns if c != "ImageNumber" and c in merged.columns]:
+        get_logger().info("%s are on both the object tables and Image.csv; keeping the Image.csv value", shared)
+        merged = merged.drop(columns=shared)
     table = merged.merge(per_image, on="ImageNumber", how="left", validate="m:1")
     # Centroids are not profile features, but qc_is_border needs them.
     for axis in ("X", "Y"):

@@ -37,19 +37,42 @@ METHODS = ("modz", "median")
 CORRELATIONS = ("spearman", "pearson")
 
 
-def modz_weights(block: np.ndarray, correlation: str = "spearman", min_weight: float = 0.01, precision: int = 4):
+def modz_weights(
+    block: np.ndarray, correlation: str = "spearman", min_weight: float = 0.01, precision: int = 4
+) -> np.ndarray:
     """Weight each replicate by how well it agrees with the others.
 
     A perturbation whose replicates all sit at ``min_weight`` has no reproducible signature,
     whatever its consensus profile looks like.
+
+    Args:
+        block: One perturbation's replicates, as rows, by features.
+        correlation: ``"spearman"`` ranks the features first, ``"pearson"`` correlates the values.
+        min_weight: Floor on a replicate's weight.
+        precision: Decimals the weights are rounded to, as in pycytominer.
+
+    Returns:
+        One weight per row of ``block``, summing to one.
     """
     if block.shape[0] == 1:
         return np.ones(1)
 
-    # nan_policy="omit" ranks the present values and leaves NaN in place. The default,
-    # "propagate", turns a replicate with one missing feature into an all-NaN row, which
-    # drops its weight to min_weight.
-    values = rankdata(block, axis=1, nan_policy="omit") if correlation == "spearman" else block
+    values = np.asarray(block, dtype=np.float64)
+    if correlation == "spearman":
+        # nan_policy="omit" ranks the present values and leaves NaN in place. The default,
+        # "propagate", turns a replicate with one missing feature into an all-NaN row, which
+        # drops its weight to min_weight.
+        values = rankdata(values, axis=1, nan_policy="omit")
+
+    # similarity_matrix fills a gap with zero, below every rank, so replicates sharing a gap
+    # would correlate there and take the largest weights. A replicate's own mean is the
+    # neutral fill: pearson centers the rows, so a filled feature then contributes nothing.
+    gaps = np.isnan(values)
+    if gaps.any():
+        present = np.maximum((~gaps).sum(axis=1, keepdims=True), 1)
+        centre = np.where(gaps, 0.0, values).sum(axis=1, keepdims=True) / present
+        values = np.where(gaps, centre, values)
+
     matrix = similarity_matrix(values, metric="pearson").astype(np.float64)
     np.fill_diagonal(matrix, np.nan)
 
@@ -91,8 +114,9 @@ def consensus(
         so a signature can be traced back to its replicates.
 
     Notes:
-        Missing values are treated as zero when correlating replicates, matching the rest of
-        the package. The signature itself is a weighted sum, so a NaN feature stays NaN.
+        A missing value is filled with its own replicate's mean before the replicates are correlated.
+        Zero would be an extreme value among ranks, and two replicates sharing a gap would look alike.
+        The signature itself is a weighted sum, so a NaN feature stays NaN.
 
         modz is a weighted mean. With one outlying replicate it drifts about forty times less
         than the unweighted mean, but it does not beat a median. On BBBC021, not-same-compound

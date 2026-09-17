@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, cast
 
@@ -12,7 +13,7 @@ from _testdata import BATCH, CELL_PAINTING_CHANNELS, EXPORT_OBJECTS, EXPORT_SHAP
 from skimage.segmentation import find_boundaries
 
 import mantispy as mt
-from mantispy.io._gallery import _fov_offsets, _labels_from_outlines, _parse_well
+from mantispy.io._gallery import _fov_offsets, _labels_from_outlines, _outline_file, _parse_well
 from mantispy.io._plate import Layout
 
 
@@ -198,6 +199,18 @@ def test_labels_from_outlines_degenerate_input() -> None:
         _labels_from_outlines(np.zeros((2, 10, 10)), _centres([1], [1.0], [1.0], [1.0]))
 
 
+@pytest.mark.parametrize("name", ["a01_1--cell_outlines.png", "A01_s1--cell_outlines.png"])
+def test_outlines_are_found_whatever_the_source_capitalised(tmp_path: Path, name: str) -> None:
+    """Path.glob is case-sensitive on POSIX, macOS included, so the lowercase layout the
+    docstring documents never matched and those sites came back with no labels at all."""
+    directory = tmp_path / f"{PLATE}-A01-1"
+    (directory / "outlines").mkdir(parents=True)
+    (directory / "outlines" / name).write_bytes(b"")
+
+    assert _outline_file(directory, "A01", 1, "cell") == directory / "outlines" / name
+    assert _outline_file(directory, "B02", 1, "cell") is None
+
+
 def test_an_export_reads_whole(export: Path) -> None:
     sdata = mt.io.read_plate(export)
     table = sdata.tables["cells"]
@@ -244,6 +257,20 @@ def test_arrays_read_back_the_same_whatever_the_width_or_the_backing(make_export
     assert sdata.labels[f"{FIELDS[0]}__Cells"].dtype == np.uint32
     assert np.asarray(sdata.images[f"{FIELDS[0]}_image"]).shape == (len(CELL_PAINTING_CHANNELS), *EXPORT_SHAPE)
     assert np.unique(np.asarray(sdata.labels[f"{FIELDS[0]}__Cells"])).tolist() == [0, 1, 2]
+
+
+def test_a_lazy_read_holds_no_file_descriptor(export: Path) -> None:
+    """Each lazy element kept its own descriptor for as long as the object lived, and one
+    384-well plate holds about ten thousand elements, which exhausts the process limit."""
+    if not Path("/dev/fd").is_dir():
+        pytest.skip("counting open descriptors needs /dev/fd")
+    before = len(os.listdir("/dev/fd"))
+
+    sdata = mt.io.read_plate(export, lazy=True)
+
+    assert len(os.listdir("/dev/fd")) <= before, "a lazy read must not keep the HDF5 files open"
+    # and the arrays must still be readable afterwards, which is the point of lazy
+    assert np.asarray(sdata.images[f"{FIELDS[0]}_image"]).shape == (len(CELL_PAINTING_CHANNELS), *EXPORT_SHAPE)
 
 
 def test_the_object_writes_to_zarr(export: Path, tmp_path: Path) -> None:

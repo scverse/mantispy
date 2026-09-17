@@ -303,3 +303,79 @@ def test_regress_out_removes_a_real_confluency_difference():
     before = _plate_gap(adata)
     mt.pp.regress_out(adata, keys=["Metadata_Count"], by="Metadata_Plate")
     assert _plate_gap(adata) < 0.4 * before
+
+
+def _operator_wells(missing_label: bool):
+    """24 wells whose only structure is a per-operator offset of 0, 5 or 10.
+
+    Args:
+        missing_label: Leave row 0's operator label missing, as an unmatched platemap row does.
+
+    Returns:
+        ``(adata, operator)``, the object and the true operator of every row.
+    """
+    import anndata as ad
+
+    from mantispy._core.schema import stamp
+
+    operator = np.array(["carol", "alice", "bob"] * 8)
+    offset = {"alice": 0.0, "bob": 5.0, "carol": 10.0}
+    generator = np.random.default_rng(0)
+    values = np.array([offset[name] for name in operator])[:, None] + generator.normal(0.0, 0.1, (24, 3))
+
+    labels = operator.astype(object).copy()
+    if missing_label:
+        labels[0] = None
+    obs = pd.DataFrame(
+        {
+            "Metadata_Plate": "P1",
+            "Metadata_Well": [f"A{index + 1:02d}" for index in range(24)],
+            "Metadata_Operator": pd.Categorical(labels),
+        },
+        index=[str(index) for index in range(24)],
+    )
+    adata = ad.AnnData(
+        X=values.astype(np.float32),
+        obs=obs,
+        var=pd.DataFrame(index=[f"Cells_AreaShape_F{index}" for index in range(3)]),
+    )
+    stamp(adata, resolution="well")
+    return adata, operator
+
+
+def test_regress_out_refuses_a_covariate_with_a_missing_label():
+    """A NaN category encodes all-zero, which is the level drop_first removed, so a row
+    whose label is missing is fitted as the reference level: row 0 came out at 13.85
+    instead of 5.06, and the 23 correctly labelled rows moved with it (per-operator means
+    6.42/6.42/6.42 became 5.17/6.42/7.39)."""
+    adata, _ = _operator_wells(missing_label=True)
+    with pytest.raises(ValueError, match="Metadata_Operator"):
+        mt.pp.regress_out(adata, keys=["Metadata_Operator"], by=None)
+
+
+def test_regress_out_levels_a_fully_labelled_covariate():
+    """The guard above must refuse the missing label without disabling the correction itself."""
+    adata, operator = _operator_wells(missing_label=False)
+    mt.pp.regress_out(adata, keys=["Metadata_Operator"], by=None)
+    means = [np.asarray(adata.X)[operator == name, 0].mean() for name in ("alice", "bob", "carol")]
+    assert max(means) - min(means) < 0.05
+
+
+def test_regress_out_says_so_when_a_missing_covariate_value_disables_it():
+    """``np.ptp`` is NaN for a covariate holding a NaN and ``NaN > 0`` is False, so the
+    covariate is read as non-varying and dropped: the correction becomes a bitwise no-op
+    (corr 0.98 before and after) while the only log line claims the covariate was removed."""
+    adata, _ = _operator_wells(missing_label=False)
+    generator = np.random.default_rng(1)
+    counts = generator.normal(1500.0, 200.0, adata.n_obs)
+    values = np.asarray(adata.X, dtype=np.float64).copy()
+    values[:, 0] = 0.05 * counts + generator.normal(0.0, 1.0, adata.n_obs)
+    adata.X = values.astype(np.float32)
+    counts[3] = np.nan
+    adata.obs["Metadata_CellCount"] = counts
+
+    before = np.asarray(adata.X).copy()
+    with pytest.warns(UserWarning, match="Metadata_CellCount"):
+        mt.pp.regress_out(adata, keys=["Metadata_CellCount"], by=None)
+    # Leaving the group uncorrected is the conservative choice; doing it silently is not.
+    assert np.array_equal(np.asarray(adata.X), before)

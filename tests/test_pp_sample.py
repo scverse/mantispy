@@ -63,3 +63,22 @@ def test_chatterjee_sees_a_non_monotonic_dependence_that_correlation_misses(plat
     # below 1, but it stays an order of magnitude above the correlation.
     assert plate.var["chatterjee_xi"].to_numpy()[0] > 0.4
     assert abs(np.corrcoef(codes, values[:, 0])[0, 1]) < 0.2
+
+
+def test_chatterjee_rejects_a_constant_feature_it_cannot_measure(plate):
+    """Ranking y's ties in x-order reads the group order back out of a tied column, which
+    scored two all-zero features at 0.998, above a genuine dose-response feature at 0.752,
+    so selection kept exactly the unmeasurable features it exists to reject. Zero-inflated
+    Zernike, Granularity and RadialDistribution columns hit this routinely."""
+    codes = plate.obs["Metadata_Perturbation"].cat.codes.to_numpy()
+    values = plate.X.copy()
+    values[:, 1] = 0.0
+    values[:, 2] = 0.0
+    values[:, 3] = 2.0 * codes + np.random.default_rng(1).normal(0.0, 0.2, plate.n_obs)
+    plate.X = values
+
+    mt.pp.feature_select_chatterjee(plate)
+    scores = plate.var["chatterjee_xi"].to_numpy()
+    assert scores[1] < 0.1 and scores[2] < 0.1, "a constant feature carries no information"
+    assert scores[3] > 0.5, "and the dose-response feature still scores high"
+    assert not plate.var["selected_chatterjee"].to_numpy()[[1, 2]].any()

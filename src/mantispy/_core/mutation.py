@@ -86,7 +86,9 @@ def inplace_or_copy(expects: str | tuple[str, ...] | None = None) -> Callable[[F
                     "call .copy() on the subset first."
                 )
             backed = bool(getattr(adata, "isbacked", False))
-            if backed and not copy and writes_layer:
+            # A `key_added` sends the result to a new layer, which a backed object takes in
+            # memory, so only a call that leaves it unset is about to rewrite X.
+            if backed and not copy and writes_layer and params.get("key_added") is None:
                 raise ValueError(
                     f"{func.__name__} rewrites X, which a backed object holds read-only on disk. "
                     "Pass copy=True to get the result in memory, or call adata.to_memory() first."
@@ -96,7 +98,19 @@ def inplace_or_copy(expects: str | tuple[str, ...] | None = None) -> Callable[[F
             if expects is not None:
                 warn_resolution(target, expects)
 
-            func(target, **params, **extra)
+            try:
+                func(target, **params, **extra)
+            except ValueError as error:
+                # A function that drops rows or features cannot declare that in its signature,
+                # so anndata is the one that refuses it, and its message names .to_memory()
+                # but not this decorator's own way out.
+                if backed and not copy and "backed mode" in str(error):
+                    raise ValueError(
+                        f"{func.__name__} drops rows or features, which a backed object cannot do in "
+                        "place, because anndata cannot copy one without a filename. Pass copy=True to "
+                        "get the result in memory, or call adata.to_memory() first."
+                    ) from error
+                raise
 
             written = params.get("key_added")
             name = f"{func.__name__}:{written}" if writes_layer and written else func.__name__

@@ -283,3 +283,16 @@ def test_edistance_caps_both_sides_and_says_so(scored, caplog):
     assert (table["n_obs"] <= 6).all(), "no group may enter the statistic above the cap"
     messages = " ".join(record.message for record in caplog.records)
     assert "sampled" in messages, "sampling down changes the answer and must be logged"
+
+
+def test_the_pairwise_edistance_caps_its_groups_too(scored):
+    """max_reference and seed were accepted and ignored on the reference=None path, where memory is quadratic in the two largest groups."""
+
+    def pairwise(**kwargs):
+        out = mt.tl.edistance(scored, reference=None, copy=True, **kwargs)
+        return out.uns["mantispy"]["edistance_pairwise"].to_numpy(dtype=float)
+
+    capped = pairwise(max_reference=20)
+    assert not np.allclose(capped, pairwise()), "20 of ~480 rows per group must change the distances"
+    np.testing.assert_array_equal(capped, pairwise(max_reference=20, seed=0), "and the same seed must repeat them")
+    assert not np.allclose(capped, pairwise(max_reference=20, seed=1)), "while another seed samples other rows"

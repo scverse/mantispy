@@ -70,6 +70,25 @@ def test_the_hits_plot_marks_the_threshold_the_run_used(scored):
     assert any(abs(float(line.get_ydata()[0]) + np.log10(0.05)) < 1e-9 for line in ax.get_lines())
 
 
+def test_the_hits_plot_draws_the_threshold_that_colored_the_points():
+    """Reading the threshold under the table key rather than the function name drew a run called at q < 0.25 against a line labelled q = 0.05, with a point colored as a hit below it."""
+    cells = mt.ds.synthetic_plate(
+        n_plates=1, n_wells=48, n_cells=6, n_features=8, n_perturbations=11, effect_size=0.4, seed=0
+    )
+    wells = mt.tl.aggregate(cells, min_cells=0)
+    mt.tl.hit_calling(wells, n_permutations=200, threshold=0.25)
+
+    ax = mt.pl.hits(wells)
+    line = next(drawn for drawn in ax.get_lines() if str(drawn.get_label()).startswith("q ="))
+    assert line.get_label() == "q = 0.25"
+
+    height = float(line.get_ydata()[0])
+    assert height == pytest.approx(-np.log10(0.25))
+    # Every point colored as a hit has to sit on or above the line that called it.
+    called = next(group for group in ax.collections if group.get_label() == "hit").get_offsets()
+    assert called.shape[0] and (called[:, 1] >= height).all()
+
+
 def test_plots_say_what_to_run_first():
     fresh = mt.tl.aggregate(mt.ds.synthetic_plate(n_wells=8, n_cells=4, n_features=8, seed=0), min_cells=0)
     with pytest.raises(KeyError, match="mt.tl.hit_calling"):

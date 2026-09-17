@@ -79,8 +79,10 @@ def _wasserstein_columns(treated: np.ndarray, control: np.ndarray, only: np.ndar
     columns instead of one ``scipy.stats.wasserstein_distance`` call per feature per group
     (700k calls for 3600 features and 200 perturbations).
 
-    Columns with missing values fall back to the scalar function, which drops them. ``only``
-    restricts the work to a subset of columns and leaves the rest ``NaN``; callers that handle
+    Columns holding a non-finite value fall back to the scalar function, which drops those rows.
+    The split is ``isfinite``, the same one :func:`wasserstein_features` uses to choose the columns it sends here.
+    Splitting on ``isnan`` instead left an infinite column in neither branch's remit, and it came back ``inf``.
+    ``only`` restricts the work to a subset of columns and leaves the rest ``NaN``; callers that handle
     the complete columns on the pre-sorted path use it for the remaining ones.
     """
     n, m = treated.shape[0], control.shape[0]
@@ -88,7 +90,7 @@ def _wasserstein_columns(treated: np.ndarray, control: np.ndarray, only: np.ndar
     if n == 0 or m == 0:
         return out
 
-    ragged = np.isnan(treated).any(axis=0) | np.isnan(control).any(axis=0)
+    ragged = ~(np.isfinite(treated).all(axis=0) & np.isfinite(control).all(axis=0))
     if only is not None:
         ragged &= only
     for column in np.flatnonzero(ragged):
@@ -183,7 +185,9 @@ def effect_size(
     # Sorted once and searched by every group; scipy re-ranks the whole reference per group,
     # which costs about three minutes on JUMP.
     ranked = sorted_control(control) if pvalues else None
-    control_smallest = int(np.isfinite(control).sum(axis=0).min()) if pvalues else 0
+    # Counted as sorted_control and scipy's nan_policy="omit" count, everything measured and
+    # infinities included, so that the branch chosen below is the branch scipy would choose.
+    control_smallest = int((~np.isnan(control)).sum(axis=0).min()) if pvalues else 0
 
     effects = np.full((adata.n_vars, len(keys)), np.nan)
     significance = np.full((adata.n_vars, len(keys)), np.nan)
@@ -199,7 +203,7 @@ def effect_size(
         # scipy's method="auto" uses the exact distribution when the smaller sample has eight or
         # fewer observations. Those groups go to scipy; larger ones, where "auto" would use the
         # normal approximation, take the fast path.
-        smallest = int(np.isfinite(treated).sum(axis=0).min())
+        smallest = int((~np.isnan(treated)).sum(axis=0).min())
         if ranked is not None and smallest > 8 and control_smallest > 8:
             significance[:, index] = mannwhitney_pvalues(treated, ranked)
         else:
@@ -254,11 +258,10 @@ def wasserstein_features(
         raise ValueError(f"no reference rows selected by reference={reference!r}")
 
     codes, keys = group_codes(adata, groupby)
-    # The reference is sorted once and reused for every group. Columns with a missing value
-    # take the general path, which drops them pairwise.
-    ranked = np.ascontiguousarray(np.asarray(control, dtype=np.float64).T)
-    ranked = np.sort(ranked, axis=1)  # missing values sort to the end
-    finite = np.isfinite(ranked).sum(axis=1)
+    # The reference is sorted once and reused for every group, by the same helper effect_size
+    # uses, so the two paths through this module cannot count it differently. Columns holding a
+    # non-finite value take the general path, which drops those rows pairwise.
+    ranked, counts, _ = sorted_control(control)
     clean = np.isfinite(control).all(axis=0)
 
     distances = np.empty((adata.n_vars, len(keys)))
@@ -268,7 +271,7 @@ def wasserstein_features(
         distances[:, index] = _wasserstein_columns(treated, control, only=~usable)
         if usable.any() and treated.shape[0]:
             block = np.ascontiguousarray(np.asarray(treated[:, usable], dtype=np.float64).T)
-            distances[usable, index] = _wasserstein_against(block, ranked[usable], finite[usable])
+            distances[usable, index] = _wasserstein_against(block, ranked[usable], counts[usable])
 
     adata.varm[key_added] = distances.astype(np.float32)
     store = adata.uns.setdefault("mantispy", {})

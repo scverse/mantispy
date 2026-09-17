@@ -69,14 +69,18 @@ def robust_zscore(values: np.ndarray, axis: int = 0) -> np.ndarray:
 
 
 def sorted_control(control: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Feature-major sorted reference, its finite counts, and its tie term per feature.
+    """Feature-major sorted reference, its measured counts, and its tie term per feature.
 
     Sorting the reference once makes :func:`mannwhitney_pvalues` cheap, because each group
     is then a binary search into it instead of another ranking of the whole reference.
     """
     values = np.ascontiguousarray(np.asarray(control, dtype=np.float64).T)
     values = np.sort(values, axis=1)  # missing values sort to the end
-    counts = np.isfinite(values).sum(axis=1)
+    # Everything that was measured counts, infinities included. `np.sort` puts -inf first, so
+    # counting only the finite values would leave the reference slice one short and cut the
+    # largest control off its end instead. scipy ranks an infinity as the extreme value it is,
+    # and `mannwhitney_pvalues` claims to match scipy.
+    counts = (~np.isnan(values)).sum(axis=1)
 
     # sum(c ** 3 - c) over runs of equal values, the tie correction's reference half.
     position = np.arange(1, values.shape[1])[None, :]

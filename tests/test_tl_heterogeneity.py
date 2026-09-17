@@ -1,10 +1,13 @@
 """Cluster composition, cell cycle, subpopulation hits and local density."""
 
+import anndata as ad
 import numpy as np
+import pandas as pd
 import pytest
 import scanpy as sc
 
 import mantispy as mt
+from mantispy._core.schema import stamp
 
 
 @pytest.fixture
@@ -30,11 +33,10 @@ def test_composition_carries_metadata_and_tests_against_the_controls(clustered):
     assert "Metadata_Perturbation" in composition.obs
     test = composition.uns["mantispy"]["composition_test"]
     assert {"group", "statistic", "pvalue", "qvalue"} <= set(test.columns)
-    assert len(test) == composition.n_obs
-    # A treated well's composition should depart from the controls more often than a
-    # control well's does.
-    control = composition.obs["Metadata_Control"].to_numpy(dtype=bool)
-    assert test["statistic"].to_numpy()[~control].mean() > test["statistic"].to_numpy()[control].mean()
+    assert len(test) == composition.n_obs, "one row per well, in the order of the rows"
+    # At effect_size=4 leiden gives one cluster per perturbation and the controls hold one of
+    # them, so no well's composition can be set against theirs.
+    assert test["pvalue"].isna().all()
 
 
 def test_cell_cycle_splits_a_bimodal_dna_content(clustered):
@@ -99,3 +101,119 @@ def test_round_trip(clustered, tmp_path):
     loaded = mt.io.read(tmp_path / "composition.h5ad")
     assert loaded.n_vars == composition.n_vars
     assert len(loaded.uns["mantispy"]["composition_test"]) == composition.n_obs
+
+
+def _noise_cells(n_control: int, n_features: int, per_group: int, n_groups: int = 12, seed: int = 0):
+    """Single cells with nothing in them: one shared cluster, controls, and pseudo-treatments."""
+    generator = np.random.default_rng(seed)
+    labels = ["DMSO"] * n_control + [f"p{index:02d}" for index in range(n_groups) for _ in range(per_group)]
+    obs = pd.DataFrame(
+        {
+            "Metadata_Perturbation": labels,
+            "Metadata_Control": [label == "DMSO" for label in labels],
+            "Metadata_Plate": "P1",
+            "Metadata_Well": [f"A{index:04d}" for index in range(len(labels))],
+            "state": "one",
+        },
+        index=[str(index) for index in range(len(labels))],
+    )
+    adata = ad.AnnData(
+        X=generator.standard_normal((len(labels), n_features)).astype(np.float32),
+        obs=obs,
+        var=pd.DataFrame(index=[f"Cells_AreaShape_f{index}" for index in range(n_features)]),
+    )
+    stamp(adata, resolution="cell")
+    return adata
+
+
+def test_subpopulation_hits_does_not_call_pure_noise():
+    """The controls that define a cluster's centroid must not also supply the distances tested against.
+
+    In sample they sit closer to the centroid than any other group can, and the bias grows
+    with features per control: at 36 controls and 120 features the raw false positive rate
+    was 0.39 against the in-sample null and 0.00 against a split reference.
+    """
+    called = total = 0
+    for seed in range(10):
+        adata = _noise_cells(n_control=36, n_features=120, per_group=200, seed=seed)
+        mt.tl.subpopulation_hits(adata, cluster_key="state")
+        table = adata.uns["mantispy"]["subpopulation_hits"]
+        pseudo = table[table["group"] != "DMSO"]
+        called += int((pseudo["pvalue"] < 0.05).sum())
+        total += len(pseudo)
+    assert total == 120
+    assert called / total < 0.1, f"{called}/{total} pure-noise pseudo-treatments called at raw p < 0.05"
+
+
+def _clustered_wells(layout: dict[str, dict[int, int]], n_clusters: int):
+    """Cells labeled by well and cluster; wells whose name starts with A are the controls."""
+    rows = [
+        {
+            "Metadata_Plate": "P1",
+            "Metadata_Well": well,
+            "Metadata_Perturbation": "DMSO" if well.startswith("A") else "pert",
+            "Metadata_Control": well.startswith("A"),
+            "leiden": str(cluster),
+        }
+        for well, clusters in layout.items()
+        for cluster, count in clusters.items()
+        for _ in range(count)
+    ]
+    obs = pd.DataFrame(rows, index=[str(index) for index in range(len(rows))])
+    adata = ad.AnnData(
+        X=np.random.default_rng(0).standard_normal((len(rows), 4)).astype(np.float32),
+        obs=obs,
+        var=pd.DataFrame(index=[f"Cells_AreaShape_f{index}" for index in range(4)]),
+    )
+    assert obs["leiden"].nunique() == n_clusters
+    stamp(adata, resolution="cell")
+    return adata
+
+
+def test_a_shifted_composition_departs_further_than_a_control_well_does():
+    """A test restricted to the clusters the controls occupy still has to separate a shifted composition from an unshifted one."""
+    layout = {
+        "A01": {0: 50, 1: 50},
+        "A02": {0: 52, 1: 48},
+        "A03": {0: 48, 1: 52},
+        "B01": {0: 80, 1: 20},
+        "B02": {0: 78, 1: 22},
+    }
+    composition = mt.tl.cluster_composition(_clustered_wells(layout, n_clusters=2))
+    test = composition.uns["mantispy"]["composition_test"]
+    control = composition.obs["Metadata_Control"].to_numpy(dtype=bool)
+
+    statistic = test["statistic"].to_numpy()
+    assert statistic[~control].min() > statistic[control].max()
+    assert (test["qvalue"].to_numpy()[~control] < 0.05).all()
+
+
+def test_a_cluster_the_controls_never_reached_does_not_fabricate_a_hit():
+    """An expected count floored at 1e-9 turned five cells in a treatment-only cluster into chi-square 7.5e10 and p exactly 0."""
+    layout = {
+        "A01": {0: 50, 1: 50},
+        "A02": {0: 60, 1: 40},
+        "A03": {0: 55, 1: 45},
+        "B01": {0: 50, 1: 45, 2: 5},  # five cells where no control cell was seen
+        "B02": {0: 52, 1: 48},
+    }
+    composition = mt.tl.cluster_composition(_clustered_wells(layout, n_clusters=3))
+    test = composition.uns["mantispy"]["composition_test"].set_index("group")
+
+    assert float(test.loc["P1/B01", "statistic"]) < 1e3
+    assert float(test.loc["P1/B01", "pvalue"]) > 0.0
+    assert float(test.loc["P1/B01", "qvalue"]) > 0.0
+    # The fractions still show the cluster, which is where a treatment-only state belongs.
+    row = composition.obs_names[composition.obs["Metadata_Well"].astype(str).to_numpy() == "B01"][0]
+    assert float(composition[row, "2"].X[0, 0]) == pytest.approx(0.05)
+
+
+def test_many_unreached_clusters_do_not_break_the_chi_square():
+    """Thirty-eight expected counts floored at 1e-9 outweighed two pooled control cells, and scipy refused the test outright."""
+    layout = {"A01": {0: 1, 1: 1}, "B01": {0: 10, 5: 3}, "B02": dict.fromkeys(range(40), 1)}
+    composition = mt.tl.cluster_composition(_clustered_wells(layout, n_clusters=40))
+    test = composition.uns["mantispy"]["composition_test"].set_index("group")
+
+    assert np.isfinite(test["statistic"].to_numpy()).all()
+    # Ten cells in cluster 0 against an even control split over clusters 0 and 1.
+    assert float(test.loc["P1/B01", "statistic"]) == pytest.approx(10.0)

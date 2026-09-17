@@ -52,7 +52,9 @@ def rank_inverse_normal(X: np.ndarray, c: float = BLOM, stochastic: bool = True,
 
     for column in range(values.shape[1]):
         finite = np.flatnonzero(np.isfinite(values[:, column]))
-        if finite.size < 2:
+        # The transform is defined at one observation, ndtri((1 - c) / (2 - 2c)) = 0.0, and
+        # skipping the column would leave the NaN prefill and lose a measured value.
+        if finite.size == 0:
             continue
         present = values[finite, column]
         if stochastic:

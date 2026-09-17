@@ -38,7 +38,9 @@ def test_mahalanobis_transform_whitens_the_reference():
     rng = np.random.default_rng(2)
     reference = rng.standard_normal((500, 3)) @ np.array([[2.0, 1, 0], [0, 3, 0], [0, 0, 1]])
     centre, whitening = mahalanobis_transform(reference)
-    np.testing.assert_allclose(np.cov((reference - centre) @ whitening, rowvar=False), np.eye(3), atol=0.15)
+    # Whitening this reference lands within 1.1e-06 of the identity. Skipping it misses by 9.3
+    # and scaling by the standard deviation alone misses by 0.33, so atol=0.15 accepted both.
+    np.testing.assert_allclose(np.cov((reference - centre) @ whitening, rowvar=False), np.eye(3), atol=1e-5)
 
 
 def test_mahalanobis_transform_survives_a_missing_value():

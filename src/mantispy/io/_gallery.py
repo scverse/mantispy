@@ -228,14 +228,20 @@ def _outline_file(directory: Path, well: str, site: int, kind: str) -> Path | No
     """Find one outline image, whatever the source called it.
 
     Seen across the gallery: ``outlines/A01_s1--cell_outlines.png``, ``outlines/a01_1--cell_outlines.png``, and ``A01_s1_cell_outlines.tiff`` in a directory named after the plate.
+    Names are compared without regard to case, because ``Path.glob`` is case-sensitive on POSIX, macOS included, and the lowercase spelling would never match a well named ``A01``.
     """
+    # Files beside the analysis first, then one level down, which is the order the globs had.
+    found: dict[str, Path] = {}
+    for path in [*sorted(directory.glob("*")), *sorted(directory.glob("*/*"))]:
+        if path.suffix and path.is_file():
+            found.setdefault(path.stem.lower(), path)
     for stem in (
         f"{well}_s{site}--{kind}_outlines",
         f"{well}_{site}--{kind}_outlines",
         f"{well}_s{site}_{kind}_outlines",
     ):
-        if matches := sorted(directory.glob(f"{stem}.*")) + sorted(directory.glob(f"*/{stem}.*")):
-            return matches[0]
+        if (match := found.get(stem.lower())) is not None:
+            return match
     return None
 
 

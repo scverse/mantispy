@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -18,9 +19,34 @@ def silhouette_label(adata: AnnData, label_key: str, use_rep: str = "X_pca") -> 
     """How well separated the biological labels are, rescaled to ``[0, 1]``.
 
     Higher means tighter, better separated groups.
+
+    The value is NaN when separation is undefined for the object, which is when it holds one
+    label or one row per label.
+
+    Args:
+        adata: Object with the embedding to measure in.
+        label_key: ``obs`` column with the biological grouping.
+        use_rep: ``obsm`` key of the embedding.
+
+    Returns:
+        A one-row tidy frame holding ``silhouette_label``.
     """
+    values = embedding(adata, use_rep)
     labels = adata.obs[label_key].to_numpy()
-    value = (silhouette_score(embedding(adata, use_rep), labels) + 1.0) / 2.0
+
+    n_labels = len(pd.unique(labels))
+    if not 2 <= n_labels <= adata.n_obs - 1:
+        # sklearn raises here, with an error that names neither the column nor the cause.
+        warnings.warn(
+            f"the label silhouette is undefined for obs[{label_key!r}]: it needs between 2 and "
+            f"n_obs - 1 distinct labels, and this object has {n_labels} over {adata.n_obs} rows. "
+            "One row per label, as a consensus object has, is the usual cause. Returning NaN.",
+            UserWarning,
+            stacklevel=2,
+        )
+        return tidy("silhouette_label", use_rep, label_key, np.nan)
+
+    value = (silhouette_score(values, labels) + 1.0) / 2.0
     return tidy("silhouette_label", use_rep, label_key, value)
 
 

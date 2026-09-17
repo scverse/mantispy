@@ -144,6 +144,21 @@ def test_a_duplicated_platemap_row_is_refused(cellprofiler_dir, platemap_path):
         mt.io.read_profiles(cellprofiler_dir, platemap=doubled)
 
 
+def test_metadata_on_both_the_object_and_image_tables_keeps_the_image_value(tmp_path, make_cellprofiler_dir):
+    """CellProfiler can copy image metadata into the object tables, and the merge then
+    suffixed the pair Metadata_Plate_x/_y, so the schema's plate column vanished silently."""
+    directory = make_cellprofiler_dir(tmp_path / "collide")
+    cells = pd.read_csv(directory / "Cells.csv")
+    cells["Metadata_Plate"] = "from_the_object_table"
+    cells.to_csv(directory / "Cells.csv", index=False)
+
+    adata = mt.io.read_profiles(directory)
+
+    assert not [column for column in adata.obs.columns if column.endswith(("_x", "_y"))]
+    assert set(adata.obs["Metadata_Plate"]) == {"P1"}
+    assert validate(adata).ok, validate(adata).errors
+
+
 def test_several_directories_are_refused(tmp_path, make_cellprofiler_dir):
     """Both number their images from 1, and image_qc joins the image table on ImageNumber alone."""
     directories = [make_cellprofiler_dir(tmp_path / name) for name in ("a", "b")]

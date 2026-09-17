@@ -108,7 +108,21 @@ def from_dataframe(
             object, including the whole-field ``Image`` measurements, of which a JUMP profile
             has 1089 against 3634 per-cell ones.
         resolution: Resolution to record. Profile tables are usually well-level.
+
+    Returns:
+        An :class:`~anndata.AnnData` of observations by features at the recorded resolution.
+
+    Raises:
+        ValueError: `df` has no rows, no column parses as a feature on `objects`, or two metadata
+            prefixes normalize onto the same column name.
+        KeyError: A name in `metadata_columns` is not in `df`.
     """
+    if len(df) == 0:
+        raise ValueError(
+            f"the table has {len(df.columns)} column(s) and no rows. A column holding no values has no "
+            "dtype to be recognised as a feature by, so this would read as an empty object with every "
+            "feature column filed into obs. Check that the file holds more than a header."
+        )
     prefixes = tuple(metadata_prefixes)
     named = set(metadata_columns)
     if missing := named - set(df.columns):
@@ -216,7 +230,9 @@ def _join_platemap(obs: pd.DataFrame, platemap: str | Path | pd.DataFrame) -> pd
     frame = frame.astype(dict.fromkeys(on, str))
     # validate="m:1": a duplicated well in the platemap would otherwise multiply that well's rows.
     try:
-        joined = left.merge(frame, on=on, how="left", suffixes=("", "_platemap"), validate="m:1")
+        joined = left.merge(
+            frame, on=on, how="left", suffixes=("", "_platemap"), validate="m:1", indicator="_platemap_match"
+        )
     except pd.errors.MergeError as error:
         duplicated = frame[frame.duplicated(on, keep=False)][on].drop_duplicates()
         raise ValueError(
@@ -224,6 +240,16 @@ def _join_platemap(obs: pd.DataFrame, platemap: str | Path | pd.DataFrame) -> pd
             f"such as {duplicated.head(3).to_dict('records')}, which would multiply the rows of those "
             "wells. De-duplicate the platemap first."
         ) from error
+    # A platemap that names the wrong wells joins onto nothing and leaves every column it was
+    # read for missing, which otherwise looks exactly like a successful read.
+    unmatched = int((joined.pop("_platemap_match") == "left_only").sum())
+    if unmatched:
+        get_logger().warning(
+            "%d of %d rows have no platemap row for %s; the platemap's columns are missing on those rows",
+            unmatched,
+            len(joined),
+            on,
+        )
     joined.index = obs.index
     return categorize_metadata(joined)
 
@@ -301,10 +327,11 @@ def read_profiles(
         An :class:`~anndata.AnnData` at the recorded resolution.
 
     Raises:
-        ValueError: No paths were given, a directory was given together with other paths, the files disagree on
-            columns while `on_column_mismatch` is ``"raise"``, no column parses as a feature on `objects`,
-            `index_columns` do not identify observations uniquely, the platemap repeats a well, or an export
-            object cannot be linked one to one.
+        ValueError: No paths were given, `on_column_mismatch` is not one of the two accepted values, a
+            directory was given together with other paths, the files disagree on columns while
+            `on_column_mismatch` is ``"raise"``, a file holds a header and no rows, no column parses as a
+            feature on `objects`, `index_columns` do not identify observations uniquely, the platemap
+            repeats a well, or an export object cannot be linked one to one.
         FileNotFoundError: A directory holds neither an ``Image.csv`` nor parquet parts, or has no table for
             `primary_object`.
         KeyError: A name in `metadata_columns` or `index_columns` is not in the data.
@@ -314,6 +341,10 @@ def read_profiles(
         >>> wells = mt.io.read_profiles("BR00116991_augmented.csv.gz", sentinels=-999)  # doctest: +SKIP
         >>> cells = mt.io.read_profiles("analysis/", platemap="platemap.csv")  # doctest: +SKIP
     """
+    # Checked before anything is read: an unrecognized value used to fall through to the
+    # intersect branch, so a typo quietly dropped every column the files disagreed on.
+    if on_column_mismatch not in {"raise", "intersect"}:
+        raise ValueError(f"on_column_mismatch must be 'raise' or 'intersect', got {on_column_mismatch!r}")
     files = [Path(paths)] if isinstance(paths, str | Path) else [Path(p) for p in paths]
     if not files:
         raise ValueError("no profile files given")

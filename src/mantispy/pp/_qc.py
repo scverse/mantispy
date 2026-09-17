@@ -109,21 +109,37 @@ def _border_flag(adata: AnnData, image_shape: tuple[int, int] | None, margin: in
 
 
 def _area_outlier_flag(adata: AnnData, X: np.ndarray) -> np.ndarray:
-    """Cells whose area is more than :data:`AREA_Z_CUTOFF` robust SDs from the plate median."""
+    """Cells whose area is more than :data:`AREA_Z_CUTOFF` robust SDs from the plate median.
+
+    Every compartment that measured an area is scored within its own plate and the flags are
+    OR-ed, so a cell is an outlier when any of its areas is. Scoring only the first matching
+    column made the flag, and so ``qc_pass``, depend on the order of ``var``.
+    """
+    if "feature" not in adata.var:
+        get_logger().warning(
+            "var has no 'feature' column, so no cell can be flagged as an area outlier. The column is "
+            "written by mt.io.read_profiles, and by mantispy._core.features.parse_feature_names for a "
+            "var table built by hand; an object from tl.feature_signature carries no per-feature "
+            "annotation to read."
+        )
+        return np.zeros(adata.n_obs, dtype=bool)
+
     area = adata.var_names[adata.var["feature"].astype(str).eq("Area")]
     if not len(area) or "Metadata_Plate" not in adata.obs:
         return np.zeros(adata.n_obs, dtype=bool)
+    if len(area) > 1:
+        get_logger().info("qc_area_outlier flags a cell outlying in any of %s", list(area))
 
-    column = X[:, np.array([adata.var_names.get_loc(area[0])])]
+    columns = X[:, np.array([adata.var_names.get_loc(name) for name in area])]
     codes, keys = group_codes(adata, "Metadata_Plate")
-    median = grouped_stat(column, codes, len(keys), MEDIAN)
-    mad = grouped_stat(column, codes, len(keys), MAD)
+    median = grouped_stat(columns, codes, len(keys), MEDIAN)
+    mad = grouped_stat(columns, codes, len(keys), MAD)
 
     with np.errstate(invalid="ignore", divide="ignore"):
-        z = np.abs(column[:, 0] - median[codes, 0]) / (1.4826 * mad[codes, 0])
+        z = np.abs(columns - median[codes]) / (1.4826 * mad[codes])
     # A quantized Area column can have zero MAD, which makes z infinite; posinf=0.0 stops
     # nan_to_num from turning that into 1.8e308 and flagging the whole plate.
-    return np.nan_to_num(z, nan=0.0, posinf=0.0, neginf=0.0) > AREA_Z_CUTOFF
+    return (np.nan_to_num(z, nan=0.0, posinf=0.0, neginf=0.0) > AREA_Z_CUTOFF).any(axis=1)
 
 
 @inplace_or_copy()
@@ -137,7 +153,9 @@ def filter_cells(
 
     Args:
         adata: Object to filter.
-        min_cells_per_well: Wells with fewer cells than this are dropped entirely. ``0`` disables the check.
+        min_cells_per_well: Wells with fewer cells than this are dropped entirely, counted over the
+            cells that survive the other checks in this call so that the cells being dropped cannot
+            hold a well above the floor. ``0`` disables the check.
         qc_pass: Also require ``obs["qc_pass"]``, which :func:`calculate_qc_metrics` writes.
         copy: Return a filtered copy instead of filtering in place.
     """
@@ -148,7 +166,11 @@ def filter_cells(
         keep &= as_frame(adata.obs)["qc_pass"].to_numpy(dtype=bool)
     if min_cells_per_well > 0:
         codes, keys = group_codes(adata, ["Metadata_Plate", "Metadata_Well"])
-        keep &= np.bincount(codes, minlength=len(keys))[codes] >= min_cells_per_well
+        # Count the survivors, not every cell in the well: counting the cells this call is about
+        # to drop left a well of 60 cells with 12 passing above a floor of 50, and tl.aggregate
+        # then built its profile from 12 cells. Running the two checks as separate calls dropped
+        # that well, so the two paths disagreed.
+        keep &= np.bincount(codes[keep], minlength=len(keys))[codes] >= min_cells_per_well
 
     dropped = int((~keep).sum())
     if dropped:

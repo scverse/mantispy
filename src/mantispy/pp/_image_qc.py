@@ -167,7 +167,6 @@ def image_qc(
 
     table["qc_image_score"] = score
     table["qc_image_pass"] = passed
-    store["image_qc"] = table
 
     if "Metadata_ImageNumber" not in adata.obs:
         raise KeyError("obs has no 'Metadata_ImageNumber' column to broadcast image QC onto")
@@ -179,7 +178,10 @@ def image_qc(
             UserWarning,
             stacklevel=3,
         )
+    # Both writes happen after the last thing that can fail, so a call that raises leaves no
+    # verdict in uns for pl.image_qc to plot and no obs column disagreeing with one.
     adata.obs["qc_image_pass"] = broadcast.fillna(True).to_numpy(dtype=bool)
+    store["image_qc"] = table
     get_logger().info("image_qc(%s) flagged %d of %d images", method, int((~passed).sum()), len(table))
     return None
 

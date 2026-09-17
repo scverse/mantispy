@@ -142,9 +142,10 @@ def differential_features(
         because it detects the plate. None of the four screens packaged with mantispy has such
         a group.
 
-        Features with a non-finite value in any well are left out of the fit and returned as
-        ``NaN``, because one infinity makes the batched least squares return ``NaN`` for every
-        feature.
+        A feature with a non-finite value in one of the wells a comparison uses is left out of that fit.
+        One infinity would make the batched least squares return ``NaN`` for every feature.
+        The mask is computed per group, over the rows that group is fitted on, so a bad well only costs the
+        groups compared against it.
 
         This test is meant for low-replicate screens. Across five configurations, the
         Mann-Whitney test in :func:`~mantispy.tl.effect_size` could not call a feature at three
@@ -179,11 +180,12 @@ def differential_features(
         raise KeyError(f"obs has no column {block!r} to block on")
     blocks = obs[block].to_numpy() if block is not None else None
 
-    usable = np.isfinite(values).all(axis=0)
+    finite = np.isfinite(values)
     codes, keys = group_codes(adata, groupby)
     features = adata.var_names.to_numpy()
 
     frames, priors, skipped, confounded = [], {}, [], []
+    unscored = 0
     for index, key in enumerate(keys):
         treated = (codes == index) & ~is_control
         # What this group is measured against: the reference rows, or every other
@@ -213,6 +215,11 @@ def differential_features(
         difference = np.full(adata.n_vars, np.nan)
         statistic = np.full(adata.n_vars, np.nan)
         pvalue = np.full(adata.n_vars, np.nan)
+
+        # Over the rows of this fit only. A well no comparison includes cannot take a feature
+        # away from the groups that are scored.
+        usable = finite[rows].all(axis=0)
+        unscored += int((~usable).sum())
 
         coefficient, unit, sigma2, df = _fit(values[np.ix_(rows, np.flatnonzero(usable))], design)
         posterior, prior_df = squeeze_variances(sigma2, df)
@@ -257,9 +264,11 @@ def differential_features(
             block,
             ", ".join(confounded[:5]) + ("..." if len(confounded) > 5 else ""),
         )
-    if not usable.all():
+    if unscored:
         logger.info(
-            "differential_features returned %d feature(s) as NaN for holding a non-finite value", int((~usable).sum())
+            "differential_features returned %d group-feature pair(s) as NaN for a non-finite value in a well "
+            "the comparison uses",
+            unscored,
         )
 
     store = adata.uns.setdefault("mantispy", {})

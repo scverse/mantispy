@@ -76,13 +76,69 @@ def test_evaluate_correction_stacks_and_names_both_lisis(corrected):
     assert set(frame["better"]) <= {"higher", "lower"}
 
 
-def test_evaluate_correction_compares_representations_and_adds_map(corrected):
+def test_evaluate_correction_compares_representations_and_names_the_map_row_honestly(corrected):
+    """Reading one uns table once per representation gave every representation the same mAP, 0.7757 under both X_pca and X_other, inside the function whose purpose is comparing them."""
     pytest.importorskip("copairs")  # copairs declares requires-python <3.13
     corrected.obsm["X_other"] = np.asarray(corrected.obsm["X_pca"])[:, :5]
-    mt.tl.map(corrected, mode="activity", null_size=200)
+    mt.tl.map(corrected, mode="activity", null_size=200)  # scores X, neither representation
+
     frame = mt.metrics.evaluate_correction(corrected, reps=("X_pca", "X_other"), map_key="map")
-    assert set(frame["representation"]) == {"X_pca", "X_other"}
-    assert "mean_average_precision" in set(frame["metric"])
+    assert {"X_pca", "X_other"} <= set(frame["representation"])
+
+    rows = frame[frame["metric"] == "mean_average_precision"]
+    assert len(rows) == 1
+    assert rows["representation"].iloc[0] == "X"
+
+
+@pytest.fixture
+def small_plate():
+    """A two-batch plate of 48 wells, fewer than the 91 rows the default perplexity of 30 needs."""
+    cells = synthetic_plate(
+        n_plates=2,
+        n_wells=24,
+        n_cells=15,
+        n_features=20,
+        n_batches=2,
+        batch_effect=3.0,
+        n_perturbations=3,
+        effect_size=3.0,
+        seed=0,
+    )
+    wells = mt.tl.aggregate(cells, min_cells=0)
+    sc.pp.pca(wells, n_comps=10)
+    return wells
+
+
+def test_lisi_refuses_a_perplexity_its_neighborhoods_cannot_support(small_plate):
+    """Clamping the neighborhood to n_obs let LISI collapse to the count of distinct labels: perplexity 100 and 1000 both returned 1.9991 here, the number of batches."""
+    assert small_plate.n_obs == 48
+    with pytest.raises(ValueError, match="perplexity"):
+        mt.metrics.lisi(small_plate, key="Metadata_Batch", perplexity=100)
+
+    # 15 fits: 3 * 15 neighbors plus the row itself is 46 of the 48 rows.
+    value = _value(mt.metrics.lisi(small_plate, key="Metadata_Batch", perplexity=15), "ilisi")
+    assert 1.0 <= value < small_plate.obs["Metadata_Batch"].nunique()
+
+
+def test_evaluate_correction_says_what_perplexity_a_small_object_can_take(small_plate):
+    """Its default perplexity of 30 needs 91 rows, so on 48 it has to say so instead of reporting a LISI that saturated at the number of batches."""
+    with pytest.raises(ValueError, match="perplexity"):
+        mt.metrics.evaluate_correction(small_plate)
+
+    frame = mt.metrics.evaluate_correction(small_plate, perplexity=10)
+    assert {"ilisi", "clisi"} <= set(frame["metric"])
+    assert np.isfinite(frame["value"]).all()
+
+
+def test_the_label_silhouette_says_why_it_cannot_score_one_row_per_label(small_plate):
+    """A consensus object holds one row per perturbation, where the label silhouette is undefined, and sklearn's own error names neither the column nor the cause."""
+    consensus = mt.tl.consensus(small_plate)
+    assert consensus.n_obs == consensus.obs["Metadata_Perturbation"].nunique()
+    sc.pp.pca(consensus, n_comps=3)
+
+    with pytest.warns(UserWarning, match="row per label"):
+        frame = mt.metrics.silhouette_label(consensus, label_key="Metadata_Perturbation")
+    assert np.isnan(frame["value"].iloc[0])
 
 
 def test_batch_variance_explained_covers_every_key(corrected):

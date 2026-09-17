@@ -65,14 +65,22 @@ def lisi(adata: AnnData, key: str, use_rep: str = "X_pca", perplexity: float = 3
         adata: Object with the embedding to measure in.
         key: ``obs`` column whose labels the neighborhoods are scored over.
         use_rep: ``obsm`` key of the embedding.
-        perplexity: Perplexity the kernel width is calibrated to. Each neighborhood holds
-            ``3 * perplexity`` rows, at most ``n_obs - 1``.
+        perplexity: Perplexity the kernel width is calibrated to.
+            Each neighborhood holds ``3 * perplexity`` rows, so the object needs more rows than that.
         kind: ``"batch"`` names the result ``ilisi`` (higher is better mixed) and ``"label"``
             names it ``clisi`` (lower means the biological groups stay separated). ``"auto"``
             guesses from the column name: a key containing batch, plate, source, week or run
             is a batch and anything else a label, so ``"Metadata_Site"`` counts as a label.
             Pass ``kind`` explicitly when one table holds both, or the two rows get the same
             metric name.
+
+    Returns:
+        A one-row tidy frame holding ``ilisi`` or ``clisi``.
+
+    Raises:
+        ValueError: ``kind`` is not one of the three accepted values.
+        ValueError: ``obs[key]`` has missing values.
+        ValueError: The object has too few rows for ``perplexity``.
     """
     if kind not in ("auto", "batch", "label"):
         raise ValueError(f"kind must be 'auto', 'batch' or 'label', got {kind!r}")
@@ -82,7 +90,17 @@ def lisi(adata: AnnData, key: str, use_rep: str = "X_pca", perplexity: float = 3
     missing = int(pd.isna(labels).sum())
     if missing:
         raise ValueError(f"obs[{key!r}] has {missing} missing value(s); drop those rows or fill the column.")
-    n_neighbors = min(int(perplexity * 3), adata.n_obs - 1)
+
+    n_neighbors = int(perplexity * 3)
+    if n_neighbors >= adata.n_obs:
+        # A neighborhood of k rows tops out at an entropy of log(k), so once k falls below the
+        # perplexity the bisection can never reach log(perplexity): beta halves all the way down,
+        # the weights go uniform, and LISI collapses to the count of distinct labels.
+        raise ValueError(
+            f"perplexity={perplexity} calibrates the kernel over {n_neighbors} neighbors and so needs "
+            f"{n_neighbors + 1} rows, but the object has {adata.n_obs}. "
+            f"Pass a perplexity of at most {(adata.n_obs - 1) // 3}, or measure on a larger object."
+        )
     distances, indices = NearestNeighbors(n_neighbors=n_neighbors + 1).fit(values).kneighbors(values)
 
     # The kernel takes unsquared distances, as harmonypy does. Squared distances keep LISI

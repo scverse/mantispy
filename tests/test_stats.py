@@ -1,7 +1,15 @@
 import numpy as np
 import pytest
+from scipy.stats import mannwhitneyu
 
-from mantispy._core._stats import benjamini_hochberg, permutation_pvalue, robust_zscore, split_reference
+from mantispy._core._stats import (
+    benjamini_hochberg,
+    mannwhitney_pvalues,
+    permutation_pvalue,
+    robust_zscore,
+    sorted_control,
+    split_reference,
+)
 
 
 def test_benjamini_hochberg_matches_the_textbook_example():
@@ -81,3 +89,34 @@ def test_split_reference_refuses_a_reference_it_cannot_halve():
     """One row per side is the least that can carry a null at all."""
     with pytest.raises(ValueError, match="at least four rows"):
         split_reference(np.arange(3), np.random.default_rng(0))
+
+
+def test_sorted_control_counts_every_measured_value_including_infinities():
+    """np.sort puts -inf first, so counting only finite values sliced the reference one short
+    and cut the largest control off its end."""
+    values, counts, _ = sorted_control(np.array([[-np.inf, 1.0], [1.0, np.nan], [2.0, 2.0], [np.nan, 3.0]]))
+
+    assert counts.tolist() == [3, 3]
+    assert values[0][:3].tolist() == [-np.inf, 1.0, 2.0]
+    assert np.isnan(values[0][3])
+
+
+def test_mannwhitney_matches_scipy_when_the_reference_holds_an_infinity():
+    """CellProfiler ratio features produce +-inf. A -inf shifted the sorted reference by one,
+    which moved the p-values by up to 41% and always toward significance."""
+    rng = np.random.default_rng(0)
+    control = rng.normal(size=(40, 4))
+    treated = rng.normal(loc=0.4, size=(25, 4))
+    control[5, 0] = -np.inf
+    control[[7, 11], 1] = -np.inf  # repeated, so the tie correction has to see both
+    control[9, 2] = np.inf
+    control[13, 3] = np.nan
+
+    got = mannwhitney_pvalues(treated, sorted_control(control))
+
+    # scipy ranks an infinity as the extreme value it is and omits only the missing ones.
+    expected = [
+        mannwhitneyu(treated[:, j], control[~np.isnan(control[:, j]), j], method="asymptotic").pvalue
+        for j in range(control.shape[1])
+    ]
+    np.testing.assert_allclose(got, expected, rtol=1e-12)
