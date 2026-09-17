@@ -109,6 +109,7 @@ typecheck = [
 ]
 
 [tool.hatch]
+build.targets.sdist.exclude = [ "/docs", "/tests" ]
 envs.default.installer = "uv"
 envs.default.dependency-groups = [ "dev" ]
 # copairs (tl.map, used by tutorials 04/08/09) declares requires-python <3.13. The docs build
