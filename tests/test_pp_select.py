@@ -1,6 +1,8 @@
 """Behaviour of feature_select beyond equivalence, which test_equivalence_* covers."""
 
+import anndata as ad
 import numpy as np
+import pandas as pd
 import pytest
 
 import mantispy as mt
@@ -32,6 +34,50 @@ def test_counts_are_what_each_operation_removes_on_its_own(wells):
         run = wells.copy()
         mt.pp.feature_select(run, operations=operations)
         assert dict(run.uns["mantispy"]["feature_select"]) == alone, f"counts changed with order {operations}"
+
+
+def _one_feature_per_operation():
+    """Four replicate groups in which drop_na_columns, drop_outliers and noise_removal each have exactly one feature to remove."""
+    rng = np.random.default_rng(0)
+    n_obs, n_groups = 20, 4
+    per_group = n_obs // n_groups
+
+    plain = rng.normal(scale=0.2, size=n_obs)  # no NaN, small, quiet within a group: every operation keeps it
+    noisy = rng.normal(scale=5.0, size=n_obs)  # within-group standard deviation above the 0.8 cutoff
+    ratio = np.repeat(np.arange(1, n_groups + 1) * 1000.0, per_group)  # above the 500 cutoff, flat within a group
+    sparse = np.full(n_obs, np.nan)  # missing in 60% of rows, two values per group so no group is all-NaN
+    for group in range(n_groups):
+        start = group * per_group
+        sparse[start] = group * 0.5
+        sparse[start + 1] = group * 0.5 + 0.1
+
+    obs = pd.DataFrame(
+        {"Metadata_Perturbation": np.repeat([f"g{group}" for group in range(n_groups)], per_group)},
+        index=[str(index) for index in range(n_obs)],
+    )
+    adata = ad.AnnData(X=np.column_stack([plain, sparse, ratio, noisy]).astype(np.float32), obs=obs)
+    adata.var_names = [
+        "Cells_AreaShape_Plain",
+        "Cells_AreaShape_Sparse",
+        "Cells_Intensity_Ratio",
+        "Cells_AreaShape_Jitter",
+    ]
+    return adata
+
+
+def test_each_operation_counts_the_features_it_actually_removed():
+    """The counts are the only thing that notices one of these three operations turning into a no-op that selects every feature."""
+    adata = _one_feature_per_operation()
+    operations = ("drop_na_columns", "drop_outliers", "noise_removal")
+
+    mt.pp.feature_select(adata, operations=operations)
+
+    assert adata.uns["mantispy"]["feature_select"] == dict.fromkeys(operations, 1)
+    assert sorted(adata.var_names[~adata.var["selected"]]) == [
+        "Cells_AreaShape_Jitter",
+        "Cells_AreaShape_Sparse",
+        "Cells_Intensity_Ratio",
+    ]
 
 
 def test_nothing_is_dropped_or_reordered(wells):
