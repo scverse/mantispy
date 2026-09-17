@@ -268,7 +268,7 @@ This project uses [sphinx][] with the following features:
 
 - The [myst][] extension allows to write documentation in markdown/Markedly Structured Text
 - [Numpy-style docstrings][numpydoc] (through the [napoloen][numpydoc-napoleon] extension).
-- Jupyter notebooks as tutorials through [myst-nb][] (See [Tutorials with myst-nb](#tutorials-with-myst-nb-and-jupyter-notebooks))
+- Jupyter notebooks as tutorials through [myst-nb][] (See [Notebook execution](#notebook-execution))
 - [sphinx-autodoc-typehints][], to automatically reference annotated input and output types
 - Citations (like {cite:p}`Virshup_2023`) can be included with [sphinxcontrib-bibtex](https://sphinxcontrib-bibtex.readthedocs.io/)
 
@@ -281,16 +281,69 @@ See scanpy’s {doc}`scanpy:dev/documentation` for more information on how to wr
 [numpydoc]: https://numpydoc.readthedocs.io/page/format.html
 [sphinx-autodoc-typehints]: https://github.com/tox-dev/sphinx-autodoc-typehints
 
-### Tutorials with myst-nb and jupyter notebooks
+### Kinds of page
 
-The documentation is set-up to render jupyter notebooks stored in the `docs/notebooks` directory using [myst-nb][].
-Currently, only notebooks in `.ipynb` format are supported that will be included with both their input and output cells.
-It is your responsibility to update and re-run the notebook whenever necessary.
+Documentation pages come in three kinds, and they are held to different standards.
 
-If you are interested in automatically running notebooks as part of the continuous integration,
-please check out [this feature request][issue-render-notebooks] in the `cookiecutter-scverse` repository.
+| Kind | Answers | Data | Prose |
+| --- | --- | --- | --- |
+| Tutorial | how do I analyse a screen? | a real screen from `mt.ds` | short, between figures |
+| Example | what does this one function do? | `mt.ds.synthetic_plate` is fine | short |
+| Pitfall | why does this method mislead? | whatever demonstrates it | long by design |
 
-[issue-render-notebooks]: https://github.com/scverse/cookiecutter-scverse/issues/40
+A tutorial runs end to end on real data. An example demonstrates a single function in as few
+cells as possible. A pitfall is a method note — why sphering can cost most of a retrieval score,
+why a four-parameter fit converges on noise — and is the one kind where prose should dominate.
+
+Method caveats belong in a pitfall, not in the middle of a tutorial. A reader working through a
+tutorial has not yet seen the step succeed, and a paragraph of warnings ahead of the first result
+teaches them nothing.
+
+### Writing a tutorial or example
+
+- **Use real data in a tutorial.** `mt.ds` ships public screens; use one. Synthetic data belongs
+  in an example, or in a pitfall where known ground truth is the point.
+- **Keep prose below roughly 250 words per figure.** These are image analysis pages in a visual
+  field. If a page is over budget, the fix is usually to move method discussion to a pitfall, not
+  to add figures.
+- **End a code cell in something the reader can use**: a figure, a `DataFrame`, or an object repr.
+  Not a hand-assembled `dict` literal of labelled numbers — that output cannot be sorted,
+  filtered, plotted or pasted into an analysis.
+- **Do not check output against ground truth in a page.** Comparing a result with
+  `uns["mantispy"]["truth"]` shows the function works; that belongs in `tests/`, where it runs on
+  every push. A page shows the reader what the result looks like.
+- **Never import a private name.** Anything a page imports is code readers will copy, and a
+  `_`-prefixed module carries no stability guarantee. If a page needs it, it belongs in the public
+  API; `tests/test_api_guards.py` enforces this.
+- **Link every API mention** with a `{func}`, `{class}` or `{mod}` role, so it resolves to the API
+  reference and the build catches a rename.
+- **Put caveats in `:::{note}` or `:::{warning}` blocks**, after the result they qualify.
+- **Cite with `{cite:t}` or `{cite:p}`.** Add the entry to `docs/references.bib` by fetching it
+  from the DOI resolver rather than writing it by hand.
+
+Open every page with what the reader will learn (three bullets), the dataset and its citation, the
+download size and the expected runtime; close it with a session-info cell.
+
+### Notebook execution
+
+Notebooks live in `docs/tutorials` and are rendered by [myst-nb][] with their committed outputs:
+`nb_execution_mode` is `off`, so the Read the Docs build downloads nothing and renders the outputs
+as they are. The `Tutorials run` job in `.github/workflows/test.yaml` executes every notebook with
+`nb_execution_mode=cache`, so a committed output cannot silently stop matching the code.
+
+Re-run a notebook and commit its outputs whenever you change it.
+
+`nb_output_stderr` is `remove`, so warnings do **not** appear on the rendered page. Never write
+prose that tells the reader to read a warning. If a warning is part of the explanation, capture it
+and print it:
+
+```python
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter("always")
+    mt.pp.sphere(adata, reference="negcon")
+print(caught[0].message)
+```
+
 
 #### Hints
 
