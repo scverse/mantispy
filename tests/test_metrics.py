@@ -1,4 +1,4 @@
-"""Integration metrics, including equivalence with scib where the definition is shared."""
+"""Integration metrics: the definitions follow scib, which nothing here imports, so these tests pin the behaviour rather than an equivalence."""
 
 import numpy as np
 import pandas as pd

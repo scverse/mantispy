@@ -52,10 +52,9 @@ def _manifest(adata: ad.AnnData, plate: Path) -> tuple[pd.DataFrame, list[str]]:
 class _LazyDataset:
     """One HDF5 dataset that opens its file for each read instead of holding it open.
 
-    A dask array over a live ``h5py`` dataset keeps one file descriptor for as long as the array
-    is referenced. One plate of a 384-well export holds about ten thousand elements, which
-    exhausts the process descriptor limit before the plate finishes reading. Reopening per read
-    costs an open per chunk and keeps the descriptor count flat.
+    A dask array over a live ``h5py`` dataset keeps one file descriptor for as long as the array is referenced.
+    One plate of a 384-well export holds about ten thousand elements, which exhausts the process descriptor limit before the plate finishes reading.
+    Reopening per read costs an open per chunk and keeps the descriptor count flat.
     """
 
     def __init__(self, path: Path) -> None:
@@ -153,7 +152,12 @@ def read_cellprofiler_export(path: Path | str, *, lazy: bool = True) -> SpatialD
 def is_export_plate_dir(path: Path) -> bool:
     """Whether `path` is one plate folder of an export.
 
-    A SpatialData zarr store also holds a ``tables/`` directory, so the table itself has to be there.
+    Args:
+        path: The directory to test.
+
+    Returns:
+        Whether `path` is a directory holding an ``.h5ad`` table under ``tables/``.
+        A SpatialData zarr store also holds a ``tables/`` directory, so the table itself has to be there.
     """
     return path.is_dir() and any((path / "tables").glob("*.h5ad"))
 

@@ -1,10 +1,7 @@
 """Read and write profile tables.
 
-The design of :func:`read_profiles` follows ``scverse/cell-painting-io`` (MIT), whose
-readers were developed against 44 Cell Painting Gallery accessions. What differs between
-real datasets is a parameter here rather than an assumption: metadata prefixes,
-missing-value sentinels, columns that disagree between files, and metadata that exists
-only in the directory name.
+The design of :func:`read_profiles` follows ``scverse/cell-painting-io`` (MIT), whose readers were developed against 44 Cell Painting Gallery accessions.
+What differs between real datasets is a parameter here rather than an assumption: metadata prefixes, missing-value sentinels, columns that disagree between files, and metadata that exists only in the directory name.
 """
 
 from __future__ import annotations
@@ -28,13 +25,11 @@ from mantispy.io._cellprofiler import export_prefix, read_export
 #: Column-name prefixes that mark metadata. Real accessions use all four.
 METADATA_PREFIXES: tuple[str, ...] = ("Image_Metadata_", "Metadata_", "metadata_", "meta_")
 
-#: When fewer features than this survive the default object filter, the drop is logged as
-#: a warning instead of at info level.
+#: When fewer features than this survive the default object filter, the drop is logged as a warning instead of at info level.
 THIN_FEATURE_SET = 10
 
-#: CellProfiler objects treated as features by default: the three compartments, as in
-#: ``pycytominer.infer_cp_features``. ``Image`` is excluded because its measurements are
-#: whole-field, not per-cell.
+#: CellProfiler objects treated as features by default: the three compartments, as in ``pycytominer.infer_cp_features``.
+#: ``Image`` is excluded because its measurements are whole-field, not per-cell.
 DEFAULT_OBJECTS: tuple[str, ...] = ("Cells", "Cytoplasm", "Nuclei")
 
 
@@ -55,8 +50,7 @@ def _strip_prefix(name: str, prefixes: Sequence[str]) -> str:
 
 def _stack(files: list[Path], on_column_mismatch: str) -> tuple[pd.DataFrame, list[int], list[Path]]:
     frames = [_read_frame(path) for path in files]
-    # An empty file reads as all-object columns and would turn the other frames' columns to
-    # object in concat, so empty files are dropped first.
+    # An empty file reads as all-object columns and would turn the other frames' columns to object in concat, so empty files are dropped first.
     kept = [index for index, frame in enumerate(frames) if len(frame)]
     if kept and len(kept) < len(frames):
         files = [files[index] for index in kept]
@@ -90,31 +84,28 @@ def from_dataframe(
 ) -> ad.AnnData:
     """Build an AnnData from a wide profile table.
 
-    Numeric columns that parse as features become ``X``; text and ``Metadata_`` columns
-    become ``obs``. Numeric columns that parse as non-features (object numbers, parent
-    links, centroids) are dropped and logged by default, because published profile tables
-    often carry dozens of them and they mean nothing at well level.
+    Numeric columns that parse as features become ``X``; text and ``Metadata_`` columns become ``obs``.
+    Numeric columns that parse as non-features (object numbers, parent links, centroids) are dropped and logged by default, because published profile tables often carry dozens of them and they mean nothing at well level.
 
     Args:
         df: The table to convert.
-        metadata_prefixes: Prefixes marking metadata columns. The matching prefix is normalized to
-            ``Metadata_``.
+        metadata_prefixes: Prefixes marking metadata columns.
+            The matching prefix is normalized to ``Metadata_``.
         metadata_columns: Columns to treat as metadata even though they are numeric and unprefixed.
         channels: Channel vocabulary passed to the feature-name parser.
         sentinels: Values in the feature matrix that stand for missing, replaced with NaN.
         keep_non_features: Keep those dropped numeric non-feature columns in ``obs`` instead.
-        objects: Which CellProfiler objects count as features. The default is the three
-            compartments, matching ``pycytominer.infer_cp_features``. ``None`` keeps every
-            object, including the whole-field ``Image`` measurements, of which a JUMP profile
-            has 1089 against 3634 per-cell ones.
-        resolution: Resolution to record. Profile tables are usually well-level.
+        objects: Which CellProfiler objects count as features.
+            The default is the three compartments, matching ``pycytominer.infer_cp_features``.
+            ``None`` keeps every object, including the whole-field ``Image`` measurements, of which a JUMP profile has 1089 against 3634 per-cell ones.
+        resolution: Resolution to record.
+            Profile tables are usually well-level.
 
     Returns:
-        An :class:`~anndata.AnnData` of observations by features at the recorded resolution.
+        An :class:`~anndata.AnnData` of observations by features at the recorded resolution, with the parsed feature annotation in ``var`` and the schema stamp, the resolution and the channel vocabulary it parsed with in ``uns["mantispy"]``.
 
     Raises:
-        ValueError: `df` has no rows, no column parses as a feature on `objects`, or two metadata
-            prefixes normalize onto the same column name.
+        ValueError: `df` has no rows, no column parses as a feature on `objects`, or two metadata prefixes normalize onto the same column name.
         KeyError: A name in `metadata_columns` is not in `df`.
     """
     if len(df) == 0:
@@ -133,10 +124,7 @@ def from_dataframe(
     candidates = [c for c in df.columns if c not in set(meta_columns)]
 
     # Resolve the vocabulary here so the object can record what it was parsed with.
-    # Inference reads channels off the columns it is given, so a subset of a plate can
-    # infer a smaller vocabulary and parse a column differently: on a six-column sample
-    # `Cells_Correlation_Correlation_AGP_DNA` parses as channel 'DNA', feature
-    # 'Correlation_AGP', where the full plate gives channel 'AGP|DNA', feature 'Correlation'.
+    # Inference reads channels off the columns it is given, so a subset of a plate can infer a smaller vocabulary and parse a column differently: on a six-column sample `Cells_Correlation_Correlation_AGP_DNA` parses as channel 'DNA', feature 'Correlation_AGP', where the full plate gives channel 'AGP|DNA', feature 'Correlation'.
     vocabulary = list(channels) if channels is not None else sorted(_infer_channels(candidates))
     parsed = parse_feature_names(candidates, channels=vocabulary)
     if channels is None and vocabulary:
@@ -155,9 +143,8 @@ def from_dataframe(
                 int((keep & excluded).sum()),
                 int(keep.sum()),
                 remedy="pass objects=None to keep every object",
-                # Warn when too few features remain, not when a large fraction is dropped. This
-                # filter is the default, and on a small export the whole-field Image_ columns
-                # often outnumber the per-cell ones.
+                # Warn when too few features remain, not when a large fraction is dropped.
+                # This filter is the default, and on a small export the whole-field Image_ columns often outnumber the per-cell ones.
                 escalate=int((keep & ~excluded).sum()) < THIN_FEATURE_SET,
             )
         keep = keep & ~excluded
@@ -240,8 +227,7 @@ def _join_platemap(obs: pd.DataFrame, platemap: str | Path | pd.DataFrame) -> pd
             f"such as {duplicated.head(3).to_dict('records')}, which would multiply the rows of those "
             "wells. De-duplicate the platemap first."
         ) from error
-    # A platemap that names the wrong wells joins onto nothing and leaves every column it was
-    # read for missing, which otherwise looks exactly like a successful read.
+    # A platemap that names the wrong wells joins onto nothing and leaves every column it was read for missing, which otherwise looks exactly like a successful read.
     unmatched = int((joined.pop("_platemap_match") == "left_only").sum())
     if unmatched:
         get_logger().warning(
@@ -257,8 +243,7 @@ def _join_platemap(obs: pd.DataFrame, platemap: str | Path | pd.DataFrame) -> pd
 def _image_table(image: pd.DataFrame, obs: pd.DataFrame) -> pd.DataFrame:
     """Per-image quality measurements, keyed by ImageNumber and carrying plate/well.
 
-    The plate and well columns let ``pp.image_qc`` threshold per plate instead of pooling
-    every plate together.
+    The plate and well columns let ``pp.image_qc`` threshold per plate instead of pooling every plate together.
     """
     quality = [c for c in image.columns if "ImageQuality" in c]
     table = image[["ImageNumber", *quality]].set_index("ImageNumber")
@@ -288,52 +273,42 @@ def read_profiles(
     What `paths` points at decides how it is read:
 
     - one or more CSV, TSV or parquet files, stacked row-wise;
-    - a directory an ``ExportToSpreadsheet`` run wrote, one row per `primary_object` with every other object
-      joined onto it through the ``Parent_`` column that links the two, and the ``MeasureImageQuality`` columns
-      of ``Image.csv`` kept in ``uns["mantispy"]["image_table"]``;
+    - a directory an ``ExportToSpreadsheet`` run wrote, one row per `primary_object` with every other object joined onto it through the ``Parent_`` column that links the two, and the ``MeasureImageQuality`` columns of ``Image.csv`` kept in ``uns["mantispy"]["image_table"]``;
     - a directory of parquet parts, as CytoTable writes them.
 
-    Numeric columns that parse as CellProfiler features become ``X``. Text and ``Metadata_`` columns become
-    ``obs``, with every metadata prefix normalized to ``Metadata_``. Numeric columns that parse as non-features
-    (object numbers, parent links, centroids) are dropped and logged, because published profile tables often
-    carry dozens of them and they mean nothing at well level.
+    Numeric columns that parse as CellProfiler features become ``X``.
+    Text and ``Metadata_`` columns become ``obs``, with every metadata prefix normalized to ``Metadata_``.
+    Numeric columns that parse as non-features (object numbers, parent links, centroids) are dropped and logged, because published profile tables often carry dozens of them and they mean nothing at well level.
 
     Args:
         paths: A file or a directory, or several files to stack.
-        metadata_prefixes: Prefixes marking metadata columns. The matching prefix is normalized to ``Metadata_``.
+        metadata_prefixes: Prefixes marking metadata columns.
+            The matching prefix is normalized to ``Metadata_``.
         metadata_columns: Columns to treat as metadata even though they are numeric and unprefixed.
-        index_columns: ``obs`` columns, named as they are after the prefix is normalized, joined with ``:`` into
-            the observation index. Without them the index is the row number.
-        channels: Channel vocabulary passed to the feature-name parser. Read from the ``FileName_`` columns of an
-            export directory, and inferred from the feature names otherwise.
+        index_columns: ``obs`` columns, named as they are after the prefix is normalized, joined with ``:`` into the observation index.
+            Without them the index is the row number.
+        channels: Channel vocabulary passed to the feature-name parser.
+            Read from the ``FileName_`` columns of an export directory, and inferred from the feature names otherwise.
         sentinels: Values in the feature matrix that stand for missing, replaced with NaN.
         keep_non_features: Keep the numeric columns that do not parse as features in ``obs`` instead.
-        objects: Which CellProfiler objects count as features, and for an export directory which object tables
-            are read. The default is the three compartments, matching ``pycytominer.infer_cp_features``.
-            ``None`` keeps every object, including the whole-field ``Image`` measurements, of which a JUMP
-            profile has 1089 against 3634 per-cell ones.
-        on_column_mismatch: ``"raise"``, or ``"intersect"`` to keep the shared columns in the first file's
-            order. Batches with disjoint feature sets do occur.
-        path_columns: Metadata read from the path: maps a column name to how many directories up to take the
-            name of, counting the directory holding a file, or a directory that was given, as 1.
-        platemap: A table, or a path to one, with a ``Metadata_Well`` column and optionally ``Metadata_Plate``,
-            left-joined onto ``obs``.
+        objects: Which CellProfiler objects count as features, and for an export directory which object tables are read.
+            The default is the three compartments, matching ``pycytominer.infer_cp_features``.
+            ``None`` keeps every object, including the whole-field ``Image`` measurements, of which a JUMP profile has 1089 against 3634 per-cell ones.
+        on_column_mismatch: ``"raise"``, or ``"intersect"`` to keep the shared columns in the first file's order.
+            Batches with disjoint feature sets do occur.
+        path_columns: Metadata read from the path: maps a column name to how many directories up to take the name of, counting the directory holding a file, or a directory that was given, as 1.
+        platemap: A table, or a path to one, with a ``Metadata_Well`` column and optionally ``Metadata_Plate``, left-joined onto ``obs``.
         primary_object: For an export directory, the object one row of the result is.
-        strict_one_to_one: For an export directory, raise when another object does not match the primary object
-            exactly once. ``False`` keeps the first match.
+        strict_one_to_one: For an export directory, raise when another object does not match the primary object exactly once.
+            ``False`` keeps the first match.
         resolution: Resolution to record, ``"cell"`` for a directory and ``"well"`` for files when omitted.
 
     Returns:
-        An :class:`~anndata.AnnData` at the recorded resolution.
+        An :class:`~anndata.AnnData` at the recorded resolution, with the parsed feature annotation in ``var``, the metadata in ``obs``, and the schema stamp, the resolution, the channel vocabulary, this call's parameters and, from an export directory, the per-image quality table under ``uns["mantispy"]``.
 
     Raises:
-        ValueError: No paths were given, `on_column_mismatch` is not one of the two accepted values, a
-            directory was given together with other paths, the files disagree on columns while
-            `on_column_mismatch` is ``"raise"``, a file holds a header and no rows, no column parses as a
-            feature on `objects`, `index_columns` do not identify observations uniquely, the platemap
-            repeats a well, or an export object cannot be linked one to one.
-        FileNotFoundError: A directory holds neither an ``Image.csv`` nor parquet parts, or has no table for
-            `primary_object`.
+        ValueError: No paths were given, `on_column_mismatch` is not one of the two accepted values, a directory was given together with other paths, the files disagree on columns while `on_column_mismatch` is ``"raise"``, a file holds a header and no rows, no column parses as a feature on `objects`, `index_columns` do not identify observations uniquely, the platemap repeats a well, or an export object cannot be linked one to one.
+        FileNotFoundError: A directory holds neither an ``Image.csv`` nor parquet parts, or has no table for `primary_object`.
         KeyError: A name in `metadata_columns` or `index_columns` is not in the data.
 
     Examples:
@@ -341,8 +316,7 @@ def read_profiles(
         >>> wells = mt.io.read_profiles("BR00116991_augmented.csv.gz", sentinels=-999)  # doctest: +SKIP
         >>> cells = mt.io.read_profiles("analysis/", platemap="platemap.csv")  # doctest: +SKIP
     """
-    # Checked before anything is read: an unrecognized value used to fall through to the
-    # intersect branch, so a typo quietly dropped every column the files disagreed on.
+    # Checked before anything is read: an unrecognized value used to fall through to the intersect branch, so a typo quietly dropped every column the files disagreed on.
     if on_column_mismatch not in {"raise", "intersect"}:
         raise ValueError(f"on_column_mismatch must be 'raise' or 'intersect', got {on_column_mismatch!r}")
     files = [Path(paths)] if isinstance(paths, str | Path) else [Path(p) for p in paths]
@@ -428,16 +402,20 @@ def read(path: str | Path, backed: Literal["r", "r+"] | None = None, migrate_sch
     """Read a mantispy h5ad or zarr store, checking its schema version.
 
     Args:
-        path: File to read. A ``.zarr`` suffix selects the zarr reader.
-        backed: ``"r"`` leaves ``X`` on disk and reads it a group at a time. ``obs`` and ``var``
-            are always in memory, so QC, feature flags and metadata work unchanged, but a
-            function that rewrites ``X`` needs ``copy=True`` or ``key_added=``. h5ad only;
-            zarr stores are read whole.
-        migrate_schema: Bring an older but known schema up to the current one on read. Set it to
-            ``False`` to see the version the file carries.
+        path: File to read.
+            A ``.zarr`` suffix selects the zarr reader.
+        backed: ``"r"`` leaves ``X`` on disk and reads it a group at a time.
+            ``obs`` and ``var`` are always in memory, so QC, feature flags and metadata work unchanged, but a function that rewrites ``X`` needs ``copy=True`` or ``key_added=``.
+            h5ad only; zarr stores are read whole.
+        migrate_schema: Bring an older but known schema up to the current one on read.
+            Set it to ``False`` to see the version the file carries.
 
     Returns:
-        The object, backed or in memory. ``adata.to_memory()`` loads a backed one into memory.
+        The object, backed or in memory.
+        ``adata.to_memory()`` loads a backed one into memory.
+
+    Raises:
+        ValueError: `backed` was given for a zarr store, or the file carries a schema version this build cannot migrate from or was told not to migrate.
     """
     path = Path(path)
     if backed is not None and path.suffix == ".zarr":
@@ -456,7 +434,16 @@ def read(path: str | Path, backed: Literal["r", "r+"] | None = None, migrate_sch
 
 
 def write(adata: ad.AnnData, path: str | Path) -> None:
-    """Validate and write ``adata`` as h5ad (default) or zarr (``.zarr`` suffix)."""
+    """Validate and write ``adata`` as h5ad (default) or zarr (``.zarr`` suffix).
+
+    Args:
+        adata: Object to write, stamped with the current schema version before it is checked.
+        path: Where to write it.
+            A ``.zarr`` suffix selects the zarr writer.
+
+    Raises:
+        ValueError: The object does not satisfy the schema, with every failure :func:`~mantispy.io.validate` found in the message.
+    """
     path = Path(path)
     stamp(adata)
     validate(adata, raise_on_error=True)

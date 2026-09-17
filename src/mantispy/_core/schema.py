@@ -1,12 +1,9 @@
 """The mantispy AnnData contract.
 
-An object is described by three things: the ``Metadata_`` columns in ``obs`` that
-identify where a profile came from, the parsed annotation columns in ``var`` that say
-what each feature measures, and a small ``uns["mantispy"]`` dict holding the schema
-version, the resolution, and provenance.
+An object is described by three things: the ``Metadata_`` columns in ``obs`` that identify where a profile came from, the parsed annotation columns in ``var`` that say what each feature measures, and a small ``uns["mantispy"]`` dict holding the schema version, the resolution, and provenance.
 
-Resolution is advisory. :func:`validate` uses it to decide which identifier columns are
-required, but no function raises because it was given an object at another resolution.
+Resolution is advisory.
+:func:`validate` uses it to decide which identifier columns are required, but no function raises because it was given an object at another resolution.
 """
 
 from __future__ import annotations
@@ -103,8 +100,8 @@ UNS_KEYS: tuple[str, ...] = (
     "truth",
 )
 
-#: Result tables mantispy writes under ``uns["mantispy"]`` and reads back. Each is read by
-#: a plot or another tool, which makes it part of the contract.
+#: Result tables mantispy writes under ``uns["mantispy"]`` and reads back.
+#: Each is read by a plot or another tool, which makes it part of the contract.
 UNS_RESULTS: tuple[str, ...] = (
     "feature_select",
     "image_qc",
@@ -253,9 +250,9 @@ def migrate(adata: AnnData, copy: bool = False) -> AnnData | None:
         ValueError: If the object carries a version this build does not know.
 
     Notes:
-        0.1 to 1.0 only updates the version stamp. The 1.0 freeze added names to the
-        vocabulary (optional ``var`` columns, JUMP identifiers, the result tables) and removed
-        none, so no data moves. Later versions that do move data add their migration here.
+        0.1 to 1.0 only updates the version stamp.
+        The 1.0 freeze added names to the vocabulary (optional ``var`` columns, JUMP identifiers, the result tables) and removed none, so no data moves.
+        Later versions that do move data add their migration here.
     """
     target = adata.copy() if copy else adata
     store = target.uns.setdefault("mantispy", {})

@@ -19,8 +19,7 @@ if TYPE_CHECKING:
 def warn_resolution(adata: AnnData, expected: str | tuple[str, ...]) -> None:
     """Warn, without raising, when the recorded resolution is not one of ``expected``.
 
-    Resolution is advisory, since a user may run an aggregated-profile tool on single cells
-    on purpose.
+    Resolution is advisory, since a user may run an aggregated-profile tool on single cells on purpose.
     """
     accepted = (expected,) if isinstance(expected, str) else tuple(expected)
     actual = adata.uns.get("mantispy", {}).get("resolution")
@@ -37,18 +36,15 @@ def warn_resolution(adata: AnnData, expected: str | tuple[str, ...]) -> None:
 def inplace_or_copy(expects: str | tuple[str, ...] | None = None) -> Callable[[F], F]:
     """Give a function the standard mantispy mutation contract.
 
-    The wrapped function receives the object to mutate and mutates it. The decorator
-    handles the rest:
+    The wrapped function receives the object to mutate and mutates it.
+    The decorator handles the rest:
 
-    * ``copy=True`` hands the function a copy and returns it; ``copy=False`` mutates
-      the caller's object and returns ``None``.
-    * The call's parameters are recorded into ``uns["mantispy"]["params"]``, read from
-      the signature rather than a hand-written dict, so provenance cannot drift from the
-      arguments the function accepts.
+    * ``copy=True`` hands the function a copy and returns it; ``copy=False`` mutates the caller's object and returns ``None``.
+    * The call's parameters are recorded into ``uns["mantispy"]["params"]``, read from the signature rather than a hand-written dict, so provenance cannot drift from the arguments the function accepts.
     * ``expects`` optionally emits the advisory resolution warning.
 
-    Only for functions that mutate in place. Functions that return a new object
-    (``tl.aggregate``, ``pp.subset_features``) do not use it.
+    Only for functions that mutate in place.
+    Functions that return a new object (``tl.aggregate``, ``pp.subset_features``) do not use it.
     """
 
     def decorator(func: F) -> F:
@@ -58,9 +54,8 @@ def inplace_or_copy(expects: str | tuple[str, ...] | None = None) -> Callable[[F
             raise TypeError(f"{func.__name__} must take an AnnData as its first argument")
         first = parameters[0].name
         var_keyword = next((p.name for p in parameters if p.kind is p.VAR_KEYWORD), None)
-        # `key_added: str | None = None` means "write to this layer instead of X", so two
-        # calls with different layers produce two different matrices and need two
-        # provenance entries. `key_added: str = "something"` names a column and does not.
+        # `key_added: str | None = None` means "write to this layer instead of X", so two calls with different layers produce two different matrices and need two provenance entries.
+        # `key_added: str = "something"` names a column and does not.
         layer_key = signature.parameters.get("key_added")
         writes_layer = layer_key is not None and layer_key.default is None
         if "copy" not in signature.parameters:
@@ -86,8 +81,7 @@ def inplace_or_copy(expects: str | tuple[str, ...] | None = None) -> Callable[[F
                     "call .copy() on the subset first."
                 )
             backed = bool(getattr(adata, "isbacked", False))
-            # A `key_added` sends the result to a new layer, which a backed object takes in
-            # memory, so only a call that leaves it unset is about to rewrite X.
+            # A `key_added` sends the result to a new layer, which a backed object takes in memory, so only a call that leaves it unset is about to rewrite X.
             if backed and not copy and writes_layer and params.get("key_added") is None:
                 raise ValueError(
                     f"{func.__name__} rewrites X, which a backed object holds read-only on disk. "
@@ -101,9 +95,7 @@ def inplace_or_copy(expects: str | tuple[str, ...] | None = None) -> Callable[[F
             try:
                 func(target, **params, **extra)
             except ValueError as error:
-                # A function that drops rows or features cannot declare that in its signature,
-                # so anndata is the one that refuses it, and its message names .to_memory()
-                # but not this decorator's own way out.
+                # A function that drops rows or features cannot declare that in its signature, so anndata is the one that refuses it, and its message names .to_memory() but not this decorator's own way out.
                 if backed and not copy and "backed mode" in str(error):
                     raise ValueError(
                         f"{func.__name__} drops rows or features, which a backed object cannot do in "

@@ -1,13 +1,8 @@
 """Check whether differential testing is calibrated on the screen at hand.
 
-The quantities that decide whether a test is calibrated (wells per treatment, heavy feature
-tails, replicates crossing plates) vary by an order of magnitude between screens, so
-calibration measured on one screen does not carry over to another. These checks measure it
-on the data being tested.
+The quantities that decide whether a test is calibrated (wells per treatment, heavy feature tails, replicates crossing plates) vary by an order of magnitude between screens, so calibration measured on one screen does not carry over to another. These checks measure it on the data being tested.
 
-The main check is an empirical null. Control wells are relabeled as pseudo-treatments of
-the same size as the real treatments and put through the same test. Every call on them is a
-false positive, so the false positive rate is observed rather than assumed.
+The main check is an empirical null. Control wells are relabeled as pseudo-treatments of the same size as the real treatments and put through the same test. Every call on them is a false positive, so the false positive rate is observed rather than assumed.
 """
 
 from __future__ import annotations
@@ -63,9 +58,8 @@ def _empirical_hit_rate(
 ) -> dict[str, int]:
     """Count the control-only pseudo-treatments each hit caller calls.
 
-    Neither hit caller is fully calibrated at small control counts, and the error depends on
-    the screen, so it is measured on these controls. Returns counts instead of a rate
-    because the verdict is a binomial tail and needs the denominator.
+    Neither hit caller is fully calibrated at small control counts, and the error depends on the screen, so it is measured on these controls.
+    Counts are returned instead of a rate because the verdict is a binomial tail and needs the denominator.
     """
     from mantispy.tl._distance import edistance
     from mantispy.tl._hits import hit_calling
@@ -104,54 +98,46 @@ def diagnose_testing(
     """Check whether differential testing is calibrated on this screen.
 
     Args:
-        adata: Well-level profiles after the normalization and transform you plan to test
-            with, since the results depend on both.
+        adata: Well-level profiles after the normalization and transform you plan to test with, since the results depend on both.
         groupby: As in :func:`~mantispy.tl.differential_features`.
         reference: As in :func:`~mantispy.tl.differential_features`.
         block: As in :func:`~mantispy.tl.differential_features`.
-        n_draws: Pseudo-treatments drawn from the controls for the empirical null. More draws
-            resolve the false positive rate better and take longer.
+        n_draws: Pseudo-treatments drawn from the controls for the empirical null. More draws resolve the false positive rate better and take longer.
         alpha: Nominal rate the null is compared against.
-        seed: Seed for choosing which control wells stand in for a treatment. The two hit
-            callers' permutation nulls are seeded by the draw index instead, so they are
-            identical across calls that differ only in ``seed``.
+        seed: Seed for choosing which control wells stand in for a treatment. The two hit callers' permutation nulls are seeded by the draw index instead, so they are identical across calls that differ only in ``seed``.
         n_permutations: Null size for the two hit callers; smaller is faster and coarser.
 
     Returns:
-        A frame with columns ``check``, ``value``, ``expected``, ``verdict`` and ``note``.
-        A ``FAIL`` verdict means the check does not hold on this data.
+        A frame with columns ``check``, ``value``, ``expected``, ``verdict`` and ``note``, one row per check that ran, where a ``FAIL`` verdict means the check does not hold on this data. The empirical-null rows are absent when every null p-value came back non-finite, and the two hit-caller rows need at least eight reference wells.
+
+    Raises:
+        ValueError: The object is annotated at cell resolution, which none of these checks describe.
+        ValueError: No treatment has two wells, or there are fewer than four reference wells, leaving nothing to measure a null against.
 
     Notes:
         The checks and what each one detects:
 
         ``null p < 0.05`` / ``null p < 0.01``
-            Control wells relabeled as treatments of the size yours have. The rate should
-            match the nominal one. Heavy tails distort small p-values first, so a test can be
-            calibrated at 0.05 and not at 0.01, which is closer to the range a false
-            discovery rate works in.
+            Control wells relabeled as treatments of the size yours have.
+            The rate should match the nominal one.
+            Heavy tails distort small p-values first, so a test can be calibrated at 0.05 and not at 0.01, which is closer to the range a false discovery rate works in.
         ``null discoveries``
-            How many of those null p-values survive Benjamini-Hochberg. A count above zero
-            means the q-values on the real data are optimistic by roughly that much.
+            How many of those null p-values survive Benjamini-Hochberg.
+            A count above zero means the q-values on the real data are optimistic by roughly that much.
         ``hit_calling null rate`` / ``edistance null rate``
-            The same relabeling applied to the two hit callers, counted over ``n_draws``
-            draws. Both are permutation tests that are not fully calibrated at small control
-            counts, so the count is compared against the upper tail of
-            ``Binomial(n_draws, alpha)`` instead of a fixed rate. At eight draws the smallest
-            non-zero rate is 0.125, and a threshold below that would fail a calibrated screen
-            a third of the time. Raising ``n_draws`` sharpens the answer and moves the cutoff
-            with it.
+            The same relabeling applied to the two hit callers, counted over ``n_draws`` draws.
+            Both are permutation tests that are not fully calibrated at small control counts, so the count is compared against the upper tail of ``Binomial(n_draws, alpha)`` instead of a fixed rate.
+            At eight draws the smallest non-zero rate is 0.125, and a threshold below that would fail a calibrated screen a third of the time.
+            Raising ``n_draws`` sharpens the answer and moves the cutoff with it.
         ``rank test resolution``
-            The smallest p-value a Mann-Whitney test can return at your replication, compared
-            with what multiple-testing correction requires. With three wells against 14
-            reference wells the floor is 2.9e-03 whatever the effect size, and
-            :func:`~mantispy.tl.effect_size` then silently calls nothing.
+            The smallest p-value a Mann-Whitney test can return at your replication, compared with what multiple-testing correction requires.
+            With three wells against 14 reference wells the floor is 2.9e-03 whatever the effect size, and :func:`~mantispy.tl.effect_size` then silently calls nothing.
         ``excess kurtosis``
-            How far the features are from the normality a t-test assumes. It predicts the
-            null checks above but is not a verdict on its own, since heavy tails matter less
-            with enough wells per group.
+            How far the features are from the normality a t-test assumes.
+            It predicts the null checks above but is not a verdict on its own, since heavy tails matter less with enough wells per group.
         ``wells per treatment`` and ``treatments sharing a {block} with the reference``
-            The replicate structure the other checks depend on. A treatment whose wells share
-            no block with the reference cannot be tested.
+            The replicate structure the other checks depend on.
+            A treatment whose wells share no block with the reference cannot be tested.
     """
     if get_resolution(adata) == "cell":
         raise ValueError("diagnose_testing describes well-level testing; aggregate first with mt.tl.aggregate")

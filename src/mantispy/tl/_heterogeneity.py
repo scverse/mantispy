@@ -1,8 +1,7 @@
 """Single-cell heterogeneity beyond the well median.
 
-A perturbation that strongly shifts ten percent of cells looks like a small change in the
-average. These tools work on the distribution of cells instead, so they need single-cell
-profiles.
+A perturbation that strongly shifts ten percent of cells looks like a small change in the average.
+These tools work on the distribution of cells instead, so they need single-cell profiles.
 """
 
 from __future__ import annotations
@@ -45,23 +44,23 @@ def cluster_composition(
         reference: Controls to test each well's composition against, or ``None`` to skip the test.
 
     Returns:
-        A new object with wells as rows and clusters as columns, holding the fraction of each
-        well's cells in each cluster. It is a well-level mantispy object, so
-        :func:`~mantispy.tl.map`, :func:`~mantispy.pp.normalize` and the plots accept it.
-        ``uns["mantispy"]["composition_test"]`` holds a chi-square test of each well against
-        the pooled control composition.
+        A new object with wells as rows and clusters as columns, holding the fraction of each well's cells in each cluster.
+        It is a well-level mantispy object, so :func:`~mantispy.tl.map`, :func:`~mantispy.pp.normalize` and the plots accept it.
+        ``uns["mantispy"]["composition_test"]`` holds a chi-square test of each well against the pooled control composition, with ``group``, ``statistic``, ``pvalue`` and ``qvalue``.
+
+    Raises:
+        KeyError: ``obs`` has no column ``cluster_key``.
 
     Notes:
-        A well with few cells has a noisy composition. The chi-square test is computed on
-        counts and accounts for this, but the fractions in ``X`` do not. Filter with
-        :func:`~mantispy.pp.well_qc` first.
+        A well with few cells has a noisy composition.
+        The chi-square test is computed on counts and accounts for this, but the fractions in ``X`` do not.
+        Filter with :func:`~mantispy.pp.well_qc` first.
 
         Clusters no control cell reached are left out of the test, since the controls give them no expected frequency.
         Their fractions stay in ``X``, and :func:`subpopulation_hits` compares within a cluster.
 
         The test holds one row per well, in the order of the rows of the returned object.
-        A well with no cells in the clusters the controls occupy gets ``NaN``, as does every well when the controls
-        occupy fewer than two clusters, since a composition cannot then differ from theirs.
+        A well with no cells in the clusters the controls occupy gets ``NaN``, as does every well when the controls occupy fewer than two clusters, since a composition cannot then differ from theirs.
     """
     if cluster_key not in adata.obs:
         raise KeyError(f"obs has no column {cluster_key!r}; cluster first, e.g. sc.tl.leiden(adata)")
@@ -104,9 +103,8 @@ def _composition_test(composition: AnnData, counts: np.ndarray, reference: str |
     if not is_control.any():
         return empty
 
-    # A cluster no control cell reached has no expected frequency. Flooring it at epsilon made
-    # a single treated cell there a chi-square of 1e10 and p exactly zero, and with enough such
-    # clusters the expected counts stopped summing to the observed ones, which scipy refuses.
+    # A cluster no control cell reached has no expected frequency.
+    # Flooring it at epsilon made a single treated cell there a chi-square of 1e10 and p exactly zero, and with enough such clusters the expected counts stopped summing to the observed ones, which scipy refuses.
     pooled = counts[is_control].sum(axis=0)
     reached = pooled > 0
     comparable = int(reached.sum()) >= 2
@@ -135,8 +133,8 @@ def _composition_test(composition: AnnData, counts: np.ndarray, reference: str |
     for row in range(composition.n_obs):
         observed = counts[row][reached]
         statistic, pvalue = np.nan, np.nan
-        # A well with no cells in the clusters the controls occupy has no composition to set
-        # against theirs. Its fractions are still in X.
+        # A well with no cells in the clusters the controls occupy has no composition to set against theirs.
+        # Its fractions are still in X.
         if comparable and observed.sum() >= 1:
             statistic, pvalue = chisquare(observed, share * observed.sum())
         records.append({"group": str(names[row]), "statistic": float(statistic), "pvalue": float(pvalue)})
@@ -158,28 +156,30 @@ def cell_cycle_phase(
     """Assign G1, S or G2M from integrated DNA intensity.
 
     A two-component Gaussian mixture is fitted to log DNA intensity within each ``by`` group.
-    The lower component is G1 and the upper is G2M. Cells that neither component claims with
-    probability above 0.9 are called S.
+    The lower component is G1 and the upper is G2M.
+    Cells that neither component claims with probability above 0.9 are called S.
 
     Args:
         adata: Single-cell object holding raw, unnormalized intensities.
-        dna_feature: The integrated DNA intensity feature. Found from the feature names and
-            ``var["channel"]`` when omitted.
-        by: Fit separately within each group, normally the plate, since staining intensity
-            does not carry across plates.
-        layer: Read this layer instead of ``X``, for example ``"raw"`` after
-            ``normalize(keep_raw=True)``.
+        dna_feature: The integrated DNA intensity feature. Found from the feature names and ``var["channel"]`` when omitted.
+        by: Fit separately within each group, normally the plate, since staining intensity does not carry across plates.
+        layer: Read this layer instead of ``X``, for example ``"raw"`` after ``normalize(keep_raw=True)``.
         key_added: ``obs`` column written.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
         ``None``, or the modified copy.
+        Writes ``obs[key_added]`` as a categorical over ``PHASES``.
+
+    Raises:
+        KeyError: ``dna_feature`` was not given and no integrated DNA intensity feature could be found.
+        ValueError: More than 5% of the feature's values are not positive, so their log cannot be fitted.
 
     Notes:
-        This is a heuristic. It needs a well-resolved DNA stain and enough cells per group
-        (a group with fewer than 20 usable cells is left as S), and it cannot tell G0 from G1.
-        It also needs raw intensities, because after :func:`~mantispy.pp.normalize` the values
-        are z-scores and about half are negative. Check the result before relying on it.
+        This is a heuristic.
+        It needs a well-resolved DNA stain and enough cells per group (a group with fewer than 20 usable cells is left as S), and it cannot tell G0 from G1.
+        It also needs raw intensities, because after :func:`~mantispy.pp.normalize` the values are z-scores and about half are negative.
+        Check the result before relying on it.
     """
     from sklearn.mixture import GaussianMixture
 
@@ -254,29 +254,28 @@ def subpopulation_hits(
         groupby: ``obs`` column holding the perturbation.
         reference: Which rows are the controls, ``"negcon"`` or the name of a boolean ``obs`` column.
         use_rep: Measure in ``obsm[use_rep]`` instead of ``X``.
-        min_cells: Skip a (cluster, group) pair with fewer cells than this on either side.
-            A cluster needs twice as many controls, and at least four, since half of them place
-            the centroid and half supply the distances tested against.
+        min_cells: Skip a (cluster, group) pair with fewer cells than this on either side. A cluster needs twice as many controls, and at least four, since half of them place the centroid and half supply the distances tested against.
         seed: Seed for the split of a cluster's controls.
         key_added: Name for the output table.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes ``uns["mantispy"][key_added]`` with
-        ``cluster``, ``group``, ``n_cells``, ``statistic`` (KS), ``pvalue`` and ``qvalue``.
+        ``None``, or the modified copy.
+        Writes ``uns["mantispy"][key_added]`` with ``cluster``, ``group``, ``n_cells``, ``statistic`` (KS), ``pvalue`` and ``qvalue``.
+
+    Raises:
+        KeyError: ``obs`` has no column ``cluster_key``.
 
     Notes:
-        Each cell is reduced to its Euclidean distance from the control centroid of its own
-        cluster, and a KS test compares the treated cells' distances with the controls'. This
-        is close to ``hit_calling(method="ks")``, restricted to comparable cells. A distance is
-        used rather than a single feature so that the test means the same on every dataset.
+        Each cell is reduced to its Euclidean distance from the control centroid of its own cluster, and a KS test compares the treated cells' distances with the controls'.
+        This is close to ``hit_calling(method="ks")``, restricted to comparable cells.
+        A distance is used rather than a single feature so that the test means the same on every dataset.
 
         A cluster's controls are split in half, as in :func:`~mantispy.tl.hit_calling`.
         One half places the centroid and the other supplies the distances tested against, so the null is out of sample.
         Controls measured against a centroid they defined themselves sit closer to it than any other group can.
         That bias grows with features per control, which is the shape of real Cell Painting data.
-        On pure noise with 36 controls and 120 features, the in-sample null called 0.40 of pseudo-treatments at
-        raw ``p < 0.05``, and the split called none.
+        On pure noise with 36 controls and 120 features, the in-sample null called 0.40 of pseudo-treatments at raw ``p < 0.05``, and the split called none.
     """
     if cluster_key not in adata.obs:
         raise KeyError(f"obs has no column {cluster_key!r}; cluster first, e.g. sc.tl.leiden(adata)")
@@ -288,9 +287,7 @@ def subpopulation_hits(
     groups = obs[groupby].astype(str).to_numpy()
 
     generator = np.random.default_rng(seed)
-    # Half the controls place the centroid and half form the distances tested against, so the
-    # null is out of sample like every group. Cells measured against a centroid they defined
-    # themselves sit too close to it, and pure noise is called (see Notes).
+    # Half the controls place the centroid and half form the distances tested against, so the null is out of sample like every group (see Notes).
     needed = max(2 * min_cells, 4)
 
     records = []
@@ -348,19 +345,22 @@ def neighbors_local_density(
 ) -> AnnData | None:
     """Mean distance to the ``k`` nearest cells in the same field of view.
 
-    Local crowding changes morphology independently of treatment. Consider regressing it out
-    with :func:`~mantispy.pp.regress_out` before attributing a change to a perturbation.
+    Local crowding changes morphology independently of treatment.
+    Consider regressing it out with :func:`~mantispy.pp.regress_out` before attributing a change to a perturbation.
 
     Args:
         adata: Single-cell object carrying ``Metadata_Center_X`` and ``Metadata_Center_Y``.
         k: Number of neighbors averaged over.
-        by: ``obs`` column identifying the field of view. Neighbors are searched within each
-            field only, since coordinates from different images are not comparable.
+        by: ``obs`` column identifying the field of view. Neighbors are searched within each field only, since coordinates from different images are not comparable.
         key_added: ``obs`` column written.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. A cell alone in its field gets ``NaN``.
+        ``None``, or the modified copy.
+        Writes ``obs[key_added]``, and a cell alone in its field gets ``NaN``.
+
+    Raises:
+        KeyError: ``obs`` is missing ``Metadata_Center_X`` or ``Metadata_Center_Y``.
     """
     from sklearn.neighbors import NearestNeighbors
 

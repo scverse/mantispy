@@ -1,8 +1,7 @@
 """Stratified subsampling.
 
-A screen of a million cells by four thousand features is 16 GB of float32 before any
-transform allocates its output. Exploring on a representative sample and confirming on
-the full data keeps memory use manageable.
+A screen of a million cells by four thousand features is 16 GB of float32 before any transform allocates its output.
+Exploring on a representative sample and confirming on the full data keeps memory use manageable.
 """
 
 from __future__ import annotations
@@ -29,17 +28,16 @@ def downsample(
 
     Args:
         adata: Object to sample from. Never modified.
-        n_per_group: Cap per group. Groups smaller than this are kept whole, so groups are capped
-            but not balanced.
-        groupby: Columns defining a group. The default caps each well, so every well is
-            represented instead of the densest wells filling the sample.
-        stratify: Keep this column's proportions inside each group, so a rare perturbation is not
-            lost to the sampling.
+        n_per_group: Cap per group. Groups smaller than this are kept whole, so groups are capped but not balanced.
+        groupby: Columns defining a group. The default caps each well, so every well is represented instead of the densest wells filling the sample.
+        stratify: Keep this column's proportions inside each group, so a rare perturbation is not lost to the sampling.
         seed: Seed for reproducibility.
 
     Returns:
-        A new object holding the sampled rows in their original order, with the call recorded
-        in ``uns["mantispy"]["params"]``.
+        A new object holding the sampled rows in their original order, with the call recorded in ``uns["mantispy"]["params"]``.
+
+    Raises:
+        ValueError: If ``n_per_group`` is below 1.
     """
     if n_per_group < 1:
         raise ValueError(f"n_per_group must be at least 1, got {n_per_group}")

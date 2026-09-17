@@ -1,12 +1,10 @@
 """ECOD: empirical-cumulative-distribution outlier detection (Li et al. 2022).
 
-Parameter-free and interpretable: a row's score is the sum, over features, of how far
-into a tail its value sits. Reimplemented here instead of depending on pyod, and checked
-against pyod's formulation by an equivalence test.
+Parameter-free and interpretable: a row's score is the sum, over features, of how far into a tail its value sits.
+Reimplemented here instead of depending on pyod, and checked against pyod's formulation by an equivalence test.
 
-The score is the sum over dimensions of the elementwise maximum of the three tail
-matrices (sum of max, not max of sum). The reverse order gives plausible scores that are
-not ECOD.
+The score is the sum over dimensions of the elementwise maximum of the three tail matrices (sum of max, not max of sum).
+The reverse order gives plausible scores that are not ECOD.
 """
 
 from __future__ import annotations
@@ -18,8 +16,7 @@ from scipy.stats import skew as _skew
 def column_ecdf(X: np.ndarray) -> np.ndarray:
     """Column-wise empirical CDF, with ties taking the highest rank.
 
-    Counts values less than or equal to each entry, which is the tie handling pyod's
-    explicit backwards pass produces.
+    Counts values less than or equal to each entry, which is the tie handling pyod's explicit backwards pass produces.
     """
     return _tail_counts(X)[0] / X.shape[0]
 
@@ -27,9 +24,8 @@ def column_ecdf(X: np.ndarray) -> np.ndarray:
 def _tail_counts(X: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """``(#values <= x, #values < x)`` per column, from a single sort.
 
-    ECOD needs the empirical CDF of both ``X`` and ``-X``. Since ``#(-X <= -x)`` is
-    ``n - #(X < x)``, both counts come from one ``argsort`` and the run structure of the
-    sorted column.
+    ECOD needs the empirical CDF of both ``X`` and ``-X``.
+    Since ``#(-X <= -x)`` is ``n - #(X < x)``, both counts come from one ``argsort`` and the run structure of the sorted column.
     """
     n_obs = X.shape[0]
     order = np.argsort(X, axis=0, kind="stable")
@@ -57,8 +53,7 @@ def _tail_counts(X: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 def ecod_scores(X: np.ndarray) -> np.ndarray:
     """ECOD outlier score per row of ``X``. Higher is more outlying.
 
-    NaN is imputed with the column mean first, since a missing value has no tail
-    probability of its own.
+    NaN is imputed with the column mean first, since a missing value has no tail probability of its own.
     """
     X = np.asarray(X, dtype=np.float64)
     missing = np.isnan(X)

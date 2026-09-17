@@ -15,11 +15,25 @@ from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy._core.mutation import inplace_or_copy
 
+#: Column order of the output table, so an empty result still carries its columns.
+_COLUMNS = ("compound", "n_doses", "spearman", "pvalue", "ec50", "hill_slope", "bottom", "top", "r_squared", "fit_ok")
+
 
 def four_parameter_logistic(
     log_dose: np.ndarray, bottom: float, top: float, log_ec50: float, hill: float
 ) -> np.ndarray:
-    """The standard sigmoid of dose-response pharmacology, in log10 dose."""
+    """The standard sigmoid of dose-response pharmacology, in log10 dose.
+
+    Args:
+        log_dose: Base-10 logarithm of the dose.
+        bottom: Response the curve approaches at low dose.
+        top: Response the curve approaches at high dose.
+        log_ec50: Base-10 logarithm of the dose halfway between ``bottom`` and ``top``.
+        hill: Slope at the inflection point, negative for a decreasing curve.
+
+    Returns:
+        The response at each dose, the same shape as ``log_dose``.
+    """
     return bottom + (top - bottom) / (1.0 + 10.0 ** ((log_ec50 - log_dose) * hill))
 
 
@@ -28,10 +42,9 @@ def _fit_curve(
 ) -> tuple[float, float, float, float, float, bool]:
     """Fit the logistic and return ``(ec50, hill_slope, bottom, top, r_squared, fit_ok)``.
 
-    A failed fit returns NaNs and ``fit_ok=False`` instead of raising. ``fit_ok`` also requires
-    ``r_squared >= min_r_squared`` and an EC50 inside the tested doses, because four parameters
-    converge on almost any five or six points. On pure noise at six doses the optimizer
-    succeeds 59 times in 60; with these checks 12 in 200 fits pass, and real curves still do.
+    A failed fit returns NaNs and ``fit_ok=False`` instead of raising.
+    ``fit_ok`` also requires ``r_squared >= min_r_squared`` and an EC50 inside the tested doses, because four parameters converge on almost any five or six points.
+    On pure noise at six doses the optimizer succeeds 59 times in 60; with these checks 12 in 200 fits pass, and real curves still do.
     """
     guess = [float(response.min()), float(response.max()), float(np.median(log_dose)), 1.0]
     failed = (np.nan, np.nan, np.nan, np.nan, np.nan, False)
@@ -66,43 +79,38 @@ def dose_response(
 ) -> AnnData | None:
     """Test whether each compound's response grows with concentration.
 
-    Each compound gets two results. The Spearman correlation between dose and response tests
-    for a monotonic trend, makes no assumption about shape and works with three doses. A
-    four-parameter logistic fit adds an EC50 and a Hill slope, and is only attempted with at
-    least ``min_doses`` distinct doses.
+    Each compound gets two results.
+    The Spearman correlation between dose and response tests for a monotonic trend, makes no assumption about shape and works with three doses.
+    A four-parameter logistic fit adds an EC50 and a Hill slope, and is only attempted with at least ``min_doses`` distinct doses.
 
-    ``fit_ok`` is True only when the fit succeeded, the curve explains the data
-    (``r_squared >= min_r_squared``) and the EC50 lies inside the tested dose range. Four
-    parameters converge on almost any five or six points. On pure noise the optimizer succeeds
-    59 times in 60, and these checks reduce that to 12 in 200 without losing real curves. Read
-    ``spearman`` and its q-value first.
+    ``fit_ok`` is True only when the fit succeeded, the curve explains the data (``r_squared >= min_r_squared``) and the EC50 lies inside the tested dose range.
+    Four parameters converge on almost any five or six points.
+    On pure noise the optimizer succeeds 59 times in 60, and these checks reduce that to 12 in 200 without losing real curves.
+    Read ``spearman`` and its q-value first.
 
     Args:
         adata: Object carrying a compound, a dose and a per-row response.
         compound_key: ``obs`` column holding the compound identity.
-        dose_key: ``obs`` column holding the concentration. Doses must be positive; rows with a
-            zero dose, such as vehicle, are dropped, since the fit is in log dose.
-        response: ``obs`` column holding the per-row response, normally the distance written by
-            :func:`~mantispy.tl.hit_calling`.
+        dose_key: ``obs`` column holding the concentration. Doses must be positive; rows with a zero dose, such as vehicle, are dropped, since the fit is in log dose.
+        response: ``obs`` column holding the per-row response, normally the distance written by :func:`~mantispy.tl.hit_calling`.
         min_doses: Distinct doses below which the curve is skipped and only the trend is reported.
         min_r_squared: Coefficient of determination a fit needs before it is marked ok.
         key_added: Name for the output table.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes ``uns["mantispy"][key_added]`` with
-        ``compound``, ``n_doses``, ``spearman``, ``pvalue``, ``qvalue``, ``ec50``,
-        ``hill_slope``, ``bottom``, ``top``, ``r_squared`` and ``fit_ok``.
+        ``None``, or the modified copy.
+        Writes ``uns["mantispy"][key_added]`` with ``compound``, ``n_doses``, ``spearman``, ``pvalue``, ``qvalue``, ``ec50``, ``hill_slope``, ``bottom``, ``top``, ``r_squared`` and ``fit_ok``.
+        ``bottom`` and ``top`` are the fitted asymptotes, so for a decreasing response, such as an inhibitor's, ``bottom`` is greater than ``top``.
 
-        ``bottom`` and ``top`` are the fitted asymptotes. For a decreasing response, such as an
-        inhibitor's, ``bottom`` is greater than ``top``.
+    Raises:
+        KeyError: ``obs`` has no ``compound_key``, no ``dose_key``, or no ``response`` column to use as the response.
 
     Notes:
         Compounds with fewer than two usable doses are left out of the table.
 
-        An EC50 outside the tested doses is an extrapolation, usually from a curve that has not
-        plateaued within the tested range, and its row has ``fit_ok=False``. Compare ``ec50``
-        against the dose range before quoting it.
+        An EC50 outside the tested doses is an extrapolation, usually from a curve that has not plateaued within the tested range, and its row has ``fit_ok=False``.
+        Compare ``ec50`` against the dose range before quoting it.
     """
     obs = as_frame(adata.obs)
     for column in (compound_key, dose_key):
@@ -149,21 +157,7 @@ def dose_response(
             }
         )
 
-    table = pd.DataFrame(
-        records,
-        columns=[
-            "compound",
-            "n_doses",
-            "spearman",
-            "pvalue",
-            "ec50",
-            "hill_slope",
-            "bottom",
-            "top",
-            "r_squared",
-            "fit_ok",
-        ],
-    )
+    table = pd.DataFrame(records, columns=list(_COLUMNS))
     table["qvalue"] = benjamini_hochberg(table["pvalue"].to_numpy()) if len(table) else []
     adata.uns.setdefault("mantispy", {})[key_added] = table
     get_logger().info("dose_response fitted %d of %d compound(s)", int(table["fit_ok"].sum()), len(table))

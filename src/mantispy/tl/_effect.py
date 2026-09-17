@@ -1,9 +1,7 @@
 """Per-feature effect sizes against a reference.
 
-Where mAP asks whether a perturbation is active, these functions ask which features changed
-and by how much. :func:`effect_size` gives a standardized difference in location, and
-:func:`wasserstein_features` a distance between whole distributions, which also detects a
-change in spread.
+Where mAP asks whether a perturbation is active, these functions ask which features changed and by how much.
+:func:`effect_size` gives a standardized difference in location, and :func:`wasserstein_features` a distance between whole distributions, which also detects a change in spread.
 """
 
 from __future__ import annotations
@@ -28,11 +26,10 @@ METHODS = ("cohens_d", "robust_z")
 def _mwu_small_samples(treated: np.ndarray, control: np.ndarray) -> np.ndarray:
     """Scipy's Mann-Whitney U, choosing the exact or asymptotic method per feature.
 
-    ``scipy.stats.mannwhitneyu`` chooses once per call. It uses the exact null only when the
-    smaller sample has eight or fewer observations and no column has ties, so one tied feature
-    sends every other feature to the normal approximation. With three treated wells against
-    330 controls, an untied feature reaches 3.3e-07 under the exact null and 2.9e-03 under the
-    approximation. Splitting the columns by ties takes 9.3 ms against 8.3 ms for 344 columns.
+    ``scipy.stats.mannwhitneyu`` chooses once per call.
+    It uses the exact null only when the smaller sample has eight or fewer observations and no column has ties, so one tied feature sends every other feature to the normal approximation.
+    With three treated wells against 330 controls, an untied feature reaches 3.3e-07 under the exact null and 2.9e-03 under the approximation.
+    Splitting the columns by ties takes 9.3 ms against 8.3 ms for 344 columns.
     """
     finite = np.vstack([treated, control])
     ordered = np.sort(finite, axis=0)
@@ -75,15 +72,12 @@ def _robust_z(treated: np.ndarray, control: np.ndarray) -> np.ndarray:
 def _wasserstein_columns(treated: np.ndarray, control: np.ndarray, only: np.ndarray | None = None) -> np.ndarray:
     """Wasserstein-1 distance for every column at once.
 
-    Computes ``W1 = integral |F(x) - G(x)| dx`` over the merged support, vectorized across
-    columns instead of one ``scipy.stats.wasserstein_distance`` call per feature per group
-    (700k calls for 3600 features and 200 perturbations).
+    Computes ``W1 = integral |F(x) - G(x)| dx`` over the merged support, vectorized across columns instead of one ``scipy.stats.wasserstein_distance`` call per feature per group (700k calls for 3600 features and 200 perturbations).
 
     Columns holding a non-finite value fall back to the scalar function, which drops those rows.
     The split is ``isfinite``, the same one :func:`wasserstein_features` uses to choose the columns it sends here.
     Splitting on ``isnan`` instead left an infinite column in neither branch's remit, and it came back ``inf``.
-    ``only`` restricts the work to a subset of columns and leaves the rest ``NaN``; callers that handle
-    the complete columns on the pre-sorted path use it for the remaining ones.
+    ``only`` restricts the work to a subset of columns and leaves the rest ``NaN``; callers that handle the complete columns on the pre-sorted path use it for the remaining ones.
     """
     n, m = treated.shape[0], control.shape[0]
     out = np.full(treated.shape[1], np.nan)
@@ -114,7 +108,7 @@ def _wasserstein_columns(treated: np.ndarray, control: np.ndarray, only: np.ndar
     return out
 
 
-def _tidy(keys, features: np.ndarray, values: np.ndarray, name: str) -> pd.DataFrame:
+def _tidy(keys: pd.Index, features: np.ndarray, values: np.ndarray, name: str) -> pd.DataFrame:
     """A (n_vars, n_groups) matrix as a long frame, groups in matrix-column order."""
     return pd.DataFrame(
         {
@@ -141,33 +135,24 @@ def effect_size(
     Args:
         adata: Object to score, at cell or profile resolution.
         groupby: Column defining the groups to score.
-        reference: Rows to compare against: ``"negcon"``, ``None`` for everything, or a boolean
-            ``obs`` column. The reference group is also scored against itself as a calibration
-            check; its effects should be near zero.
-        method: ``"cohens_d"`` is the difference in means over the pooled standard deviation.
-            ``"robust_z"`` is the difference in medians in units of control MAD, which a few
-            extreme cells cannot move.
-        pvalues: Compute a Mann-Whitney p-value for each effect. At single-cell resolution nearly
-            every feature is significant, so turn them off when ranking by effect.
+        reference: Rows to compare against: ``"negcon"``, ``None`` for everything, or a boolean ``obs`` column. The reference group is also scored against itself as a calibration check; its effects should be near zero.
+        method: ``"cohens_d"`` is the difference in means over the pooled standard deviation. ``"robust_z"`` is the difference in medians in units of control MAD, which a few extreme cells cannot move.
+        pvalues: Compute a Mann-Whitney p-value for each effect. At single-cell resolution nearly every feature is significant, so turn them off when ranking by effect.
         min_obs: Groups with fewer rows than this are left unscored as ``NaN``.
         key_added: Name for the outputs.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes
+        ``None``, or the modified copy.
+        Writes ``varm[key_added]``, a ``(n_vars, n_groups)`` float32 array with columns in the order of ``uns["mantispy"][key_added + "_groups"]``, and ``uns["mantispy"][key_added]``, a tidy frame with ``group``, ``feature``, ``effect``, ``pvalue`` (Mann-Whitney U, two-sided, ``NaN`` when ``pvalues=False``) and ``qvalue`` (Benjamini-Hochberg over the whole table, since it is one family of tests).
 
-        * ``varm[key_added]``, a ``(n_vars, n_groups)`` float32 array with columns in the order
-          of ``uns["mantispy"][key_added + "_groups"]``;
-        * ``uns["mantispy"][key_added]``, a tidy frame with ``group``, ``feature``,
-          ``effect``, ``pvalue`` (Mann-Whitney U, two-sided, ``NaN`` when ``pvalues=False``)
-          and ``qvalue`` (Benjamini-Hochberg over the whole table, since it is one family of
-          tests).
+    Raises:
+        ValueError: ``method`` is not one of ``METHODS``, or ``reference`` selects fewer than two rows.
 
     Notes:
-        The p-value tests whether the distributions differ, and its significance grows with the
-        number of rows. The effect size measures by how much, and does not grow with the number
-        of rows. At single-cell resolution nearly everything is significant, so rank by effect
-        and use the q-value only to filter.
+        The p-value tests whether the distributions differ, and its significance grows with the number of rows.
+        The effect size measures by how much, and does not grow with the number of rows.
+        At single-cell resolution nearly everything is significant, so rank by effect and use the q-value only to filter.
     """
     if method not in METHODS:
         raise ValueError(f"method must be one of {METHODS}, got {method!r}")
@@ -182,11 +167,9 @@ def effect_size(
     codes, keys = group_codes(adata, groupby)
     estimate = _cohens_d if method == "cohens_d" else _robust_z
 
-    # Sorted once and searched by every group; scipy re-ranks the whole reference per group,
-    # which costs about three minutes on JUMP.
+    # Sorted once and searched by every group; scipy re-ranks the whole reference per group, which costs about three minutes on JUMP.
     ranked = sorted_control(control) if pvalues else None
-    # Counted as sorted_control and scipy's nan_policy="omit" count, everything measured and
-    # infinities included, so that the branch chosen below is the branch scipy would choose.
+    # Counted as sorted_control and scipy's nan_policy="omit" count, everything measured and infinities included, so that the branch chosen below is the branch scipy would choose.
     control_smallest = int((~np.isnan(control)).sum(axis=0).min()) if pvalues else 0
 
     effects = np.full((adata.n_vars, len(keys)), np.nan)
@@ -200,9 +183,8 @@ def effect_size(
         effects[:, index] = estimate(treated, control)
         if not pvalues:
             continue
-        # scipy's method="auto" uses the exact distribution when the smaller sample has eight or
-        # fewer observations. Those groups go to scipy; larger ones, where "auto" would use the
-        # normal approximation, take the fast path.
+        # scipy's method="auto" uses the exact distribution when the smaller sample has eight or fewer observations.
+        # Those groups go to scipy; larger ones, where "auto" would use the normal approximation, take the fast path.
         smallest = int((~np.isnan(treated)).sum(axis=0).min())
         if ranked is not None and smallest > 8 and control_smallest > 8:
             significance[:, index] = mannwhitney_pvalues(treated, ranked)
@@ -234,23 +216,22 @@ def wasserstein_features(
     """Wasserstein-1 distance per feature between each group and the reference.
 
     Args:
-        adata: Object to score. Most useful at single-cell resolution, where a group is a
-            distribution rather than a point.
+        adata: Object to score. Most useful at single-cell resolution, where a group is a distribution rather than a point.
         groupby: As in :func:`effect_size`.
         reference: As in :func:`effect_size`.
         key_added: Name for the outputs.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes ``varm[key_added]`` and a tidy
-        ``uns["mantispy"][key_added]`` with ``group``, ``feature`` and ``distance``, laid out
-        as in :func:`effect_size`.
+        ``None``, or the modified copy.
+        Writes ``varm[key_added]``, a tidy ``uns["mantispy"][key_added]`` with ``group``, ``feature`` and ``distance``, and the group order in ``uns["mantispy"][key_added + "_groups"]``, laid out as in :func:`effect_size`.
+
+    Raises:
+        ValueError: ``reference`` selects no rows.
 
     Notes:
-        The distance compares whole distributions, so a perturbation that widens a feature
-        without moving its mean (a mixed response where only some cells react) is detected here
-        but not by :func:`effect_size`. The distance is in the feature's units, so normalize
-        first to compare features with each other.
+        The distance compares whole distributions, so a perturbation that widens a feature without moving its mean (a mixed response where only some cells react) is detected here but not by :func:`effect_size`.
+        The distance is in the feature's units, so normalize first to compare features with each other.
     """
     X = get_matrix(adata)
     control = X[reference_mask(adata, reference)]
@@ -258,9 +239,8 @@ def wasserstein_features(
         raise ValueError(f"no reference rows selected by reference={reference!r}")
 
     codes, keys = group_codes(adata, groupby)
-    # The reference is sorted once and reused for every group, by the same helper effect_size
-    # uses, so the two paths through this module cannot count it differently. Columns holding a
-    # non-finite value take the general path, which drops those rows pairwise.
+    # The reference is sorted once and reused for every group, by the same helper effect_size uses, so the two paths through this module cannot count it differently.
+    # Columns holding a non-finite value take the general path, which drops those rows pairwise.
     ranked, counts, _ = sorted_control(control)
     clean = np.isfinite(control).all(axis=0)
 

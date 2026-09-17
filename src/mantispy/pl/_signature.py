@@ -27,18 +27,18 @@ def feature_signature(
 
     Args:
         adata: The output of :func:`~mantispy.tl.feature_signature`.
-        groupby: ``obs`` column to average rows within, instead of showing one row per
-            perturbation. ``"Metadata_MOA"``, for example, gives one row per mechanism.
-        top: Show only this many rows, those with the largest absolute value. ``None`` shows
-            all of them. Ignored when ``groupby`` is given.
-        cluster: Order rows and columns by hierarchical clustering, so families that move
-            together are adjacent. Otherwise the object's order is kept.
+        groupby: ``obs`` column to average rows within, instead of showing one row per perturbation. ``"Metadata_MOA"``, for example, gives one row per mechanism.
+        top: Show only this many rows, those with the largest absolute value. ``None`` shows all of them. Ignored when ``groupby`` is given.
+        cluster: Order rows and columns by hierarchical clustering, so families that move together are adjacent. Otherwise the object's order is kept.
         cmap: Diverging colormap, centered on zero so decreases and increases read equally.
-        figsize: Standard matplotlib arguments.
-        ax: Standard matplotlib arguments.
+        figsize: Size of the figure, in inches, or ``None`` for one that grows with the number of rows and columns. Ignored when ``ax`` is given.
+        ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
-        The axes.
+        The axes drawn on, holding perturbations against feature families on a scale centered on zero, with a colorbar beside them.
+
+    Raises:
+        KeyError: ``groupby`` was given and ``obs`` has no such column.
     """
     values = get_matrix(adata).astype(np.float64)
     obs = as_frame(adata.obs)

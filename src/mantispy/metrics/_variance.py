@@ -18,8 +18,19 @@ if TYPE_CHECKING:
 def pc_regression(adata: AnnData, key: str, use_rep: str = "X_pca", n_comps: int | None = None) -> pd.DataFrame:
     """Variance-weighted R^2 of the principal components on ``key``.
 
-    The value is the share of total variance the covariate explains, so for a batch key
-    lower is better.
+    The value is the share of total variance the covariate explains, so for a batch key lower is better.
+
+    Args:
+        adata: Object with the embedding to measure in.
+        key: ``obs`` column the components are regressed on.
+        use_rep: ``obsm`` key of the embedding.
+        n_comps: Use only the leading components, or ``None`` for every component the embedding holds.
+
+    Returns:
+        A one-row tidy frame holding ``pc_regression``.
+
+    Raises:
+        KeyError: ``obsm`` holds nothing under ``use_rep``.
     """
     values = embedding(adata, use_rep)
     if n_comps is not None:
@@ -33,5 +44,17 @@ def pc_regression(adata: AnnData, key: str, use_rep: str = "X_pca", n_comps: int
 
 
 def batch_variance_explained(adata: AnnData, keys: Sequence[str], use_rep: str = "X_pca") -> pd.DataFrame:
-    """:func:`~mantispy.metrics.pc_regression` for several covariates, stacked into one frame."""
+    """:func:`~mantispy.metrics.pc_regression` for several covariates, stacked into one frame.
+
+    Args:
+        adata: Object with the embedding to measure in.
+        keys: ``obs`` columns to score, one row of the result each.
+        use_rep: ``obsm`` key of the embedding.
+
+    Returns:
+        A tidy frame holding one ``pc_regression`` row per entry of ``keys``.
+
+    Raises:
+        KeyError: ``obsm`` holds nothing under ``use_rep``.
+    """
     return pd.concat([pc_regression(adata, key, use_rep) for key in keys], ignore_index=True)

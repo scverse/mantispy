@@ -1,12 +1,8 @@
 """Local inverse Simpson's index (LISI).
 
-The effective number of distinct labels in a neighborhood, weighting each neighbor by
-``exp(-beta * d)`` with ``beta`` calibrated so the neighborhood's entropy matches the
-requested perplexity. On a batch key it is iLISI (higher is better mixed); on a label key
-it is cLISI (lower means the biological groups stay separated).
+The effective number of distinct labels in a neighborhood, weighting each neighbor by ``exp(-beta * d)`` with ``beta`` calibrated so the neighborhood's entropy matches the requested perplexity. On a batch key it is iLISI (higher is better mixed); on a label key it is cLISI (lower means the biological groups stay separated).
 
-Values match ``harmonypy.lisi.compute_lisi`` (Korsunsky et al. 2019) to machine precision,
-so they are comparable with published LISI values.
+Values match ``harmonypy.lisi.compute_lisi`` (Korsunsky et al. 2019) to machine precision, so they are comparable with published LISI values.
 """
 
 from __future__ import annotations
@@ -65,19 +61,14 @@ def lisi(adata: AnnData, key: str, use_rep: str = "X_pca", perplexity: float = 3
         adata: Object with the embedding to measure in.
         key: ``obs`` column whose labels the neighborhoods are scored over.
         use_rep: ``obsm`` key of the embedding.
-        perplexity: Perplexity the kernel width is calibrated to.
-            Each neighborhood holds ``3 * perplexity`` rows, so the object needs more rows than that.
-        kind: ``"batch"`` names the result ``ilisi`` (higher is better mixed) and ``"label"``
-            names it ``clisi`` (lower means the biological groups stay separated). ``"auto"``
-            guesses from the column name: a key containing batch, plate, source, week or run
-            is a batch and anything else a label, so ``"Metadata_Site"`` counts as a label.
-            Pass ``kind`` explicitly when one table holds both, or the two rows get the same
-            metric name.
+        perplexity: Perplexity the kernel width is calibrated to. Each neighborhood holds ``3 * perplexity`` rows, so the object needs more rows than that.
+        kind: ``"batch"`` names the result ``ilisi`` (higher is better mixed) and ``"label"`` names it ``clisi`` (lower means the biological groups stay separated). ``"auto"`` guesses from the column name: a key containing batch, plate, source, week or run is a batch and anything else a label, so ``"Metadata_Site"`` counts as a label. Pass ``kind`` explicitly when one table holds both, or the two rows get the same metric name.
 
     Returns:
         A one-row tidy frame holding ``ilisi`` or ``clisi``.
 
     Raises:
+        KeyError: ``obsm`` holds nothing under ``use_rep``.
         ValueError: ``kind`` is not one of the three accepted values.
         ValueError: ``obs[key]`` has missing values.
         ValueError: The object has too few rows for ``perplexity``.

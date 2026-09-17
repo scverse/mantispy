@@ -21,17 +21,27 @@ def signature_stability(
 ) -> float:
     """Median correlation between two independent ``depth``-replicate signatures per group.
 
-    Draws ``2 * depth`` replicates per group, splits them into halves and correlates the two
-    medians. This shows at what depth a signature stops changing when a different set of
-    wells is drawn. It needs no labels and is defined from a depth of one.
+    Draws ``2 * depth`` replicates per group, splits them into halves and correlates the two medians.
+    This shows at what depth a signature stops changing when a different set of wells is drawn.
+    It needs no labels and is defined from a depth of one.
+
+    Args:
+        profiles: The feature matrix, one row per replicate.
+        members: Row indices of each group, one array per group.
+        depth: Replicates per half, so a group contributes only with ``2 * depth`` rows.
+        generator: Source of the random draw.
+
+    Returns:
+        The median over the contributing groups, or ``NaN`` when no group could contribute.
+        A group is left out when it has fewer than ``2 * depth`` replicates, or when either half has fewer than two finite features or no spread, which leaves the correlation undefined.
     """
     scores = []
     for rows in members:
         if rows.size < 2 * depth:
             continue
         drawn = generator.choice(rows, size=2 * depth, replace=False)
-        # Both halves in one grouped-median call. np.nanmedian dispatches per feature slice,
-        # and this runs n_draws times for every depth of every group.
+        # Both halves in one grouped-median call.
+        # np.nanmedian dispatches per feature slice, and this runs n_draws times for every depth of every group.
         halves = grouped_stat(profiles[drawn], np.repeat([0, 1], depth).astype(np.int32), 2, MEDIAN)
         left, right = halves[0], halves[1]
         usable = np.isfinite(left) & np.isfinite(right)
@@ -46,10 +56,19 @@ def signature_convergence(
 ) -> float:
     """Median correlation between a ``depth``-replicate signature and the full one.
 
-    Defined up to one less than the group size, whereas ``signature_stability`` needs twice
-    the depth and gives a single point at three replicates per treatment, as in BBBC021.
-    The subset is part of the full set it is compared against, so the correlation is
-    optimistic. Read the shape of the curve rather than its height.
+    Defined up to one less than the group size, whereas ``signature_stability`` needs twice the depth and gives a single point at three replicates per treatment, as in BBBC021.
+    The subset is part of the full set it is compared against, so the correlation is optimistic.
+    Read the shape of the curve rather than its height.
+
+    Args:
+        profiles: The feature matrix, one row per replicate.
+        members: Row indices of each group, one array per group.
+        depth: Replicates in the subset, so a group contributes only with more than ``depth`` rows.
+        generator: Source of the random draw.
+
+    Returns:
+        The median over the contributing groups, or ``NaN`` when no group could contribute.
+        A group is left out when it has ``depth`` or fewer replicates, or when the two signatures share fewer than two finite features or have no spread.
     """
     scores = []
     for rows in members:
@@ -86,18 +105,9 @@ def replicate_saturation(
     Args:
         adata: Well-level profiles with several replicates per group.
         groupby: The column whose groups are the replicate sets.
-        metric: ``"signature_stability"`` correlates two disjoint subsets of this depth. It is
-            unbiased but needs ``2 * depth`` replicates, so it stops early on a screen with three.
-            ``"convergence"`` correlates a subset of this depth with the group's full signature.
-            It is defined up to one less than the group size and optimistic by construction.
-            A callable ``(profiles, codes, depth, generator) -> float`` can score anything else,
-            such as MOA retrieval or mAP.
+        metric: ``"signature_stability"`` correlates two disjoint subsets of this depth. It is unbiased but needs ``2 * depth`` replicates, so it stops early on a screen with three. ``"convergence"`` correlates a subset of this depth with the group's full signature. It is defined up to one less than the group size and optimistic by construction. A callable ``(profiles, codes, depth, generator) -> float`` can score anything else, such as MOA retrieval or mAP.
         max_replicates: Deepest subset to try. ``None`` derives it from ``min_groups``.
-        min_groups: Number of groups that must be able to supply a depth for it to be scored.
-            The statistic is a median over the contributing groups, and the largest group is
-            usually the negative controls. On 132 JUMP plates, taking the range from the largest
-            group gives 4252 depths, and past about 66 only DMSO contributes.
-            ``min_groups=1`` takes the range from the largest group.
+        min_groups: Number of groups that must be able to supply a depth for it to be scored. The statistic is a median over the contributing groups, and the largest group is usually the negative controls. On 132 JUMP plates, taking the range from the largest group gives 4252 depths, and past about 66 only DMSO contributes. ``min_groups=1`` takes the range from the largest group.
         n_draws: Random subsets per depth. The spread across draws is reported as ``std``.
         use_rep: Score ``obsm[use_rep]`` instead of ``X``.
         seed: Seed for reproducibility.
@@ -105,13 +115,16 @@ def replicate_saturation(
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes ``uns["mantispy"][key_added]`` with
-        ``n_replicates``, ``mean``, ``std`` and ``n_draws``.
+        ``None``, or the modified copy.
+        Writes ``uns["mantispy"][key_added]`` with ``n_replicates``, ``mean``, ``std`` and ``n_draws``.
+        The ``n_draws`` column counts the draws that produced a finite score, which can be fewer than the ``n_draws`` asked for, and the first depth at which every draw is ``NaN`` ends the table.
+
+    Raises:
+        ValueError: ``metric`` is neither a callable nor one of ``METRICS``.
 
     Notes:
-        A curve that still climbs steeply at the deepest depth means the screen is
-        under-replicated, which informs the design of the next experiment. Three replicates, as
-        in BBBC021, give one point with the default metric and two with ``"convergence"``.
+        A curve that still climbs steeply at the deepest depth means the screen is under-replicated, which informs the design of the next experiment.
+        Three replicates, as in BBBC021, give one point with the default metric and two with ``"convergence"``.
     """
     profiles = representation(adata, use_rep)
     codes, keys = group_codes(adata, groupby)
@@ -122,14 +135,13 @@ def replicate_saturation(
     if max_replicates is not None:
         deepest = max_replicates
     else:
-        # The deepest depth that `min_groups` groups can still supply. The largest group is
-        # usually the negative controls, 8505 wells on JUMP against a median group size of 132.
+        # The deepest depth that `min_groups` groups can still supply.
+        # The largest group is usually the negative controls, 8505 wells on JUMP against a median group size of 132.
         ranked = np.sort(sizes)[::-1]
         pivot = int(ranked[min(min_groups, ranked.size) - 1]) if ranked.size else 0
         deepest = max(pivot - 1 if metric == "convergence" else pivot // 2, 1)
 
-    # Group the rows once; `codes == group` inside the loop is an O(n_obs) scan per group,
-    # repeated n_draws * deepest times.
+    # Group the rows once; `codes == group` inside the loop is an O(n_obs) scan per group, repeated n_draws * deepest times.
     order = np.argsort(codes, kind="stable")
     starts = np.cumsum(np.concatenate([[0], sizes]))
     members: list[np.ndarray] = [order[starts[group] : starts[group + 1]] for group in range(len(keys))]
@@ -177,30 +189,30 @@ def cytotoxicity(
         groupby: The column defining a perturbation.
         reference: Rows whose median cell count defines a viability of 1.0.
         count_key: ``obs`` column holding the cell count.
-        distance_key: ``obs`` column holding the distance from the controls, as written by
-            :func:`~mantispy.tl.hit_calling`.
+        distance_key: ``obs`` column holding the distance from the controls, as written by :func:`~mantispy.tl.hit_calling`.
         min_viability: Fraction of the control cell count below which a group counts as having lost cells.
         key_added: Name for the outputs.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes ``uns["mantispy"][key_added]`` with ``group``,
-        ``viability``, ``distance``, ``n_obs`` and ``suspect``, and broadcasts
-        ``obs[key_added + "_suspect"]``.
+        ``None``, or the modified copy.
+        Writes ``uns["mantispy"][key_added]`` with ``group``, ``viability``, ``distance``, ``n_obs`` and ``suspect``, and broadcasts ``obs[key_added + "_suspect"]``.
+
+    Raises:
+        KeyError: ``obs`` has no ``count_key`` or no ``distance_key``.
+        ValueError: The reference rows have no usable cell count to normalize viability against.
 
     Notes:
-        A group is suspect when its viability is below ``min_viability`` and its median
-        distance is above that of the controls. Cell loss alone is a phenotype, and a large
-        distance alone is a hit. Together they are suspect because a well with a fifth of its
-        cells has a noisier median and drifts from the controls regardless of the biology. On
-        a synthetic plate with one purely cytotoxic perturbation and its morphology effect
-        removed, that perturbation's distance was 21.1 against 7.0 for the controls.
+        A group is suspect when its viability is below ``min_viability`` and its median distance is above that of the controls.
+        Cell loss alone is a phenotype, and a large distance alone is a hit.
+        Together they are suspect because a well with a fifth of its cells has a noisier median and drifts from the controls regardless of the biology.
+        On a synthetic plate with one purely cytotoxic perturbation and its morphology effect removed, that perturbation's distance was 21.1 against 7.0 for the controls.
 
-        The flag is a diagnostic and does not correct the distances. How much cytotoxicity
-        confounds a screen varies. Over the pki dose series, the rank correlation between
-        phenotype distance and cell loss is +0.79 (p < 1e-8) and the four strongest hits have
-        viabilities of 0.27 to 0.68. Over rohban2017's ORF overexpression the same correlation
-        is +0.00 (p = 0.95). Measure it on your own screen.
+        The flag is a diagnostic and does not correct the distances.
+        How much cytotoxicity confounds a screen varies.
+        Over the pki dose series, the rank correlation between phenotype distance and cell loss is +0.79 (p < 1e-8) and the four strongest hits have viabilities of 0.27 to 0.68.
+        Over rohban2017's ORF overexpression the same correlation is +0.00 (p = 0.95).
+        Measure it on your own screen.
     """
     obs = as_frame(adata.obs)
     if count_key not in obs:

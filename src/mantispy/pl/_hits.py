@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -14,6 +14,7 @@ from mantispy.pl._common import table as _table
 if TYPE_CHECKING:
     import pandas as pd
     from anndata import AnnData
+    from matplotlib.axes import Axes
 
 #: Values below this are clipped so they stay on the plot.
 _FLOOR = 1e-12
@@ -30,7 +31,7 @@ def _threshold(adata: AnnData, function: str, default: float = 0.05) -> float:
     return float(recorded.get("threshold", default))
 
 
-def hits(adata: AnnData, key: str = "hits", label_top: int = 10, ax: plt.Axes | None = None) -> plt.Axes:
+def hits(adata: AnnData, key: str = "hits", label_top: int = 10, ax: Axes | None = None) -> Axes:
     """Distance from the controls against significance, with the most distant groups labeled.
 
     A point in the upper right moved far from the controls and is significant under the permutation null.
@@ -69,7 +70,7 @@ def hits(adata: AnnData, key: str = "hits", label_top: int = 10, ax: plt.Axes | 
     return ax
 
 
-def _effects(adata: AnnData, group: str, key: str):
+def _effects(adata: AnnData, group: str, key: str) -> tuple[pd.DataFrame, pd.Series | None]:
     table = _table(adata, key, "mt.tl.effect_size")
     selected = table[table["group"].astype(str) == str(group)]
     if selected.empty:
@@ -79,7 +80,7 @@ def _effects(adata: AnnData, group: str, key: str):
     return selected, families
 
 
-def _family_colours(families, names) -> tuple[list, dict]:
+def _family_colours(families: pd.Series | None, names: pd.Series) -> tuple[list[Any], dict[str, Any]]:
     """One color per feature family, assigned in sorted order of the families present."""
     if families is None:
         return ["tab:blue"] * len(names), {}
@@ -88,9 +89,7 @@ def _family_colours(families, names) -> tuple[list, dict]:
     return [palette[label] for label in labels], palette
 
 
-def effect_sizes(
-    adata: AnnData, group: str, key: str = "effect", top: int = 30, ax: plt.Axes | None = None
-) -> plt.Axes:
+def effect_sizes(adata: AnnData, group: str, key: str = "effect", top: int = 30, ax: Axes | None = None) -> Axes:
     """The largest effects for one group, colored by feature family.
 
     Args:
@@ -127,8 +126,8 @@ def effect_sizes(
 
 
 def feature_volcano(
-    adata: AnnData, group: str, key: str = "effect", label_top: int = 8, ax: plt.Axes | None = None
-) -> plt.Axes:
+    adata: AnnData, group: str, key: str = "effect", label_top: int = 8, ax: Axes | None = None
+) -> Axes:
     """Effect against significance, per feature, for one group.
 
     Args:
@@ -177,8 +176,8 @@ def dose_response(
     compound_key: str = "Metadata_Compound",
     dose_key: str = "Metadata_Concentration",
     response: str = "hits_distance",
-    ax: plt.Axes | None = None,
-) -> plt.Axes:
+    ax: Axes | None = None,
+) -> Axes:
     """One compound's response against dose, with the fitted curve when there is one.
 
     Args:

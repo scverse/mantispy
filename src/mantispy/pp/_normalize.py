@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import warnings
+from typing import Any
 
 import numpy as np
 from anndata import AnnData
@@ -18,13 +19,12 @@ METHODS = ("mad_robustize", "standardize", "robustize")
 
 
 def _center_and_scale(
-    adata: AnnData, method: str, by, layer: str | None, mask: np.ndarray, epsilon: float
+    adata: AnnData, method: str, by: str | list[str] | None, layer: str | None, mask: np.ndarray, epsilon: float
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Per-group center and scale, plus the features that cannot be normalized somewhere.
 
-    Returned as ``(center, scale, degenerate, uncentred)``, the first two ``(n_groups, n_vars)``
-    float32 and the last two boolean masks over features. ``degenerate`` flags a spread of zero
-    in some group and ``uncentred`` a group whose reference rows hold no usable value at all.
+    Returned as ``(center, scale, degenerate, uncentred)``, the first two ``(n_groups, n_vars)`` float32 and the last two boolean masks over features.
+    ``degenerate`` flags a spread of zero in some group and ``uncentred`` a group whose reference rows hold no usable value at all.
     """
     if method == "standardize":
         centre, _, _ = reduce_grouped(adata, by, MEAN, layer=layer, mask=mask)
@@ -69,26 +69,20 @@ def normalize(
 
     Args:
         adata: Object to normalize.
-        method: ``"mad_robustize"`` computes ``(x - median) / (1.4826 * MAD + epsilon)``,
-            ``"standardize"`` computes ``(x - mean) / sd``, and ``"robustize"`` computes
-            ``(x - median) / IQR``.
-        by: Column(s) defining the groups statistics are computed within, usually the plate.
-            ``None`` fits one set of statistics globally.
-        reference: Rows to fit on: ``None`` for all, ``"negcon"`` for ``Metadata_Control``, or the
-            name of a boolean ``obs`` column.
-        epsilon: Added to the MAD, matching pycytominer's ``mad_robustize_epsilon``. Unused by
-            the other methods.
-        keep_raw: Store the pre-normalization matrix in ``layers["raw"]``. Off by default, because
-            the layer doubles memory and the raw table is already on disk.
+        method: ``"mad_robustize"`` computes ``(x - median) / (1.4826 * MAD + epsilon)``, ``"standardize"`` computes ``(x - mean) / sd``, and ``"robustize"`` computes ``(x - median) / IQR``.
+        by: Column(s) defining the groups statistics are computed within, usually the plate. ``None`` fits one set of statistics globally.
+        reference: Rows to fit on: ``None`` for all, ``"negcon"`` for ``Metadata_Control``, or the name of a boolean ``obs`` column.
+        epsilon: Added to the MAD, matching pycytominer's ``mad_robustize_epsilon``. Unused by the other methods.
+        keep_raw: Store the pre-normalization matrix in ``layers["raw"]``. Off by default, because the layer doubles memory and the raw table is already on disk.
         layer: Read this layer instead of ``X``.
         key_added: Write to ``layers[key_added]`` instead of overwriting ``X``.
         copy: Return a normalized copy instead of normalizing in place.
 
     Returns:
-        ``None``, or the normalized copy when ``copy=True``. Also writes
-        ``var["degenerate_scale"]``, or ``var["degenerate_scale_<key_added>"]`` when writing to a
-        layer, which flags features that have no spread in some group or no reference values to
-        centre on there, and comes with a warning; drop those features before computing distances.
+        ``None``, or the normalized copy when ``copy=True``. Writes ``X`` or ``layers[key_added]``, and ``var["degenerate_scale"]``, or ``var["degenerate_scale_<key_added>"]`` when writing to a layer, which flags features that have no spread in some group or no reference values to centre on there, and comes with a warning; drop those features before computing distances.
+
+    Raises:
+        ValueError: If ``method`` is unknown, or ``reference`` selects no rows at all or none in some group.
     """
     if method not in METHODS:
         raise ValueError(f"method must be one of {METHODS}, got {method!r}")
@@ -139,14 +133,15 @@ def normalize(
         )
     lookup = {key: position for position, key in enumerate(keys)}
 
-    def rescale(key, block: np.ndarray) -> np.ndarray:
+    def _rescale(key: Any, block: np.ndarray) -> np.ndarray:
+        """Centre and scale one group's block with that group's own statistics."""
         index = lookup[key]
         return (block - centre[index]) / scale[index]
 
     if keep_raw and "raw" not in adata.layers:
         adata.layers["raw"] = get_matrix(adata, layer).copy()
 
-    out = transform_grouped(adata, by, rescale, layer=layer)
+    out = transform_grouped(adata, by, _rescale, layer=layer)
     if key_added is None:
         adata.X = out
     else:

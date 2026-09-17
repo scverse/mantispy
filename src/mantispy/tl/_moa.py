@@ -58,12 +58,7 @@ def nn_moa_classify(
         adata: Profiles to classify, one row per treatment or per well.
         moa_key: ``obs`` column holding the known mechanism.
         metric: Similarity between profiles, ``"cosine"`` or ``"pearson"``.
-        scheme: ``"nn"`` allows any neighbor, which is usually optimistic because a compound
-            can match itself at another dose.
-            ``"nsc"`` (not-same-compound) excludes neighbors of the same compound, as in the
-            published BBBC021 benchmark.
-            ``"nscb"`` also excludes neighbors from the same batch, so a batch effect cannot
-            produce the match.
+        scheme: ``"nn"`` allows any neighbor, which is usually optimistic because a compound can match itself at another dose. ``"nsc"`` (not-same-compound) excludes neighbors of the same compound, as in the published BBBC021 benchmark. ``"nscb"`` also excludes neighbors from the same batch, so a batch effect cannot produce the match.
         compound_key: ``obs`` column read for the ``nsc`` and ``nscb`` exclusions.
         batch_key: ``obs`` column read for the ``nscb`` exclusion.
         use_rep: Classify ``obsm[use_rep]`` instead of ``X``.
@@ -71,18 +66,18 @@ def nn_moa_classify(
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes ``obs[key_added + "_predicted"]``, a summary at
-        ``uns["mantispy"][key_added]`` (``accuracy``, ``n_classified``, ``n_excluded``,
-        ``scheme``) and a tidy ``true``/``predicted``/``count`` table at
-        ``uns["mantispy"][key_added + "_confusion"]``.
+        ``None``, or the modified copy.
+        Writes ``obs[key_added + "_predicted"]``, a summary at ``uns["mantispy"][key_added]`` (``accuracy``, ``n_classified``, ``n_excluded``, ``scheme``) and a tidy ``true``/``predicted``/``count`` table at ``uns["mantispy"][key_added + "_confusion"]``.
+
+    Raises:
+        ValueError: ``scheme`` is not one of ``SCHEMES``.
+        KeyError: ``obs`` has no ``moa_key``, or no column that the chosen scheme excludes neighbors on.
 
     Notes:
-        A row with no admissible neighbor, for example under ``"nscb"`` on a single batch, is
-        left unclassified and counted in ``n_excluded``. Chance level is ``1/n_classes`` only
-        when the classes are balanced; otherwise compare against the largest class's share.
+        A row with no admissible neighbor, for example under ``"nscb"`` on a single batch, is left unclassified and counted in ``n_excluded``.
+        Chance level is ``1/n_classes`` only when the classes are balanced; otherwise compare against the largest class's share.
 
-        A profile with no mechanism on file is neither scored nor used as a neighbor, so the
-        accuracy does not depend on the annotated fraction.
+        A profile with no mechanism on file is neither scored nor used as a neighbor, so the accuracy does not depend on the annotated fraction.
     """
     if scheme not in SCHEMES:
         raise ValueError(f"scheme must be one of {SCHEMES}, got {scheme!r}")
@@ -92,8 +87,7 @@ def nn_moa_classify(
     similarity = _blocked_similarity(adata, metric, use_rep, scheme, compound_key, batch_key)
     truth = as_frame(adata.obs)[moa_key].to_numpy(dtype=object)
     annotated = pd.notna(truth)
-    # Unannotated profiles cannot be neighbors, so the nearest annotated profile is used even
-    # when an unannotated one is closer.
+    # Unannotated profiles cannot be neighbors, so the nearest annotated profile is used even when an unannotated one is closer.
     similarity[:, ~annotated] = -np.inf
 
     usable = np.isfinite(similarity).any(axis=1) & annotated
@@ -108,8 +102,7 @@ def nn_moa_classify(
             stacklevel=3,
         )
 
-    # pd.Series.eq rather than ==, which raises on an object array holding pd.NA; eq treats
-    # a missing value as unequal.
+    # pd.Series.eq rather than ==, which raises on an object array holding pd.NA; eq treats a missing value as unequal.
     correct = pd.Series(predicted).eq(pd.Series(truth)).to_numpy() & usable
     labelled = np.where(usable, predicted, np.array(None, dtype=object))
     adata.obs[f"{key_added}_predicted"] = pd.Categorical(labelled)
@@ -145,29 +138,29 @@ def moa_enrichment(
 ) -> AnnData | None:
     """Test which mechanisms are over-represented among each profile's nearest neighbors.
 
-    For each profile and mechanism, a hypergeometric test asks whether the mechanism is more
-    common among the ``k`` nearest neighbors than among all other profiles.
+    For each profile and mechanism, a hypergeometric test asks whether the mechanism is more common among the ``k`` nearest neighbors than among all other profiles.
 
     Args:
         adata: Profiles to test, one row per treatment or per well.
         moa_key: ``obs`` column holding the mechanism labels.
         groupby: ``obs`` column naming each profile in the output table.
-        k: Number of neighbors considered. Smaller values are more local and less powerful.
+        k: Number of neighbors considered, capped at ``n_obs - 1``. Smaller values are more local and less powerful.
         metric: As in :func:`nn_moa_classify`.
         use_rep: As in :func:`nn_moa_classify`.
         key_added: Name for the output table.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes ``uns["mantispy"][key_added]`` with ``group``,
-        ``moa``, ``n_neighbours``, ``pvalue`` and ``qvalue``, one row per annotated profile and
-        per mechanism found among its neighbors.
+        ``None``, or the modified copy.
+        Writes ``uns["mantispy"][key_added]`` with ``group``, ``moa``, ``n_neighbours``, ``pvalue`` and ``qvalue``, one row per annotated profile and per mechanism found among its neighbors.
+
+    Raises:
+        ValueError: ``k`` is less than 1, or ``obs[moa_key]`` has no annotated rows.
 
     Notes:
-        Unannotated profiles are not tested, but they can be neighbors. They take up places
-        among the ``k`` neighbors without adding to any mechanism's count, and they are part
-        of the population the test draws from. The profile itself is excluded from both its
-        neighborhood and the population.
+        Unannotated profiles are not tested, but they can be neighbors.
+        They take up places among the ``k`` neighbors without adding to any mechanism's count, and they are part of the population the test draws from.
+        The profile itself is excluded from both its neighborhood and the population.
     """
     if k < 1:
         raise ValueError(f"k must be at least 1, got {k}")

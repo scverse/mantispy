@@ -1,20 +1,16 @@
 """Differential features with the well as the experimental unit.
 
-Cells in a well share its confluency, focus, plate position and treatment, so a per-cell
-test treats dependent cells as independent replicates and finds a difference between almost
-any two sets of cells. Splitting control wells into two arbitrary halves and testing per
-cell calls 60% of features significant when the well-to-well spread is a quarter of the
-cell-level spread. Aggregating to wells first calls none.
+Cells in a well share its confluency, focus, plate position and treatment, so a per-cell test treats dependent cells as independent replicates and finds a difference between almost any two sets of cells.
+Splitting control wells into two arbitrary halves and testing per cell calls 60% of features significant when the well-to-well spread is a quarter of the cell-level spread.
+Aggregating to wells first calls none.
 
-Wells are in turn nested in plates. A perturbation whose wells all sit on plates without
-control wells cannot be separated from its plate, and an unblocked test is most confident in
-that layout, so :func:`differential_features` checks the layout.
+Wells are in turn nested in plates.
+A perturbation whose wells all sit on plates without control wells cannot be separated from its plate, and an unblocked test is most confident in that layout, so :func:`differential_features` checks the layout.
 
-The test is the moderated t of Smyth (2004), the statistic behind ``limma``. Each feature's
-residual variance is shrunk towards a prior estimated from all features. This suits
-morphology profiles, with thousands of features and three or four replicates, and keeps a
-feature that happens to look quiet in three wells from producing a large t. The gain is
-about sevenfold in true positives at three replicates and none by six.
+The test is the moderated t of Smyth (2004), the statistic behind ``limma``.
+Each feature's residual variance is shrunk towards a prior estimated from all features.
+This suits morphology profiles, with thousands of features and three or four replicates, and keeps a feature that happens to look quiet in three wells from producing a large t.
+The gain is about sevenfold in true positives at three replicates and none by six.
 """
 
 from __future__ import annotations
@@ -53,9 +49,15 @@ def _trigamma_inverse(value: float) -> float:
 def squeeze_variances(variances: np.ndarray, df: int) -> tuple[np.ndarray, float]:
     """Empirical Bayes posterior variances, and the prior degrees of freedom.
 
-    Matches a scaled inverse chi-square to the observed log variances by the method of
-    moments. A ``prior_df`` of ``inf`` means the variances were homogeneous enough that
-    every feature is shrunk to the common prior.
+    Matches a scaled inverse chi-square to the observed log variances by the method of moments.
+
+    Args:
+        variances: One residual variance per feature, as returned by the least-squares fit.
+        df: Residual degrees of freedom of that fit, shared by every feature.
+
+    Returns:
+        ``(posterior, prior_df)``: the variances shrunk towards the prior, and the prior degrees of freedom the shrinkage used.
+        ``prior_df`` is ``inf`` when the variances were homogeneous enough that every usable feature is replaced by the common prior, and ``0.0`` when fewer than two features have a positive finite variance or ``df < 1``, in which case ``variances`` is returned unchanged.
     """
     usable = np.isfinite(variances) & (variances > 0)
     if usable.sum() < 2 or df < 1:
@@ -105,58 +107,44 @@ def differential_features(
     """Moderated t-test per feature, per group, with wells as the replicates.
 
     Args:
-        adata: Well-level profiles. Cell-level objects are refused; aggregate them first with
-            :func:`~mantispy.tl.aggregate`, since the well is the unit that was randomized.
+        adata: Well-level profiles. Cell-level objects are refused; aggregate them first with :func:`~mantispy.tl.aggregate`, since the well is the unit that was randomized.
         groupby: Column naming the perturbation to test.
         reference: Rows to test against: ``"negcon"``, or the name of a boolean ``obs`` column.
-        contrast: ``"reference"`` tests each group against the reference rows, which gives what
-            the perturbation changed. ``"rest"`` tests it against every other perturbation and
-            leaves the reference out, which gives what distinguishes it from the others. This is
-            the marker-gene contrast, and it removes the component all active perturbations share.
+        contrast: ``"reference"`` tests each group against the reference rows, which gives what the perturbation changed. ``"rest"`` tests it against every other perturbation and leaves the reference out, which gives what distinguishes it from the others. This is the marker-gene contrast, and it removes the component all active perturbations share.
 
-            On BBBC021, mechanism retrieval from the resulting signatures is 0.631 for ``"rest"``
-            and 0.505 for ``"reference"``. ``"rest"`` reproduces less well across plates because
-            its comparison set depends on the rest of the screen. On the pki dose series, where
-            the rest for a compound includes its own other doses, split-half agreement falls from
-            0.566 to 0.448. Use ``"rest"`` to tell perturbations apart and ``"reference"`` for
-            results to compare between screens.
-        block: Column whose levels enter the model as fixed effects, normally the plate. Without
-            it, plate variance stays in the residual and costs power; on a four-plate layout,
-            blocking raised power from 0.68 to 0.94. ``None`` fits the contrast alone.
+            On BBBC021, mechanism retrieval from the resulting signatures is 0.631 for ``"rest"`` and 0.505 for ``"reference"``.
+            ``"rest"`` reproduces less well across plates because its comparison set depends on the rest of the screen.
+            On the pki dose series, where the rest for a compound includes its own other doses, split-half agreement falls from 0.566 to 0.448.
+            Use ``"rest"`` to tell perturbations apart and ``"reference"`` for results to compare between screens.
+        block: Column whose levels enter the model as fixed effects, normally the plate. Without it, plate variance stays in the residual and costs power; on a four-plate layout, blocking raised power from 0.68 to 0.94. ``None`` fits the contrast alone.
         min_replicates: Groups with fewer wells than this are left unscored.
         key_added: Name for the output table.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes ``uns["mantispy"][key_added]``, a tidy frame of
-        ``group``, ``feature``, ``difference`` (the fitted contrast, in the units of ``X``),
-        ``t``, ``pvalue`` and ``qvalue`` (Benjamini-Hochberg over the whole table), and
-        ``uns["mantispy"][key_added + "_prior_df"]``, the prior degrees of freedom of the
-        empirical Bayes step per group. Large values mean the variances were homogeneous and
-        strongly shrunk.
+        ``None``, or the modified copy.
+        Writes ``uns["mantispy"][key_added]``, a tidy frame of ``group``, ``feature``, ``difference`` (the fitted contrast, in the units of ``X``), ``t``, ``pvalue`` and ``qvalue`` (Benjamini-Hochberg over the whole table), and ``uns["mantispy"][key_added + "_prior_df"]``, the prior degrees of freedom of the empirical Bayes step per group.
+        Large values mean the variances were homogeneous and strongly shrunk.
+
+    Raises:
+        ValueError: The object is at cell resolution, ``contrast`` is neither ``"reference"`` nor ``"rest"``, ``reference`` selects fewer than ``min_replicates`` wells, or no group had enough replicates in blocks shared with what it is compared against.
+        KeyError: ``obs`` has no column ``block`` to block on.
 
     Notes:
-        With ``block`` set, a group is skipped with a warning when none of its plates also holds
-        rows it is compared against, since its treatment and its plate are then confounded. On
-        a confounded null, the unblocked test reports 70% power with a 23% false positive rate
-        because it detects the plate. None of the four screens packaged with mantispy has such
-        a group.
+        With ``block`` set, a group is skipped with a warning when none of its plates also holds rows it is compared against, since its treatment and its plate are then confounded.
+        On a confounded null, the unblocked test reports 70% power with a 23% false positive rate because it detects the plate.
+        None of the four screens packaged with mantispy has such a group.
 
         A feature with a non-finite value in one of the wells a comparison uses is left out of that fit.
         One infinity would make the batched least squares return ``NaN`` for every feature.
-        The mask is computed per group, over the rows that group is fitted on, so a bad well only costs the
-        groups compared against it.
+        The mask is computed per group, over the rows that group is fitted on, so a bad well only costs the groups compared against it.
 
-        This test is meant for low-replicate screens. Across five configurations, the
-        Mann-Whitney test in :func:`~mantispy.tl.effect_size` could not call a feature at three
-        or fewer wells per treatment and was adequate from ten wells up, where this function is
-        a rescaling of Cohen's d (Spearman 1.00). BBBC021 has three wells per treatment and the
-        full JUMP TARGET-2 has 132.
+        This test is meant for low-replicate screens.
+        Across five configurations, the Mann-Whitney test in :func:`~mantispy.tl.effect_size` could not call a feature at three or fewer wells per treatment and was adequate from ten wells up, where this function is a rescaling of Cohen's d (Spearman 1.00).
+        BBBC021 has three wells per treatment and the full JUMP TARGET-2 has 132.
 
-        Calibration depends on the replicate count and the feature distribution, which vary by
-        an order of magnitude between screens. Check the p-values on your own screen with
-        :func:`~mantispy.metrics.diagnose_testing`, which relabels control wells as
-        pseudo-treatments of the same size and reports the resulting false positive rate.
+        Calibration depends on the replicate count and the feature distribution, which vary by an order of magnitude between screens.
+        Check the p-values on your own screen with :func:`~mantispy.metrics.diagnose_testing`, which relabels control wells as pseudo-treatments of the same size and reports the resulting false positive rate.
     """
     if get_resolution(adata) == "cell":
         raise ValueError(
@@ -188,8 +176,6 @@ def differential_features(
     unscored = 0
     for index, key in enumerate(keys):
         treated = (codes == index) & ~is_control
-        # What this group is measured against: the reference rows, or every other
-        # perturbation with the reference left out.
         against = is_control if contrast == "reference" else (~is_control & ~treated)
         if treated.sum() < min_replicates or against.sum() < min_replicates:
             skipped.append(str(key))
@@ -216,8 +202,8 @@ def differential_features(
         statistic = np.full(adata.n_vars, np.nan)
         pvalue = np.full(adata.n_vars, np.nan)
 
-        # Over the rows of this fit only. A well no comparison includes cannot take a feature
-        # away from the groups that are scored.
+        # Over the rows of this fit only.
+        # A well no comparison includes cannot take a feature away from the groups that are scored.
         usable = finite[rows].all(axis=0)
         unscored += int((~usable).sum())
 

@@ -15,9 +15,16 @@ from mantispy._core.mutation import inplace_or_copy
 def intraclass_correlation(X: np.ndarray, codes: np.ndarray, n_groups: int) -> np.ndarray:
     """One-way ICC per column, the share of variance that lies between groups.
 
-    ``ICC(1) = (MSB - MSW) / (MSB + (k0 - 1) * MSW)``, with ``k0`` the effective group size
-    for an unbalanced design. Missing values are dropped per column, so a feature measured
-    in fewer wells is scored on the wells it has rather than on zeros.
+    ``ICC(1) = (MSB - MSW) / (MSB + (k0 - 1) * MSW)``, with ``k0`` the effective group size for an unbalanced design.
+    Missing values are dropped per column, so a feature measured in fewer wells is scored on the wells it has rather than on zeros.
+
+    Args:
+        X: Values to score, one feature per column.
+        codes: Group code per row, as ``group_codes`` returns.
+        n_groups: Number of groups those codes index.
+
+    Returns:
+        One ICC per column, clipped to ``[-1, 1]``, and 0.0 for a column left with fewer than two observations or fewer than two groups.
     """
     observed = np.isfinite(X)
     values = np.where(observed, X, 0.0)
@@ -60,8 +67,7 @@ def feature_reproducibility(
     """Score each feature by how consistently replicates of a perturbation agree on it.
 
     A feature that varies only within replicate groups is noise, however large its variance.
-    The intraclass correlation is the share of variance that lies between groups, which a
-    variance filter does not measure.
+    The intraclass correlation is the share of variance that lies between groups, which a variance filter does not measure.
 
     Args:
         adata: Profiles with several replicates per group, at well or perturbation resolution.
@@ -71,18 +77,18 @@ def feature_reproducibility(
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy.
+        ``None``, or the modified copy. Writes the ICC to ``var[key_added]`` and the flag to ``var[key_added + "_selected"]``.
+
+    Raises:
+        ValueError: If ``groupby`` has a single group, so that no variance can lie between groups.
 
     Notes:
-        Filtering on ICC raised replicate-retrieval mAP on all three packaged screens: bbbc021
-        from 0.121 to 0.141 (ICC > 0.2) and 0.162 (> 0.4), rohban2017 from 0.097 to 0.143 and
-        0.136, and pki from 0.178 to 0.192 and 0.200. The best cutoff differs by dataset, so
-        0.2 is a conservative default; choose one from the distribution in ``var[key_added]``.
+        Filtering on ICC raised replicate-retrieval mAP on all three packaged screens: bbbc021 from 0.121 to 0.141 (ICC > 0.2) and 0.162 (> 0.4), rohban2017 from 0.097 to 0.143 and 0.136, and pki from 0.178 to 0.192 and 0.200.
+        The best cutoff differs by dataset, so 0.2 is a conservative default; choose one from the distribution in ``var[key_added]``.
 
-        ICC filtering can hurt other tasks. On BBBC021, not-same-compound MOA retrieval fell
-        from 0.777 over all features to 0.767 at ICC > 0.2 and 0.757 at 0.4. ICC measures
-        reproducibility within a treatment, which is a different property from agreement
-        between compounds that share a mechanism.
+        ICC filtering can hurt other tasks.
+        On BBBC021, not-same-compound MOA retrieval fell from 0.777 over all features to 0.767 at ICC > 0.2 and 0.757 at 0.4.
+        ICC measures reproducibility within a treatment, which is a different property from agreement between compounds that share a mechanism.
     """
     codes, keys = group_codes(adata, groupby)
     if len(keys) < 2:
@@ -119,14 +125,14 @@ def feature_batch_sensitivity(
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy.
+        ``None``, or the modified copy. Writes ``var[key_added + "_pvalue"]``, ``var[key_added + "_qvalue"]`` and the boolean ``var[key_added + "_sensitive"]``.
+
+    Raises:
+        ValueError: If ``batch_key`` holds fewer than two batches.
 
     Notes:
-        Uses Kruskal-Wallis instead of ANOVA, because morphology features are not normally
-        distributed and a few extreme wells should not decide the result. Expect a large
-        fraction to come back sensitive, since per-plate centering does not remove plate
-        structure: over BBBC021's treated wells, 338 of 344 features still depend on the plate
-        at q < 0.05 after per-plate normalization, and rohban2017 and pki are similar.
+        Uses Kruskal-Wallis instead of ANOVA, because morphology features are not normally distributed and a few extreme wells should not decide the result.
+        Expect a large fraction to come back sensitive, since per-plate centering does not remove plate structure: over BBBC021's treated wells, 338 of 344 features still depend on the plate at q < 0.05 after per-plate normalization, and rohban2017 and pki are similar.
 
         Compare the sensitive fraction before and after a correction.
     """
@@ -138,7 +144,7 @@ def feature_batch_sensitivity(
     blocks = [np.flatnonzero(codes == index) for index in range(len(keys))]
     pvalues = np.ones(adata.n_vars)
     for feature in range(adata.n_vars):
-        samples = [X[rows, feature][np.isfinite(X[rows, feature])] for rows in blocks]
+        samples = [column[np.isfinite(column)] for column in (X[rows, feature] for rows in blocks)]
         samples = [sample for sample in samples if sample.size > 1]
         if len(samples) > 1:
             try:

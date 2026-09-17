@@ -17,9 +17,8 @@ if TYPE_CHECKING:
 def feature_mask(adata: AnnData, key: str | None) -> np.ndarray:
     """Boolean mask over ``var``: the features flagged by ``key``, or all of them.
 
-    A missing column is not an error. Callers pass ``key="selected"`` by default, so running
-    after :func:`~mantispy.pp.feature_select` uses the selection and running before it uses
-    every feature.
+    A missing column is not an error.
+    Callers pass ``key="selected"`` by default, so running after :func:`~mantispy.pp.feature_select` uses the selection and running before it uses every feature.
     """
     if key is not None and key in adata.var:
         return as_frame(adata.var)[key].to_numpy(dtype=bool)
@@ -31,8 +30,7 @@ def feature_mask(adata: AnnData, key: str | None) -> np.ndarray:
 def reference_mask(adata: AnnData, reference: str | None) -> np.ndarray:
     """Boolean mask over ``obs``: the rows a transform should be fitted on.
 
-    ``None`` fits on everything, ``"negcon"`` on ``Metadata_Control``, and anything else
-    names a boolean ``obs`` column.
+    ``None`` fits on everything, ``"negcon"`` on ``Metadata_Control``, and anything else names a boolean ``obs`` column.
     """
     if reference is None:
         return np.ones(adata.n_obs, dtype=bool)

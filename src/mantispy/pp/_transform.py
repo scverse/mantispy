@@ -1,13 +1,10 @@
 """Rank-based inverse normal transformation.
 
-After per-plate normalization, each feature is replaced by the normal quantile of its
-rank. This is the ``_int`` step of the JUMP consortium's recipe and the third step of the
-baseline in Arevalo et al. (2024). Morphology features are heavy-tailed and differ in
-shape, so a few extreme wells can dominate distances; ranking removes both the shape
-differences and the outliers, at the cost of the original units.
+After per-plate normalization, each feature is replaced by the normal quantile of its rank.
+This is the ``_int`` step of the JUMP consortium's recipe and the third step of the baseline in Arevalo et al. (2024).
+Morphology features are heavy-tailed and differ in shape, so a few extreme wells can dominate distances; ranking removes both the shape differences and the outliers, at the cost of the original units.
 
-Reference: the ``rank_int_array`` implementation in ``broadinstitute/jump-profiling-recipe``,
-which this reproduces on data with no missing values.
+Reference: the ``rank_int_array`` implementation in ``broadinstitute/jump-profiling-recipe``, which this reproduces on data with no missing values.
 """
 
 from __future__ import annotations
@@ -31,18 +28,15 @@ def rank_inverse_normal(X: np.ndarray, c: float = BLOM, stochastic: bool = True,
     Args:
         X: Values to transform, one feature per column.
         c: Blom's constant in ``(rank - c) / (n - 2c + 1)``.
-        stochastic: Break ties at random, as the reference implementation does. With ``False``, tied
-            values share the mid-rank and get the same output, which suits real ties (such as a
-            feature that is zero in half the wells) but not ties from rounding.
+        stochastic: Break ties at random, as the reference implementation does. With ``False``, tied values share the mid-rank and get the same output, which suits real ties (such as a feature that is zero in half the wells) but not ties from rounding.
         seed: Seed for the tie-breaking.
 
     Returns:
         The transformed values, ``NaN`` where the input was missing.
 
     Notes:
-        The finite values of each column are ranked among themselves, and only missing
-        entries come back missing. The reference implementation passes the column to
-        ``scipy.stats.rankdata``, which returns all NaN for a column with any missing value.
+        The finite values of each column are ranked among themselves, and only missing entries come back missing.
+        The reference implementation passes the column to ``scipy.stats.rankdata``, which returns all NaN for a column with any missing value.
     """
     values = np.atleast_2d(np.asarray(X, dtype=np.float64).T).T
     out = np.full(values.shape, np.nan)
@@ -81,12 +75,8 @@ def rank_int(
     """Replace every feature by the normal quantile of its rank.
 
     Args:
-        adata: Object to transform. Run it after :func:`~mantispy.pp.normalize`, as the JUMP
-            recipe and the batch-correction benchmark do.
-        by: Rank within each group of this column. ``None`` ranks globally, as the reference
-            implementation does, which keeps every feature comparable across the screen.
-            Ranking per plate also removes plate-level differences in distribution shape, but
-            can hide a plate that failed.
+        adata: Object to transform. Run it after :func:`~mantispy.pp.normalize`, as the JUMP recipe and the batch-correction benchmark do.
+        by: Rank within each group of this column. ``None`` ranks globally, as the reference implementation does, which keeps every feature comparable across the screen. Ranking per plate also removes plate-level differences in distribution shape, but can hide a plate that failed.
         c: Blom's constant.
         stochastic: Tie handling; see ``rank_inverse_normal``.
         seed: Tie handling; see ``rank_inverse_normal``.
@@ -94,13 +84,12 @@ def rank_int(
         copy: Return a modified copy instead of transforming in place.
 
     Returns:
-        ``None``, or the modified copy.
+        ``None``, or the modified copy. Writes ``X`` or ``layers[key_added]``.
 
     Notes:
-        Every feature comes out standard normal, so no feature dominates a distance through
-        its units. Effect sizes are lost as well: a feature that doubled and one that moved by
-        one percent look the same if they reorder the same wells. Keep the untransformed values
-        with ``key_added`` for effect sizes and dose-response curves.
+        Every feature comes out standard normal, so no feature dominates a distance through its units.
+        Effect sizes are lost as well: a feature that doubled and one that moved by one percent look the same if they reorder the same wells.
+        Keep the untransformed values with ``key_added`` for effect sizes and dose-response curves.
     """
     X = get_matrix(adata)
     out = np.empty_like(X, dtype=np.float32)

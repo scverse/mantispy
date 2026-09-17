@@ -1,9 +1,8 @@
 """JUMP Cell Painting profiles and their perturbation annotation.
 
-A JUMP plate parquet carries three metadata columns (source, plate, well) and 4762
-features. The compound or gene each well received is recorded in a separate repository,
-keyed by ``Metadata_JCP2022``. This module reads the profiles with
-:func:`~mantispy.io.read_profiles` and joins the annotation onto them.
+A JUMP plate parquet carries three metadata columns (source, plate, well) and 4762 features.
+The compound or gene each well received is recorded in a separate repository, keyed by ``Metadata_JCP2022``.
+This module reads the profiles with :func:`~mantispy.io.read_profiles` and joins the annotation onto them.
 
 Sources, all public over HTTPS:
 
@@ -18,6 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 from anndata import AnnData
@@ -39,7 +39,17 @@ _JOIN_ON = ["Metadata_Source", "Metadata_Plate", "Metadata_Well"]
 
 
 def jump_metadata(name: str) -> pd.DataFrame:
-    """Read one of JUMP's annotation tables, ``"plate"``, ``"well"`` or ``"compound"``."""
+    """Read one of JUMP's annotation tables, ``"plate"``, ``"well"`` or ``"compound"``.
+
+    Args:
+        name: Which table to read, one of :data:`TABLES`.
+
+    Returns:
+        The table as JUMP publishes it, downloaded once into :attr:`mantispy.settings.cache_dir` and checked against the sha256 the dataset registry pins.
+
+    Raises:
+        ValueError: `name` is not one of :data:`TABLES`.
+    """
     if name not in TABLES:
         raise ValueError(f"name must be one of {TABLES}, got {name!r}")
     from mantispy.ds._datasets import _files
@@ -48,24 +58,22 @@ def jump_metadata(name: str) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
-def read_jump(paths: str | Path | Sequence[str | Path], annotate: bool = True, **kwargs) -> AnnData:
+def read_jump(paths: str | Path | Sequence[str | Path], annotate: bool = True, **kwargs: Any) -> AnnData:
     """Read JUMP plate profiles, optionally joining the annotation.
 
     Args:
         paths: One or more ``{plate}.parquet`` files in the Cell Painting Gallery layout.
-        annotate: Join the well and compound tables, which map the three metadata columns to a
-            perturbation. Downloads about 14 MB once and caches it.
-        kwargs: Passed to :func:`~mantispy.io.read_profiles`. ``on_column_mismatch="intersect"``
-            is useful when plates come from different sources.
+        annotate: Join the well and compound tables, which map the three metadata columns to a perturbation.
+            Downloads about 14 MB once and caches it.
+        kwargs: Passed to :func:`~mantispy.io.read_profiles`.
+            ``on_column_mismatch="intersect"`` is useful when plates come from different sources.
 
     Returns:
-        An :class:`~anndata.AnnData` at well resolution. With ``annotate`` it carries
-        ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_InChIKey`` and
-        ``Metadata_Control``.
+        An :class:`~anndata.AnnData` at well resolution.
+        With ``annotate`` it carries ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_InChIKey`` and ``Metadata_Control``.
 
     Notes:
-        JUMP plates from different sources share their feature names but not always the same
-        set of features; pass ``on_column_mismatch="intersect"`` when mixing sources.
+        JUMP plates from different sources share their feature names but not always the same set of features; pass ``on_column_mismatch="intersect"`` when mixing sources.
     """
     adata = read_profiles(paths, resolution="well", **kwargs)
     if annotate:
@@ -76,7 +84,19 @@ def read_jump(paths: str | Path | Sequence[str | Path], annotate: bool = True, *
 
 
 def join_jump_annotation(obs: pd.DataFrame, kind: str = "compound") -> pd.DataFrame:
-    """Join the JUMP annotation onto an ``obs`` frame keyed by source, plate and well."""
+    """Join the JUMP annotation onto an ``obs`` frame keyed by source, plate and well.
+
+    Args:
+        obs: A frame carrying ``Metadata_Source``, ``Metadata_Plate`` and ``Metadata_Well``, whose three key columns are cast to strings in place before the join.
+        kind: Which perturbation the annotation is read for, one of :data:`KINDS`.
+
+    Returns:
+        A new frame with ``Metadata_JCP2022``, ``Metadata_InChIKey``, ``Metadata_Perturbation`` and ``Metadata_Control`` (true for :data:`NEGATIVE_CONTROL`) joined onto `obs`, missing on the wells the annotation does not cover.
+
+    Raises:
+        ValueError: `kind` is not one of :data:`KINDS`.
+        KeyError: `obs` is missing one of the three columns the annotation is keyed by.
+    """
     if kind not in KINDS:
         raise ValueError(f"kind must be one of {KINDS}, got {kind!r}")
 

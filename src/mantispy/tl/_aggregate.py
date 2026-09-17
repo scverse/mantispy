@@ -22,8 +22,8 @@ FUNCTIONS = {"median": MEDIAN, "mean": MEAN}
 
 _WELL_KEYS = {"Metadata_Plate", "Metadata_Well"}
 
-#: uns["mantispy"] keys that survive aggregation because they describe the features or the
-#: experiment. Result tables are keyed on the input rows and are dropped.
+#: uns["mantispy"] keys that survive aggregation because they describe the features or the experiment.
+#: Result tables are keyed on the input rows and are dropped.
 _INHERITED = frozenset({"channels", "dataset", "truth", "feature_select", "blocklist"})
 
 
@@ -44,13 +44,14 @@ def aggregate(
         layer: Aggregate this layer instead of ``X``.
 
     Returns:
-        A new :class:`~anndata.AnnData` with one row per group. ``var`` is carried over
-        unchanged; ``obs`` holds the grouping columns, ``Metadata_CellCount``, and every
-        other ``Metadata_`` column that is constant within every group.
+        A new :class:`~anndata.AnnData` with one row per group.
+        ``var`` is carried over unchanged; ``obs`` holds the grouping columns, ``Metadata_CellCount``, and every other ``Metadata_`` column that is constant within every group.
+
+    Raises:
+        ValueError: ``func`` is not one of ``FUNCTIONS``.
 
     Notes:
-        This uses mantispy's own NaN-skipping kernel rather than :func:`scanpy.get.aggregate`,
-        which propagates NaN and is measurably slower on both mean and median.
+        This uses mantispy's own NaN-skipping kernel rather than :func:`scanpy.get.aggregate`, which propagates NaN and is measurably slower on both mean and median.
     """
     if func not in FUNCTIONS:
         raise ValueError(f"func must be one of {tuple(FUNCTIONS)}, got {func!r}")

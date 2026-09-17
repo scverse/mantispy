@@ -1,7 +1,7 @@
 """Whitening (sphering) fitted on control profiles.
 
-This is typical variation normalization. Whitening by the covariance of the negative
-controls removes the variation they share, leaving the effects of the perturbations.
+This is typical variation normalization.
+Whitening by the covariance of the negative controls removes the variation they share, leaving the effects of the perturbations.
 """
 
 from __future__ import annotations
@@ -18,13 +18,11 @@ from mantispy._core.mutation import inplace_or_copy
 METHODS = ("ZCA", "ZCA-cor", "PCA", "PCA-cor")
 
 
-def _fit(reference: np.ndarray, method: str, epsilon: float):
+def _fit(reference: np.ndarray, method: str, epsilon: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Return ``(center, scale, W)`` for the requested whitening.
 
-    Follows pycytominer's ``Spherize``: epsilon is added to the singular values, and when
-    there are no more rows than features the null directions are padded with the smallest
-    non-zero singular value. Adding epsilon to clipped eigenvalues instead diverges from
-    pycytominer by orders of magnitude where the matrix is near-singular.
+    Follows pycytominer's ``Spherize``: epsilon is added to the singular values, and when there are no more rows than features the null directions are padded with the smallest non-zero singular value.
+    Adding epsilon to clipped eigenvalues instead diverges from pycytominer by orders of magnitude where the matrix is near-singular.
     """
     # A missing value would otherwise surface as "LinAlgError: SVD did not converge".
     if not np.isfinite(reference).all():
@@ -98,26 +96,18 @@ def sphere(
 
     Args:
         adata: Object to sphere. Usually well-level profiles.
-        method: ``"ZCA"`` and ``"ZCA-cor"`` rotate back into the original feature basis, so the
-            output columns still correspond to features and ``var`` still describes them.
-            ``"PCA"`` and ``"PCA-cor"`` return principal components, which ``var`` no longer
-            describes, and warn about it unless ``key_added`` is set.
-            The ``-cor`` variants whiten the correlation instead of the covariance, so
-            high-variance features do not dominate.
-        reference: Rows to fit on: ``"negcon"`` for the controls, ``None`` for everything, or the
-            name of a boolean ``obs`` column.
+        method: ``"ZCA"`` and ``"ZCA-cor"`` rotate back into the original feature basis, so the output columns still correspond to features and ``var`` still describes them. ``"PCA"`` and ``"PCA-cor"`` return principal components, which ``var`` no longer describes, and warn about it unless ``key_added`` is set. The ``-cor`` variants whiten the correlation instead of the covariance, so high-variance features do not dominate.
+        reference: Rows to fit on: ``"negcon"`` for the controls, ``None`` for everything, or the name of a boolean ``obs`` column.
         epsilon: Regularization added to the singular values.
         by: Fit and apply separately within each group of this column, e.g. per batch.
         key_added: Write to ``layers[key_added]`` instead of overwriting ``X``.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy.
+        ``None``, or the modified copy. Writes ``X`` or ``layers[key_added]``.
 
     Raises:
-        ValueError: If a group has fewer than two reference rows, the reference holds missing or
-            infinite values, a ``-cor`` method meets a zero-variance feature, or the reference
-            matrix is not full rank.
+        ValueError: If ``method`` is unknown, ``reference`` selects no rows, a group has fewer than two reference rows, the reference holds missing or infinite values, a ``-cor`` method meets a zero-variance feature, or the reference matrix is not full rank.
     """
     if method not in METHODS:
         raise ValueError(f"method must be one of {METHODS}, got {method!r}")

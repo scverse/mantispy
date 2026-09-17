@@ -1,8 +1,7 @@
 """Plate and well geometry.
 
-Well names are normalized to the canonical ``A01`` form on read, so every downstream
-consumer can assume that shape. Rows are 0-based and support the two-letter names used
-by 1536-well plates (``A`` -> 0, ``AA`` -> 26, ``AF`` -> 31).
+Well names are normalized to the canonical ``A01`` form on read, so every downstream consumer can assume that shape.
+Rows are 0-based and support the two-letter names used by 1536-well plates (``A`` -> 0, ``AA`` -> 26, ``AF`` -> 31).
 """
 
 from __future__ import annotations
@@ -54,8 +53,7 @@ def well_col(well: str) -> int:
 def row_label(row: int) -> int | str:
     """Inverse of :func:`well_row`: the letter label for a 0-based row index.
 
-    Rows past ``Z`` get the two-letter names CellProfiler and plate readers use
-    (``AA``, ``AB``, ...), which is what 1536-well plates need.
+    Rows past ``Z`` get the two-letter names CellProfiler and plate readers use (``AA``, ``AB``, ...), which is what 1536-well plates need.
     """
     if row < 0:
         raise ValueError(f"row index must be non-negative, got {row}")

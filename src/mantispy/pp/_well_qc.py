@@ -27,20 +27,15 @@ def well_qc(
         adata: Single-cell object to summarize per well.
         min_cells: Wells with fewer cells than this fail.
         max_nan_fraction: Wells missing more than this fraction of their values fail.
-        max_control_cv: For control wells only, the largest acceptable median coefficient of variation
-            across features. ``None`` skips the check, which is the default because a
-            sensible value depends on the assay.
+        max_control_cv: For control wells only, the largest acceptable median coefficient of variation across features. ``None`` skips the check, which is the default because a sensible value depends on the assay.
         key: Restrict the statistics to features flagged by this boolean ``var`` column.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes ``uns["mantispy"]["well_qc"]``, a frame with
-        the columns ``Metadata_Plate``, ``Metadata_Well``, ``n_cells``, ``nan_fraction``,
-        ``control_cv`` and ``qc_well_pass``, and broadcasts ``obs["qc_well_pass"]``.
+        ``None``, or the modified copy. Writes ``uns["mantispy"]["well_qc"]``, a frame with the columns ``Metadata_Plate``, ``Metadata_Well``, ``n_cells``, ``nan_fraction``, ``control_cv`` and ``qc_well_pass``, and broadcasts ``obs["qc_well_pass"]``.
 
     Notes:
-        The table keeps plate and well as columns because a MultiIndex in ``uns`` cannot be
-        written to h5ad.
+        The table keeps plate and well as columns because a MultiIndex in ``uns`` cannot be written to h5ad.
     """
     selected = feature_mask(adata, key)
     X = get_matrix(adata)[:, selected]

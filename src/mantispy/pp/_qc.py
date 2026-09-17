@@ -21,7 +21,10 @@ AREA_Z_CUTOFF = 5.0
 
 
 def _nanvar(X: np.ndarray) -> np.ndarray:
-    """Per-feature variance, ignoring NaN. An all-NaN column yields NaN without a warning."""
+    """Per-feature variance, ignoring NaN.
+
+    An all-NaN column yields NaN without a warning.
+    """
     with warnings.catch_warnings(), np.errstate(invalid="ignore"):
         warnings.simplefilter("ignore", RuntimeWarning)
         return np.nanvar(X, axis=0)
@@ -30,10 +33,8 @@ def _nanvar(X: np.ndarray) -> np.ndarray:
 def _n_unique(X: np.ndarray, missing: np.ndarray) -> np.ndarray:
     """Distinct finite values per feature, a column block at a time.
 
-    Sorting a block of columns in one call avoids a Python-level ``np.unique`` per feature,
-    which took nine seconds on 50 640 JUMP wells by 3634 features. Missing values sort to
-    the end, so each column's distinct count is the number of value changes in its finite
-    prefix.
+    Sorting a block of columns in one call avoids a Python-level ``np.unique`` per feature, which took nine seconds on 50 640 JUMP wells by 3634 features.
+    Missing values sort to the end, so each column's distinct count is the number of value changes in its finite prefix.
     """
     n_obs, n_vars = X.shape
     out = np.empty(n_vars, dtype=np.int32)
@@ -60,19 +61,13 @@ def calculate_qc_metrics(
 
     Args:
         adata: Object to annotate.
-        image_shape: ``(height, width)`` of a field of view. Without it, and without
-            ``Metadata_Center_X``/``_Y`` in ``obs``, the border flag stays ``False``.
+        image_shape: ``(height, width)`` of a field of view. Without it, and without ``Metadata_Center_X``/``_Y`` in ``obs``, the border flag stays ``False``.
         border_margin: Distance from the image edge, in pixels, inside which a cell is a border cell.
-        max_nan_fraction: Largest fraction of missing features a cell may have and still pass.
-            Partial NaN is routine in CellProfiler output (Zernike and RadialDistribution
-            features are undefined for small objects), so requiring no missing values would
-            fail almost every cell.
+        max_nan_fraction: Largest fraction of missing features a cell may have and still pass. Partial NaN is routine in CellProfiler output (Zernike and RadialDistribution features are undefined for small objects), so requiring no missing values would fail almost every cell.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes the ``obs`` columns ``qc_n_nan_features``,
-        ``qc_nan_fraction``, ``qc_is_border``, ``qc_area_outlier`` and ``qc_pass``, and the
-        ``var`` columns ``qc_n_nan``, ``qc_variance`` and ``qc_n_unique``.
+        ``None``, or the modified copy. Writes the ``obs`` columns ``qc_n_nan_features``, ``qc_nan_fraction``, ``qc_is_border``, ``qc_area_outlier`` and ``qc_pass``, and the ``var`` columns ``qc_n_nan``, ``qc_variance`` and ``qc_n_unique``.
     """
     X = get_matrix(adata)
     missing = np.isnan(X)
@@ -111,9 +106,8 @@ def _border_flag(adata: AnnData, image_shape: tuple[int, int] | None, margin: in
 def _area_outlier_flag(adata: AnnData, X: np.ndarray) -> np.ndarray:
     """Cells whose area is more than :data:`AREA_Z_CUTOFF` robust SDs from the plate median.
 
-    Every compartment that measured an area is scored within its own plate and the flags are
-    OR-ed, so a cell is an outlier when any of its areas is. Scoring only the first matching
-    column made the flag, and so ``qc_pass``, depend on the order of ``var``.
+    Every compartment that measured an area is scored within its own plate and the flags are OR-ed, so a cell is an outlier when any of its areas is.
+    Scoring only the first matching column made the flag, and so ``qc_pass``, depend on the order of ``var``.
     """
     if "feature" not in adata.var:
         get_logger().warning(
@@ -153,11 +147,15 @@ def filter_cells(
 
     Args:
         adata: Object to filter.
-        min_cells_per_well: Wells with fewer cells than this are dropped entirely, counted over the
-            cells that survive the other checks in this call so that the cells being dropped cannot
-            hold a well above the floor. ``0`` disables the check.
+        min_cells_per_well: Wells with fewer cells than this are dropped entirely, counted over the cells that survive the other checks in this call so that the cells being dropped cannot hold a well above the floor. ``0`` disables the check.
         qc_pass: Also require ``obs["qc_pass"]``, which :func:`calculate_qc_metrics` writes.
         copy: Return a filtered copy instead of filtering in place.
+
+    Returns:
+        ``None``, or the filtered copy. Subsets ``obs`` to the surviving cells, and warns when that leaves none.
+
+    Raises:
+        KeyError: If ``qc_pass`` is requested but ``obs`` has no such column.
     """
     keep = np.ones(adata.n_obs, dtype=bool)
     if qc_pass:
@@ -196,14 +194,12 @@ def filter_features(
     Args:
         adata: Object to filter.
         drop_nan: Drop features that are missing everywhere.
-        min_variance: Drop features whose variance is at or below this, as
-            :func:`~mantispy.pp.feature_select` and sklearn's ``VarianceThreshold`` do.
-            ``0`` disables the check.
-        blocklist: ``"default"`` for the bundled CellProfiler blocklist, an explicit list of names,
-            or ``None`` to skip.
-            Matched against the current names and against ``var["original_name"]``, so it
-            works either side of :func:`~mantispy.pp.standardize_feature_names`.
+        min_variance: Drop features whose variance is at or below this, as :func:`~mantispy.pp.feature_select` and sklearn's ``VarianceThreshold`` do. ``0`` disables the check.
+        blocklist: ``"default"`` for the bundled CellProfiler blocklist, an explicit list of names, or ``None`` to skip. Matched against the current names and against ``var["original_name"]``, so it works either side of :func:`~mantispy.pp.standardize_feature_names`.
         copy: Return a filtered copy instead of filtering in place.
+
+    Returns:
+        ``None``, or the filtered copy. Subsets ``var`` to the surviving features, and reports how many were dropped.
     """
     X = get_matrix(adata)
     keep = np.ones(adata.n_vars, dtype=bool)

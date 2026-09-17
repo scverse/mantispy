@@ -12,8 +12,8 @@ from mantispy._core.mutation import inplace_or_copy
 
 METRICS = ("cosine", "pearson")
 
-#: Largest float64 similarity matrix, in bytes, that :func:`similarity_matrix` builds. The
-#: cast to float32 adds half as much again at peak.
+#: Largest float64 similarity matrix, in bytes, that :func:`similarity_matrix` builds.
+#: The cast to float32 adds half as much again at peak.
 SIMILARITY_BYTES = 4_000_000_000
 
 
@@ -22,10 +22,16 @@ def similarity_matrix(values: np.ndarray, metric: str = "cosine") -> np.ndarray:
 
     Pearson is cosine on row-centered data, so one code path serves both.
 
+    Args:
+        values: Profiles as rows.
+        metric: One of ``METRICS``.
+
+    Returns:
+        An ``(n_obs, n_obs)`` float32 matrix with 1.0 on the diagonal.
+        Missing values are filled with zero before the similarity is taken.
+
     Raises:
-        ValueError: ``metric`` is not one of ``METRICS``, or the float64 matrix would exceed
-            :data:`SIMILARITY_BYTES`. Memory is quadratic in the number of profiles (50,640 JUMP
-            wells need 30 GB), so aggregate to consensus profiles first.
+        ValueError: ``metric`` is not one of ``METRICS``, or the float64 matrix would exceed :data:`SIMILARITY_BYTES`. Memory is quadratic in the number of profiles (50,640 JUMP wells need 30 GB), so aggregate to consensus profiles first.
     """
     if metric not in METRICS:
         raise ValueError(f"metric must be one of {METRICS}, got {metric!r}")
@@ -56,9 +62,19 @@ def similarity(
 ) -> AnnData | None:
     """Store pairwise profile similarity in ``obsp[key_added]``.
 
+    Args:
+        adata: Profiles to compare.
+        metric: Similarity between profiles, one of ``METRICS``.
+        use_rep: Compare ``obsm[use_rep]`` instead of ``X``.
+        key_added: ``obsp`` key written.
+        copy: Return a modified copy instead of mutating in place.
+
+    Returns:
+        ``None``, or the modified copy.
+        Writes the dense float32 similarity matrix of :func:`similarity_matrix` to ``obsp[key_added]``.
+
     Notes:
-        The result is dense and quadratic in the number of profiles, so this expects well- or
-        perturbation-level profiles rather than single cells.
+        The result is dense and quadratic in the number of profiles, so this expects well- or perturbation-level profiles rather than single cells.
     """
     values = representation(adata, use_rep)
     adata.obsp[key_added] = similarity_matrix(values, metric)
@@ -79,14 +95,25 @@ def percent_replicating(
 ) -> AnnData | None:
     """Median replicate correlation against a non-replicate null.
 
-    An older readout, largely replaced by mAP. It thresholds rather than ranks, and it
-    depends on the number of replicates per perturbation. It is included because many
-    published results report it.
+    An older readout, largely replaced by mAP.
+    It thresholds rather than ranks, and it depends on the number of replicates per perturbation.
+    It is included because many published results report it.
+
+    Args:
+        adata: Well-level profiles with several replicates per group.
+        groupby: Column whose groups are the replicate sets.
+        metric: Similarity between profiles, one of ``METRICS``.
+        use_rep: Score ``obsm[use_rep]`` instead of ``X``.
+        null_size: Number of draws in the non-replicate null.
+        quantile: Quantile of the null medians a group has to beat to count as replicating.
+        seed: Seed for the null draws.
+        key_added: Name for the outputs.
+        copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes a per-group table to
-        ``uns["mantispy"][key_added]`` and a summary dict to
-        ``uns["mantispy"][key_added + "_summary"]``.
+        ``None``, or the modified copy.
+        Writes ``uns["mantispy"][key_added]`` with ``group``, ``n_replicates``, ``median_replicate_correlation``, ``null_threshold`` and ``is_replicating``, leaving out groups with a single replicate.
+        Writes ``uns["mantispy"][key_added + "_summary"]`` with ``fraction_replicating`` and ``n_groups``.
     """
     matrix = similarity_matrix(representation(adata, use_rep), metric).astype(np.float64)
     codes, keys = group_codes(adata, groupby)
@@ -137,9 +164,25 @@ def grit(
 ) -> AnnData | None:
     """Similarity of each replicate to its group, z-scored against its similarity to the controls.
 
-    For each profile, the similarities to its replicates are z-scored against its
-    similarities to the control profiles and averaged. A perturbation's grit is the mean
-    over its replicates.
+    For each profile, the similarities to its replicates are z-scored against its similarities to the control profiles and averaged.
+    A perturbation's grit is the mean over its replicates.
+
+    Args:
+        adata: Well-level profiles with several replicates per group.
+        groupby: Column whose groups are the replicate sets.
+        reference: Which rows are the controls each similarity is z-scored against.
+        metric: Similarity between profiles, one of ``METRICS``.
+        use_rep: Score ``obsm[use_rep]`` instead of ``X``.
+        key_added: Name for the outputs.
+        copy: Return a modified copy instead of mutating in place.
+
+    Returns:
+        ``None``, or the modified copy.
+        Writes the per-replicate score to ``obs[key_added]`` and ``uns["mantispy"][key_added]`` with ``group``, ``key_added`` (the mean over the group's replicates) and ``n_replicates``.
+        A replicate is left ``NaN`` when it is alone in its group, when fewer than two control profiles are available to it, or when those similarities have no spread, and ``n_replicates`` counts only the replicates that were scored.
+
+    Raises:
+        ValueError: ``reference`` selects no rows.
     """
     is_control = reference_mask(adata, reference)
     if not is_control.any():

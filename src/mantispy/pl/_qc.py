@@ -7,21 +7,18 @@ from typing import TYPE_CHECKING
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 
 from mantispy._core._reduce import get_matrix, group_codes
 from mantispy._core.frames import as_frame
-from mantispy.pl._common import axes
+from mantispy.pl._common import axes as _axes
+from mantispy.pl._common import table as _table
 
 if TYPE_CHECKING:
     from anndata import AnnData
+    from matplotlib.axes import Axes
 
 
-#: Same name the other plot modules use for :func:`mantispy.pl._common.axes`.
-_axes = axes
-
-
-def cell_counts(adata: AnnData, groupby: str = "Metadata_Plate", ax: plt.Axes | None = None) -> plt.Axes:
+def cell_counts(adata: AnnData, groupby: str = "Metadata_Plate", ax: Axes | None = None) -> Axes:
     """Distribution of cells per well, split by ``groupby``.
 
     Args:
@@ -97,7 +94,7 @@ def feature_distributions(
     return axes
 
 
-def _ridge(axis: plt.Axes, values: np.ndarray, offset: int, label: str) -> None:
+def _ridge(axis: Axes, values: np.ndarray, offset: int, label: str) -> None:
     """One filled density curve, raised by ``offset`` so the groups stack rather than overlap."""
     grid = np.linspace(values.min(), values.max(), 128)
     if values.size < 2 or np.ptp(values) == 0:
@@ -109,7 +106,7 @@ def _ridge(axis: plt.Axes, values: np.ndarray, offset: int, label: str) -> None:
     axis.fill_between(grid, offset, offset + density, alpha=0.7, lw=0.6, edgecolor="black", label=label)
 
 
-def nan_matrix(adata: AnnData, max_features: int = 200, ax: plt.Axes | None = None) -> plt.Axes:
+def nan_matrix(adata: AnnData, max_features: int = 200, ax: Axes | None = None) -> Axes:
     """Fraction of missing values per feature, per plate.
 
     Args:
@@ -171,7 +168,7 @@ def qc(adata: AnnData, figsize: tuple[float, float] = (12, 8)) -> np.ndarray:
     return axes
 
 
-def replicate_saturation(adata: AnnData, key: str = "replicate_saturation", ax: plt.Axes | None = None) -> plt.Axes:
+def replicate_saturation(adata: AnnData, key: str = "replicate_saturation", ax: Axes | None = None) -> Axes:
     """The saturation curve with its spread across draws.
 
     A curve still rising at the right edge means the screen is under-replicated, which informs the design of the next experiment.
@@ -187,11 +184,7 @@ def replicate_saturation(adata: AnnData, key: str = "replicate_saturation", ax: 
     Raises:
         KeyError: ``uns["mantispy"]`` holds no table under ``key``.
     """
-    store = adata.uns.get("mantispy", {})
-    if key not in store:
-        raise KeyError(f"uns['mantispy'][{key!r}] is missing; run mt.tl.replicate_saturation first")
-
-    table = pd.DataFrame(store[key])
+    table = _table(adata, key, "mt.tl.replicate_saturation")
     ax = _axes(ax, (5, 4))
     ax.errorbar(table["n_replicates"], table["mean"], yerr=table["std"], marker="o", capsize=3)
     ax.set_xticks(table["n_replicates"].to_numpy())
@@ -200,7 +193,7 @@ def replicate_saturation(adata: AnnData, key: str = "replicate_saturation", ax: 
     return ax
 
 
-def cytotoxicity(adata: AnnData, key: str = "cytotoxicity", label_top: int = 8, ax: plt.Axes | None = None) -> plt.Axes:
+def cytotoxicity(adata: AnnData, key: str = "cytotoxicity", label_top: int = 8, ax: Axes | None = None) -> Axes:
     """Distance from the controls against viability, with the suspect groups marked.
 
     Groups in the upper left are far from the controls and have lost most of their cells.
@@ -218,11 +211,7 @@ def cytotoxicity(adata: AnnData, key: str = "cytotoxicity", label_top: int = 8, 
     Raises:
         KeyError: ``uns["mantispy"]`` holds no table under ``key``.
     """
-    store = adata.uns.get("mantispy", {})
-    if key not in store:
-        raise KeyError(f"uns['mantispy'][{key!r}] is missing; run mt.tl.cytotoxicity first")
-
-    table = pd.DataFrame(store[key])
+    table = _table(adata, key, "mt.tl.cytotoxicity")
     suspect = table["suspect"].to_numpy(dtype=bool)
     ax = _axes(ax, (5.5, 4.5))
     ax.scatter(table["viability"][~suspect], table["distance"][~suspect], s=16, color="tab:blue", label="ok")

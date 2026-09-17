@@ -28,16 +28,15 @@ def features(
         adata: Object to query.
         object: Exact matches against the parsed ``var`` columns of the same name.
         feature_group: Exact matches against the parsed ``var`` columns of the same name.
-        channel: Matches any component of a multi-channel value, so ``"DNA"`` selects
-            ``"DNA|ER"`` colocalization features too.
-        key: Restrict to features where this boolean ``var`` column is true, e.g.
-            ``"selected"``.
-        canonical_channels: Compare channels through ``canonical_channel``, so
-            that ``channel="DNA"`` also matches a dataset whose nuclear stain is named
-            ``Hoechst`` or ``DAPI``.
+        channel: Matches any component of a multi-channel value, so ``"DNA"`` selects ``"DNA|ER"`` colocalization features too.
+        key: Restrict to features where this boolean ``var`` column is true, e.g. ``"selected"``.
+        canonical_channels: Compare channels through ``canonical_channel``, so that ``channel="DNA"`` also matches a dataset whose nuclear stain is named ``Hoechst`` or ``DAPI``.
 
     Returns:
         Feature names, in ``var`` order.
+
+    Raises:
+        KeyError: `key` names a column ``var`` does not have.
     """
     mask = np.ones(adata.n_vars, dtype=bool)
     if object is not None:
@@ -68,8 +67,19 @@ def to_dataframe(
 ) -> pd.DataFrame:
     """Wide, pycytominer-shaped frame: ``Metadata_`` columns first, then features.
 
-    Use it to pass profiles to pycytominer, cytominer-eval and other tools that expect a
-    flat table.
+    Use it to pass profiles to pycytominer, cytominer-eval and other tools that expect a flat table.
+
+    Args:
+        adata: Object to read.
+        layer: Layer to read instead of ``X``.
+        metadata: Put the ``Metadata_`` columns of ``obs`` in front of the feature columns.
+        features: Features to take, in the order given, defaulting to every feature in ``var`` order.
+
+    Returns:
+        A frame indexed by ``obs_names``, with one column per feature and, unless `metadata` is off, the ``Metadata_`` columns of ``obs`` before them.
+
+    Raises:
+        KeyError: A name in `features` is not in ``var_names``.
     """
     names = list(adata.var_names) if features is None else list(features)
     matrix = get_matrix(adata, layer)
@@ -91,8 +101,17 @@ def to_dataframe(
 def controls(adata: AnnData, kind: str = "negcon") -> np.ndarray:
     """Boolean mask of control rows.
 
-    ``"negcon"`` reads ``Metadata_Control``; ``"poscon"`` reads
-    ``Metadata_Control_Type == "poscon"`` and is all-``False`` when that column is absent.
+    Args:
+        adata: Object to read.
+        kind: ``"negcon"`` reads ``Metadata_Control``; ``"poscon"`` reads ``Metadata_Control_Type == "poscon"`` and is all-``False`` when that column is absent.
+
+    Returns:
+        A boolean mask over ``obs``, true on the control rows.
+
+    Raises:
+        ValueError: `kind` is neither ``"negcon"`` nor ``"poscon"``, or ``Metadata_Control`` has missing values.
+        KeyError: ``"negcon"`` was asked for and ``obs`` has no ``Metadata_Control`` column.
+        TypeError: ``Metadata_Control`` is not boolean, so it would select every row.
     """
     if kind == "negcon":
         return reference_mask(adata, "negcon")

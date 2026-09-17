@@ -13,17 +13,30 @@ from mantispy.pl._common import table as _table
 from mantispy.pl._moa import _heatmap
 
 if TYPE_CHECKING:
-    import matplotlib.pyplot as plt
     from anndata import AnnData
+    from matplotlib.axes import Axes
 
 
 def transport(
-    adata: AnnData, key: str = "transport", level: str | None = None, top: int = 25, ax: plt.Axes | None = None
-):
+    adata: AnnData, key: str = "transport", level: str | None = None, top: int = 25, ax: Axes | None = None
+) -> Axes:
     """Agreement per perturbation, ranked, with the ones that reproduce colored.
 
-    With more than ``top`` perturbations, the highest and lowest ranked are shown. The
-    perturbations at the bottom are the ones whose effects did not reproduce across settings.
+    With more than ``top`` perturbations, the highest and lowest ranked are shown.
+    The perturbations at the bottom are the ones whose effects did not reproduce across settings.
+
+    Args:
+        adata: Object holding the table :func:`~mantispy.tl.transport` wrote.
+        key: Name of that table in ``uns["mantispy"]``.
+        level: Which level of that table to draw, or ``None`` for the last one it holds.
+        top: How many perturbations to draw, taken half from each end of the ranking when there are more.
+        ax: Axes to draw on, or ``None`` for a new figure.
+
+    Returns:
+        The axes drawn on, with one bar per perturbation, the ones that reproduce in crimson, and how many of them do in the title.
+
+    Raises:
+        KeyError: There is no such table, or it holds no such level.
     """
     table = _table(adata, key, "mt.tl.transport")
     levels = list(dict.fromkeys(table["level"]))
@@ -46,23 +59,25 @@ def transport(
 
 
 def setting_agreement(
-    adata: AnnData, key: str = "transport", by: str | None = None, cluster: bool = True, ax: plt.Axes | None = None
-):
+    adata: AnnData, key: str = "transport", by: str | None = None, cluster: bool = True, ax: Axes | None = None
+) -> Axes:
     """Settings against settings: which plates, batches or laboratories agree with each other.
 
-    Uses the same effect vectors as :func:`transport`, compared between settings instead of
-    between perturbations. Two settings agree when the perturbations they share moved the
-    same way in both, weighted by effect size, so agreement on inactive compounds counts for
-    little.
+    Uses the same effect vectors as :func:`transport`, compared between settings instead of between perturbations.
+    Two settings agree when the perturbations they share moved the same way in both, weighted by effect size, so agreement on inactive compounds counts for little.
 
     Args:
         adata: Object :func:`~mantispy.tl.transport` has run on.
         key: The key it was stored under.
-        by: ``obs`` column to annotate the settings with, e.g. ``"Metadata_Source"`` when the
-            units are plates. Settings are ordered by it with a line at each boundary, so a
-            laboratory whose plates disagree shows as a broken block.
+        by: ``obs`` column to annotate the settings with, e.g. ``"Metadata_Source"`` when the units are plates. Settings are ordered by it with a line at each boundary, so a laboratory whose plates disagree shows as a broken block.
         cluster: Order the settings by similarity instead. Ignored when ``by`` is given.
         ax: Axes to draw into.
+
+    Returns:
+        The axes drawn on, holding the settings-by-settings agreement matrix with a white line at each ``by`` boundary.
+
+    Raises:
+        KeyError: ``uns["mantispy"]`` holds no ``key + "_units"`` matrix, or ``by`` was given and no ``obs`` column names the settings it holds.
     """
     matrix = _table(adata, f"{key}_units", "mt.tl.transport").astype(float)
     labels = [str(name) for name in matrix.columns]

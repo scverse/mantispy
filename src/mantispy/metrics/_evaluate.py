@@ -30,9 +30,7 @@ BETTER = {
 def _map_row(adata: AnnData, map_key: str, label_key: str) -> pd.DataFrame:
     """The mean mAP of a table :func:`~mantispy.tl.map` wrote, under the representation that run scored.
 
-    The table is read rather than recomputed, so this is one row per call and not one row per
-    representation: the same number repeated under every representation would read as a
-    measured comparison.
+    The table is read rather than recomputed, so this is one row per call and not one row per representation: the same number repeated under every representation would read as a measured comparison.
 
     Args:
         adata: Object holding the table and the provenance of the run that wrote it.
@@ -78,17 +76,14 @@ def evaluate_correction(
         reps: Representations to compare, e.g. ``("X_pca", "X_pca_harmony")``.
         label_key: ``obs`` column with the biological grouping.
         batch_key: ``obs`` column with the nuisance grouping.
-        perplexity: Perplexity for both :func:`~mantispy.metrics.lisi` rows.
-            The default needs more than 90 rows, so a smaller object needs a smaller value.
-        map_key: Name of a table written by :func:`~mantispy.tl.map`, to add its mean mAP as one more row.
-            That table is read rather than recomputed, so the row appears once, under the
-            representation that run scored, and not once per entry of ``reps``.
+        perplexity: Perplexity for both :func:`~mantispy.metrics.lisi` rows. The default needs more than 90 rows, so a smaller object needs a smaller value.
+        map_key: Name of a table written by :func:`~mantispy.tl.map`, to add its mean mAP as one more row. That table is read rather than recomputed, so the row appears once, under the representation that run scored, and not once per entry of ``reps``.
 
     Returns:
-        A tidy frame with ``metric``, ``representation``, ``key``, ``value`` and ``better``,
-        the last saying which direction is an improvement for that metric.
+        A tidy frame with ``metric``, ``representation``, ``key``, ``value`` and ``better``, the last saying which direction is an improvement for that metric.
 
     Raises:
+        KeyError: ``obsm`` holds nothing under one of ``reps``.
         KeyError: ``map_key`` names no table, or nothing recorded the representation behind it.
         ValueError: The object has too few rows for ``perplexity``.
     """

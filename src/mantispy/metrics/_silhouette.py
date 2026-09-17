@@ -20,16 +20,16 @@ def silhouette_label(adata: AnnData, label_key: str, use_rep: str = "X_pca") -> 
 
     Higher means tighter, better separated groups.
 
-    The value is NaN when separation is undefined for the object, which is when it holds one
-    label or one row per label.
-
     Args:
         adata: Object with the embedding to measure in.
         label_key: ``obs`` column with the biological grouping.
         use_rep: ``obsm`` key of the embedding.
 
     Returns:
-        A one-row tidy frame holding ``silhouette_label``.
+        A one-row tidy frame holding ``silhouette_label``, whose value is NaN when separation is undefined for the object, which is when it holds one label or one row per label.
+
+    Raises:
+        KeyError: ``obsm`` holds nothing under ``use_rep``.
     """
     values = embedding(adata, use_rep)
     labels = adata.obs[label_key].to_numpy()
@@ -54,12 +54,21 @@ def silhouette_batch(adata: AnnData, label_key: str, batch_key: str, use_rep: st
     """How well mixed the batches are within each biological label.
 
     Computed per label as ``1 - mean|silhouette over batch|`` and averaged over labels.
-    Higher is better; a silhouette near zero means the batches are indistinguishable within
-    that label.
+    Higher is better; a silhouette near zero means the batches are indistinguishable within that label.
 
-    A label is skipped when mixing is undefined for it, which is when it has fewer than two
-    batches or as many batches as rows (one well per plate on three plates, for example).
-    The value is NaN when every label is skipped.
+    A label is skipped when mixing is undefined for it, which is when it has fewer than two batches or as many batches as rows (one well per plate on three plates, for example).
+
+    Args:
+        adata: Object with the embedding to measure in.
+        label_key: ``obs`` column with the biological grouping, whose labels the batches are mixed within.
+        batch_key: ``obs`` column with the nuisance grouping.
+        use_rep: ``obsm`` key of the embedding.
+
+    Returns:
+        A one-row tidy frame holding ``silhouette_batch``, whose value is NaN when every label was skipped.
+
+    Raises:
+        KeyError: ``obsm`` holds nothing under ``use_rep``.
     """
     values = embedding(adata, use_rep)
     labels = adata.obs[label_key].to_numpy()

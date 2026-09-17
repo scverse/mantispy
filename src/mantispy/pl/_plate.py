@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -14,6 +14,7 @@ from mantispy._core.plate import PLATE_FORMATS, detect_plate_format, row_label, 
 
 if TYPE_CHECKING:
     from anndata import AnnData
+    from matplotlib.axes import Axes
 
 #: How to combine several cells or sites falling in the same well. pandas skips NaN.
 AGGREGATIONS = ("median", "mean", "max", "min")
@@ -33,15 +34,14 @@ def plate(
     color: str,
     plate: str | None = None,
     agg: str = "median",
-    ax: plt.Axes | None = None,
+    ax: Axes | None = None,
     cmap: str = "viridis",
-    **kwargs,
-):
+    **kwargs: Any,
+) -> Axes | np.ndarray:
     """Well-grid heatmap of ``color``, one panel per plate.
 
     Args:
-        adata: Object to draw. Works at cell or well resolution; several rows landing in the
-            same well are combined with ``agg``.
+        adata: Object to draw. Works at cell or well resolution; several rows landing in the same well are combined with ``agg``.
         color: A feature name or an ``obs`` column.
         plate: Draw only this plate. By default every plate gets a panel.
         agg: How to combine rows sharing a well: median, mean, max or min.
@@ -50,7 +50,11 @@ def plate(
         kwargs: Passed to :meth:`~matplotlib.axes.Axes.imshow`.
 
     Returns:
-        A single :class:`~matplotlib.axes.Axes`, or an array of them for several plates.
+        A single :class:`~matplotlib.axes.Axes`, or an array of them for several plates, each panel labeled with the plate's own well grid.
+
+    Raises:
+        ValueError: ``agg`` is not one of ``AGGREGATIONS``, or ``ax`` was passed for more than one plate.
+        KeyError: ``color`` is neither a feature name nor an ``obs`` column.
     """
     if agg not in AGGREGATIONS:
         raise ValueError(f"agg must be one of {AGGREGATIONS}, got {agg!r}")
