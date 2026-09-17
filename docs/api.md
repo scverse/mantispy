@@ -114,6 +114,7 @@ pip install 'mantispy[spatial]'
 `pp.normalize` also writes `var["degenerate_scale"]`, flagging features with no spread in
 some group. Those are divided by `epsilon` rather than by zero and come back at ~1e17;
 drop them before computing anything from distances.
+Writing to a layer suffixes the column, so `key_added="sphered"` flags `var["degenerate_scale_sphered"]` and one call cannot overwrite what another measured.
 
 ## Tools
 
