@@ -11,10 +11,8 @@ from __future__ import annotations
 
 import numpy as np
 from anndata import AnnData
-from scipy.special import ndtri
-from scipy.stats import rankdata
 
-from mantispy._core._reduce import get_matrix, group_codes
+from mantispy._core._reduce import get_matrix, group_codes, group_offsets
 from mantispy._core.logging import get_logger
 from mantispy._core.mutation import inplace_or_copy
 
@@ -38,6 +36,9 @@ def rank_inverse_normal(X: np.ndarray, c: float = BLOM, stochastic: bool = True,
         The finite values of each column are ranked among themselves, and only missing entries come back missing.
         The reference implementation passes the column to ``scipy.stats.rankdata``, which returns all NaN for a column with any missing value.
     """
+    from scipy.special import ndtri
+    from scipy.stats import rankdata
+
     values = np.atleast_2d(np.asarray(X, dtype=np.float64).T).T
     out = np.full(values.shape, np.nan)
 
@@ -95,8 +96,9 @@ def rank_int(
     out = np.empty_like(X, dtype=np.float32)
 
     codes, keys = group_codes(adata, by)
+    order, offsets = group_offsets(codes, len(keys))
     for index in range(len(keys)):
-        rows = np.flatnonzero(codes == index)
+        rows = order[offsets[index] : offsets[index + 1]]
         if rows.size:
             out[rows] = rank_inverse_normal(X[rows], c=c, stochastic=stochastic, seed=seed).astype(np.float32)
 

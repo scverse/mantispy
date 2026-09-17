@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from anndata import AnnData
 
-from mantispy._core._reduce import get_matrix, group_codes
+from mantispy._core._reduce import get_matrix, group_codes, group_offsets
 from mantispy._core.logging import get_logger
 from mantispy._core.masks import feature_mask, reference_mask
 from mantispy._core.mutation import inplace_or_copy
@@ -44,9 +44,10 @@ def well_qc(
         reference_mask(adata, "negcon") if "Metadata_Control" in adata.obs else np.zeros(adata.n_obs, dtype=bool)
     )
 
+    order, offsets = group_offsets(codes, len(keys))
     records = []
     for group in range(len(keys)):
-        rows = codes == group
+        rows = order[offsets[group] : offsets[group + 1]]
         block = X[rows]
         control_cv = np.nan
         if is_control[rows].any() and block.shape[0] > 1:
@@ -56,7 +57,7 @@ def well_qc(
                 control_cv = float(np.nanmedian(np.abs(deviation / np.where(mean == 0, np.nan, mean))))
         records.append(
             {
-                "n_cells": int(rows.sum()),
+                "n_cells": int(rows.size),
                 "nan_fraction": float(np.isnan(block).mean()) if block.size else 1.0,
                 "control_cv": control_cv,
             }

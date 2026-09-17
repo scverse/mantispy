@@ -19,10 +19,9 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 from anndata import AnnData
-from scipy.stats import rankdata
 
 from mantispy._core._numba import MEDIAN
-from mantispy._core._reduce import get_matrix, group_codes, reduce_grouped
+from mantispy._core._reduce import get_matrix, group_codes, group_offsets, reduce_grouped
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import report_drop
 from mantispy._core.provenance import record_params
@@ -50,6 +49,8 @@ def modz_weights(
     Returns:
         One weight per row of ``block``, summing to one.
     """
+    from scipy.stats import rankdata
+
     if block.shape[0] == 1:
         return np.ones(1)
 
@@ -133,8 +134,9 @@ def consensus(
     else:
         X = get_matrix(adata)
         values = np.zeros((len(keys), adata.n_vars), dtype=np.float64)
+        order, offsets = group_offsets(codes, len(keys))
         for index in range(len(keys)):
-            rows = np.flatnonzero(codes == index)
+            rows = order[offsets[index] : offsets[index + 1]]
             block = modz_weights(X[rows], correlation, min_weight, precision)
             weights[rows] = block
             values[index] = block @ X[rows]

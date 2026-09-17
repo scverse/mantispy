@@ -11,7 +11,7 @@ from collections.abc import Sequence
 import numpy as np
 from anndata import AnnData
 
-from mantispy._core._reduce import group_codes
+from mantispy._core._reduce import group_codes, group_offsets
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy._core.provenance import record_params
@@ -47,8 +47,9 @@ def downsample(
     labels = as_frame(adata.obs)[stratify].astype(str).to_numpy() if stratify else None
     chosen: list[np.ndarray] = []
 
+    order, offsets = group_offsets(codes, len(keys))
     for index in range(len(keys)):
-        rows = np.flatnonzero(codes == index)
+        rows = order[offsets[index] : offsets[index + 1]]
         if rows.size <= n_per_group:
             chosen.append(rows)
         elif labels is None:

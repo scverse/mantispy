@@ -9,7 +9,7 @@ import numpy as np
 from anndata import AnnData
 
 from mantispy._core._corr import CHUNK_BYTES
-from mantispy._core._numba import MAD, MEDIAN, grouped_stat
+from mantispy._core._numba import MAD, grouped_median_spread
 from mantispy._core._reduce import get_matrix, group_codes
 from mantispy._core.features import blocklist_hits
 from mantispy._core.frames import as_frame
@@ -126,8 +126,7 @@ def _area_outlier_flag(adata: AnnData, X: np.ndarray) -> np.ndarray:
 
     columns = X[:, np.array([adata.var_names.get_loc(name) for name in area])]
     codes, keys = group_codes(adata, "Metadata_Plate")
-    median = grouped_stat(columns, codes, len(keys), MEDIAN)
-    mad = grouped_stat(columns, codes, len(keys), MAD)
+    median, mad = grouped_median_spread(columns, codes, len(keys), MAD)
 
     with np.errstate(invalid="ignore", divide="ignore"):
         z = np.abs(columns - median[codes]) / (1.4826 * mad[codes])

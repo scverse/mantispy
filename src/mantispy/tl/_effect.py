@@ -11,10 +11,9 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 from anndata import AnnData
-from scipy.stats import mannwhitneyu, wasserstein_distance
 
 from mantispy._core._numba import _wasserstein_against
-from mantispy._core._reduce import get_matrix, group_codes
+from mantispy._core._reduce import get_matrix, group_codes, group_offsets
 from mantispy._core._stats import MAD_TO_SIGMA, benjamini_hochberg, mannwhitney_pvalues, sorted_control
 from mantispy._core.logging import get_logger
 from mantispy._core.masks import reference_mask
@@ -31,6 +30,8 @@ def _mwu_small_samples(treated: np.ndarray, control: np.ndarray) -> np.ndarray:
     With three treated wells against 330 controls, an untied feature reaches 3.3e-07 under the exact null and 2.9e-03 under the approximation.
     Splitting the columns by ties takes 9.3 ms against 8.3 ms for 344 columns.
     """
+    from scipy.stats import mannwhitneyu
+
     finite = np.vstack([treated, control])
     ordered = np.sort(finite, axis=0)
     # A difference involving NaN is never zero, so missing values do not count as ties.
@@ -79,6 +80,8 @@ def _wasserstein_columns(treated: np.ndarray, control: np.ndarray, only: np.ndar
     Splitting on ``isnan`` instead left an infinite column in neither branch's remit, and it came back ``inf``.
     ``only`` restricts the work to a subset of columns and leaves the rest ``NaN``; callers that handle the complete columns on the pre-sorted path use it for the remaining ones.
     """
+    from scipy.stats import wasserstein_distance
+
     n, m = treated.shape[0], control.shape[0]
     out = np.full(treated.shape[1], np.nan)
     if n == 0 or m == 0:
@@ -175,8 +178,9 @@ def effect_size(
     effects = np.full((adata.n_vars, len(keys)), np.nan)
     significance = np.full((adata.n_vars, len(keys)), np.nan)
     skipped = []
+    order, offsets = group_offsets(codes, len(keys))
     for index, key in enumerate(keys):
-        treated = X[codes == index]
+        treated = X[order[offsets[index] : offsets[index + 1]]]
         if treated.shape[0] < min_obs:
             skipped.append(str(key))
             continue
@@ -245,8 +249,9 @@ def wasserstein_features(
     clean = np.isfinite(control).all(axis=0)
 
     distances = np.empty((adata.n_vars, len(keys)))
+    order, offsets = group_offsets(codes, len(keys))
     for index in range(len(keys)):
-        treated = X[codes == index]
+        treated = X[order[offsets[index] : offsets[index + 1]]]
         usable = clean & np.isfinite(treated).all(axis=0)
         distances[:, index] = _wasserstein_columns(treated, control, only=~usable)
         if usable.any() and treated.shape[0]:

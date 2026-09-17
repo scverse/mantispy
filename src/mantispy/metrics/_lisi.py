@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
-from sklearn.neighbors import NearestNeighbors
 
 from mantispy.metrics._common import embedding, tidy
 
@@ -73,6 +72,8 @@ def lisi(adata: AnnData, key: str, use_rep: str = "X_pca", perplexity: float = 3
         ValueError: ``obs[key]`` has missing values.
         ValueError: The object has too few rows for ``perplexity``.
     """
+    from sklearn.neighbors import NearestNeighbors
+
     if kind not in ("auto", "batch", "label"):
         raise ValueError(f"kind must be 'auto', 'batch' or 'label', got {kind!r}")
 

@@ -10,7 +10,6 @@ The reverse order gives plausible scores that are not ECOD.
 from __future__ import annotations
 
 import numpy as np
-from scipy.stats import skew as _skew
 
 
 def column_ecdf(X: np.ndarray) -> np.ndarray:
@@ -55,6 +54,8 @@ def ecod_scores(X: np.ndarray) -> np.ndarray:
 
     NaN is imputed with the column mean first, since a missing value has no tail probability of its own.
     """
+    from scipy.stats import skew as _skew
+
     X = np.asarray(X, dtype=np.float64)
     missing = np.isnan(X)
     if missing.any():

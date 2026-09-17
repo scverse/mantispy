@@ -9,7 +9,8 @@ Built on them:
 * :func:`transform_grouped`: rewrite the matrix group by group (the write path).
 * :func:`iter_groups`: the ``(key, rows, block)`` iteration both are built on.
 
-Sixteen call sites across ``pp`` and ``tl`` run their own ``np.flatnonzero(codes == group)`` loop over the matrix from :func:`get_matrix`, because what they compute per group (a whitening, a permutation null, a chi-square) is not a statistic the kernels can express.
+A dozen call sites across ``pp`` and ``tl`` loop over the groups themselves, because what they compute per group (a whitening, a permutation null, a chi-square) is not a statistic the kernels can express.
+They take their rows from :func:`~mantispy._core._numba.group_offsets`, re-exported here, rather than scanning ``codes == group`` once per group: that scan is O(n_obs) per group, so a loop over g groups costs O(g * n_obs) where one stable ordering serves every group.
 Each loop would need rewriting for a streaming backend.
 They still take the matrix and the grouping from this module, so the code to change is easy to find.
 """
@@ -22,7 +23,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 
-from ._numba import MAD, MEAN, MEDIAN, QUANTILE, STD, group_counts, grouped_stat
+from ._numba import MAD, MEAN, MEDIAN, QUANTILE, STD, group_counts, group_offsets, grouped_stat
 from .frames import as_frame
 
 if TYPE_CHECKING:
@@ -36,6 +37,7 @@ __all__ = [
     "STD",
     "get_matrix",
     "group_codes",
+    "group_offsets",
     "iter_groups",
     "reduce_grouped",
     "representation",

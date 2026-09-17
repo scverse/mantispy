@@ -9,7 +9,7 @@ import pandas as pd
 from anndata import AnnData
 
 from mantispy._core._distance import energy_distance, pairwise_sqeuclidean
-from mantispy._core._reduce import group_codes, representation
+from mantispy._core._reduce import group_codes, group_offsets, representation
 from mantispy._core._stats import benjamini_hochberg, permutation_pvalue, split_reference
 from mantispy._core.logging import get_logger
 from mantispy._core.masks import reference_mask
@@ -78,12 +78,13 @@ def edistance(
     """
     values = representation(adata, use_rep)
     codes, keys = group_codes(adata, groupby)
+    order, offsets = group_offsets(codes, len(keys))
     generator = np.random.default_rng(seed)
 
     if reference is None:
         blocks = []
         for index in range(len(keys)):
-            rows = np.flatnonzero(codes == index)
+            rows = order[offsets[index] : offsets[index + 1]]
             # Each pair builds a distance matrix quadratic in the two groups, so the cap applies here as well; without it this path had no memory bound.
             if rows.size > max_reference:
                 get_logger().info(
@@ -121,7 +122,7 @@ def edistance(
     unscorable_reference = []
     unscorable_size = []
     for index in range(len(keys)):
-        rows = np.flatnonzero(codes == index)
+        rows = order[offsets[index] : offsets[index + 1]]
         # n_obs is the number of rows the statistic uses, so it is updated after sampling and after splitting the reference.
         sizes[index] = rows.size
         if rows.size > max_reference:

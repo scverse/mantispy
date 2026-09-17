@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
@@ -37,6 +36,8 @@ def cluster_composition(composition: AnnData, groupby: str = "Metadata_Perturbat
     Raises:
         KeyError: ``obs`` has no ``groupby`` column.
     """
+    import matplotlib.pyplot as plt
+
     if groupby not in composition.obs:
         raise KeyError(f"obs has no column {groupby!r}")
 
@@ -84,6 +85,8 @@ def cell_cycle(
         KeyError: ``obs`` has no ``key`` column, or ``dna_feature`` is not one of ``var_names``.
         ValueError: The object has no layer named ``layer``.
     """
+    import matplotlib.pyplot as plt
+
     if key not in adata.obs:
         raise KeyError(f"obs has no column {key!r}; run mt.tl.cell_cycle_phase first")
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import numpy as np
 from anndata import AnnData
-from scipy.stats import kruskal
 
 from mantispy._core._reduce import get_matrix, group_codes
 from mantispy._core._stats import benjamini_hochberg
@@ -136,6 +135,8 @@ def feature_batch_sensitivity(
 
         Compare the sensitive fraction before and after a correction.
     """
+    from scipy.stats import kruskal
+
     codes, keys = group_codes(adata, batch_key)
     if len(keys) < 2:
         raise ValueError(f"batch sensitivity needs at least two batches, but {batch_key!r} has {len(keys)}")

@@ -9,7 +9,7 @@ import pandas as pd
 from anndata import AnnData
 
 from mantispy._core._numba import MEDIAN, grouped_stat
-from mantispy._core._reduce import group_codes, representation
+from mantispy._core._reduce import group_codes, group_offsets, representation
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy._core.masks import reference_mask
@@ -142,9 +142,8 @@ def replicate_saturation(
         deepest = max(pivot - 1 if metric == "convergence" else pivot // 2, 1)
 
     # Group the rows once; `codes == group` inside the loop is an O(n_obs) scan per group, repeated n_draws * deepest times.
-    order = np.argsort(codes, kind="stable")
-    starts = np.cumsum(np.concatenate([[0], sizes]))
-    members: list[np.ndarray] = [order[starts[group] : starts[group + 1]] for group in range(len(keys))]
+    order, offsets = group_offsets(codes, len(keys))
+    members: list[np.ndarray] = [order[offsets[group] : offsets[group + 1]] for group in range(len(keys))]
 
     records = []
     for depth in range(1, deepest + 1):
@@ -232,9 +231,10 @@ def cytotoxicity(
         raise ValueError(f"the reference rows have no usable {count_key!r} to normalize viability against")
 
     codes, keys = group_codes(adata, groupby)
+    order, offsets = group_offsets(codes, len(keys))
     records = []
     for index, key in enumerate(keys):
-        rows = np.flatnonzero(codes == index)
+        rows = order[offsets[index] : offsets[index + 1]]
         viability = float(np.nanmedian(counts[rows])) / control_count
         distance = float(np.nanmedian(distances[rows]))
         records.append(

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
@@ -208,6 +207,8 @@ def pathway_coherence(adata: AnnData, key: str = "pathway_coherence", top: int =
         KeyError: ``uns["mantispy"]`` holds no table under ``key``.
         ValueError: That table is empty, which is what happens when no set had enough of its genes in the screen.
     """
+    import matplotlib.pyplot as plt
+
     table = _table(adata, key, "mt.tl.pathway_coherence")
     if table.empty:
         raise ValueError(f"uns['mantispy'][{key!r}] is empty; no set had enough of its genes in the screen")

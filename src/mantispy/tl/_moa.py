@@ -7,7 +7,6 @@ import warnings
 import numpy as np
 import pandas as pd
 from anndata import AnnData
-from scipy.stats import hypergeom
 
 from mantispy._core._reduce import representation
 from mantispy._core._stats import benjamini_hochberg
@@ -162,6 +161,8 @@ def moa_enrichment(
         They take up places among the ``k`` neighbors without adding to any mechanism's count, and they are part of the population the test draws from.
         The profile itself is excluded from both its neighborhood and the population.
     """
+    from scipy.stats import hypergeom
+
     if k < 1:
         raise ValueError(f"k must be at least 1, got {k}")
     similarity = similarity_matrix(representation(adata, use_rep), metric).astype(np.float64)

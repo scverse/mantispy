@@ -18,8 +18,6 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 from anndata import AnnData
-from scipy import stats
-from scipy.special import digamma, polygamma
 
 from mantispy._core._reduce import get_matrix, group_codes
 from mantispy._core._stats import benjamini_hochberg
@@ -32,6 +30,8 @@ from mantispy._core.schema import get_resolution
 
 def _trigamma_inverse(value: float) -> float:
     """Solve ``trigamma(y) = value`` by the Newton iteration limma uses."""
+    from scipy.special import polygamma
+
     if value > 1e7:
         return float(1.0 / np.sqrt(value))
     if value < 1e-6:
@@ -59,6 +59,8 @@ def squeeze_variances(variances: np.ndarray, df: int) -> tuple[np.ndarray, float
         ``(posterior, prior_df)``: the variances shrunk towards the prior, and the prior degrees of freedom the shrinkage used.
         ``prior_df`` is ``inf`` when the variances were homogeneous enough that every usable feature is replaced by the common prior, and ``0.0`` when fewer than two features have a positive finite variance or ``df < 1``, in which case ``variances`` is returned unchanged.
     """
+    from scipy.special import digamma, polygamma
+
     usable = np.isfinite(variances) & (variances > 0)
     if usable.sum() < 2 or df < 1:
         return variances, 0.0
@@ -146,6 +148,8 @@ def differential_features(
         Calibration depends on the replicate count and the feature distribution, which vary by an order of magnitude between screens.
         Check the p-values on your own screen with :func:`~mantispy.metrics.diagnose_testing`, which relabels control wells as pseudo-treatments of the same size and reports the resulting false positive rate.
     """
+    from scipy import stats
+
     if get_resolution(adata) == "cell":
         raise ValueError(
             "differential_features needs well-level profiles; testing per cell treats cells as "

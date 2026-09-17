@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import silhouette_samples, silhouette_score
 
 from mantispy.metrics._common import embedding, tidy
 
@@ -31,6 +30,8 @@ def silhouette_label(adata: AnnData, label_key: str, use_rep: str = "X_pca") -> 
     Raises:
         KeyError: ``obsm`` holds nothing under ``use_rep``.
     """
+    from sklearn.metrics import silhouette_score
+
     values = embedding(adata, use_rep)
     labels = adata.obs[label_key].to_numpy()
 
@@ -70,6 +71,8 @@ def silhouette_batch(adata: AnnData, label_key: str, batch_key: str, use_rep: st
     Raises:
         KeyError: ``obsm`` holds nothing under ``use_rep``.
     """
+    from sklearn.metrics import silhouette_samples
+
     values = embedding(adata, use_rep)
     labels = adata.obs[label_key].to_numpy()
     batches = adata.obs[batch_key].to_numpy()

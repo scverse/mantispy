@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-import matplotlib.pyplot as plt
 import numpy as np
 
 from mantispy._core._reduce import get_matrix, group_codes
@@ -65,6 +64,8 @@ def feature_distributions(
     Raises:
         ValueError: ``kind`` is not one of the three accepted values.
     """
+    import matplotlib.pyplot as plt
+
     if kind not in {"ecdf", "hist", "ridge"}:
         raise ValueError(f"kind must be 'ecdf', 'hist' or 'ridge', got {kind!r}")
     features = list(features)
@@ -142,6 +143,8 @@ def qc(adata: AnnData, figsize: tuple[float, float] = (12, 8)) -> np.ndarray:
     Returns:
         The two-by-two array of axes.
     """
+    import matplotlib.pyplot as plt
+
     figure, axes = plt.subplots(2, 2, figsize=figsize)
     cell_counts(adata, ax=axes[0, 0])
 

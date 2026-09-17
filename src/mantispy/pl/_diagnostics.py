@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
@@ -46,6 +45,8 @@ def plate_effects(adata: AnnData, feature: str | None = None, axes: np.ndarray |
     Raises:
         KeyError: ``feature`` is not one of ``var_names``, or ``obs`` has no ``Metadata_Plate`` or ``Metadata_Well`` column.
     """
+    import matplotlib.pyplot as plt
+
     values = _feature_values(adata, feature)
     frame = pd.DataFrame(
         {
@@ -156,6 +157,8 @@ def outliers(adata: AnnData, key: str = "qc_outlier", axes: np.ndarray | None = 
     Raises:
         KeyError: ``obs`` has no ``key`` column.
     """
+    import matplotlib.pyplot as plt
+
     if key not in adata.obs:
         raise KeyError(f"obs has no {key!r}; run mt.pp.outliers first")
     if axes is None:

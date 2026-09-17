@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import matplotlib.pyplot as plt
 import pandas as pd
 
 if TYPE_CHECKING:
@@ -25,6 +24,8 @@ def axes(ax: Axes | None, figsize: tuple[float, float]) -> Axes:
     Returns:
         The axes to draw on.
     """
+    import matplotlib.pyplot as plt
+
     return ax if ax is not None else plt.subplots(figsize=figsize)[1]
 
 

@@ -13,9 +13,8 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 from anndata import AnnData
-from scipy import stats
 
-from mantispy._core._reduce import get_matrix, group_codes
+from mantispy._core._reduce import get_matrix, group_codes, group_offsets
 from mantispy._core._stats import benjamini_hochberg
 from mantispy._core.frames import as_frame
 from mantispy._core.masks import reference_mask
@@ -139,6 +138,8 @@ def diagnose_testing(
             The replicate structure the other checks depend on.
             A treatment whose wells share no block with the reference cannot be tested.
     """
+    from scipy import stats
+
     if get_resolution(adata) == "cell":
         raise ValueError("diagnose_testing describes well-level testing; aggregate first with mt.tl.aggregate")
 
@@ -169,12 +170,18 @@ def diagnose_testing(
     if block is not None and block in obs.columns:
         blocks = obs[block].to_numpy()
         control_blocks = set(blocks[is_control])
+        # Both comprehensions want the same per-group rows, so the rows are taken once from one stable ordering.
+        order, offsets = group_offsets(codes, len(keys))
+        treated = [
+            blocks[rows[~is_control[rows]]]
+            for rows in (order[offsets[index] : offsets[index + 1]] for index in range(len(keys)))
+        ]
         stranded = [
             str(keys[index])
             for index in range(len(keys))
-            if sizes[index] >= 2 and not set(blocks[(codes == index) & ~is_control]) & control_blocks
+            if sizes[index] >= 2 and not set(treated[index]) & control_blocks
         ]
-        spans = [len(set(blocks[(codes == index) & ~is_control])) for index in range(len(keys)) if sizes[index] >= 2]
+        spans = [len(set(treated[index])) for index in range(len(keys)) if sizes[index] >= 2]
         rows.append(
             {
                 "check": f"treatments sharing a {block} with the reference",

@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from anndata import AnnData
 
-from mantispy._core._reduce import group_codes, representation
+from mantispy._core._reduce import group_codes, group_offsets, representation
 from mantispy._core.masks import reference_mask
 from mantispy._core.mutation import inplace_or_copy
 
@@ -151,9 +151,10 @@ def percent_replicating(
     generator = np.random.default_rng(seed)
     non_replicate = _non_replicate_pool(matrix, codes)
 
+    order, offsets = group_offsets(codes, len(keys))
     records = []
     for group, key in enumerate(keys):
-        members = np.flatnonzero(codes == group)
+        members = order[offsets[group] : offsets[group + 1]]
         if members.size < 2:
             continue
         pair_rows, pair_columns = np.triu_indices(members.size, k=1)
@@ -222,8 +223,9 @@ def grit(
     positions = np.arange(adata.n_obs)
 
     per_replicate = np.full(adata.n_obs, np.nan)
+    order, offsets = group_offsets(codes, len(keys))
     for group in range(len(keys)):
-        members = np.flatnonzero(codes == group)
+        members = order[offsets[group] : offsets[group + 1]]
         if members.size < 2:
             continue
         for member in members:

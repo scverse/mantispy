@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 from anndata import AnnData
 
-from mantispy._core._reduce import group_codes, representation
+from mantispy._core._reduce import group_codes, group_offsets, representation
 from mantispy._core._stats import benjamini_hochberg
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
@@ -34,6 +34,8 @@ def _effects(
     effect: dict[str, np.ndarray] = {}
     activity: dict[str, np.ndarray] = {}
     usable = []
+    # Grouped once for every setting: the inner loop ran `codes == index` per (setting, group), an O(n_obs) scan each.
+    order, offsets = group_offsets(codes, len(keys))
     for unit in sorted(set(units.tolist())):
         here = units == unit
         if (here & is_control).sum() < 2:
@@ -42,8 +44,9 @@ def _effects(
         centre = np.nanmedian(values[here & is_control], axis=0)
         block = np.full((len(keys), values.shape[1]), np.nan)
         for index in range(len(keys)):
-            rows = here & (codes == index) & ~is_control
-            if rows.any():
+            group = order[offsets[index] : offsets[index + 1]]
+            rows = group[here[group] & ~is_control[group]]
+            if rows.size:
                 block[index] = np.nanmedian(values[rows], axis=0) - centre
         effect[unit] = block
         activity[unit] = np.linalg.norm(np.nan_to_num(block), axis=1)

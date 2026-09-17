@@ -13,10 +13,9 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 from anndata import AnnData
-from scipy.stats import chisquare
 
 from mantispy._core._distance import pairwise_sqeuclidean
-from mantispy._core._reduce import get_matrix, group_codes, representation
+from mantispy._core._reduce import get_matrix, group_codes, group_offsets, representation
 from mantispy._core._stats import benjamini_hochberg, split_reference
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
@@ -92,6 +91,8 @@ def cluster_composition(
 
 def _composition_test(composition: AnnData, counts: np.ndarray, reference: str | None) -> pd.DataFrame:
     """Chi-square each well's cluster counts against the pooled control composition."""
+    from scipy.stats import chisquare
+
     empty = pd.DataFrame(columns=["group", "statistic", "pvalue", "qvalue"])
     if reference is None:
         return empty
@@ -372,8 +373,9 @@ def neighbors_local_density(
     codes, keys = group_codes(adata, by)
     density = np.full(adata.n_obs, np.nan)
 
+    order, offsets = group_offsets(codes, len(keys))
     for index in range(len(keys)):
-        rows = np.flatnonzero(codes == index)
+        rows = order[offsets[index] : offsets[index + 1]]
         if rows.size < 2:
             continue
         neighbours = min(k + 1, rows.size)

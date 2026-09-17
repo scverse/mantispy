@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-import matplotlib.pyplot as plt
 import numpy as np
 
 from mantispy._core.frames import as_frame
@@ -82,6 +81,8 @@ def _effects(adata: AnnData, group: str, key: str) -> tuple[pd.DataFrame, pd.Ser
 
 def _family_colours(families: pd.Series | None, names: pd.Series) -> tuple[list[Any], dict[str, Any]]:
     """One color per feature family, assigned in sorted order of the families present."""
+    import matplotlib.pyplot as plt
+
     if families is None:
         return ["tab:blue"] * len(names), {}
     labels = [str(families.get(name, "unknown")) for name in names]
@@ -105,6 +106,8 @@ def effect_sizes(adata: AnnData, group: str, key: str = "effect", top: int = 30,
     Raises:
         KeyError: There is no such table, or it holds no such group.
     """
+    import matplotlib.pyplot as plt
+
     selected, families = _effects(adata, group, key)
     strongest = selected.reindex(selected["effect"].abs().sort_values(ascending=False).index).head(top)[::-1]
     ax = _axes(ax, (6, 0.22 * len(strongest) + 1.5))
@@ -143,6 +146,8 @@ def feature_volcano(
     Raises:
         KeyError: There is no such table, or it holds no such group.
     """
+    import matplotlib.pyplot as plt
+
     selected, families = _effects(adata, group, key)
     ax = _axes(ax, (5.5, 4.5))
 

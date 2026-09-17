@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 import pandas as pd
-from anndata import AnnData
-from matplotlib import pyplot as plt
-from matplotlib.axes import Axes
-from scipy.cluster import hierarchy
-from scipy.spatial import distance
 
 from mantispy._core._reduce import get_matrix
 from mantispy._core.frames import as_frame
+
+if TYPE_CHECKING:
+    from anndata import AnnData
+    from matplotlib.axes import Axes
 
 
 def feature_signature(
@@ -40,6 +41,10 @@ def feature_signature(
     Raises:
         KeyError: ``groupby`` was given and ``obs`` has no such column.
     """
+    import matplotlib.pyplot as plt
+    from scipy.cluster import hierarchy
+    from scipy.spatial import distance
+
     values = get_matrix(adata).astype(np.float64)
     obs = as_frame(adata.obs)
     rows = pd.Index(adata.obs_names.astype(str))

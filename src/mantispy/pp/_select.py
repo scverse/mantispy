@@ -16,7 +16,7 @@ import numpy as np
 from anndata import AnnData
 
 from mantispy._core._corr import correlated_pairs
-from mantispy._core._reduce import get_matrix, group_codes
+from mantispy._core._reduce import get_matrix, group_codes, group_offsets
 from mantispy._core.features import blocklist_hits
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
@@ -121,8 +121,11 @@ def _op_noise_removal(X: np.ndarray, codes: np.ndarray, stdev_cutoff: float = 0.
     The statistic is the mean, over groups, of each group's population standard deviation (``ddof=0``).
     """
     n_groups = int(codes.max()) + 1
+    order, offsets = group_offsets(codes, n_groups)
     with np.errstate(invalid="ignore"):
-        deviations = np.stack([np.nanstd(X[codes == group], axis=0, ddof=0) for group in range(n_groups)])
+        deviations = np.stack(
+            [np.nanstd(X[order[offsets[group] : offsets[group + 1]]], axis=0, ddof=0) for group in range(n_groups)]
+        )
     return ~(np.nan_to_num(deviations.mean(axis=0), nan=0.0) > stdev_cutoff)
 
 

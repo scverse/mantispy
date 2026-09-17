@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
@@ -56,6 +55,8 @@ def plate(
         ValueError: ``agg`` is not one of ``AGGREGATIONS``, or ``ax`` was passed for more than one plate.
         KeyError: ``color`` is neither a feature name nor an ``obs`` column.
     """
+    import matplotlib.pyplot as plt
+
     if agg not in AGGREGATIONS:
         raise ValueError(f"agg must be one of {AGGREGATIONS}, got {agg!r}")
     values = _values(adata, color)

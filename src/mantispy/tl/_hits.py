@@ -7,10 +7,9 @@ import warnings
 import numpy as np
 import pandas as pd
 from anndata import AnnData
-from scipy.stats import ks_2samp
 
 from mantispy._core._distance import mahalanobis_transform
-from mantispy._core._reduce import group_codes, representation
+from mantispy._core._reduce import group_codes, group_offsets, representation
 from mantispy._core._stats import benjamini_hochberg, permutation_pvalue, split_reference
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
@@ -107,6 +106,8 @@ def hit_calling(
 
         To check the rate on your own screen, :func:`~mantispy.metrics.diagnose_testing` relabels control wells as pseudo-treatments of your group sizes and reports the fraction called.
     """
+    from scipy.stats import ks_2samp
+
     if method not in METHODS:
         raise ValueError(f"method must be one of {METHODS}, got {method!r}")
 
@@ -144,8 +145,9 @@ def hit_calling(
     sizes = np.empty(len(keys), dtype=int)
     pvalues = np.empty(len(keys))
     null = np.empty((len(keys), n_permutations))
+    order, offsets = group_offsets(codes, len(keys))
     for index in range(len(keys)):
-        rows = np.flatnonzero(codes == index)
+        rows = order[offsets[index] : offsets[index + 1]]
         sizes[index] = rows.size
         observed[index] = _statistic(to_control[rows], control_distances, method)[0]
         if method == "ks":

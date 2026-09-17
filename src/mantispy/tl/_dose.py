@@ -7,8 +7,6 @@ import warnings
 import numpy as np
 import pandas as pd
 from anndata import AnnData
-from scipy.optimize import OptimizeWarning, curve_fit
-from scipy.stats import ConstantInputWarning, spearmanr
 
 from mantispy._core._stats import benjamini_hochberg
 from mantispy._core.frames import as_frame
@@ -46,6 +44,8 @@ def _fit_curve(
     ``fit_ok`` also requires ``r_squared >= min_r_squared`` and an EC50 inside the tested doses, because four parameters converge on almost any five or six points.
     On pure noise at six doses the optimizer succeeds 59 times in 60; with these checks 12 in 200 fits pass, and real curves still do.
     """
+    from scipy.optimize import OptimizeWarning, curve_fit
+
     guess = [float(response.min()), float(response.max()), float(np.median(log_dose)), 1.0]
     failed = (np.nan, np.nan, np.nan, np.nan, np.nan, False)
     try:
@@ -112,6 +112,8 @@ def dose_response(
         An EC50 outside the tested doses is an extrapolation, usually from a curve that has not plateaued within the tested range, and its row has ``fit_ok=False``.
         Compare ``ec50`` against the dose range before quoting it.
     """
+    from scipy.stats import ConstantInputWarning, spearmanr
+
     obs = as_frame(adata.obs)
     for column in (compound_key, dose_key):
         if column not in obs:
