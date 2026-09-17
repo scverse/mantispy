@@ -12,7 +12,7 @@ from mantispy._core.mutation import inplace_or_copy
 
 METRICS = ("cosine", "pearson")
 
-#: Largest float64 similarity matrix, in bytes, that :func:`similarity_matrix` builds.
+#: Largest float64 similarity matrix, in bytes, that ``similarity_matrix`` builds.
 #: The cast to float32 adds half as much again at peak.
 SIMILARITY_BYTES = 4_000_000_000
 
@@ -71,7 +71,7 @@ def similarity(
 
     Returns:
         ``None``, or the modified copy.
-        Writes the dense float32 similarity matrix of :func:`similarity_matrix` to ``obsp[key_added]``.
+        Writes the dense float32 similarity matrix of ``similarity_matrix`` to ``obsp[key_added]``.
 
     Notes:
         The result is dense and quadratic in the number of profiles, so this expects well- or perturbation-level profiles rather than single cells.
@@ -86,10 +86,10 @@ def _non_replicate_pool(matrix: np.ndarray, codes: np.ndarray, block: int = 2048
 
     This is the null the replicate medians are scored against.
     It is taken a row block at a time, so the pair indices of the whole upper triangle never exist at once: at 20 000 profiles those two index arrays cost 3.2 GB between them, four times the pool they select.
-    Values stay ``float32`` as :func:`similarity_matrix` returns them and are widened once drawn, which is exact because every entry is a float32 either way.
+    Values stay ``float32`` as ``similarity_matrix`` returns them and are widened once drawn, which is exact because every entry is a float32 either way.
 
     Args:
-        matrix: Pairwise similarity, as :func:`similarity_matrix` returns it.
+        matrix: Pairwise similarity, as ``similarity_matrix`` returns it.
         codes: Per-row integer group codes, so a pair is a non-replicate pair exactly when its two codes differ.
         block: Rows per step, which bounds the mask this builds rather than the pool it returns.
 
@@ -141,7 +141,7 @@ def percent_replicating(
         Writes ``uns["mantispy"][key_added]`` with ``group``, ``n_replicates``, ``median_replicate_correlation``, ``null_threshold`` and ``is_replicating``, leaving out groups with a single replicate.
         Writes ``uns["mantispy"][key_added + "_summary"]`` with ``fraction_replicating`` and ``n_groups``.
     """
-    # The matrix stays float32, as :func:`similarity_matrix` returns it, and only the drawn values are widened.
+    # The matrix stays float32, as ``similarity_matrix`` returns it, and only the drawn values are widened.
     # Every entry is a float32 widened to float64 either way, so the medians below are unchanged.
     # That, with the blocked pool, is what this costs: 20 000 wells x 500 features at 4 replicates per group
     # (200.0M pairs) take 14.7 s and peak at 5.0 GB of Python allocation, against 19.6 s and 9.8 GB for a
