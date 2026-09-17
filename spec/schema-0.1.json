@@ -1,0 +1,52 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "mantispy AnnData schema",
+    "schema_version": "0.1",
+    "description": "Contract for an AnnData object produced by mantispy. X holds float32 feature values; obs holds Metadata_ columns identifying where each profile came from; var holds the parsed feature annotation; uns['mantispy'] holds the schema version, resolution and provenance.",
+    "x_dtype": "float32",
+    "resolutions": ["cell", "well", "perturbation"],
+    "required_obs": {
+        "cell": ["Metadata_Plate", "Metadata_Well"],
+        "well": ["Metadata_Plate", "Metadata_Well"],
+        "perturbation": []
+    },
+    "reserved_obs": [
+        "Metadata_Batch",
+        "Metadata_Source",
+        "Metadata_Site",
+        "Metadata_ImageNumber",
+        "Metadata_ObjectNumber",
+        "Metadata_Perturbation",
+        "Metadata_Compound",
+        "Metadata_Concentration",
+        "Metadata_MOA",
+        "Metadata_Control",
+        "Metadata_CellCount",
+        "Metadata_Center_X",
+        "Metadata_Center_Y",
+        "Metadata_Barcode",
+        "Metadata_Gene",
+        "Metadata_sgRNA",
+        "Metadata_BarcodeQuality"
+    ],
+    "required_var": [
+        "object",
+        "feature_group",
+        "feature",
+        "channel",
+        "scale",
+        "angle",
+        "gray_levels",
+        "radial_bin",
+        "params",
+        "is_feature"
+    ],
+    "uns_keys": [
+        "schema_version",
+        "resolution",
+        "channels",
+        "image_table",
+        "params",
+        "aggregated_from"
+    ]
+}

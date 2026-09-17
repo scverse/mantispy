@@ -6,7 +6,10 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
-from mantispy.io._profiles import _annotate_features
+from mantispy._core._reduce import get_matrix
+from mantispy._core._utils import as_frame
+from mantispy._core.features import parse_feature_names
+from mantispy._core.schema import stamp
 
 if TYPE_CHECKING:
     import numpy.typing as npt
@@ -146,30 +149,30 @@ def blobs(
             obs.append(
                 pd.DataFrame(
                     {
-                        "Plate": plate,
-                        "Well": well,
-                        "Site": site,
-                        "ObjectNumber": numbers.astype(np.int32),
+                        "Metadata_Plate": plate,
+                        "Metadata_Well": well,
+                        "Metadata_Site": site,
+                        "Metadata_ObjectNumber": numbers.astype(np.int32),
                         "region": f"{field}_cells",
                     }
                 )
             )
 
     cells_obs = pd.concat(obs, ignore_index=True).astype(
-        {"Plate": "category", "Well": "category", "region": "category"}
+        {"Metadata_Plate": "category", "Metadata_Well": "category", "region": "category"}
     )
-    cells_obs.index = pd.Index(cells_obs["region"].astype(str) + ":" + cells_obs["ObjectNumber"].astype(str))
-    var = pd.DataFrame(index=pd.Index(frames[0].columns, name="feature"))
-    _annotate_features(var)
+    cells_obs.index = pd.Index(cells_obs["region"].astype(str) + ":" + cells_obs["Metadata_ObjectNumber"].astype(str))
+    var = parse_feature_names(list(frames[0].columns), channels=CELL_PAINTING_CHANNELS)
     table = ad.AnnData(pd.concat(frames, ignore_index=True).to_numpy(np.float32), obs=cells_obs, var=var)
+    stamp(table, resolution="cell")
     tables = {
         "cells": TableModel.parse(
             table,
             region=sorted(cells_obs["region"].cat.categories),
             region_key="region",
-            instance_key="ObjectNumber",
+            instance_key="Metadata_ObjectNumber",
         ),
-        "wells": _well_table(table, var=var, plate=plate, wells=wells),
+        "wells": _well_table(table, plate=plate, wells=wells),
     }
 
     points = [
@@ -186,89 +189,21 @@ def blobs(
     )
 
 
-def _well_table(cells: ad.AnnData, *, var: pd.DataFrame, plate: str, wells: list[str]) -> ad.AnnData:
+def _well_table(cells: ad.AnnData, *, plate: str, wells: list[str]) -> ad.AnnData:
     from spatialdata.models import TableModel
 
-    frame = pd.DataFrame(np.asarray(cells.X), columns=cells.var_names)
-    frame["Well"] = cells.obs["Well"].to_numpy()
-    means = frame.groupby("Well", observed=True).mean().reindex(wells)
+    frame = pd.DataFrame(get_matrix(cells), columns=cells.var_names)
+    frame["Metadata_Well"] = cells.obs["Metadata_Well"].to_numpy()
+    means = frame.groupby("Metadata_Well", observed=True).mean().reindex(wells)
     obs = pd.DataFrame(
         {
-            "Plate": pd.Categorical([plate] * len(wells)),
-            "Well": pd.Categorical(wells),
+            "Metadata_Plate": pd.Categorical([plate] * len(wells)),
+            "Metadata_Well": pd.Categorical(wells),
             "well_index": [(ord(w[0]) - ord("A")) * 12 + int(w[1:]) - 1 for w in wells],
             "region": pd.Categorical([f"{plate}_wells"] * len(wells)),
         },
-        index=pd.Index([f"{plate}:{well}" for well in wells], name="observation"),
+        index=pd.Index([f"{plate}:{well}" for well in wells]),
     )
-    adata = ad.AnnData(means.to_numpy(np.float32), obs=obs, var=var.copy())
+    adata = ad.AnnData(means.to_numpy(np.float32), obs=obs, var=as_frame(cells.var).copy())
+    stamp(adata, resolution="well")
     return TableModel.parse(adata, region=f"{plate}_wells", region_key="region", instance_key="well_index")
-
-
-def blobs_profiles(
-    *,
-    n_plates: int = 2,
-    n_wells: int = 96,
-    n_features: int = 60,
-    seed: int = 0,
-) -> ad.AnnData:
-    """Synthetic well-level profiles, with a plate effect laid over a treatment effect.
-
-    The features carry CellProfiler names and are annotated as such, so anything keying off the compartment or the channel of a feature has something to key off.
-    Four treatments, one of them ``DMSO``, differ in a third of the features.
-    Every plate adds its own offset on top: that offset is what a batch correction has to remove.
-
-    Args:
-        n_plates: Number of plates, each a batch of its own.
-        n_wells: Wells per plate, filled across the rows of a 96-well plate from ``A01``.
-        n_features: Number of features, spread over the compartments and channels.
-        seed: Seed of the random generator.
-            Two calls with one seed give the same profiles.
-
-    Returns:
-        An :class:`~anndata.AnnData` of ``n_plates * n_wells`` observations, with ``Plate``, ``Well`` and ``treatment`` in ``obs``.
-
-    Examples:
-        >>> import mantispy as mt
-        >>> adata = mt.ds.blobs_profiles()
-        >>> adata.obs["treatment"].value_counts().to_dict()["DMSO"]
-        48
-    """
-    rng = np.random.default_rng(seed)
-    treatments = ("DMSO", "compound_a", "compound_b", "compound_c")
-    families = (("AreaShape", ""), ("Intensity_MeanIntensity", "{channel}"), ("Texture_Contrast", "{channel}"))
-
-    names: list[str] = []
-    index = 0
-    while len(names) < n_features:
-        compartment = _COMPARTMENTS[index % len(_COMPARTMENTS)]
-        family, suffix = families[index // len(_COMPARTMENTS) % len(families)]
-        channel = CELL_PAINTING_CHANNELS[index % len(CELL_PAINTING_CHANNELS)]
-        names.append(f"{compartment}_{family}_{index}{'_' + channel if suffix else ''}")
-        index += 1
-
-    wells = _wells(n_wells)
-    obs = pd.DataFrame(
-        {
-            "Plate": pd.Categorical([f"BLOBS{p + 1:02d}" for p in range(n_plates) for _ in wells]),
-            "Well": pd.Categorical(wells * n_plates),
-            "treatment": pd.Categorical(
-                [treatments[index % len(treatments)] for _ in range(n_plates) for index in range(len(wells))],
-                categories=treatments,
-            ),
-        }
-    )
-    obs.index = pd.Index(obs["Plate"].astype(str) + ":" + obs["Well"].astype(str), name="observation")
-
-    x = rng.normal(0.0, 1.0, (len(obs), len(names))).astype(np.float32)
-    affected = rng.choice(len(names), size=len(names) // 3, replace=False)
-    for number, treatment in enumerate(treatments[1:], start=1):
-        rows = (obs["treatment"] == treatment).to_numpy()
-        x[np.ix_(rows, affected)] += number * 1.5
-    for number in range(n_plates):
-        rows = (obs["Plate"] == f"BLOBS{number + 1:02d}").to_numpy()
-        x[rows] += rng.normal(0.0, 1.0, len(names)).astype(np.float32)
-
-    var = pd.DataFrame(index=pd.Index(names, name="feature"))
-    _annotate_features(var)
-    return ad.AnnData(x, obs=obs, var=var)

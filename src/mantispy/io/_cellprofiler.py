@@ -1,143 +1,139 @@
+"""Join a CellProfiler ``ExportToSpreadsheet`` directory into one table.
+
+The module writes ``Image.csv`` beside one CSV per object, all behind the file-name prefix
+a run was configured with (``MyExpt_Image.csv``, ``MyExpt_Cells.csv``). Inside an object
+table the columns do not carry the object's name, so they are prefixed with it before the
+objects are joined. :func:`~mantispy.io.read_profiles` turns the table into AnnData.
+"""
+
 from __future__ import annotations
 
+import re
+from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
 
-import anndata as ad
-import numpy as np
 import pandas as pd
 
-if TYPE_CHECKING:
-    import dask.array as da
-    import numpy.typing as npt
-    from spatialdata import SpatialData
-
-DATASET = "data"
-MANIFEST = "cellprofiler_mapping"
-ELEMENTS = "elements"
-IMAGE_CHANNELS = "image_channels"
-ELEMENT_IMAGE = "image"
-ELEMENT_LABELS = "labels"
-STATUS_OK = "ok"
-REGION_KEY = "region_key"
-INSTANCE_KEY = "label_id"
-
-# CellProfiler narrows label arrays to the object count, so fields of one plate would otherwise disagree.
-LABEL_DTYPE = np.uint32
+_KEYS = ("ImageNumber", "ObjectNumber")
+_FILENAME_RE = re.compile(r"^(?:Image_)?FileName_(.+)$")
+_NOT_OBJECTS = ("Image", "Experiment")
 
 
-def _table_path(plate: Path) -> Path:
-    tables = sorted((plate / "tables").glob("*.h5ad"))
-    if not tables:
-        msg = f"no table under {plate / 'tables'}; is {plate} a plate folder of an export?"
-        raise FileNotFoundError(msg)
-    if len(tables) > 1:
-        msg = f"expected one table under {plate / 'tables'}, found {[path.name for path in tables]}"
-        raise ValueError(msg)
-    return tables[0]
+def export_prefix(path: Path) -> str | None:
+    """The file-name prefix an ``ExportToSpreadsheet`` run used, or ``None`` if `path` is not such a directory."""
+    if not path.is_dir():
+        return None
+    prefixes = sorted((file.name.removesuffix("Image.csv") for file in path.glob("*Image.csv")), key=len)
+    return prefixes[0] if prefixes else None
 
 
-def _manifest(adata: ad.AnnData, plate: Path) -> tuple[pd.DataFrame, list[str]]:
-    mapping = adata.uns.get(MANIFEST, {})
-    if ELEMENTS not in mapping:
-        msg = (
-            f"{plate} has no uns['{MANIFEST}']['{ELEMENTS}'], so it holds no images or segmentations. "
-            "ExportToAnnData writes a table alone; ExportForSpatialData writes the manifest this reader needs."
+def infer_channels(image: pd.DataFrame) -> list[str]:
+    """Channel names, taken from the ``FileName_<channel>`` columns.
+
+    Falls back to an empty list, in which case the parser infers the channels from the
+    feature names. No channel vocabulary is assumed.
+    """
+    return sorted({match.group(1) for match in map(_FILENAME_RE.match, image.columns) if match})
+
+
+def _prefix(frame: pd.DataFrame, obj: str) -> pd.DataFrame:
+    """Prefix an object's columns with its name, leaving the join keys and metadata alone."""
+    keep = (f"{obj}_", "Metadata_")
+    return frame.rename(columns={c: c if c in _KEYS or c.startswith(keep) else f"{obj}_{c}" for c in frame.columns})
+
+
+def _link_columns(primary_frame: pd.DataFrame, child_frame: pd.DataFrame, primary: str, obj: str):
+    """Locate the parent/child link, which may be on either table.
+
+    CellProfiler writes ``Cells_Parent_Nuclei`` on the primary table when cells were
+    identified from nuclei, and ``Cytoplasm_Parent_Cells`` on the child table for a
+    tertiary object. Both cases are handled; using the wrong column would silently pair
+    unrelated objects that share an object number.
+    """
+    on_child = f"{obj}_Parent_{primary}"
+    on_primary = f"{primary}_Parent_{obj}"
+    if on_child in child_frame.columns:
+        return primary_frame["ObjectNumber"], child_frame[on_child]
+    if on_primary in primary_frame.columns:
+        return primary_frame[on_primary], child_frame["ObjectNumber"]
+    raise ValueError(
+        f"cannot link {obj!r} to {primary!r}: neither {on_child!r} nor {on_primary!r} is present. "
+        f"Pass objects= to read only the tables that are related, or set a different primary_object."
+    )
+
+
+def _join_child(merged: pd.DataFrame, child: pd.DataFrame, primary: str, obj: str, strict: bool) -> pd.DataFrame:
+    """Attach one child object's columns to the primary table."""
+    primary_link, child_link = _link_columns(merged, child, primary, obj)
+
+    left = pd.DataFrame({"ImageNumber": merged["ImageNumber"], "_link": primary_link.to_numpy()})
+    right = child.assign(_link=child_link.to_numpy()).drop(columns=["ObjectNumber"], errors="ignore")
+
+    counts = right.groupby(["ImageNumber", "_link"], dropna=False).size()
+    wanted = pd.MultiIndex.from_frame(left)
+    matches = counts.reindex(wanted, fill_value=0).to_numpy()
+
+    if strict and not (matches == 1).all():
+        without = int((matches == 0).sum())
+        several = int((matches > 1).sum())
+        raise ValueError(
+            f"join to {obj!r} is not one-to-one with {primary!r}: "
+            f"{without} {primary} object(s) have no {obj} and {several} have more than one. "
+            "Pass strict_one_to_one=False to keep the first match and leave the rest missing."
         )
-        raise ValueError(msg)
-    channels = mapping[IMAGE_CHANNELS].sort_values("stack_index")["channel"].astype(str).tolist()
-    return mapping[ELEMENTS], channels
+
+    right = right.drop_duplicates(subset=["ImageNumber", "_link"], keep="first")
+    joined = left.merge(right, on=["ImageNumber", "_link"], how="left", validate="m:1")
+    return joined.drop(columns=["ImageNumber", "_link"])
 
 
-def _read_array(path: Path, *, lazy: bool) -> npt.NDArray | da.Array:
-    import h5py
-
-    if not lazy:
-        with h5py.File(path, "r") as handle:
-            return handle[DATASET][()]
-    import dask.array as da
-
-    # lock: HDF5 is not thread-safe and dask reads on several threads.
-    dataset = h5py.File(path, "r")[DATASET]
-    return da.from_array(dataset, chunks=dataset.chunks or "auto", lock=True)
-
-
-def read_cellprofiler_export(path: Path | str, *, lazy: bool = True) -> SpatialData:
-    """Read one plate folder written by the ``ExportForSpatialData`` CellProfiler module.
-
-    See :func:`mantispy.io.read_plate`, which dispatches here, for what the result holds.
+def read_export(
+    directory: Path, primary_object: str, objects: Sequence[str] | None, strict_one_to_one: bool
+) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
+    """Join one export directory into a table with one row per `primary_object`.
 
     Args:
-        path: A plate folder of an export, the directory holding ``images/``, ``labels/`` and ``tables/``.
-        lazy: Read arrays through dask, one HDF5 dataset per element, instead of loading them into memory.
+        directory: A directory an ``ExportToSpreadsheet`` run wrote.
+        primary_object: The object one row of the table is.
+        objects: Object tables to join onto it, defaulting to every one in the directory.
+        strict_one_to_one: Raise when an object does not match the primary object exactly once.
 
     Returns:
-        The plate as a :class:`~spatialdata.SpatialData` object, with the Images and Labels the manifest lists as written and a ``cells`` Table annotating them.
+        The joined table, with identifiers, image metadata and the primary object's centroid as ``Metadata_``
+        columns and every measurement prefixed by its object; the ``Image.csv`` table; and the channels its
+        ``FileName_`` columns name.
 
     Raises:
-        FileNotFoundError: No table under ``path/tables``, or the manifest names an array that is not there.
-        ValueError: Several tables under ``path/tables``, or the table carries no element manifest, or it has no ``region_key`` column to join its rows onto the label arrays.
+        FileNotFoundError: There is no table for `primary_object`.
+        ValueError: An object cannot be linked to the primary object, or does not match it one to one.
     """
-    from spatialdata import SpatialData
-    from spatialdata.models import Image2DModel, Labels2DModel, TableModel
-    from spatialdata.transformations import Identity
+    prefix = export_prefix(directory) or ""
+    found = [
+        name
+        for path in sorted(directory.glob(f"{prefix}*.csv"))
+        if (name := path.stem.removeprefix(prefix)) not in _NOT_OBJECTS
+    ]
+    if primary_object not in found:
+        raise FileNotFoundError(f"no {prefix}{primary_object}.csv in {directory}; found {found}")
+    children = [name for name in found if name != primary_object and (objects is None or name in objects)]
 
-    plate = Path(path)
-    adata = ad.read_h5ad(_table_path(plate))
-    elements, channels = _manifest(adata, plate)
-    written = elements[elements["status"] == STATUS_OK]
+    merged = _prefix(pd.read_csv(directory / f"{prefix}{primary_object}.csv"), primary_object)
+    n_primary = len(merged)
+    for obj in children:
+        child = _prefix(pd.read_csv(directory / f"{prefix}{obj}.csv"), obj)
+        merged = pd.concat([merged, _join_child(merged, child, primary_object, obj, strict_one_to_one)], axis=1)
+    if len(merged) != n_primary:
+        raise AssertionError("object join changed the row count")
 
-    images: dict[str, Any] = {}
-    labels: dict[str, Any] = {}
-    for row in written.to_dict("records"):
-        field = str(row["sample_key"])
-        transformations = {field: Identity()}
-        array = _read_array(plate / str(row["path"]), lazy=lazy)
-        if row["element_type"] == ELEMENT_IMAGE:
-            images[f"{field}_image"] = Image2DModel.parse(
-                array, dims=("c", "y", "x"), c_coords=channels, transformations=transformations
-            )
-        elif row["element_type"] == ELEMENT_LABELS:
-            labels[str(row["region_key_value"])] = Labels2DModel.parse(
-                array.astype(LABEL_DTYPE), dims=("y", "x"), transformations=transformations
-            )
-
-    tables = {}
-    if labels:
-        if REGION_KEY not in adata.obs:
-            msg = (
-                f"the table in {plate} has no obs['{REGION_KEY}'] column, so its rows cannot be joined onto the "
-                "label arrays. ExportForSpatialData adds it; a table from ExportToAnnData does not carry it."
-            )
-            raise ValueError(msg)
-        named = np.asarray(adata.obs[REGION_KEY], dtype=str)
-        regions = sorted(set(named.tolist()) & set(labels))
-        table = adata[np.isin(named, regions)].copy()
-        table.obs[REGION_KEY] = pd.Categorical(np.asarray(table.obs[REGION_KEY], dtype=str), categories=regions)
-        # TableModel.parse refuses to run while ATTRS_KEY is still set.
-        table.uns.pop(TableModel.ATTRS_KEY, None)
-        tables["cells"] = TableModel.parse(table, region=regions, region_key=REGION_KEY, instance_key=INSTANCE_KEY)
-    return SpatialData(images=images, labels=labels, tables=tables)
-
-
-def is_export_plate_dir(path: Path) -> bool:
-    """Whether `path` is one plate folder of an export.
-
-    A SpatialData zarr store also holds a ``tables/`` directory, so the table itself has to be there.
-    """
-    return path.is_dir() and any((path / "tables").glob("*.h5ad"))
-
-
-def export_plate_dirs(root: Path | str) -> list[Path]:
-    """The plate folders of one export root, sorted by name.
-
-    Args:
-        root: The ``<prefix>_export`` directory the module wrote.
-
-    Returns:
-        Every immediate subdirectory that holds a ``tables/`` directory.
-    """
-    root = Path(root)
-    if not root.is_dir():
-        return []
-    return sorted(path for path in root.iterdir() if is_export_plate_dir(path))
+    image = pd.read_csv(directory / f"{prefix}Image.csv")
+    renames = {
+        c: "Metadata_" + c.removeprefix("Image_Metadata_") for c in image.columns if c.startswith("Image_Metadata_")
+    }
+    renames |= {c: c for c in image.columns if c.startswith("Metadata_")}
+    per_image = image[["ImageNumber", *renames]].rename(columns=renames)
+    table = merged.merge(per_image, on="ImageNumber", how="left", validate="m:1")
+    # Centroids are not profile features, but qc_is_border needs them.
+    for axis in ("X", "Y"):
+        if (source := f"{primary_object}_Location_Center_{axis}") in table.columns:
+            table[f"Metadata_Center_{axis}"] = table[source].to_numpy()
+    return table.rename(columns={key: f"Metadata_{key}" for key in _KEYS}), image, infer_channels(image)

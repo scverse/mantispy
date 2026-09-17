@@ -1,10 +1,13 @@
-from mantispy.ds._blobs import blobs, blobs_profiles
+"""Synthetic plates to try things on, and Cell Painting Gallery accessions to check them against."""
+
+from mantispy.ds._blobs import blobs
 from mantispy.ds._datasets import (
     agnp,
     amish,
     bbbc021,
     chroma,
     jump_crispr,
+    jump_target2,
     luad,
     miami,
     neuropainting,
@@ -13,15 +16,17 @@ from mantispy.ds._datasets import (
     pooled_rare,
     rohban,
 )
+from mantispy.ds._synthetic import DEFAULT_CHANNELS, synthetic_plate
 
 __all__ = [
+    "DEFAULT_CHANNELS",
     "agnp",
     "amish",
     "bbbc021",
     "blobs",
-    "blobs_profiles",
     "chroma",
     "jump_crispr",
+    "jump_target2",
     "luad",
     "miami",
     "neuropainting",
@@ -29,4 +34,5 @@ __all__ = [
     "pki",
     "pooled_rare",
     "rohban",
+    "synthetic_plate",
 ]
