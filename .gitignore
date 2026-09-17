@@ -20,6 +20,9 @@ __pycache__/
 # docs
 /docs/generated/
 /docs/_build/
+# written by 00_overview.ipynb and 09_scaling_and_sites.ipynb at docs-build time,
+# then read back in the same cell -- regenerated on every execution, not a fixture
+docs/tutorials/*.h5ad
 
 # planning docs kept out of the repo
 mantispy_release_plan.md

@@ -93,7 +93,6 @@ doc = [
   "myst-nb>=1.1",
   "nbconvert>=7",
   "pandas",
-  "pytest",                      # tutorial 1 borrows tests/conftest.py's write_cellprofiler_dir
   "scverse-misc[sphinx]>=0.1.6",
   "sphinx>=8.1",
   "sphinx-autodoc-typehints",

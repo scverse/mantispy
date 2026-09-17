@@ -15,7 +15,7 @@ from _testdata import CHANNELS, OVERLAY_PLATE, PLATE, PLATES, build_export, writ
 from mantispy._core.schema import stamp
 from mantispy.ds import synthetic_plate
 
-# re-exported: the test modules and tutorial 1 import these from here
+# re-exported: the test modules import these from here
 __all__ = ["CHANNELS", "write_cellprofiler_dir"]
 
 

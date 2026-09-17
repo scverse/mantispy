@@ -3,6 +3,17 @@
 ```{toctree}
 :maxdepth: 1
 
+00_overview
+01_from_cellprofiler_to_anndata
 reading_profiles
 reading_plates
+02_from_cells_to_profiles
+03_trustworthy_profiles
+04_correcting_and_evaluating
+05_hits_and_effects
+06_mechanism_of_action
+07_single_cell_heterogeneity
+08_trustworthy_features_and_design
+09_scaling_and_sites
+10_differential_features
 ```
