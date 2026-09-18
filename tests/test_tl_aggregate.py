@@ -54,6 +54,15 @@ def test_the_count_columns_can_be_named(adata):
     assert (plates.obs["n_fields"] == 48).all()
 
 
+def test_profiles_without_a_count_give_an_unknown_one(adata):
+    """Counting the wells of a plate as its cells would read as cell loss, and min_cells would drop small groups."""
+    wells = mt.tl.aggregate(adata, min_cells=0)
+    del wells.obs["Metadata_CellCount"]
+    plates = mt.tl.aggregate(wells, by=("Metadata_Plate",))
+    assert plates.n_obs == 2
+    assert plates.obs["Metadata_CellCount"].isna().all()
+
+
 def test_an_unknown_count_keeps_its_group(adata):
     wells = mt.tl.aggregate(adata, min_cells=0)
     wells.obs["Metadata_CellCount"] = np.where(np.arange(wells.n_obs) == 0, np.nan, 15.0)

@@ -20,7 +20,7 @@ from mantispy._core.logging import get_logger, report_drop
 from mantispy._core.schema import SCHEMA_VERSION, stamp
 from mantispy._settings import settings
 from mantispy.io._jump import join_jump_annotation, read_jump
-from mantispy.io._profiles import from_dataframe, read, read_profiles, write
+from mantispy.io._profiles import _UPSTREAM_COUNTS, _adopt_counts, from_dataframe, read, read_profiles, write
 from mantispy.pp._select import subset_features
 
 if TYPE_CHECKING:
@@ -66,29 +66,12 @@ def _plate_files(name: str, plates: Sequence[str] | None, cache_dir: str | Path 
     return _files(name, cache_dir, select=lambda file_name: _plate(file_name) in wanted)
 
 
-#: pycytominer's per-well counts and the names mantispy reads them under, the first present winning.
-#: ``Metadata_Object_Count``, the cells it aggregated, equals ``Metadata_Count_Cells`` wherever both are published.
-#: ``Metadata_Site_Count`` counts the fields of view that held a cell, as :func:`mantispy.tl.aggregate` does, not those imaged.
-_UPSTREAM_COUNTS = {
-    "Metadata_Count_Cells": "Metadata_CellCount",
-    "Metadata_Object_Count": "Metadata_CellCount",
-    "Metadata_Site_Count": "Metadata_SiteCount",
-}
-
-
-def _adopt_counts(frame: pd.DataFrame) -> pd.DataFrame:
-    """Rename the upstream counts in `frame` to the names mantispy reads, in place, and return it."""
-    for source, target in _UPSTREAM_COUNTS.items():
-        if source in frame and target not in frame:
-            frame[target] = frame.pop(source).to_numpy(dtype=float)
-    return frame
-
-
 def _read_counts(path: Path) -> pd.DataFrame:
-    """The plate, well and counts of a per-well table, which may hold thousands of other columns."""
+    """The plate, well and counts, under mantispy's names, of a per-well table that may hold thousands of other columns."""
     header = pd.read_csv(path, nrows=0).columns
     wanted = [column for column in ("Metadata_Plate", "Metadata_Well", *_UPSTREAM_COUNTS) if column in header]
-    return _adopt_counts(pd.read_csv(path, usecols=wanted, dtype={"Metadata_Plate": str}, engine="pyarrow"))
+    counts = _adopt_counts(pd.read_csv(path, usecols=wanted, dtype={"Metadata_Plate": str}, engine="pyarrow"))
+    return counts.drop(columns=list(_UPSTREAM_COUNTS), errors="ignore")
 
 
 def _augmented(name: str, plates: Sequence[str] | None, cache_dir: str | Path | None) -> AnnData:
@@ -96,15 +79,12 @@ def _augmented(name: str, plates: Sequence[str] | None, cache_dir: str | Path | 
 
     Columns are intersected because plates of one screen can differ by a few features when a channel failed on one of them.
     """
-    adata = read_profiles(_plate_files(name, plates, cache_dir), on_column_mismatch="intersect", resolution="well")
-    _adopt_counts(as_frame(adata.obs))
-    return adata
+    return read_profiles(_plate_files(name, plates, cache_dir), on_column_mismatch="intersect", resolution="well")
 
 
 def _profiles(name: str, cache_dir: str | Path | None, **kwargs: Any) -> AnnData:
     """Stack every file of an accession, with the reading arguments the registry records for it."""
     adata = read_profiles(_files(name, cache_dir), **{**_DATASETS[name].metadata.get("read", {}), **kwargs})
-    _adopt_counts(as_frame(adata.obs))
     adata.uns["mantispy"]["dataset"] = _DATASETS[name].metadata["accession"]
     return adata
 

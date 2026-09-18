@@ -51,7 +51,7 @@ def aggregate(
     Returns:
         A new :class:`~anndata.AnnData` with one row per group.
         ``var`` is carried over unchanged; ``obs`` holds the grouping columns, `count_key`, `site_key` when the fields of view are known, and every other ``Metadata_`` column that is constant within every group.
-        `count_key` is the number of cells behind a row, so its scope follows ``by``: grouping by site counts the cells of one field of view, grouping by well those of every field. Profiles contribute the cells they carry rather than one each.
+        `count_key` is the number of cells behind a row, so its scope follows ``by``: grouping by site counts the cells of one field of view, grouping by well those of every field. Profiles contribute the cells they carry rather than one each, and profiles that carry no count give an unknown one.
         `site_key` is the number of fields that contributed cells, summed where the rows carry it and counted from ``Metadata_Site`` otherwise.
         The resolution recorded is ``"well"`` when ``by`` holds both ``Metadata_Plate`` and ``Metadata_Well``, since a finer grouping such as one row per site is still per-well or finer, and ``"perturbation"`` otherwise.
 
@@ -71,7 +71,9 @@ def aggregate(
     tallies = {count_key: counts}
     # The recorded resolution decides, not the column: a cell may carry its well's count as a covariate.
     if get_resolution(adata) != "cell":
-        # Profiles stand for the cells and fields they summarize, not one cell each.
+        # Profiles stand for the cells and fields they summarize, not one cell each; without a count, for an
+        # unknown number of them.
+        tallies[count_key] = np.full(len(keys), np.nan)
         for column in (count_key, site_key):
             if column in frame:
                 tallies[column] = np.bincount(codes, weights=frame[column].to_numpy(dtype=float), minlength=len(keys))

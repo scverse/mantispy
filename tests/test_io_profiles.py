@@ -36,6 +36,19 @@ def test_every_real_world_metadata_prefix_is_recognised(prefix):
     assert adata.n_vars == 2
 
 
+@pytest.mark.parametrize(
+    ("published", "expected"),
+    [({"Metadata_Count_Cells": 7, "Metadata_Object_Count": 9}, 7.0), ({"Metadata_Object_Count": 9}, 9.0)],
+)
+def test_pycytominer_counts_are_copied_to_the_names_mantispy_reads(published, expected):
+    frame = _frame().assign(**published, Metadata_Site_Count=9)
+    obs = from_dataframe(frame, channels=["DNA"]).obs
+    assert (obs["Metadata_CellCount"] == expected).all()
+    assert (obs["Metadata_SiteCount"] == 9).all()
+    # Copied, not renamed: code reading the upstream columns keeps working.
+    assert set(published) | {"Metadata_Site_Count"} <= set(obs.columns)
+
+
 def test_sentinels_become_nan():
     frame = _frame()
     frame.loc[0, "Cells_AreaShape_Area"] = -999.0
