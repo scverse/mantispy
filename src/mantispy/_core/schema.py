@@ -49,7 +49,10 @@ RESERVED_OBS: tuple[str, ...] = (
     "Metadata_Concentration",
     "Metadata_MOA",
     "Metadata_Control",
+    # The cells a row summarizes, and the fields of view that contributed them: one for a per-site row, every
+    # field that held a cell for a per-well row. tl.aggregate writes both; the datasets carry upstream's.
     "Metadata_CellCount",
+    "Metadata_SiteCount",
     "Metadata_Center_X",
     "Metadata_Center_Y",
     "Metadata_Control_Type",
@@ -251,6 +254,12 @@ def validate(adata: AnnData, *, raise_on_error: bool = False) -> ValidationRepor
 
     if adata.n_vars and "is_feature" in adata.var and not adata.var["is_feature"].any():
         report.warnings.append("no column in var is marked is_feature")
+
+    if resolution == "well" and "Metadata_CellCount" not in adata.obs:
+        report.warnings.append(
+            "obs has no Metadata_CellCount, so mt.tl.cytotoxicity cannot separate a hit from cell loss; "
+            "aggregate single cells with mt.tl.aggregate, which writes it, or add a per-well count"
+        )
 
     if raise_on_error and not report.ok:
         raise ValueError("\n".join(report.errors))

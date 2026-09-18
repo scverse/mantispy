@@ -97,6 +97,8 @@ def test_jump_target2_loads_two_sources():
     assert int(adata.obs["Metadata_Control"].sum()) == 128  # 64 DMSO wells per plate
     assert adata.obs["Metadata_Perturbation"].nunique() == 302
     assert mt.io.validate(adata).ok, mt.io.validate(adata).errors
+    well = adata.obs[(adata.obs["Metadata_Plate"] == "JCPQC051") & (adata.obs["Metadata_Well"] == "A01")]
+    assert well[["Metadata_CellCount", "Metadata_SiteCount"]].values.tolist() == [[1853.0, 9.0]]
 
 
 @pytest.mark.network

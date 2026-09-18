@@ -76,6 +76,26 @@ def test_cytotoxicity_says_what_to_run_first(profiles):
         mt.tl.cytotoxicity(profiles, distance_key="not_computed")
 
 
+def test_a_missing_count_names_where_to_get_one(profiles):
+    del profiles.obs["Metadata_CellCount"]
+    profiles.obs["hits_distance"] = 1.0
+    with pytest.raises(KeyError, match="mt.tl.aggregate.*mt.ds.*count_key="):
+        mt.tl.cytotoxicity(profiles)
+
+
+def test_viability_compares_cells_per_field(profiles):
+    """A well imaged at half its fields holds half the cells without having lost any."""
+    halved = (profiles.obs["Metadata_Perturbation"] == "pert01").to_numpy()
+    profiles.obs["Metadata_SiteCount"] = np.where(halved, 2.0, 4.0)
+    profiles.obs["Metadata_CellCount"] = np.where(halved, 10.0, 20.0)
+    profiles.obs["hits_distance"] = 1.0
+
+    mt.tl.cytotoxicity(profiles)
+    assert profiles.uns["mantispy"]["cytotoxicity"].set_index("group").loc["pert01", "viability"] == 1.0
+    mt.tl.cytotoxicity(profiles, site_key=None)
+    assert profiles.uns["mantispy"]["cytotoxicity"].set_index("group").loc["pert01", "viability"] == 0.5
+
+
 def test_convergence_reaches_deeper_than_disjoint_halves(profiles):
     """Convergence reaches n - 1 replicates where disjoint halves stop at n // 2, so three
     replicates give a curve of two points instead of one."""

@@ -24,6 +24,7 @@
         "Metadata_MOA",
         "Metadata_Control",
         "Metadata_CellCount",
+        "Metadata_SiteCount",
         "Metadata_Center_X",
         "Metadata_Center_Y",
         "Metadata_Control_Type",

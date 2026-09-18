@@ -24,7 +24,12 @@ def test_loads_annotated_and_valid(bbbc021):
         "Metadata_MOA",
         "Metadata_Control",
         "Metadata_Perturbation",
+        "Metadata_CellCount",
+        "Metadata_SiteCount",
     }
+    # Summed from the well's Image.csv; the profile's mean Cells_Number_Object_Number is exactly what these give.
+    well = bbbc021.obs[(bbbc021.obs["Metadata_Plate"] == "Week1_22123") & (bbbc021.obs["Metadata_Well"] == "B02")]
+    assert well[["Metadata_CellCount", "Metadata_SiteCount"]].values.tolist() == [[874.0, 4.0]]
     # The mode= shorthands of mt.tl.map read this column, so it must exist here too.
     assert bbbc021.obs["Metadata_Perturbation"].nunique() == 104
     assert bbbc021.obs["Metadata_Compound"].nunique() == 39
