@@ -24,8 +24,6 @@ def _median_and_spread(
     """Per-group median and robust spread, from one sort of each group-by-feature slice.
 
     Asking :func:`~mantispy._core._reduce.reduce_grouped` for the two separately sorted every slice three times: once for the median, then again inside the spread pass, which re-finds that same median before measuring the deviations from it, or takes two more quantiles of the same values.
-    Measured on 1M rows by 500 features in 20 groups, median of three runs, the fit fell from 23.7 s to 12.6 s for ``mad_robustize`` and from 24.6 s to 8.7 s for ``robustize``.
-    That fit was 97% of a 24 s call before the change, and every statistic it returns is bit for bit what the separate passes returned.
     """
     codes, keys = group_codes(adata, by)
     if adata.isbacked:

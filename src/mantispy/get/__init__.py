@@ -10,10 +10,7 @@ if TYPE_CHECKING:
     from scanpy.get import obs_df, var_df
 
 #: Names re-exported from :mod:`scanpy.get`, fetched on first access rather than at import.
-#: Importing them eagerly reached scanpy, and through it sklearn and matplotlib: ``scanpy <- scanpy.get <- mantispy.get`` was the parent chain in every ``python -X importtime`` trace, and sklearn arrived under ``scanpy.get._aggregated`` rather than from any import of ours.
-#: That chain is a structural fact and holds regardless of load, which is why it is recorded here.
-#: Measured on an idle machine, minimum of seven interleaved rounds: ``import mantispy`` takes 1.85 s against 3.43 s before this deferral, where ``import anndata`` alone costs 1.59 s, so the overhead this package adds on top of anndata falls from 1.84 s to 0.27 s.
-#: The cost is deferred rather than removed: the first call that draws pays 0.64 s for matplotlib, and the first ``get.obs_df`` pays scanpy in full, once per process.
+#: Importing them eagerly pulls in scanpy, and with it sklearn and matplotlib, so the first access pays that cost instead of every ``import mantispy``.
 _SCANPY_NAMES = ("obs_df", "var_df")
 
 __all__ = ["controls", "features", "obs_df", "to_dataframe", "var_df"]

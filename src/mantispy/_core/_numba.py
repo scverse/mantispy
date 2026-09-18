@@ -151,9 +151,6 @@ def grouped_stat(
     return _grouped(X, order, offsets, n_groups, stat, float(q), int(ddof))
 
 
-# Measured at 1M rows by 500 features in 20 groups, float32, median of three runs.
-# The median and the MAD together take 12.6 s here against 23.7 s as two `grouped_stat` passes, and the median and the IQR 8.7 s against 24.6 s as three.
-# Both agree with the separate passes bit for bit, missing values included, which shorten the slice that gets sorted.
 @njit(parallel=True, cache=True, nogil=True)
 def _grouped_median_spread(
     X: np.ndarray, order: np.ndarray, offsets: np.ndarray, n_groups: int, spread: int

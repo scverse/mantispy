@@ -143,9 +143,6 @@ def percent_replicating(
     """
     # The matrix stays float32, as ``similarity_matrix`` returns it, and only the drawn values are widened.
     # Every entry is a float32 widened to float64 either way, so the medians below are unchanged.
-    # That, with the blocked pool, is what this costs: 20 000 wells x 500 features at 4 replicates per group
-    # (200.0M pairs) take 14.7 s and peak at 5.0 GB of Python allocation, against 19.6 s and 9.8 GB for a
-    # float64 copy of the matrix and a pool selected through materialized upper-triangle indices.
     matrix = similarity_matrix(representation(adata, use_rep), metric)
     codes, keys = group_codes(adata, groupby)
     generator = np.random.default_rng(seed)

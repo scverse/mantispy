@@ -334,8 +334,7 @@ def harmony(
         Requires ``harmonypy``: ``pip install 'mantispy[harmony]'``.
 
         harmonypy can report convergence and return the embedding unchanged; this wrapper warns when it does.
-        What decides this is separability, not size: on 50 640 JUMP TARGET2 wells across ten imaging sites it corrected the embedding, and on synthetic plates whose batches are perfectly separable it returned the input bit for bit (192 wells, harmonypy 2.0.0 and 2.0.2, maximum absolute change 0).
-        Shifting the embedding dimensions of one batch directly, rather than shifting the features and then running PCA, always corrected (48 to 768 wells, shifts of 0 to 50 standard deviations, with and without an explicit ``nclust``).
+        What decides this is separability rather than size: it corrected the embedding of 50 640 JUMP TARGET2 wells across ten imaging sites, and returns the input untouched when the batches occupy disjoint regions of the embedding, because every soft cluster then holds a single batch.
 
         Check the result with more than one metric.
         On those JUMP wells Harmony moved the site centroids 36% closer together (mean separation 300 to 192, with unchanged overall spread) but lowered iLISI from 2.01 to 1.02, so the sites moved together globally while neighborhoods stayed site-pure.
