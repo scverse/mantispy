@@ -33,6 +33,63 @@ def test_cell_count_and_min_cells(adata):
     assert mt.tl.aggregate(adata, min_cells=16).n_obs == 0
 
 
+def test_aggregating_profiles_counts_their_cells_not_their_rows(adata):
+    """Regression test for #63: a plate of 24 wells of 15 cells holds 360 cells, not 24."""
+    wells = mt.tl.aggregate(adata, min_cells=0)
+    plates = mt.tl.aggregate(wells, by=("Metadata_Plate",), min_cells=0)
+    assert (plates.obs["Metadata_CellCount"] == 360).all()
+    # min_cells is still a number of cells.
+    assert mt.tl.aggregate(wells, by=("Metadata_Plate",), min_cells=361).n_obs == 0
+
+
+def test_the_count_columns_can_be_named(adata):
+    adata.obs["Metadata_Site"] = np.tile(["1", "2"], adata.n_obs // 2)
+    wells = mt.tl.aggregate(adata, min_cells=0, count_key="n_cells", site_key="n_fields")
+    assert (wells.obs["n_cells"] == 15).all()
+    assert (wells.obs["n_fields"] == 2).all()
+    assert "Metadata_CellCount" not in wells.obs
+
+    plates = mt.tl.aggregate(wells, by=("Metadata_Plate",), min_cells=0, count_key="n_cells", site_key="n_fields")
+    assert (plates.obs["n_cells"] == 360).all()
+    assert (plates.obs["n_fields"] == 48).all()
+
+
+def test_profiles_without_a_count_give_an_unknown_one(adata):
+    """Counting the wells of a plate as its cells would read as cell loss, and min_cells would drop small groups."""
+    wells = mt.tl.aggregate(adata, min_cells=0)
+    del wells.obs["Metadata_CellCount"]
+    plates = mt.tl.aggregate(wells, by=("Metadata_Plate",))
+    assert plates.n_obs == 2
+    assert plates.obs["Metadata_CellCount"].isna().all()
+
+
+def test_an_unknown_count_keeps_its_group(adata):
+    wells = mt.tl.aggregate(adata, min_cells=0)
+    wells.obs["Metadata_CellCount"] = np.where(np.arange(wells.n_obs) == 0, np.nan, 15.0)
+    plates = mt.tl.aggregate(wells, by=("Metadata_Plate",), min_cells=10)
+    assert plates.n_obs == 2
+    assert np.isnan(plates.obs["Metadata_CellCount"]).sum() == 1
+
+
+def test_the_site_count_follows_the_grouping(adata):
+    """A per-site row counts one field of view, a per-well row every field that held a cell."""
+    assert "Metadata_SiteCount" not in mt.tl.aggregate(adata, min_cells=0).obs
+    adata.obs["Metadata_Site"] = np.tile(["1", "2"], adata.n_obs // 2)
+    sites = mt.tl.aggregate(adata, by=("Metadata_Plate", "Metadata_Well", "Metadata_Site"), min_cells=0)
+    wells = mt.tl.aggregate(adata, min_cells=0)
+    assert (sites.obs["Metadata_SiteCount"] == 1).all()
+    assert (wells.obs["Metadata_SiteCount"] == 2).all()
+    assert sites.obs["Metadata_CellCount"].sum() == wells.obs["Metadata_CellCount"].sum() == adata.n_obs
+
+    plates = mt.tl.aggregate(sites, by=("Metadata_Plate",), min_cells=0)
+    assert (plates.obs["Metadata_SiteCount"] == 48).all()
+    # A consensus counts replicates, and a constant site count is not carried onto it.
+    consensus = mt.tl.consensus(wells, method="median")
+    assert "Metadata_SiteCount" not in consensus.obs
+    # Nor is a replicate count carried onto a coarser grouping of consensus profiles.
+    assert "Metadata_ReplicateCount" not in mt.tl.aggregate(consensus, by=("Metadata_Control",), min_cells=0).obs
+
+
 def test_constant_metadata_carried_and_varying_dropped(adata):
     adata.obs["Metadata_Varies"] = np.arange(adata.n_obs)
     wells = mt.tl.aggregate(adata, min_cells=0)

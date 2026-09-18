@@ -158,7 +158,7 @@ Writing to a layer suffixes the column, so `key_added="sphered"` flags `var["deg
 
 | Function | Stores |
 | --- | --- |
-| `tl.aggregate` | returns a new object: `obs` gains `Metadata_CellCount`; `uns["mantispy"]` gains `aggregated_from` and a `resolution` of `"well"` or `"perturbation"` |
+| `tl.aggregate` | returns a new object: `obs` gains `Metadata_CellCount` (`count_key`), and `Metadata_SiteCount` (`site_key`) when the fields of view are known; `uns["mantispy"]` gains `aggregated_from` and a `resolution` of `"well"` or `"perturbation"` |
 | `tl.map` | `uns["mantispy"][key_added]`, `obs[key_added]`, `obs[key_added + "_qvalue"]` |
 | `tl.similarity` | `obsp[key_added]` |
 | `tl.percent_replicating` | `uns["mantispy"][key_added]` and `..._summary` |

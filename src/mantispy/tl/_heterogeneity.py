@@ -77,7 +77,7 @@ def cluster_composition(
     totals = counts.sum(axis=1, keepdims=True)
     fractions = np.divide(counts, totals, out=np.zeros_like(counts), where=totals > 0)
 
-    obs = _group_obs(adata, columns, keys, codes, counts.sum(axis=1).astype(int))
+    obs = _group_obs(adata, columns, keys, codes, {"Metadata_CellCount": counts.sum(axis=1).astype(int)})
     obs.index = pd.Index([str(row) for row in range(len(obs))])
     var = pd.DataFrame(index=pd.Index(labels))
     var["object"], var["feature_group"], var["feature"] = "Cluster", "Composition", labels

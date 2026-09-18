@@ -176,6 +176,7 @@ def cytotoxicity(
     groupby: str = "Metadata_Perturbation",
     reference: str | None = "negcon",
     count_key: str = "Metadata_CellCount",
+    site_key: str | None = "Metadata_SiteCount",
     distance_key: str = "hits_distance",
     min_viability: float = 0.7,
     key_added: str = "cytotoxicity",
@@ -188,6 +189,8 @@ def cytotoxicity(
         groupby: The column defining a perturbation.
         reference: Rows whose median cell count defines a viability of 1.0.
         count_key: ``obs`` column holding the cell count.
+        site_key: ``obs`` column holding the number of fields of view that count covers.
+            Where present, viability compares cells per field, so a well missing a field does not read as cell loss. ``None`` compares the counts as they are.
         distance_key: ``obs`` column holding the distance from the controls, as written by :func:`~mantispy.tl.hit_calling`.
         min_viability: Fraction of the control cell count below which a group counts as having lost cells.
         key_added: Name for the outputs.
@@ -212,10 +215,20 @@ def cytotoxicity(
         Over the pki dose series, the rank correlation between phenotype distance and cell loss is +0.79 (p < 1e-8) and the four strongest hits have viabilities of 0.27 to 0.68.
         Over rohban2017's ORF overexpression the same correlation is +0.00 (p = 0.95).
         Measure it on your own screen.
+
+        The cell count is a baseline in its own right. Across three bioactivity benchmarks, a model given only the cell count often matched one given the whole Cell Painting profile, because many assays' actives simply lower it :cite:p:`Seal_2025`.
+        Predicting two cytotoxicity readouts in hepatocytes, the profiles did no better than cell count, plate and well position on LDH release :cite:p:`Ewald_2026`.
+
+    References:
+        :cite:t:`Seal_2025`.
+        :cite:t:`Ewald_2026`.
     """
     obs = as_frame(adata.obs)
     if count_key not in obs:
-        raise KeyError(f"obs has no column {count_key!r}; mt.tl.aggregate writes Metadata_CellCount")
+        raise KeyError(
+            f"obs has no column {count_key!r}; mt.tl.aggregate and every well-level mt.ds dataset write "
+            "Metadata_CellCount, or name another column with count_key="
+        )
     if distance_key not in obs:
         raise KeyError(
             f"obs has no column {distance_key!r}; run mt.tl.hit_calling first, which writes "
@@ -224,6 +237,8 @@ def cytotoxicity(
 
     is_control = reference_mask(adata, reference)
     counts = obs[count_key].to_numpy(dtype=float)
+    if site_key in obs:
+        counts = counts / np.maximum(obs[site_key].to_numpy(dtype=float), 1)
     distances = obs[distance_key].to_numpy(dtype=float)
     control_count = float(np.nanmedian(counts[is_control]))
     control_distance = float(np.nanmedian(distances[is_control]))

@@ -65,6 +65,12 @@ def test_the_downloads_read_back_at_the_shape_the_registry_claims(name: str) -> 
     if name == "bbbc021":
         assert adata.obs["Metadata_MOA"].notna().all()
         assert adata.obs["Metadata_Control"].sum() == 330
+    # Regression test for #63: every well-level dataset publishes an exact per-well count upstream.
+    if name not in ("jump_cells", "pooled_rare"):
+        assert (adata.obs["Metadata_CellCount"] > 0).all()
+        # jump-profiling-recipe's count table, which jump_crispr reads, has no field count.
+        if name != "jump_crispr":
+            assert adata.obs["Metadata_SiteCount"].between(1, 36).all()
 
 
 @pytest.mark.network

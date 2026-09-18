@@ -32,6 +32,15 @@ THIN_FEATURE_SET = 10
 #: ``Image`` is excluded because its measurements are whole-field, not per-cell.
 DEFAULT_OBJECTS: tuple[str, ...] = ("Cells", "Cytoplasm", "Nuclei")
 
+#: pycytominer's per-well counts and the names mantispy reads them under, the first one present winning.
+#: ``Metadata_Object_Count``, the cells it aggregated, equals ``Metadata_Count_Cells`` wherever both are published.
+#: ``Metadata_Site_Count`` counts the fields of view that held a cell, as :func:`mantispy.tl.aggregate` does, not those imaged.
+_UPSTREAM_COUNTS = {
+    "Metadata_Count_Cells": "Metadata_CellCount",
+    "Metadata_Object_Count": "Metadata_CellCount",
+    "Metadata_Site_Count": "Metadata_SiteCount",
+}
+
 
 def _read_frame(path: Path) -> pd.DataFrame:
     if path.suffix in {".parquet", ".pq"}:
@@ -39,6 +48,14 @@ def _read_frame(path: Path) -> pd.DataFrame:
     if path.suffix in {".tsv", ".txt"}:
         return pd.read_csv(path, sep="\t")
     return pd.read_csv(path)
+
+
+def _adopt_counts(obs: pd.DataFrame) -> pd.DataFrame:
+    """Copy pycytominer's per-well counts in `obs` to the names mantispy reads, keeping the originals, and return it."""
+    for source, target in _UPSTREAM_COUNTS.items():
+        if source in obs and target not in obs:
+            obs[target] = obs[source].to_numpy(dtype=float)
+    return obs
 
 
 def _strip_prefix(name: str, prefixes: Sequence[str]) -> str:
@@ -103,6 +120,7 @@ def from_dataframe(
 
     Returns:
         An :class:`~anndata.AnnData` of observations by features at the recorded resolution, with the parsed feature annotation in ``var`` and the schema stamp, the resolution and the channel vocabulary it parsed with in ``uns["mantispy"]``.
+        pycytominer's per-well ``Metadata_Count_Cells``, or ``Metadata_Object_Count`` without it, and ``Metadata_Site_Count`` are copied to ``Metadata_CellCount`` and ``Metadata_SiteCount``.
 
     Raises:
         ValueError: `df` has no rows, no column parses as a feature on `objects`, or two metadata prefixes normalize onto the same column name.
@@ -189,7 +207,7 @@ def from_dataframe(
         )
     if "Metadata_Well" in obs:
         obs["Metadata_Well"] = [normalize_well(well) for well in obs["Metadata_Well"].astype(str)]
-    obs = categorize_metadata(obs)
+    obs = categorize_metadata(_adopt_counts(obs))
     obs.index = pd.Index([str(i) for i in range(len(obs))])
 
     adata = ad.AnnData(X=X, obs=obs, var=parsed.loc[feature_names])
@@ -304,7 +322,7 @@ def read_profiles(
         resolution: Resolution to record, ``"cell"`` for a directory and ``"well"`` for files when omitted.
 
     Returns:
-        An :class:`~anndata.AnnData` at the recorded resolution, with the parsed feature annotation in ``var``, the metadata in ``obs``, and the schema stamp, the resolution, the channel vocabulary, this call's parameters and, from an export directory, the per-image quality table under ``uns["mantispy"]``.
+        An :class:`~anndata.AnnData` at the recorded resolution, with the parsed feature annotation in ``var``, the metadata in ``obs`` with pycytominer's per-well counts copied to ``Metadata_CellCount`` and ``Metadata_SiteCount``, and the schema stamp, the resolution, the channel vocabulary, this call's parameters and, from an export directory, the per-image quality table under ``uns["mantispy"]``.
 
     Raises:
         ValueError: No paths were given, `on_column_mismatch` is not one of the two accepted values, a directory was given together with other paths, the files disagree on columns while `on_column_mismatch` is ``"raise"``, a file holds a header and no rows, no column parses as a feature on `objects`, `index_columns` do not identify observations uniquely, the platemap repeats a well, or an export object cannot be linked one to one.

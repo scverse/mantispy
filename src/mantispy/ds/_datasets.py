@@ -20,7 +20,7 @@ from mantispy._core.logging import get_logger, report_drop
 from mantispy._core.schema import SCHEMA_VERSION, stamp
 from mantispy._settings import settings
 from mantispy.io._jump import join_jump_annotation, read_jump
-from mantispy.io._profiles import from_dataframe, read, read_profiles, write
+from mantispy.io._profiles import _UPSTREAM_COUNTS, _adopt_counts, from_dataframe, read, read_profiles, write
 from mantispy.pp._select import subset_features
 
 if TYPE_CHECKING:
@@ -66,15 +66,20 @@ def _plate_files(name: str, plates: Sequence[str] | None, cache_dir: str | Path 
     return _files(name, cache_dir, select=lambda file_name: _plate(file_name) in wanted)
 
 
+def _read_counts(path: Path) -> pd.DataFrame:
+    """The plate, well and counts, under mantispy's names, of a per-well table that may hold thousands of other columns."""
+    header = pd.read_csv(path, nrows=0).columns
+    wanted = [column for column in ("Metadata_Plate", "Metadata_Well", *_UPSTREAM_COUNTS) if column in header]
+    counts = _adopt_counts(pd.read_csv(path, usecols=wanted, dtype={"Metadata_Plate": str}, engine="pyarrow"))
+    return counts.drop(columns=list(_UPSTREAM_COUNTS), errors="ignore")
+
+
 def _augmented(name: str, plates: Sequence[str] | None, cache_dir: str | Path | None) -> AnnData:
     """Read the ``*_augmented`` profiles of some plates, which already carry their platemap.
 
     Columns are intersected because plates of one screen can differ by a few features when a channel failed on one of them.
     """
-    adata = read_profiles(_plate_files(name, plates, cache_dir), on_column_mismatch="intersect", resolution="well")
-    obs = as_frame(adata.obs)
-    obs["Metadata_CellCount"] = obs.pop("Metadata_Count_Cells").to_numpy(dtype=float)
-    return adata
+    return read_profiles(_plate_files(name, plates, cache_dir), on_column_mismatch="intersect", resolution="well")
 
 
 def _profiles(name: str, cache_dir: str | Path | None, **kwargs: Any) -> AnnData:
@@ -90,7 +95,7 @@ def bbbc021(cache_dir: str | Path | None = None) -> AnnData:
     Well-level CellProfiler profiles (``cpg0010-caie-drugresponse``), joined to the compound, concentration and mechanism of action the Broad Bioimage Benchmark Collection publishes with the image set.
     The image set covers 113 compounds.
     This returns the annotated subset the benchmark uses: 38 compounds plus DMSO, 103 treatments (a compound at a concentration) across 12 mechanisms.
-    Downloads about 10 MB.
+    Downloads about 22 MB, half of it the ``Image.csv`` of each well, which is where the cell counts are.
 
     Every well carries a mechanism, DMSO included; select treatments with ``adata[~adata.obs["Metadata_Control"]]``.
 
@@ -99,14 +104,14 @@ def bbbc021(cache_dir: str | Path | None = None) -> AnnData:
             Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Returns:
-        632 wells by 473 features at well resolution, with ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Compound``, ``Metadata_Concentration``, ``Metadata_MOA``, ``Metadata_Perturbation`` (compound at concentration) and ``Metadata_Control``.
+        632 wells by 473 features at well resolution, with ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Compound``, ``Metadata_Concentration``, ``Metadata_MOA``, ``Metadata_Perturbation`` (compound at concentration), ``Metadata_Control``, and ``Metadata_CellCount`` over the ``Metadata_SiteCount`` of the four fields that held cells.
 
     References:
         :cite:t:`Caie_2010`, the image set.
         :cite:t:`Ljosa_2013`, these profiles and the benchmark.
         Images courtesy of Peter Caie and David Westwood, available from the Broad Bioimage Benchmark Collection :cite:p:`Ljosa_2012`.
     """
-    profiles_path, images_path, moa_path = _files("bbbc021", cache_dir)
+    profiles_path, images_path, moa_path, *fields = _files("bbbc021", cache_dir)
     wells = (
         pd.read_csv(images_path)[
             [
@@ -134,7 +139,9 @@ def bbbc021(cache_dir: str | Path | None = None) -> AnnData:
     profiles = pd.read_csv(profiles_path).rename(
         columns={"Image_Metadata_Plate": "Metadata_Plate", "Image_Metadata_Well": "Metadata_Well"}
     )
-    merged = profiles.merge(annotations, on=["Metadata_Plate", "Metadata_Well"], how="left")
+    merged = profiles.merge(annotations, on=["Metadata_Plate", "Metadata_Well"], how="left").merge(
+        _bbbc021_counts(fields), on=["Metadata_Plate", "Metadata_Well"], how="left"
+    )
     if unmatched := int(merged["Metadata_Compound"].isna().sum()):
         get_logger().warning("%d wells have no compound annotation and are dropped", unmatched)
         merged = merged[merged["Metadata_Compound"].notna()]
@@ -151,6 +158,15 @@ def bbbc021(cache_dir: str | Path | None = None) -> AnnData:
     return adata
 
 
+def _bbbc021_counts(paths: Sequence[Path]) -> pd.DataFrame:
+    """Cells, and fields that held one, per well, from the per-field ``Image.csv`` of the run the ljosa_2013 profiles aggregate."""
+    rows = []
+    for path in paths:
+        cells = pd.read_csv(path, usecols=["Count_Cells"])["Count_Cells"]
+        rows.append((*path.parent.name.rsplit("-", 1), cells.sum(), (cells > 0).sum()))
+    return pd.DataFrame(rows, columns=["Metadata_Plate", "Metadata_Well", "Metadata_CellCount", "Metadata_SiteCount"])
+
+
 def rohban(plates: Sequence[str] | None = None, cache_dir: str | Path | None = None) -> AnnData:
     """An ORF overexpression screen, with the genes and cell counts that BBBC021 lacks.
 
@@ -163,7 +179,7 @@ def rohban(plates: Sequence[str] | None = None, cache_dir: str | Path | None = N
             Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Returns:
-        Wells by features at well resolution, with ``Metadata_Perturbation`` (the gene), ``Metadata_Control``, ``Metadata_CellCount`` and the screen's own ``Metadata_gene_name``, ``Metadata_GeneID`` and ``Metadata_ASSAY_WELL_ROLE``.
+        Wells by features at well resolution, with ``Metadata_Perturbation`` (the gene), ``Metadata_Control``, ``Metadata_CellCount``, ``Metadata_SiteCount`` and the screen's own ``Metadata_gene_name``, ``Metadata_GeneID`` and ``Metadata_ASSAY_WELL_ROLE``.
 
     Raises:
         KeyError: A plate is not one of the five.
@@ -201,7 +217,7 @@ def pki(plates: Sequence[str] | None = None, cache_dir: str | Path | None = None
             Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Returns:
-        Wells by features at well resolution, with ``Metadata_Perturbation`` (compound at concentration), ``Metadata_Compound``, ``Metadata_Concentration`` (the platemap's ``mmoles_per_liter``), ``Metadata_MOA``, ``Metadata_Control`` and ``Metadata_CellCount``.
+        Wells by features at well resolution, with ``Metadata_Perturbation`` (compound at concentration), ``Metadata_Compound``, ``Metadata_Concentration`` (the platemap's ``mmoles_per_liter``), ``Metadata_MOA``, ``Metadata_Control``, ``Metadata_CellCount`` and ``Metadata_SiteCount``.
 
     Raises:
         KeyError: A plate is not one of the eight.
@@ -245,21 +261,23 @@ def jump_target2(
 
     Args:
         plates: Plate barcodes to load.
-            The default takes one plate from each of two sources, about 26 MB; ``None`` loads all twelve.
+            The default takes one plate from each of two sources, about 117 MB, most of it the per-well table each plate's cell counts are published in; ``None`` loads all twelve.
         annotate: Join the JUMP annotation, which supplies ``Metadata_Perturbation`` and ``Metadata_Control``.
             Downloads another 14 MB.
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Returns:
-        384 wells per plate at well resolution, carrying ``Metadata_Source``, ``Metadata_Batch``, ``Metadata_Plate``, ``Metadata_Well`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_InChIKey`` and ``Metadata_Control`` (JUMP's 64 DMSO wells per plate).
+        384 wells per plate at well resolution, carrying ``Metadata_Source``, ``Metadata_Batch``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_CellCount``, ``Metadata_SiteCount`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_InChIKey`` and ``Metadata_Control`` (JUMP's 64 DMSO wells per plate).
 
     Raises:
         KeyError: A plate is not one of the twelve.
     """
-    adata = read_jump(
-        _plate_files("jump_target2", plates, cache_dir), annotate=annotate, on_column_mismatch="intersect"
-    )
+    paths = _plate_files("jump_target2", plates, cache_dir)
+    # The profiles carry no count; each plate's backend table does, among 7,600 other columns.
+    counts = pd.concat([_read_counts(path) for path in paths if path.suffix == ".csv"])
+    profiles = [path for path in paths if path.suffix == ".parquet"]
+    adata = read_jump(profiles, annotate=annotate, on_column_mismatch="intersect", platemap=counts)
     batches = {_plate(file.name): file.name.split("__")[0] for file in _DATASETS["jump_target2"].files}
     adata.obs["Metadata_Batch"] = [batches[str(plate)] for plate in adata.obs["Metadata_Plate"]]
     adata.uns["mantispy"]["dataset"] = "cpg0016-jump"
@@ -300,7 +318,7 @@ def luad(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
         kwargs: Passed to :func:`mantispy.io.read_profiles`.
 
     Returns:
-        Wells by features, indexed by plate and well.
+        Wells by features, indexed by plate and well, with ``Metadata_CellCount`` and ``Metadata_SiteCount``.
     """
     return _profiles("luad", cache_dir, **kwargs)
 
@@ -317,7 +335,7 @@ def agnp(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
         kwargs: Passed to :func:`mantispy.io.read_profiles`.
 
     Returns:
-        Wells by features, indexed by plate and well.
+        Wells by features, indexed by plate and well, with ``Metadata_CellCount`` and ``Metadata_SiteCount``.
     """
     return _profiles("agnp", cache_dir, **kwargs)
 
@@ -334,7 +352,7 @@ def neuropainting(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData
         kwargs: Passed to :func:`mantispy.io.read_profiles`.
 
     Returns:
-        Wells by features.
+        Wells by features, with ``Metadata_CellCount`` and ``Metadata_SiteCount``.
     """
     return _profiles("neuropainting", cache_dir, **kwargs)
 
@@ -351,7 +369,7 @@ def amish(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
         kwargs: Passed to :func:`mantispy.io.read_profiles`.
 
     Returns:
-        Wells by features, indexed by plate and well.
+        Wells by features, indexed by plate and well, with ``Metadata_CellCount`` and ``Metadata_SiteCount``.
     """
     return _profiles("amish", cache_dir, **kwargs)
 
@@ -368,7 +386,7 @@ def chroma(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
         kwargs: Passed to :func:`mantispy.io.read_profiles`.
 
     Returns:
-        Wells by features.
+        Wells by features, with ``Metadata_CellCount`` and ``Metadata_SiteCount``.
     """
     return _profiles("chroma", cache_dir, **kwargs)
 
@@ -384,7 +402,7 @@ def oasis_pilot(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
         kwargs: Passed to :func:`mantispy.io.read_profiles`.
 
     Returns:
-        Wells by features, indexed by plate and well.
+        Wells by features, indexed by plate and well, with ``Metadata_CellCount`` and ``Metadata_SiteCount``.
     """
     return _profiles("oasis_pilot", cache_dir, **kwargs)
 
@@ -400,7 +418,7 @@ def miami(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
         kwargs: Passed to :func:`mantispy.io.read_profiles`.
 
     Returns:
-        Wells by features, indexed by plate and well.
+        Wells by features, indexed by plate and well, with ``Metadata_CellCount`` and ``Metadata_SiteCount``.
     """
     return _profiles("miami", cache_dir, **kwargs)
 
@@ -410,6 +428,7 @@ def jump_crispr(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
 
     ``cpg0016-jump-assembled``, the ``v1.0a`` well-position-corrected and feature-selected parquet, and the largest dataset here at 180 MB.
     ``Metadata_JCP2022`` identifies the perturbation.
+    The cell counts are the ones jump-profiling-recipe regresses out of these profiles; their ``Cells_Count_Count`` feature was normalized with the rest and is no longer a count.
 
     Args:
         cache_dir: Where to keep the download.
@@ -417,12 +436,13 @@ def jump_crispr(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
         kwargs: Passed to :func:`mantispy.io.read_profiles`.
 
     Returns:
-        Wells by features, indexed by plate and well.
+        Wells by features, indexed by plate and well, with ``Metadata_CellCount``.
 
     References:
         :cite:t:`Chandrasekaran_2023`.
     """
-    return _profiles("jump_crispr", cache_dir, **kwargs)
+    (counts,) = _files("_jump_cell_counts", cache_dir)
+    return _profiles("jump_crispr", cache_dir, platemap=_read_counts(counts), **kwargs)
 
 
 def _read_site(directory: Path, source: str, channels: Sequence[str]) -> AnnData:
@@ -541,6 +561,7 @@ def jump_cells(annotate: bool = True, selected: bool = False, cache_dir: str | P
 
     Returns:
         Cells by features at cell resolution, carrying ``Metadata_Source``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Site`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_InChIKey`` and ``Metadata_Control``. When annotated, ``var["selected"]`` marks the features feature selection keeps, so the object can be reduced with ``adata[:, adata.var["selected"]]`` the way scanpy's ``highly_variable`` is used.
+        A cell carries no count. :func:`mantispy.tl.aggregate` writes ``Metadata_CellCount`` over the four fields read and a ``Metadata_SiteCount`` of four, so a well counts about four ninths of the cells :func:`jump_target2` gives it over all nine.
 
     References:
         :cite:t:`Chandrasekaran_2023`.
