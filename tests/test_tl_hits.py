@@ -1,5 +1,6 @@
 """Hit calling and energy distance."""
 
+import anndata as ad
 import numpy as np
 import pytest
 from scipy.stats import ks_2samp
@@ -345,3 +346,30 @@ def test_the_pairwise_edistance_caps_its_groups_too(scored):
     assert not np.allclose(capped, pairwise()), "20 of ~480 rows per group must change the distances"
     np.testing.assert_array_equal(capped, pairwise(max_reference=20, seed=0), "and the same seed must repeat them")
     assert not np.allclose(capped, pairwise(max_reference=20, seed=1)), "while another seed samples other rows"
+
+
+def test_the_null_is_calibrated_on_pure_noise():
+    """On data with no effect, p < 0.05 should happen about 5% of the time.
+
+    The null is the other ways to draw a group of this size from the group and the held-out controls
+    pooled. Bootstrapping the controls alone centres the null on that sample's own median and leaves
+    its error out of the spread, which called ~9% of nothing at n=24 against 48 held-out controls.
+    """
+    rng = np.random.default_rng(0)
+    pvalues = []
+    for seed in range(25):
+        n_controls, n_groups, group_size = 96, 6, 24
+        n = n_controls + n_groups * group_size
+        adata = ad.AnnData(X=rng.normal(size=(n, 12)).astype(np.float32))
+        adata.obs["Metadata_Plate"] = "P1"
+        adata.obs["Metadata_Well"] = [f"{chr(65 + i // 24)}{i % 24 + 1:02d}" for i in range(n)]
+        adata.obs["Metadata_Perturbation"] = ["DMSO"] * n_controls + [
+            f"p{g:02d}" for g in range(n_groups) for _ in range(group_size)
+        ]
+        adata.obs["Metadata_Control"] = adata.obs["Metadata_Perturbation"] == "DMSO"
+        mt.tl.hit_calling(adata, groupby="Metadata_Perturbation", n_permutations=500, seed=seed)
+        table = adata.uns["mantispy"]["hits"]
+        pvalues += list(table.loc[table["group"] != "DMSO", "pvalue"])
+
+    rate = float(np.mean(np.asarray(pvalues) < 0.05))
+    assert rate < 0.08, f"called {rate:.1%} of pure noise at a nominal 5%"

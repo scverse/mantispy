@@ -72,8 +72,11 @@ def test_the_hits_plot_marks_the_threshold_the_run_used(scored):
 
 def test_the_hits_plot_draws_the_threshold_that_colored_the_points():
     """Reading the threshold under the table key rather than the function name drew a run called at q < 0.25 against a line labelled q = 0.05, with a point colored as a hit below it."""
+    # 96 wells over 3 perturbations leaves 24 controls, so the reference is large enough for the null to
+    # mean something. At 48 wells over 11 it left four, two of which formed the whole null, and the hit this
+    # asserts on was the over-calling of #60 rather than the effect.
     cells = mt.ds.synthetic_plate(
-        n_plates=1, n_wells=48, n_cells=6, n_features=8, n_perturbations=11, effect_size=0.4, seed=0
+        n_plates=1, n_wells=96, n_cells=6, n_features=8, n_perturbations=3, effect_size=3.0, seed=0
     )
     wells = mt.tl.aggregate(cells, min_cells=0)
     mt.tl.hit_calling(wells, n_permutations=200, threshold=0.25)

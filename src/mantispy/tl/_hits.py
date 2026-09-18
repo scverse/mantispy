@@ -128,8 +128,6 @@ def hit_calling(
         )
 
     generator = np.random.default_rng(seed)
-    # Halving the reference group's held-out rows draws from a child of the seeded generator, so that it leaves the stream the permutation draws come from where it was.
-    half_generator = generator.spawn(1)[0]
     fit_rows, null_rows = split_reference(np.flatnonzero(is_control), generator)
     if fit_rows.size <= values.shape[1]:
         warnings.warn(
@@ -149,8 +147,6 @@ def hit_calling(
     fitted[fit_rows] = True
     # The split partitions the control rows, so the held-out half is the controls that did not fit.
     held_out = is_control & ~fitted
-    # Only a group that holds control rows has rows of its own in the null, so every other group is tested against all of them.
-    null_distances = to_control[null_rows]
 
     codes, keys = group_codes(adata, groupby)
 
@@ -166,14 +162,13 @@ def hit_calling(
         # The controls carry a perturbation label of their own, so one group is the reference against itself.
         # Half of its held-out rows are the sample and half are what it is tested against, drawn at random because the rows are ordered by plate and well.
         shared = np.flatnonzero(held_out[rows])
-        keep[half_generator.permutation(shared)[: shared.size // 2]] = False
+        keep[generator.permutation(shared)[: shared.size // 2]] = False
         tested = rows[keep]
-        against = null_distances
-        if shared.size:
-            # This group's sample came out of the held-out rows, so it is tested against the rest of them.
-            in_sample = np.zeros(adata.n_obs, dtype=bool)
-            in_sample[tested] = True
-            against = null_distances[~in_sample[null_rows]]
+        # A row is never on both sides: the reference group's sample comes out of the held-out rows, so it is tested against the rest of them, and every other group is tested against all of them.
+        in_sample = np.zeros(adata.n_obs, dtype=bool)
+        in_sample[tested] = True
+        against_rows = null_rows[~in_sample[null_rows]]
+        against = to_control[against_rows]
         sizes[index] = tested.size
         observed[index] = _statistic(to_control[tested], against, method)[0]
         if method == "ks":
@@ -181,13 +176,13 @@ def hit_calling(
             # A permutation null drawn from the reference rows is too small, since each draw is a subset of its own reference, and a further split cannot supply pseudo-groups as large as the real ones.
             pvalues[index] = float(ks_2samp(to_control[tested], against).pvalue)
             continue
-        # The draw is as wide as the group and the null takes as many of its columns as the sample has rows, so that trimming the reference group's sample leaves the draws of the groups after it where they were.
-        draws = generator.choice(null_rows, size=(n_permutations, max(rows.size, 1)), replace=True)
-        if shared.size:
-            # The reference group's sample is half of the held-out rows, so its null is the other ways to halve them, drawn without replacement rather than bootstrapped.
-            spread = np.random.default_rng([seed, index]).random((n_permutations, null_rows.size))
-            draws = null_rows[np.argsort(spread, axis=1)[:, : tested.size]]
-        null[index] = _statistic(to_control[draws[:, : max(tested.size, 1)]], against, method)
+        # Under the null this group is exchangeable with the controls it is measured against, so the null is the other ways to draw a group of its size from the two of them pooled.
+        # Bootstrapping the controls alone instead centres the null on that sample's own median rather than the population's, and leaves the error in that centre out of the spread, so the observed lands in the tail more often than it should: the rate goes as the one-sided tail of z / sqrt(1 + tested/held-out), which called 9 to 11% of pure noise at 24 rows against 48 held-out controls.
+        # Drawing without replacement from the controls alone is worse still, since it narrows the null further.
+        pool = np.concatenate([tested, against_rows])
+        spread = np.random.default_rng([seed, index]).random((n_permutations, pool.size))
+        draws = pool[np.argsort(spread, axis=1)[:, : max(tested.size, 1)]]
+        null[index] = _statistic(to_control[draws], against, method)
 
     if method != "ks":
         pvalues = permutation_pvalue(observed, null)
