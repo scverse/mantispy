@@ -1,7 +1,7 @@
 """Cell Painting Gallery accessions, downloaded once and read with :func:`mantispy.io.read_profiles`.
 
-Every file is pinned by its sha256 in ``registry.yaml``, so a file changed upstream raises an error instead of
-loading different data. Downloads land in :attr:`mantispy.settings.cache_dir`.
+Every file is pinned by its sha256 in ``registry.yaml``, so a file changed upstream raises an error instead of loading different data.
+Downloads land in :attr:`mantispy.settings.cache_dir`.
 """
 
 from __future__ import annotations
@@ -15,7 +15,8 @@ import numpy as np
 import pandas as pd
 from scverse_misc.datasets import fetch, parse_registry, register_loader
 
-from mantispy._core._utils import as_frame, get_logger, report_drop
+from mantispy._core.frames import as_frame
+from mantispy._core.logging import get_logger, report_drop
 from mantispy._core.schema import SCHEMA_VERSION, stamp
 from mantispy._settings import settings
 from mantispy.io._jump import join_jump_annotation, read_jump
@@ -68,8 +69,7 @@ def _plate_files(name: str, plates: Sequence[str] | None, cache_dir: str | Path 
 def _augmented(name: str, plates: Sequence[str] | None, cache_dir: str | Path | None) -> AnnData:
     """Read the ``*_augmented`` profiles of some plates, which already carry their platemap.
 
-    Columns are intersected because plates of one screen can differ by a few features when a channel failed on one
-    of them.
+    Columns are intersected because plates of one screen can differ by a few features when a channel failed on one of them.
     """
     adata = read_profiles(_plate_files(name, plates, cache_dir), on_column_mismatch="intersect", resolution="well")
     obs = as_frame(adata.obs)
@@ -87,26 +87,24 @@ def _profiles(name: str, cache_dir: str | Path | None, **kwargs: Any) -> AnnData
 def bbbc021(cache_dir: str | Path | None = None) -> AnnData:
     """BBBC021, MCF-7 cells treated with small molecules, the standard mechanism-of-action benchmark.
 
-    Well-level CellProfiler profiles from Ljosa et al. 2013 (``cpg0010-caie-drugresponse``), joined to the compound,
-    concentration and mechanism of action the Broad Bioimage Benchmark Collection publishes with the image set.
-    The image set covers 113 compounds. This returns the annotated subset the benchmark uses: 38 compounds plus
-    DMSO, 103 treatments (a compound at a concentration) across 12 mechanisms. Downloads about 10 MB.
+    Well-level CellProfiler profiles from Ljosa et al. 2013 (``cpg0010-caie-drugresponse``), joined to the compound, concentration and mechanism of action the Broad Bioimage Benchmark Collection publishes with the image set.
+    The image set covers 113 compounds.
+    This returns the annotated subset the benchmark uses: 38 compounds plus DMSO, 103 treatments (a compound at a concentration) across 12 mechanisms.
+    Downloads about 10 MB.
 
     Every well carries a mechanism, DMSO included; select treatments with ``adata[~adata.obs["Metadata_Control"]]``.
 
     Args:
-        cache_dir: Where to keep the download. Defaults to :attr:`mantispy.settings.cache_dir`.
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Returns:
-        632 wells by 473 features at well resolution, with ``Metadata_Plate``, ``Metadata_Well``,
-        ``Metadata_Compound``, ``Metadata_Concentration``, ``Metadata_MOA``, ``Metadata_Perturbation`` (compound at
-        concentration) and ``Metadata_Control``.
+        632 wells by 473 features at well resolution, with ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Compound``, ``Metadata_Concentration``, ``Metadata_MOA``, ``Metadata_Perturbation`` (compound at concentration) and ``Metadata_Control``.
 
     References:
         Caie et al. (2010) Mol Cancer Ther 9:1913, the image set.
         Ljosa et al. (2013) J Biomol Screen 18:1321, these profiles and the benchmark.
-        Images courtesy of Peter Caie and David Westwood, available from the Broad Bioimage Benchmark Collection
-        (Ljosa et al. 2012, Nature Methods 9:637).
+        Images courtesy of Peter Caie and David Westwood, available from the Broad Bioimage Benchmark Collection (Ljosa et al. 2012, Nature Methods 9:637).
     """
     profiles_path, images_path, moa_path = _files("bbbc021", cache_dir)
     wells = (
@@ -156,25 +154,23 @@ def bbbc021(cache_dir: str | Path | None = None) -> AnnData:
 def rohban(plates: Sequence[str] | None = None, cache_dir: str | Path | None = None) -> AnnData:
     """The Rohban 2017 ORF overexpression screen, with the genes and cell counts that BBBC021 lacks.
 
-    ``cpg0017-rohban-pathways``: U2OS cells, one gene overexpressed per well, roughly ten replicate wells per gene
-    over five plates. Downloads about 27 MB for all five.
+    ``cpg0017-rohban-pathways``: U2OS cells, one gene overexpressed per well, roughly ten replicate wells per gene over five plates.
+    Downloads about 27 MB for all five.
 
     Args:
         plates: Plate barcodes to load, all five when omitted.
-        cache_dir: Where to keep the download. Defaults to :attr:`mantispy.settings.cache_dir`.
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Returns:
-        Wells by features at well resolution, with ``Metadata_Perturbation`` (the gene), ``Metadata_Control``,
-        ``Metadata_CellCount`` and the screen's own ``Metadata_gene_name``, ``Metadata_GeneID`` and
-        ``Metadata_ASSAY_WELL_ROLE``.
+        Wells by features at well resolution, with ``Metadata_Perturbation`` (the gene), ``Metadata_Control``, ``Metadata_CellCount`` and the screen's own ``Metadata_gene_name``, ``Metadata_GeneID`` and ``Metadata_ASSAY_WELL_ROLE``.
 
     Raises:
         KeyError: A plate is not one of the five.
 
     Notes:
-        ``Metadata_Control`` marks the wells transfected with a control ORF (Luciferase, LacZ and eGFP), the
-        reference for normalization. The untreated wells (``Metadata_gene_name == "EMPTY"``) were never transfected
-        and are not flagged; drop them if a gene-level analysis should not see them.
+        ``Metadata_Control`` marks the wells transfected with a control ORF (Luciferase, LacZ and eGFP), the reference for normalization.
+        The untreated wells (``Metadata_gene_name == "EMPTY"``) were never transfected and are not flagged; drop them if a gene-level analysis should not see them.
 
     References:
         Rohban et al. (2017) eLife 6:e24060.
@@ -196,24 +192,23 @@ def rohban(plates: Sequence[str] | None = None, cache_dir: str | Path | None = N
 def pki(plates: Sequence[str] | None = None, cache_dir: str | Path | None = None) -> AnnData:
     """Kinase inhibitors over a dose series, from the JUMP pilot.
 
-    ``cpg0008-pki``: fifteen compounds over a seven-point dose range (eleven at three doses, four at one) in U2OS
-    cells, over eight plates with 32 to 64 replicate wells per treatment. Downloads about 71 MB for all eight.
+    ``cpg0008-pki``: fifteen compounds over a seven-point dose range (eleven at three doses, four at one) in U2OS cells, over eight plates with 32 to 64 replicate wells per treatment.
+    Downloads about 71 MB for all eight.
 
     Args:
         plates: Plate barcodes to load, all eight when omitted.
-        cache_dir: Where to keep the download. Defaults to :attr:`mantispy.settings.cache_dir`.
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Returns:
-        Wells by features at well resolution, with ``Metadata_Perturbation`` (compound at concentration),
-        ``Metadata_Compound``, ``Metadata_Concentration`` (the platemap's ``mmoles_per_liter``), ``Metadata_MOA``,
-        ``Metadata_Control`` and ``Metadata_CellCount``.
+        Wells by features at well resolution, with ``Metadata_Perturbation`` (compound at concentration), ``Metadata_Compound``, ``Metadata_Concentration`` (the platemap's ``mmoles_per_liter``), ``Metadata_MOA``, ``Metadata_Control`` and ``Metadata_CellCount``.
 
     Raises:
         KeyError: A plate is not one of the eight.
 
     Notes:
-        ``Metadata_Control`` marks the DMSO wells only. The positive controls (``Metadata_control_type ==
-        "poscon"``) are not flagged, because they are perturbations and should not be normalized against.
+        ``Metadata_Control`` marks the DMSO wells only.
+        The positive controls (``Metadata_control_type == "poscon"``) are not flagged, because they are perturbations and should not be normalized against.
     """
     adata = _augmented("pki", plates, cache_dir)
     obs = as_frame(adata.obs)
@@ -244,22 +239,20 @@ def jump_target2(
 ) -> AnnData:
     """JUMP-Target-2, one 384-well plate map run at many sites.
 
-    The JUMP consortium ran the same plate map in every participating laboratory, so differences between plates
-    from different sources are technical. This makes it suited to studying batch and source effects. Twelve of the
-    141 plates in ``cpg0016-jump`` are pinned here (three sources, two batches each, two plates per batch), which
-    lets :func:`~mantispy.tl.transport` separate a laboratory effect from a plate effect.
+    The JUMP consortium ran the same plate map in every participating laboratory, so differences between plates from different sources are technical.
+    This makes it suited to studying batch and source effects.
+    Twelve of the 141 plates in ``cpg0016-jump`` are pinned here (three sources, two batches each, two plates per batch), which lets :func:`~mantispy.tl.transport` separate a laboratory effect from a plate effect.
 
     Args:
-        plates: Plate barcodes to load. The default takes one plate from each of two sources, about 26 MB;
-            ``None`` loads all twelve.
+        plates: Plate barcodes to load.
+            The default takes one plate from each of two sources, about 26 MB; ``None`` loads all twelve.
         annotate: Join the JUMP annotation, which supplies ``Metadata_Perturbation`` and ``Metadata_Control``.
             Downloads another 14 MB.
-        cache_dir: Where to keep the download. Defaults to :attr:`mantispy.settings.cache_dir`.
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Returns:
-        384 wells per plate at well resolution, carrying ``Metadata_Source``, ``Metadata_Batch``,
-        ``Metadata_Plate``, ``Metadata_Well`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``,
-        ``Metadata_InChIKey`` and ``Metadata_Control`` (JUMP's 64 DMSO wells per plate).
+        384 wells per plate at well resolution, carrying ``Metadata_Source``, ``Metadata_Batch``, ``Metadata_Plate``, ``Metadata_Well`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_InChIKey`` and ``Metadata_Control`` (JUMP's 64 DMSO wells per plate).
 
     Raises:
         KeyError: A plate is not one of the twelve.
@@ -282,11 +275,11 @@ def jump_target2(
 def pooled_rare(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
     """Pooled rare variants, 290 barcodes in a pooled screen.
 
-    ``cpg0032-pooled-rare``, aggregated to one row per barcode rather than per well, so there is no plate or well in
-    ``obs``.
+    ``cpg0032-pooled-rare``, aggregated to one row per barcode rather than per well, so there is no plate or well in ``obs``.
 
     Args:
-        cache_dir: Where to keep the download. Defaults to :attr:`mantispy.settings.cache_dir`.
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
         kwargs: Passed to :func:`mantispy.io.read_profiles`.
 
     Returns:
@@ -298,11 +291,12 @@ def pooled_rare(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
 def luad(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
     """LUAD alleles, 6,144 wells of wild-type against mutant.
 
-    ``cpg0031-caicedo-cmvip``, sixteen plates read down to the features they share. ``Metadata_x_mutation_status``
-    separates the mutants from the wild type.
+    ``cpg0031-caicedo-cmvip``, sixteen plates read down to the features they share.
+    ``Metadata_x_mutation_status`` separates the mutants from the wild type.
 
     Args:
-        cache_dir: Where to keep the download. Defaults to :attr:`mantispy.settings.cache_dir`.
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
         kwargs: Passed to :func:`mantispy.io.read_profiles`.
 
     Returns:
@@ -314,19 +308,19 @@ def luad(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
 def agnp(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
     """Silver nanoparticles, 180 wells at four sizes and three doses.
 
-    ``cpg0040-garcia-fossa-AgNP``, the smallest dataset here at 300 kB. ``Metadata_NPSize_nm`` holds the particle
-    size and ``Metadata_Concentration_mgml`` the dose.
+    ``cpg0040-garcia-fossa-AgNP``, the smallest dataset here at 300 kB.
+    ``Metadata_NPSize_nm`` holds the particle size and ``Metadata_Concentration_mgml`` the dose.
 
     Args:
-        cache_dir: Where to keep the download. Defaults to :attr:`mantispy.settings.cache_dir`.
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
         kwargs: Passed to :func:`mantispy.io.read_profiles`.
 
     Returns:
         Wells by features, indexed by plate and well.
 
     References:
-        Garcia-Fossa et al. (2023), *Interpreting image-based profiles using similarity clustering and single-cell
-        visualization*, Current Protocols.
+        Garcia-Fossa et al. (2023), *Interpreting image-based profiles using similarity clustering and single-cell visualization*, Current Protocols.
     """
     return _profiles("agnp", cache_dir, **kwargs)
 
@@ -334,11 +328,12 @@ def agnp(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
 def neuropainting(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
     """Astrocytes and neurons, 1,691 wells imaged at 20x and 63x.
 
-    ``cpg0038-tegtmeyer-neuropainting``. One plate barcode appears in more than one batch, so the observations are
-    not indexed by plate and well.
+    ``cpg0038-tegtmeyer-neuropainting``.
+    One plate barcode appears in more than one batch, so the observations are not indexed by plate and well.
 
     Args:
-        cache_dir: Where to keep the download. Defaults to :attr:`mantispy.settings.cache_dir`.
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
         kwargs: Passed to :func:`mantispy.io.read_profiles`.
 
     Returns:
@@ -350,10 +345,12 @@ def neuropainting(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData
 def amish(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
     """An Amish cohort, 468 wells varying seeding density and timepoint.
 
-    ``cpg0047-amish``. ``Metadata_density_cells_per_well`` and ``Metadata_timepoint_hours`` hold the two factors.
+    ``cpg0047-amish``.
+    ``Metadata_density_cells_per_well`` and ``Metadata_timepoint_hours`` hold the two factors.
 
     Args:
-        cache_dir: Where to keep the download. Defaults to :attr:`mantispy.settings.cache_dir`.
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
         kwargs: Passed to :func:`mantispy.io.read_profiles`.
 
     Returns:
@@ -365,11 +362,12 @@ def amish(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
 def chroma(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
     """Alternative dyes, 3,455 wells across eight channels.
 
-    ``cpg0029-chroma-pilot``, which images more channels than the five of the standard protocol. One plate barcode
-    appears at several timepoints, so the observations are not indexed by plate and well.
+    ``cpg0029-chroma-pilot``, which images more channels than the five of the standard protocol.
+    One plate barcode appears at several timepoints, so the observations are not indexed by plate and well.
 
     Args:
-        cache_dir: Where to keep the download. Defaults to :attr:`mantispy.settings.cache_dir`.
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
         kwargs: Passed to :func:`mantispy.io.read_profiles`.
 
     Returns:
@@ -384,7 +382,8 @@ def oasis_pilot(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
     ``cpg0033-oasis-pilot``, twelve plates read down to the features they share.
 
     Args:
-        cache_dir: Where to keep the download. Defaults to :attr:`mantispy.settings.cache_dir`.
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
         kwargs: Passed to :func:`mantispy.io.read_profiles`.
 
     Returns:
@@ -399,7 +398,8 @@ def miami(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
     ``cpg0006-miami``, fourteen plates read down to the features they share.
 
     Args:
-        cache_dir: Where to keep the download. Defaults to :attr:`mantispy.settings.cache_dir`.
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
         kwargs: Passed to :func:`mantispy.io.read_profiles`.
 
     Returns:
@@ -411,19 +411,19 @@ def miami(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
 def jump_crispr(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
     """The assembled JUMP CRISPR arm, 51,185 wells of knockouts.
 
-    ``cpg0016-jump-assembled``, the ``v1.0a`` well-position-corrected and feature-selected parquet, and the largest
-    dataset here at 180 MB. ``Metadata_JCP2022`` identifies the perturbation.
+    ``cpg0016-jump-assembled``, the ``v1.0a`` well-position-corrected and feature-selected parquet, and the largest dataset here at 180 MB.
+    ``Metadata_JCP2022`` identifies the perturbation.
 
     Args:
-        cache_dir: Where to keep the download. Defaults to :attr:`mantispy.settings.cache_dir`.
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
         kwargs: Passed to :func:`mantispy.io.read_profiles`.
 
     Returns:
         Wells by features, indexed by plate and well.
 
     References:
-        Chandrasekaran et al. (2024), *Three million images and morphological profiles of cells treated with matched
-        chemical and genetic perturbations*, Nature Methods.
+        Chandrasekaran et al. (2024), *Three million images and morphological profiles of cells treated with matched chemical and genetic perturbations*, Nature Methods.
     """
     return _profiles("jump_crispr", cache_dir, **kwargs)
 
@@ -431,9 +431,7 @@ def jump_crispr(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
 def _read_site(directory: Path, source: str, channels: Sequence[str]) -> AnnData:
     """One analysis directory as cells, checked against the ``<plate>-<well>-<site>`` name it is filed under.
 
-    The JUMP pipeline gives ``Cytoplasm`` a ``Parent_Cells`` and a ``Parent_Nuclei`` and gives ``Cells`` no
-    parent at all, so ``Cytoplasm`` is the only primary object that joins all three tables. One cytoplasm is
-    one cell here, and the three tables have equal length.
+    The JUMP pipeline gives ``Cytoplasm`` a ``Parent_Cells`` and a ``Parent_Nuclei`` and gives ``Cells`` no parent at all, so ``Cytoplasm`` is the only primary object that joins all three tables. One cytoplasm is one cell here, and the three tables have equal length.
     """
     adata = read_profiles(
         directory,
@@ -490,11 +488,7 @@ def _select(adata: AnnData, path: Path) -> AnnData:
 def _mark_selected(adata: AnnData) -> None:
     """Write the feature-selection mask into ``var["selected"]``, as :func:`mantispy.pp.feature_select` does.
 
-    The mask is computed on a normalized copy, because variance and correlation are only comparable between
-    features once each is on its own plate's control scale, and the values on `adata` stay as CellProfiler
-    measured them. The recipe is the one the tutorials use: ``pp.normalize`` against the negative controls,
-    drop what ``var["degenerate_scale"]`` flags, then ``pp.feature_select``. No step of it draws a random
-    number, so the same pinned files always give the same mask.
+    The mask is computed on a normalized copy, because variance and correlation are only comparable between features once each is on its own plate's control scale, and the values on `adata` stay as CellProfiler measured them. The recipe is the one the tutorials use: ``pp.normalize`` against the negative controls, drop what ``var["degenerate_scale"]`` flags, then ``pp.feature_select``. No step of it draws a random number, so the same pinned files always give the same mask.
     """
     from mantispy.pp._normalize import normalize
     from mantispy.pp._select import feature_select
@@ -510,12 +504,9 @@ def _mark_selected(adata: AnnData) -> None:
 def jump_export(cache_dir: str | Path | None = None) -> Path:
     """One real ``ExportToSpreadsheet`` directory, as CellProfiler wrote it.
 
-    A single field of view of a DMSO well of ``BR00121438``: ``Image.csv`` plus the ``Cells``, ``Cytoplasm``
-    and ``Nuclei`` tables, unmodified, for reading with :func:`mantispy.io.read_profiles`. About 18 MB, and
-    part of the download :func:`jump_cells` makes, so asking for both costs nothing extra.
+    A single field of view of a DMSO well of ``BR00121438``: ``Image.csv`` plus the ``Cells``, ``Cytoplasm`` and ``Nuclei`` tables, unmodified, for reading with :func:`mantispy.io.read_profiles`. About 18 MB, and part of the download :func:`jump_cells` makes, so asking for both costs nothing extra.
 
-    The images this was measured from are in :func:`jump_plate`, and the well-level profiles of the same
-    plate are in :func:`jump_target2`.
+    The images this was measured from are in :func:`jump_plate`, and the well-level profiles of the same plate are in :func:`jump_target2`.
 
     Args:
         cache_dir: Where to keep the download. Defaults to :attr:`mantispy.settings.cache_dir`.
@@ -524,8 +515,7 @@ def jump_export(cache_dir: str | Path | None = None) -> Path:
         The directory, to pass to :func:`mantispy.io.read_profiles`.
 
     References:
-        Chandrasekaran et al. (2024), *Three million images and morphological profiles of cells treated with
-        matched chemical and genetic perturbations*, Nature Methods.
+        Chandrasekaran et al. (2024), *Three million images and morphological profiles of cells treated with matched chemical and genetic perturbations*, Nature Methods.
     """
     paths = _files("jump_cells", cache_dir, select=lambda name: f"{_EXPORT_FOV}/" in name)
     if not paths:
@@ -536,38 +526,27 @@ def jump_export(cache_dir: str | Path | None = None) -> Path:
 def jump_cells(annotate: bool = True, selected: bool = False, cache_dir: str | Path | None = None) -> AnnData:
     """Single cells from one JUMP plate, as CellProfiler measured them.
 
-    Twenty-four wells of ``BR00121438`` at four fields of view each: eight DMSO wells, four compounds with both
-    of their replicate wells, and eight more compounds at one well. The strongest movers on this plate are
-    cytotoxic, so ranking wells by distance alone selects for empty wells; every well here holds more than 120
-    cells in its first field.
+    Twenty-four wells of ``BR00121438`` at four fields of view each: eight DMSO wells, four compounds with both of their replicate wells, and eight more compounds at one well. The strongest movers on this plate are cytotoxic, so ranking wells by distance alone selects for empty wells; every well here holds more than 120 cells in its first field.
 
-    The same plate's well-level profiles are :func:`jump_target2`, so a profile aggregated from these cells can
-    be compared with the one the consortium published.
+    The same plate's well-level profiles are :func:`jump_target2`, so a profile aggregated from these cells can be compared with the one the consortium published.
 
-    The first call downloads about 1.5 GB of CellProfiler output, reads 480 tables and writes the assembled
-    object next to them, which takes a few minutes. Later calls read that one file.
+    The first call downloads about 1.5 GB of CellProfiler output, reads 480 tables and writes the assembled object next to them, which takes a few minutes. Later calls read that one file.
 
     Args:
         annotate: Join the JUMP annotation, which supplies ``Metadata_Perturbation`` and ``Metadata_Control``.
             Downloads another 14 MB. Needed for `selected`, which is computed against the controls.
         selected: Return only the features ``var["selected"]`` marks, 1607 of 5857, as
-            :func:`mantispy.pp.subset_features` would. The subset is kept beside the whole object, so a
-            notebook that only wants the reduced one reads 87 MB instead of 308 MB.
+            :func:`mantispy.pp.subset_features` would. The subset is kept beside the whole object, so a notebook that only wants the reduced one reads 87 MB instead of 308 MB.
         cache_dir: Where to keep the download. Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Raises:
         KeyError: `selected` was asked for without `annotate`, so there are no controls to select against.
 
     Returns:
-        Cells by features at cell resolution, carrying ``Metadata_Source``, ``Metadata_Plate``,
-        ``Metadata_Well``, ``Metadata_Site`` and, when annotated, ``Metadata_JCP2022``,
-        ``Metadata_Perturbation``, ``Metadata_InChIKey`` and ``Metadata_Control``. When annotated,
-        ``var["selected"]`` marks the features feature selection keeps, so the object can be reduced with
-        ``adata[:, adata.var["selected"]]`` the way scanpy's ``highly_variable`` is used.
+        Cells by features at cell resolution, carrying ``Metadata_Source``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Site`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_InChIKey`` and ``Metadata_Control``. When annotated, ``var["selected"]`` marks the features feature selection keeps, so the object can be reduced with ``adata[:, adata.var["selected"]]`` the way scanpy's ``highly_variable`` is used.
 
     References:
-        Chandrasekaran et al. (2024), *Three million images and morphological profiles of cells treated with
-        matched chemical and genetic perturbations*, Nature Methods.
+        Chandrasekaran et al. (2024), *Three million images and morphological profiles of cells treated with matched chemical and genetic perturbations*, Nature Methods.
     """
     if selected and not annotate:
         raise KeyError("selected=True needs annotate=True: the mask is computed against the negative controls")
@@ -594,24 +573,19 @@ def jump_cells(annotate: bool = True, selected: bool = False, cache_dir: str | P
 def jump_plate(cache_dir: str | Path | None = None, **kwargs: Any) -> SpatialData:
     """The images and segmentations behind one well of ``BR00121438``.
 
-    Two fields of view of well ``O09``, a compound that changed the cells without killing them: the eight
-    channel images of each field, the CellProfiler outlines they were segmented with, and the plate's
-    ``load_data.csv``. About 44 MB, and needs the spatial extra.
+    Two fields of view of well ``O09``, a compound that changed the cells without killing them: the eight channel images of each field, the CellProfiler outlines they were segmented with, and the plate's ``load_data.csv``. About 44 MB, and needs the spatial extra.
 
-    The cells measured from these fields are in :func:`jump_cells`, and the well-level profiles of the same
-    plate in :func:`jump_target2`.
+    The cells measured from these fields are in :func:`jump_cells`, and the well-level profiles of the same plate in :func:`jump_target2`.
 
     Args:
         cache_dir: Where to keep the download. Defaults to :attr:`mantispy.settings.cache_dir`.
         kwargs: Passed to :func:`mantispy.io.read_plate`.
 
     Returns:
-        The well, with its fields as Images, the Nuclei, Cells and Cytoplasm segmentations as Labels, and the
-        ``cells`` Table.
+        The well, with its fields as Images, the Nuclei, Cells and Cytoplasm segmentations as Labels, and the ``cells`` Table.
 
     References:
-        Chandrasekaran et al. (2024), *Three million images and morphological profiles of cells treated with
-        matched chemical and genetic perturbations*, Nature Methods.
+        Chandrasekaran et al. (2024), *Three million images and morphological profiles of cells treated with matched chemical and genetic perturbations*, Nature Methods.
     """
     from mantispy.io._plate import read_plate
 

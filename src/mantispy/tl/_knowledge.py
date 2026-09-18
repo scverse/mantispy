@@ -1,11 +1,9 @@
 """Gene-set tools for genetic screens.
 
-In a CRISPR or ORF screen each perturbation is a gene, so gene-set resources apply to
-morphological profiles. The enrichment used with feature annotations tests pathways when
-given a pathway network.
+In a CRISPR or ORF screen each perturbation is a gene, so gene-set resources apply to morphological profiles.
+The enrichment used with feature annotations tests pathways when given a pathway network.
 
-The sets come from OmniPath through decoupler, in the same ``source``/``target``/``weight``
-format that :func:`~mantispy.tl.feature_sets` produces.
+The sets come from OmniPath through decoupler, in the same ``source``/``target``/``weight`` format that :func:`~mantispy.tl.feature_sets` produces.
 """
 
 from __future__ import annotations
@@ -16,7 +14,9 @@ from anndata import AnnData
 
 from mantispy._core._reduce import representation
 from mantispy._core._stats import benjamini_hochberg, permutation_pvalue
-from mantispy._core._utils import as_frame, get_logger, inplace_or_copy
+from mantispy._core.frames import as_frame
+from mantispy._core.logging import get_logger
+from mantispy._core.mutation import inplace_or_copy
 from mantispy.tl._similarity import similarity_matrix
 
 SOURCES = ("hallmark", "progeny", "collectri", "dorothea")
@@ -26,13 +26,15 @@ def gene_sets(source: str = "hallmark", organism: str = "human") -> pd.DataFrame
     """Fetch a gene-set network, or read one from a GMT file.
 
     Args:
-        source: One of ``SOURCES``, or a path ending in ``.gmt``. ``"hallmark"`` (50 broad
-            programs) is a good default for a morphological screen.
+        source: One of ``SOURCES``, or a path ending in ``.gmt``. ``"hallmark"`` (50 broad programs) is a good default for a morphological screen.
         organism: Passed to the OmniPath resource.
 
     Returns:
-        A frame with ``source``, ``target`` and ``weight``. Unweighted resources get
-        ``weight = 1.0``.
+        A frame with ``source``, ``target`` and ``weight``.
+        Unweighted resources get ``weight = 1.0``.
+
+    Raises:
+        ValueError: ``source`` is neither one of ``SOURCES`` nor a path to a ``.gmt`` file.
 
     Notes:
         Named resources are downloaded on first use and cached by decoupler.
@@ -68,14 +70,12 @@ def pathway_coherence(
 ) -> AnnData | None:
     """Score how similar the profiles of each gene set's genes are.
 
-    For each set, the mean pairwise similarity among the profiles of its genes is compared
-    with random sets of the same number of profiles. This checks whether a genetic screen
-    recovers known biology.
+    For each set, the mean pairwise similarity among the profiles of its genes is compared with random sets of the same number of profiles.
+    This checks whether a genetic screen recovers known biology.
 
     Args:
         adata: One profile per gene, normally the output of :func:`~mantispy.tl.consensus`.
-        net: A gene-set network from :func:`gene_sets`, or any frame with ``source`` and
-            ``target``.
+        net: A gene-set network from :func:`gene_sets`, or any frame with ``source`` and ``target``.
         gene_key: ``obs`` column holding the gene symbol.
         metric: Similarity between profiles, ``"cosine"`` or ``"pearson"``.
         use_rep: Measure in ``obsm[use_rep]`` instead of ``X``.
@@ -86,13 +86,16 @@ def pathway_coherence(
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes ``uns["mantispy"][key_added]`` with ``set``,
-        ``n_genes``, ``coherence``, ``pvalue`` and ``qvalue``, sorted by coherence.
+        ``None``, or the modified copy.
+        Writes ``uns["mantispy"][key_added]`` with ``set``, ``n_genes``, ``coherence``, ``pvalue`` and ``qvalue``, sorted by coherence.
+
+    Raises:
+        KeyError: ``obs`` has no column ``gene_key``.
 
     Notes:
-        Rank sets by coherence rather than by p-value. With 1000 permutations every strongly
-        coherent set reaches the p-value floor of 1/1001 and ties there. The p-value shows
-        whether a set is coherent, and the coherence orders the sets that are.
+        Rank sets by coherence rather than by p-value.
+        With 1000 permutations every strongly coherent set reaches the p-value floor of 1/1001 and ties there.
+        The p-value shows whether a set is coherent, and the coherence orders the sets that are.
     """
     obs = as_frame(adata.obs)
     if gene_key not in obs:
@@ -161,17 +164,20 @@ def enrich_hits(
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes ``uns["mantispy"][key_added]`` with ``set``,
-        ``odds_ratio`` (log, Haldane-Anscombe corrected) and ``qvalue``, the
-        Benjamini-Hochberg adjusted p-value of decoupler's Fisher test.
+        ``None``, or the modified copy.
+        Writes ``uns["mantispy"][key_added]`` with ``set``, ``odds_ratio`` (log, Haldane-Anscombe corrected) and ``qvalue``, the Benjamini-Hochberg adjusted p-value of decoupler's Fisher test.
+
+    Raises:
+        KeyError: ``obs`` has no ``gene_key`` or no ``hit_key``.
+        ValueError: Every gene or no gene is a hit at ``threshold``, so one side of the comparison is empty.
 
     Notes:
-        Over-representation is coarser than :func:`pathway_coherence`. It counts hits per set
-        and ignores whether their phenotypes resemble each other. Sets that share many genes,
-        such as the cell-cycle programs, are reported together.
+        Over-representation is coarser than :func:`pathway_coherence`.
+        It counts hits per set and ignores whether their phenotypes resemble each other.
+        Sets that share many genes, such as the cell-cycle programs, are reported together.
 
-        The background is the set of genes measured in this screen. When almost every gene is
-        a hit (190 of 193 on rohban2017), the result mostly reflects the library's composition.
+        The background is the set of genes measured in this screen.
+        When almost every gene is a hit (190 of 193 on rohban2017), the result mostly reflects the library's composition.
         In that case tighten ``threshold``, or rank by phenotype strength instead.
     """
     import decoupler as dc
@@ -202,19 +208,11 @@ def enrich_hits(
             "are empty and there is nothing to compare. Loosen the threshold if nothing was called, tighten "
             "it if everything was, or rank by phenotype strength instead."
         )
-    # ORA returns log odds ratios and BH-adjusted q-values. The background is the screen's own
-    # genes rather than decoupler's genome-wide default. ORA keeps genes ranked above n_up, so
-    # n_up = n_bg - n_hits selects the hits and reproduces Fisher's exact test.
+    # ORA returns log odds ratios and BH-adjusted q-values.
+    # The background is the screen's own genes rather than decoupler's genome-wide default.
+    # ORA keeps genes ranked above n_up, so n_up = n_bg - n_hits selects the hits and reproduces Fisher's exact test.
     # empty=False keeps sets without hits, so depletion is reported.
-    scores, qvalues = dc.mt.ora(
-        membership,
-        net,
-        tmin=1,
-        n_bg=n_bg,
-        n_up=n_bg - n_hits,
-        empty=False,
-        verbose=False,
-    )
+    scores, qvalues = dc.mt.ora(membership, net, tmin=1, n_bg=n_bg, n_up=n_bg - n_hits, empty=False, verbose=False)
     table = pd.DataFrame(
         {
             "set": list(scores.columns),

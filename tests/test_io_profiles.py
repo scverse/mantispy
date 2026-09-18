@@ -328,6 +328,39 @@ def test_a_directory_with_nothing_to_read_says_so(tmp_path):
         mt.io.read_profiles(tmp_path)
 
 
+def test_an_unknown_on_column_mismatch_is_refused(tmp_path):
+    """A typo fell through to the intersect branch, which drops every column the files
+    disagree on without saying so."""
+    path = tmp_path / "a.csv"
+    _frame().to_csv(path, index=False)
+
+    with pytest.raises(ValueError, match="on_column_mismatch"):
+        mt.io.read_profiles(path, channels=["DNA"], on_column_mismatch="intersct")
+
+
+def test_a_file_with_a_header_and_no_rows_is_refused(tmp_path):
+    """It read as a silent 0x0 object with every feature column misfiled into obs, because a
+    column of no values has no dtype to recognise a feature by."""
+    path = tmp_path / "header_only.csv"
+    _frame().iloc[:0].to_csv(path, index=False)
+
+    with pytest.raises(ValueError, match="no rows"):
+        mt.io.read_profiles(path, channels=["DNA"])
+
+
+def test_platemap_wells_that_match_nothing_are_reported(tmp_path, capsys):
+    """They were left silently NaN, so a platemap naming the wrong wells looked like a
+    successful read; io.read_jump warns for the identical join."""
+    path = tmp_path / "profiles.csv"
+    _frame().to_csv(path, index=False)
+    platemap = pd.DataFrame({"Metadata_Well": ["A01"], "Metadata_Perturbation": ["DMSO"]})
+
+    adata = mt.io.read_profiles(path, channels=["DNA"], platemap=platemap)
+
+    assert int(adata.obs["Metadata_Perturbation"].isna().sum()) == 3
+    assert "3 of 4" in capsys.readouterr().err
+
+
 def test_index_columns_name_the_observations(tmp_path):
     path = tmp_path / "profile.csv"
     _frame().to_csv(path, index=False)

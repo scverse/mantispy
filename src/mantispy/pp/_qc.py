@@ -9,17 +9,23 @@ import numpy as np
 from anndata import AnnData
 
 from mantispy._core._corr import CHUNK_BYTES
-from mantispy._core._numba import MAD, MEDIAN, grouped_stat
+from mantispy._core._numba import MAD, grouped_median_spread
 from mantispy._core._reduce import get_matrix, group_codes
-from mantispy._core._utils import as_frame, get_logger, inplace_or_copy, report_drop
+from mantispy._core._stats import MAD_TO_SIGMA
 from mantispy._core.features import blocklist_hits
+from mantispy._core.frames import as_frame
+from mantispy._core.logging import get_logger, report_drop
+from mantispy._core.mutation import inplace_or_copy
 
 #: Robust z above which a cell's area is called an outlier.
 AREA_Z_CUTOFF = 5.0
 
 
 def _nanvar(X: np.ndarray) -> np.ndarray:
-    """Per-feature variance, ignoring NaN. An all-NaN column yields NaN without a warning."""
+    """Per-feature variance, ignoring NaN.
+
+    An all-NaN column yields NaN without a warning.
+    """
     with warnings.catch_warnings(), np.errstate(invalid="ignore"):
         warnings.simplefilter("ignore", RuntimeWarning)
         return np.nanvar(X, axis=0)
@@ -28,10 +34,8 @@ def _nanvar(X: np.ndarray) -> np.ndarray:
 def _n_unique(X: np.ndarray, missing: np.ndarray) -> np.ndarray:
     """Distinct finite values per feature, a column block at a time.
 
-    Sorting a block of columns in one call avoids a Python-level ``np.unique`` per feature,
-    which took nine seconds on 50 640 JUMP wells by 3634 features. Missing values sort to
-    the end, so each column's distinct count is the number of value changes in its finite
-    prefix.
+    Sorting a block of columns in one call avoids a Python-level ``np.unique`` per feature, which took nine seconds on 50 640 JUMP wells by 3634 features.
+    Missing values sort to the end, so each column's distinct count is the number of value changes in its finite prefix.
     """
     n_obs, n_vars = X.shape
     out = np.empty(n_vars, dtype=np.int32)
@@ -58,36 +62,43 @@ def calculate_qc_metrics(
 
     Args:
         adata: Object to annotate.
-        image_shape: ``(height, width)`` of a field of view. Without it, and without
-            ``Metadata_Center_X``/``_Y`` in ``obs``, the border flag stays ``False``.
+        image_shape: ``(height, width)`` of a field of view. Without it, and without ``Metadata_Center_X``/``_Y`` in ``obs``, the border flag stays ``False``.
         border_margin: Distance from the image edge, in pixels, inside which a cell is a border cell.
-        max_nan_fraction: Largest fraction of missing features a cell may have and still pass.
-            Partial NaN is routine in CellProfiler output (Zernike and RadialDistribution
-            features are undefined for small objects), so requiring no missing values would
-            fail almost every cell.
+        max_nan_fraction: Largest fraction of missing features a cell may have and still pass. Partial NaN is routine in CellProfiler output (Zernike and RadialDistribution features are undefined for small objects), so requiring no missing values would fail almost every cell.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes the ``obs`` columns ``qc_n_nan_features``,
-        ``qc_nan_fraction``, ``qc_is_border``, ``qc_area_outlier`` and ``qc_pass``, and the
-        ``var`` columns ``qc_n_nan``, ``qc_variance`` and ``qc_n_unique``.
+        ``None``, or the modified copy. Writes the ``obs`` columns ``qc_n_nan_features``, ``qc_nan_fraction``, ``qc_is_border``, ``qc_area_outlier`` and ``qc_pass``, and the ``var`` columns ``qc_n_nan``, ``qc_variance`` and ``qc_n_unique``.
+
+    Raises:
+        KeyError: If ``var`` has no ``feature`` column, which ``qc_area_outlier`` needs to find the area features, and which the schema requires.
     """
+    if "feature" not in adata.var:
+        # An all-false flag for a check that did not run makes qc_pass a weaker statement than
+        # it claims to be: a cell of any area passes. 'feature' is a schema requirement, and
+        # mt.io.validate reports it as an error too.
+        raise KeyError(
+            "var has no 'feature' column, which qc_area_outlier needs to find the area features. "
+            "mt.io.read_profiles writes it, and mantispy._core.features.parse_feature_names builds it "
+            "for a var table made by hand; an object from tl.feature_signature carries no per-feature "
+            "annotation, and cell-level QC does not apply to it."
+        )
+
     X = get_matrix(adata)
     missing = np.isnan(X)
+    nan_fraction = missing.mean(axis=1)
+    border = _border_flag(adata, image_shape, border_margin)
+    area_outlier = _area_outlier_flag(adata, X)
 
     adata.obs["qc_n_nan_features"] = missing.sum(axis=1).astype(np.int32)
-    adata.obs["qc_nan_fraction"] = missing.mean(axis=1)
+    adata.obs["qc_nan_fraction"] = nan_fraction
     adata.var["qc_n_nan"] = missing.sum(axis=0).astype(np.int32)
     adata.var["qc_variance"] = _nanvar(X)
     adata.var["qc_n_unique"] = _n_unique(X, missing)
 
-    adata.obs["qc_is_border"] = _border_flag(adata, image_shape, border_margin)
-    adata.obs["qc_area_outlier"] = _area_outlier_flag(adata, X)
-    adata.obs["qc_pass"] = (
-        ~adata.obs["qc_is_border"].to_numpy()
-        & ~adata.obs["qc_area_outlier"].to_numpy()
-        & (adata.obs["qc_nan_fraction"].to_numpy() <= max_nan_fraction)
-    )
+    adata.obs["qc_is_border"] = border
+    adata.obs["qc_area_outlier"] = area_outlier
+    adata.obs["qc_pass"] = ~border & ~area_outlier & (nan_fraction <= max_nan_fraction)
     return None
 
 
@@ -107,21 +118,28 @@ def _border_flag(adata: AnnData, image_shape: tuple[int, int] | None, margin: in
 
 
 def _area_outlier_flag(adata: AnnData, X: np.ndarray) -> np.ndarray:
-    """Cells whose area is more than :data:`AREA_Z_CUTOFF` robust SDs from the plate median."""
+    """Cells whose area is more than :data:`AREA_Z_CUTOFF` robust SDs from the plate median.
+
+    Every compartment that measured an area is scored within its own plate and the flags are OR-ed, so a cell is an outlier when any of its areas is.
+    Scoring only the first matching column made the flag, and so ``qc_pass``, depend on the order of ``var``.
+
+    The ``feature`` column this needs is a precondition of :func:`calculate_qc_metrics`, checked there before anything is written.
+    """
     area = adata.var_names[adata.var["feature"].astype(str).eq("Area")]
     if not len(area) or "Metadata_Plate" not in adata.obs:
         return np.zeros(adata.n_obs, dtype=bool)
+    if len(area) > 1:
+        get_logger().info("qc_area_outlier flags a cell outlying in any of %s", list(area))
 
-    column = X[:, np.array([adata.var_names.get_loc(area[0])])]
+    columns = X[:, np.array([adata.var_names.get_loc(name) for name in area])]
     codes, keys = group_codes(adata, "Metadata_Plate")
-    median = grouped_stat(column, codes, len(keys), MEDIAN)
-    mad = grouped_stat(column, codes, len(keys), MAD)
+    median, mad = grouped_median_spread(columns, codes, len(keys), MAD)
 
     with np.errstate(invalid="ignore", divide="ignore"):
-        z = np.abs(column[:, 0] - median[codes, 0]) / (1.4826 * mad[codes, 0])
+        z = np.abs(columns - median[codes]) / (MAD_TO_SIGMA * mad[codes])
     # A quantized Area column can have zero MAD, which makes z infinite; posinf=0.0 stops
     # nan_to_num from turning that into 1.8e308 and flagging the whole plate.
-    return np.nan_to_num(z, nan=0.0, posinf=0.0, neginf=0.0) > AREA_Z_CUTOFF
+    return (np.nan_to_num(z, nan=0.0, posinf=0.0, neginf=0.0) > AREA_Z_CUTOFF).any(axis=1)
 
 
 @inplace_or_copy()
@@ -135,9 +153,15 @@ def filter_cells(
 
     Args:
         adata: Object to filter.
-        min_cells_per_well: Wells with fewer cells than this are dropped entirely. ``0`` disables the check.
+        min_cells_per_well: Wells with fewer cells than this are dropped entirely, counted over the cells that survive the other checks in this call so that the cells being dropped cannot hold a well above the floor. ``0`` disables the check.
         qc_pass: Also require ``obs["qc_pass"]``, which :func:`calculate_qc_metrics` writes.
         copy: Return a filtered copy instead of filtering in place.
+
+    Returns:
+        ``None``, or the filtered copy. Subsets ``obs`` to the surviving cells, and warns when that leaves none.
+
+    Raises:
+        KeyError: If ``qc_pass`` is requested but ``obs`` has no such column.
     """
     keep = np.ones(adata.n_obs, dtype=bool)
     if qc_pass:
@@ -146,7 +170,11 @@ def filter_cells(
         keep &= as_frame(adata.obs)["qc_pass"].to_numpy(dtype=bool)
     if min_cells_per_well > 0:
         codes, keys = group_codes(adata, ["Metadata_Plate", "Metadata_Well"])
-        keep &= np.bincount(codes, minlength=len(keys))[codes] >= min_cells_per_well
+        # Count the survivors, not every cell in the well: counting the cells this call is about
+        # to drop left a well of 60 cells with 12 passing above a floor of 50, and tl.aggregate
+        # then built its profile from 12 cells. Running the two checks as separate calls dropped
+        # that well, so the two paths disagreed.
+        keep &= np.bincount(codes[keep], minlength=len(keys))[codes] >= min_cells_per_well
 
     dropped = int((~keep).sum())
     if dropped:
@@ -172,14 +200,12 @@ def filter_features(
     Args:
         adata: Object to filter.
         drop_nan: Drop features that are missing everywhere.
-        min_variance: Drop features whose variance is at or below this, as
-            :func:`~mantispy.pp.feature_select` and sklearn's ``VarianceThreshold`` do.
-            ``0`` disables the check.
-        blocklist: ``"default"`` for the bundled CellProfiler blocklist, an explicit list of names,
-            or ``None`` to skip.
-            Matched against the current names and against ``var["original_name"]``, so it
-            works either side of :func:`~mantispy.pp.standardize_feature_names`.
+        min_variance: Drop features whose variance is at or below this, as :func:`~mantispy.pp.feature_select` and sklearn's ``VarianceThreshold`` do. ``0`` disables the check.
+        blocklist: ``"default"`` for the bundled CellProfiler blocklist, an explicit list of names, or ``None`` to skip. Matched against the current names and against ``var["original_name"]``, so it works either side of :func:`~mantispy.pp.standardize_feature_names`.
         copy: Return a filtered copy instead of filtering in place.
+
+    Returns:
+        ``None``, or the filtered copy. Subsets ``var`` to the surviving features, and reports how many were dropped.
     """
     X = get_matrix(adata)
     keep = np.ones(adata.n_vars, dtype=bool)

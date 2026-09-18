@@ -1,8 +1,7 @@
 """Stratified subsampling.
 
-A screen of a million cells by four thousand features is 16 GB of float32 before any
-transform allocates its output. Exploring on a representative sample and confirming on
-the full data keeps memory use manageable.
+A screen of a million cells by four thousand features is 16 GB of float32 before any transform allocates its output.
+Exploring on a representative sample and confirming on the full data keeps memory use manageable.
 """
 
 from __future__ import annotations
@@ -12,8 +11,10 @@ from collections.abc import Sequence
 import numpy as np
 from anndata import AnnData
 
-from mantispy._core._reduce import group_codes
-from mantispy._core._utils import as_frame, get_logger, record_params
+from mantispy._core._reduce import group_codes, group_offsets
+from mantispy._core.frames import as_frame
+from mantispy._core.logging import get_logger
+from mantispy._core.provenance import record_params
 
 
 def downsample(
@@ -27,17 +28,16 @@ def downsample(
 
     Args:
         adata: Object to sample from. Never modified.
-        n_per_group: Cap per group. Groups smaller than this are kept whole, so groups are capped
-            but not balanced.
-        groupby: Columns defining a group. The default caps each well, so every well is
-            represented instead of the densest wells filling the sample.
-        stratify: Keep this column's proportions inside each group, so a rare perturbation is not
-            lost to the sampling.
+        n_per_group: Cap per group. Groups smaller than this are kept whole, so groups are capped but not balanced.
+        groupby: Columns defining a group. The default caps each well, so every well is represented instead of the densest wells filling the sample.
+        stratify: Keep this column's proportions inside each group, so a rare perturbation is not lost to the sampling.
         seed: Seed for reproducibility.
 
     Returns:
-        A new object holding the sampled rows in their original order, with the call recorded
-        in ``uns["mantispy"]["params"]``.
+        A new object holding the sampled rows in their original order, with the call recorded in ``uns["mantispy"]["params"]``.
+
+    Raises:
+        ValueError: If ``n_per_group`` is below 1.
     """
     if n_per_group < 1:
         raise ValueError(f"n_per_group must be at least 1, got {n_per_group}")
@@ -47,8 +47,9 @@ def downsample(
     labels = as_frame(adata.obs)[stratify].astype(str).to_numpy() if stratify else None
     chosen: list[np.ndarray] = []
 
+    order, offsets = group_offsets(codes, len(keys))
     for index in range(len(keys)):
-        rows = np.flatnonzero(codes == index)
+        rows = order[offsets[index] : offsets[index + 1]]
         if rows.size <= n_per_group:
             chosen.append(rows)
         elif labels is None:

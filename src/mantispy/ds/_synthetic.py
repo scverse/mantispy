@@ -1,10 +1,8 @@
 """A synthetic plate whose every injected effect is recorded as ground truth.
 
-Used by the test suite and the tutorials, so both run offline and can check that a
-method recovers a known effect.
+Used by the test suite and the tutorials, so both run offline and can check that a method recovers a known effect.
 
-The default channel names are the Cell Painting ones, but any ``channels`` work,
-including a single channel.
+The default channel names are the Cell Painting ones, but any ``channels`` work, including a single channel.
 """
 
 from __future__ import annotations
@@ -15,8 +13,8 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
-from mantispy._core._utils import categorize_metadata
 from mantispy._core.features import parse_feature_names
+from mantispy._core.frames import categorize_metadata
 from mantispy._core.plate import PLATE_FORMATS, well_col, well_name, well_row
 from mantispy._core.schema import stamp
 
@@ -95,8 +93,7 @@ def synthetic_plate(
 ) -> ad.AnnData:
     """Generate a synthetic plate with known ground truth.
 
-    Every injected effect is recorded under ``uns["mantispy"]["truth"]`` so tests and
-    tutorials can check that a method recovers it.
+    Every injected effect is recorded under ``uns["mantispy"]["truth"]`` so tests and tutorials can check that a method recovers it.
 
     Args:
         n_plates: Number of plates.
@@ -121,7 +118,10 @@ def synthetic_plate(
         seed: Seed for reproducibility.
 
     Returns:
-        An :class:`~anndata.AnnData` at cell resolution.
+        An :class:`~anndata.AnnData` at cell resolution, carrying every injected effect under ``uns["mantispy"]["truth"]``, the channel vocabulary under ``channels`` and the per-image quality metrics under ``image_table``.
+
+    Raises:
+        ValueError: `n_features` needs more distinct names than `channels` can spell, or `n_wells` exceeds the largest standard plate format.
     """
     rng = np.random.default_rng(seed)
     channels = list(channels)

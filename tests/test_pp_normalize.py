@@ -152,3 +152,76 @@ def test_a_feature_constant_among_the_controls_is_flagged(cells):
     assert np.abs(np.asarray(cells.X)[:, 3]).max() > 1e6  # the multiplier the warning describes
     kept = cells[:, ~cells.var["degenerate_scale"].to_numpy()]
     assert np.abs(np.asarray(kept.X)).max() < 1e6
+
+
+def test_a_feature_both_constant_and_unmeasured_reports_both_conditions(adata):
+    """Suppressing the spread warning whenever a feature was also uncentred somewhere hid the
+    1e18 multiplication exactly when it was happening: a feature constant among the first
+    plate's controls and unmeasured among the second's left the first plate's treated rows at
+    1.0e19, with only the centring warning to show for it."""
+    plate = adata.obs["Metadata_Plate"].astype(str).to_numpy()
+    control = adata.obs["Metadata_Control"].to_numpy(dtype=bool)
+    first, second = sorted(set(plate))
+
+    values = adata.X.copy()
+    values[(plate == first) & control, 3] = 7.0  # constant among these controls, varying outside them
+    values[(plate == second) & control, 3] = np.nan  # never measured among those
+    adata.X = values
+    treated = (plate == first) & ~control
+
+    with pytest.warns(UserWarning) as record:
+        mt.pp.normalize(adata, method="mad_robustize", by="Metadata_Plate", reference="negcon")
+    messages = [str(warning.message) for warning in record]
+
+    assert any("no spread" in message and "1e18" in message for message in messages), "the multiplication"
+    assert any("no reference values" in message for message in messages), "and the missing centre"
+    assert adata.var["degenerate_scale"].to_numpy()[3]
+    assert np.abs(np.asarray(adata.X)[treated, 3]).max() > 1e6
+
+
+@pytest.mark.parametrize("method", ["mad_robustize", "standardize", "robustize"])
+def test_a_feature_unmeasured_among_one_groups_controls_keeps_its_measured_values(adata, method):
+    """Repairing the zero scale to 1.0 but leaving the centre NaN turns every measured value
+    in that group into NaN: the first plate's treated wells went from [-0.62, -0.22, -0.54]
+    to all-NaN, 6 of 6 rows on that plate against 0 of 6 on the other."""
+    plate = adata.obs["Metadata_Plate"].astype(str).to_numpy()
+    control = adata.obs["Metadata_Control"].to_numpy(dtype=bool)
+    first = sorted(set(plate))[0]
+
+    values = adata.X.copy()
+    values[(plate == first) & control, 1] = np.nan
+    adata.X = values
+    measured = (plate == first) & ~control
+    assert np.isfinite(values[measured, 1]).all(), "the feature is measured outside the controls"
+
+    with pytest.warns(UserWarning, match="no reference values"):
+        mt.pp.normalize(adata, method=method, by="Metadata_Plate", reference="negcon")
+
+    assert np.isfinite(np.asarray(adata.X)[measured, 1]).all()
+    assert adata.var["degenerate_scale"].to_numpy()[1], "and the feature is still flagged"
+
+
+def test_two_layers_keep_their_own_degenerate_flags(adata):
+    """One unsuffixed flag column for every layer lets a second call unflag a feature whose
+    value in the first layer is 8.0e18, so the remedy the docstrings give (drop the flagged
+    features) keeps it."""
+    plate = adata.obs["Metadata_Plate"].astype(str).to_numpy()
+    control = adata.obs["Metadata_Control"].to_numpy(dtype=bool)
+
+    values = adata.X.copy()
+    for name in sorted(set(plate)):
+        rows = np.flatnonzero((plate == name) & control)
+        # A quantized feature: most controls share one value, so the MAD is 0 while the SD is not.
+        values[rows, 3] = 4.0
+        values[rows[: rows.size // 5], 3] = 12.0
+        values[rows[rows.size // 5 : 2 * (rows.size // 5)], 3] = -4.0
+    adata.X = values
+
+    with pytest.warns(UserWarning, match="no spread"):
+        mt.pp.normalize(adata, method="mad_robustize", by="Metadata_Plate", reference="negcon", key_added="one")
+    assert adata.var["degenerate_scale_one"].to_numpy()[3]
+    assert np.abs(np.asarray(adata.layers["one"])[:, 3]).max() > 1e6
+
+    mt.pp.normalize(adata, method="standardize", by="Metadata_Plate", reference="negcon", key_added="two")
+    assert adata.var["degenerate_scale_one"].to_numpy()[3], "the second call unflagged the first layer"
+    assert not adata.var["degenerate_scale_two"].to_numpy()[3]

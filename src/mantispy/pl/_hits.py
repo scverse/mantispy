@@ -2,23 +2,25 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-import matplotlib.pyplot as plt
 import numpy as np
 
-from mantispy._core._utils import as_frame
+from mantispy._core.frames import as_frame
 from mantispy.pl._common import axes as _axes
 from mantispy.pl._common import table as _table
 
 if TYPE_CHECKING:
+    import pandas as pd
     from anndata import AnnData
+    from matplotlib.axes import Axes
 
 #: Values below this are clipped so they stay on the plot.
 _FLOOR = 1e-12
 
 
-def _significance(values) -> np.ndarray:
+def _significance(values: pd.Series | np.ndarray) -> np.ndarray:
+    """Q-values on a ``-log10`` scale, floored so that an exact zero stays on the plot."""
     return -np.log10(np.clip(np.asarray(values, dtype=float), _FLOOR, None))
 
 
@@ -28,11 +30,23 @@ def _threshold(adata: AnnData, function: str, default: float = 0.05) -> float:
     return float(recorded.get("threshold", default))
 
 
-def hits(adata: AnnData, key: str = "hits", label_top: int = 10, ax: plt.Axes | None = None):
+def hits(adata: AnnData, key: str = "hits", label_top: int = 10, ax: Axes | None = None) -> Axes:
     """Distance from the controls against significance, with the most distant groups labeled.
 
-    A point in the upper right moved far from the controls and is significant under the
-    permutation null. The dashed line is the q-value threshold the run used.
+    A point in the upper right moved far from the controls and is significant under the permutation null.
+    The dashed line is the q-value threshold the run used, so every point colored as a hit sits on or above it.
+
+    Args:
+        adata: Object holding the table :func:`~mantispy.tl.hit_calling` wrote.
+        key: Name of that table in ``uns["mantispy"]``.
+        label_top: How many of the most distant groups to label.
+        ax: Axes to draw on, or ``None`` for a new figure.
+
+    Returns:
+        The axes drawn on.
+
+    Raises:
+        KeyError: ``uns["mantispy"]`` holds no table under ``key``.
     """
     table = _table(adata, key, "mt.tl.hit_calling")
     ax = _axes(ax, (5.5, 4.5))
@@ -42,7 +56,9 @@ def hits(adata: AnnData, key: str = "hits", label_top: int = 10, ax: plt.Axes | 
     ax.scatter(table["distance"][~called], significance[~called], s=14, color="lightgrey", label="not called")
     ax.scatter(table["distance"][called], significance[called], s=14, color="crimson", label="hit")
 
-    threshold = _threshold(adata, key)
+    # The threshold is recorded under the name of the function, not under the name of the table
+    # it wrote, so reading it under `key` drew every run against the default of 0.05.
+    threshold = _threshold(adata, "hit_calling")
     ax.axhline(-np.log10(threshold), color="grey", ls="--", lw=1, label=f"q = {threshold}")
     for _, row in table.nlargest(label_top, "distance").iterrows():
         ax.annotate(str(row["group"]), (row["distance"], -np.log10(max(float(row["qvalue"]), _FLOOR))), fontsize=6)
@@ -53,7 +69,7 @@ def hits(adata: AnnData, key: str = "hits", label_top: int = 10, ax: plt.Axes | 
     return ax
 
 
-def _effects(adata: AnnData, group: str, key: str):
+def _effects(adata: AnnData, group: str, key: str) -> tuple[pd.DataFrame, pd.Series | None]:
     table = _table(adata, key, "mt.tl.effect_size")
     selected = table[table["group"].astype(str) == str(group)]
     if selected.empty:
@@ -63,8 +79,10 @@ def _effects(adata: AnnData, group: str, key: str):
     return selected, families
 
 
-def _family_colours(families, names) -> tuple[list, dict]:
+def _family_colours(families: pd.Series | None, names: pd.Series) -> tuple[list[Any], dict[str, Any]]:
     """One color per feature family, assigned in sorted order of the families present."""
+    import matplotlib.pyplot as plt
+
     if families is None:
         return ["tab:blue"] * len(names), {}
     labels = [str(families.get(name, "unknown")) for name in names]
@@ -72,8 +90,24 @@ def _family_colours(families, names) -> tuple[list, dict]:
     return [palette[label] for label in labels], palette
 
 
-def effect_sizes(adata: AnnData, group: str, key: str = "effect", top: int = 30, ax: plt.Axes | None = None):
-    """The largest effects for one group, colored by feature family."""
+def effect_sizes(adata: AnnData, group: str, key: str = "effect", top: int = 30, ax: Axes | None = None) -> Axes:
+    """The largest effects for one group, colored by feature family.
+
+    Args:
+        adata: Object holding the table :func:`~mantispy.tl.effect_size` wrote.
+        group: Which group of that table to draw.
+        key: Name of that table in ``uns["mantispy"]``.
+        top: How many features to draw, taken by absolute effect.
+        ax: Axes to draw on, or ``None`` for a new figure.
+
+    Returns:
+        The axes drawn on.
+
+    Raises:
+        KeyError: There is no such table, or it holds no such group.
+    """
+    import matplotlib.pyplot as plt
+
     selected, families = _effects(adata, group, key)
     strongest = selected.reindex(selected["effect"].abs().sort_values(ascending=False).index).head(top)[::-1]
     ax = _axes(ax, (6, 0.22 * len(strongest) + 1.5))
@@ -94,8 +128,26 @@ def effect_sizes(adata: AnnData, group: str, key: str = "effect", top: int = 30,
     return ax
 
 
-def feature_volcano(adata: AnnData, group: str, key: str = "effect", label_top: int = 8, ax: plt.Axes | None = None):
-    """Effect against significance, per feature, for one group."""
+def feature_volcano(
+    adata: AnnData, group: str, key: str = "effect", label_top: int = 8, ax: Axes | None = None
+) -> Axes:
+    """Effect against significance, per feature, for one group.
+
+    Args:
+        adata: Object holding the table :func:`~mantispy.tl.effect_size` wrote.
+        group: Which group of that table to draw.
+        key: Name of that table in ``uns["mantispy"]``.
+        label_top: How many features to label, taken by absolute effect.
+        ax: Axes to draw on, or ``None`` for a new figure.
+
+    Returns:
+        The axes drawn on.
+
+    Raises:
+        KeyError: There is no such table, or it holds no such group.
+    """
+    import matplotlib.pyplot as plt
+
     selected, families = _effects(adata, group, key)
     ax = _axes(ax, (5.5, 4.5))
 
@@ -129,9 +181,25 @@ def dose_response(
     compound_key: str = "Metadata_Compound",
     dose_key: str = "Metadata_Concentration",
     response: str = "hits_distance",
-    ax: plt.Axes | None = None,
-):
-    """One compound's response against dose, with the fitted curve when there is one."""
+    ax: Axes | None = None,
+) -> Axes:
+    """One compound's response against dose, with the fitted curve when there is one.
+
+    Args:
+        adata: Object holding the table :func:`~mantispy.tl.dose_response` wrote.
+        compound: Which compound of that table to draw.
+        key: Name of that table in ``uns["mantispy"]``.
+        compound_key: ``obs`` column naming the compound of each well.
+        dose_key: ``obs`` column holding the dose of each well.
+        response: ``obs`` column drawn against the dose.
+        ax: Axes to draw on, or ``None`` for a new figure.
+
+    Returns:
+        The axes drawn on.
+
+    Raises:
+        KeyError: There is no such table, or it holds no such compound.
+    """
     from mantispy.tl._dose import four_parameter_logistic
 
     table = _table(adata, key, "mt.tl.dose_response")

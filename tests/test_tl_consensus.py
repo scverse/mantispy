@@ -73,5 +73,26 @@ def test_one_missing_feature_does_not_evict_a_replicate():
     weights = modz_weights(holed)
 
     assert weights[2] > 0.15, "one gap in twenty features must not evict the replicate"
-    assert weights[2] < clean[2], "but it does carry less information, so it weighs less"
+    # Not "the weight must fall": a gap carries no information either way, and requiring it
+    # to fall is satisfied just as well by a fill that fabricates agreement instead.
+    assert weights[2] == pytest.approx(clean[2], abs=0.01), "one gap of eighty barely moves the weight"
     assert weights.sum() == pytest.approx(1.0, abs=1e-3)
+
+
+def test_a_gap_two_replicates_share_does_not_make_them_agree():
+    """A gap the same in two replicates must not correlate them: zero-filled ranks gave the pair the two largest weights.
+
+    ``similarity_matrix`` fills missing values with zero, which is below every rank, so two
+    replicates with the same gap looked alike there. Structured missingness is the common
+    case in CellProfiler output, where the same features are undefined in the same wells.
+    """
+    from mantispy.tl._consensus import modz_weights
+
+    rng = np.random.default_rng(0)
+    block = rng.normal(size=(4, 60))  # four replicates that agree on nothing
+    holed = block.copy()
+    holed[np.ix_([0, 1], np.arange(20))] = np.nan
+
+    clean, weights = modz_weights(block), modz_weights(holed)
+    assert np.abs(weights - clean).max() < 0.05, f"the gap moved the weights from {clean} to {weights}"
+    assert set(np.argsort(weights)[-2:]) == set(np.argsort(clean)[-2:]), "and must not re-rank the replicates"

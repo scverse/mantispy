@@ -3,7 +3,7 @@
 import pytest
 
 import mantispy as mt
-from mantispy._core._utils import get_logger, report_drop
+from mantispy._core.logging import get_logger, report_drop
 
 
 @pytest.fixture(autouse=True)

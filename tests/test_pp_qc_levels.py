@@ -124,3 +124,12 @@ def test_standardize_keeps_zernike_orders_distinct():
 def test_standardize_refuses_a_collision_and_an_unknown_target(cells):
     with pytest.raises(ValueError, match="target must be"):
         mt.pp.standardize_feature_names(cells, target="nonsense")
+
+
+def test_a_failed_image_qc_call_leaves_no_verdict_behind(imaged):
+    """The uns write happened before the broadcast could raise, so a call that failed still
+    left a verdict in uns that was never applied to a single cell, and pl.image_qc plotted it."""
+    imaged.obs = imaged.obs.drop(columns="Metadata_ImageNumber")
+    with pytest.raises(KeyError, match="Metadata_ImageNumber"):
+        mt.pp.image_qc(imaged)
+    assert "image_qc" not in imaged.uns["mantispy"]

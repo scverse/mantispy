@@ -162,3 +162,36 @@ def test_the_reported_floor_is_the_floor_effect_size_actually_reaches(well_profi
 
     report = mt.metrics.diagnose_testing(adata, n_draws=2).set_index("check")
     assert float(report.loc["rank test resolution", "value"]) == pytest.approx(reached, rel=0.05)
+
+
+def test_a_well_no_comparison_uses_cannot_nullify_a_feature():
+    """A non-finite value in a well that min_replicates skips must not blank that feature for every scored group."""
+
+    def scored(nan: bool):
+        generator = np.random.default_rng(7)
+        labels = ["DMSO"] * 6 + [f"p{index}" for index in range(4) for _ in range(3)] + ["solo"]
+        values = generator.standard_normal((len(labels), 6))
+        values[np.array([label == "p0" for label in labels]), 0] += 2.0
+        if nan:
+            values[-1, 0] = np.nan  # the one-well perturbation, which min_replicates=2 leaves unscored
+        obs = pd.DataFrame(
+            {
+                "Metadata_Plate": "P1",
+                "Metadata_Well": [f"A{index:02d}" for index in range(len(labels))],
+                "Metadata_Perturbation": labels,
+                "Metadata_Control": [label == "DMSO" for label in labels],
+            },
+            index=[str(index) for index in range(len(labels))],
+        )
+        adata = ad.AnnData(X=values.astype(np.float32), obs=obs)
+        adata.var_names = [f"Cells_AreaShape_F{index}" for index in range(6)]
+        stamp(adata, resolution="well")
+        mt.tl.differential_features(adata)
+        return adata.uns["mantispy"]["differential"]
+
+    clean, holed = scored(nan=False), scored(nan=True)
+    columns = ["difference", "t", "pvalue", "qvalue"]
+    assert set(holed["group"]) == {"p0", "p1", "p2", "p3"}, "the one-well group is in no fit's rows"
+    assert np.isfinite(holed[columns].to_numpy(dtype=float)).all(), "so its NaN cannot reach a scored group"
+    # Identical, not merely finite: dropping the feature would also shift the shared prior.
+    np.testing.assert_allclose(holed[columns].to_numpy(dtype=float), clean[columns].to_numpy(dtype=float), rtol=1e-10)

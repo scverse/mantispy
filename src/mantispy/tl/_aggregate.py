@@ -12,16 +12,16 @@ from anndata import AnnData
 
 from mantispy._core._numba import MEAN, MEDIAN
 from mantispy._core._reduce import group_codes, reduce_grouped
-from mantispy._core._utils import as_frame, categorize_metadata, get_logger, record_params
-from mantispy._core.schema import stamp
+from mantispy._core.frames import as_frame, categorize_metadata
+from mantispy._core.logging import get_logger
+from mantispy._core.provenance import record_params
+from mantispy._core.schema import resolution_for, stamp
 
 #: Aggregation functions, mapped to the kernel selector that computes them.
 FUNCTIONS = {"median": MEDIAN, "mean": MEAN}
 
-_WELL_KEYS = {"Metadata_Plate", "Metadata_Well"}
-
-#: uns["mantispy"] keys that survive aggregation because they describe the features or the
-#: experiment. Result tables are keyed on the input rows and are dropped.
+#: uns["mantispy"] keys that survive aggregation because they describe the features or the experiment.
+#: Result tables are keyed on the input rows and are dropped.
 _INHERITED = frozenset({"channels", "dataset", "truth", "feature_select", "blocklist"})
 
 
@@ -42,13 +42,15 @@ def aggregate(
         layer: Aggregate this layer instead of ``X``.
 
     Returns:
-        A new :class:`~anndata.AnnData` with one row per group. ``var`` is carried over
-        unchanged; ``obs`` holds the grouping columns, ``Metadata_CellCount``, and every
-        other ``Metadata_`` column that is constant within every group.
+        A new :class:`~anndata.AnnData` with one row per group.
+        ``var`` is carried over unchanged; ``obs`` holds the grouping columns, ``Metadata_CellCount``, and every other ``Metadata_`` column that is constant within every group.
+        The resolution recorded is ``"well"`` when ``by`` holds both ``Metadata_Plate`` and ``Metadata_Well``, since a finer grouping such as one row per site is still per-well or finer, and ``"perturbation"`` otherwise.
+
+    Raises:
+        ValueError: ``func`` is not one of ``FUNCTIONS``.
 
     Notes:
-        This uses mantispy's own NaN-skipping kernel rather than :func:`scanpy.get.aggregate`,
-        which propagates NaN and is measurably slower on both mean and median.
+        This uses mantispy's own NaN-skipping kernel rather than :func:`scanpy.get.aggregate`, which propagates NaN and is measurably slower on both mean and median.
     """
     if func not in FUNCTIONS:
         raise ValueError(f"func must be one of {tuple(FUNCTIONS)}, got {func!r}")
@@ -66,7 +68,7 @@ def aggregate(
     obs.index = pd.Index([str(index) for index in range(len(obs))])
 
     result = ad.AnnData(X=values[keep].astype(np.float32), obs=obs, var=as_frame(adata.var).copy())
-    stamp(result, resolution="well" if set(columns) == _WELL_KEYS else "perturbation")
+    stamp(result, resolution=resolution_for(columns))
     store = adata.uns.get("mantispy", {})
     # Deep copies, so the aggregate and its source do not share mutable frames.
     result.uns["mantispy"].update({key: deepcopy(value) for key, value in store.items() if key in _INHERITED})

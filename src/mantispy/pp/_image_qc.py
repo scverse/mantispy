@@ -1,7 +1,7 @@
 """Image-level quality control, from CellProfiler's MeasureImageQuality columns.
 
-No pixels are read. Everything here works off ``uns["mantispy"]["image_table"]``, which
-the reader fills from ``Image.csv``.
+No pixels are read.
+Everything here works off ``uns["mantispy"]["image_table"]``, which the reader fills from ``Image.csv``.
 """
 
 from __future__ import annotations
@@ -13,7 +13,9 @@ import numpy as np
 import pandas as pd
 from anndata import AnnData
 
-from mantispy._core._utils import as_frame, get_logger, inplace_or_copy, report_drop
+from mantispy._core.frames import as_frame
+from mantispy._core.logging import get_logger, report_drop
+from mantispy._core.mutation import inplace_or_copy
 
 #: Metrics MeasureImageQuality writes that say something about usable image quality.
 DEFAULT_METRICS = ("FocusScore", "PowerLogLogSlope", "PercentMaximal", "PercentMinimal", "Saturation")
@@ -52,9 +54,8 @@ def _robust_z(values: np.ndarray) -> np.ndarray:
 def _lower_half_z(scores: np.ndarray) -> np.ndarray:
     """Robust z for a one-sided, right-skewed score.
 
-    The spread is taken from the values at or below the median, because outliers sit in
-    the upper half and would inflate it. A few badly out-of-focus images can otherwise
-    raise the threshold enough to hide most of them.
+    The spread is taken from the values at or below the median, because outliers sit in the upper half and would inflate it.
+    A few badly out-of-focus images can otherwise raise the threshold enough to hide most of them.
     """
     median = np.median(scores)
     lower = scores[scores <= median]
@@ -90,30 +91,20 @@ def image_qc(
     """Flag low-quality images and broadcast the verdict onto their cells.
 
     Args:
-        adata: Object carrying ``uns["mantispy"]["image_table"]`` and
-            ``obs["Metadata_ImageNumber"]``.
+        adata: Object carrying ``uns["mantispy"]["image_table"]`` and ``obs["Metadata_ImageNumber"]``.
         metrics: Which MeasureImageQuality metrics to use.
         channel: Restrict to one channel's metrics. ``None`` uses every channel present.
-        method: ``"mad"`` flags an image when any metric is an outlier within its ``by`` group.
-            ``"knn"`` flags images that sit far from their neighbors in the standardized
-            metric space, which catches unusual combinations of metrics that a per-metric
-            rule misses.
-        threshold: ``"auto"`` flags a score above the method's default robust-z cutoff
-            (``DEFAULT_CUTOFF``). A float thresholds the raw score instead.
-        by: Compute thresholds within each group of this column, normally the plate.
-            ``None`` pools every image, which flags every image on a dim plate and misses a
-            blurred image on a bright one.
+        method: ``"mad"`` flags an image when any metric is an outlier within its ``by`` group. ``"knn"`` flags images that sit far from their neighbors in the standardized metric space, which catches unusual combinations of metrics that a per-metric rule misses.
+        threshold: ``"auto"`` flags a score above the method's default robust-z cutoff (``DEFAULT_CUTOFF``). A float thresholds the raw score instead.
+        by: Compute thresholds within each group of this column, normally the plate. ``None`` pools every image, which flags every image on a dim plate and misses a blurred image on a bright one.
         k: Neighbors for ``method="knn"``.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes ``uns["mantispy"]["image_qc"]`` (the image
-        table plus ``qc_image_score`` and ``qc_image_pass``) and broadcasts
-        ``obs["qc_image_pass"]``.
+        ``None``, or the modified copy. Writes ``uns["mantispy"]["image_qc"]`` (the image table plus ``qc_image_score`` and ``qc_image_pass``) and broadcasts ``obs["qc_image_pass"]``.
 
     Raises:
-        KeyError: If the image table is missing, holds none of the requested metrics, or lacks
-            the ``by`` column.
+        KeyError: If the image table is missing, holds none of the requested metrics, or lacks the ``by`` column, or ``obs`` has no ``Metadata_ImageNumber`` to broadcast onto.
         ValueError: If ``method`` is unknown, or some images have no value in ``by``.
     """
     if method not in METHODS:
@@ -136,11 +127,12 @@ def image_qc(
             "pool every image, which flags all images on a plate that is dimmer than the rest."
         )
     groups = table[by].to_numpy() if by is not None else np.zeros(len(table), dtype=int)
-    if by is not None and pd.isna(groups).any():
+    unassigned = int(pd.isna(groups).sum())
+    if unassigned:
         # `groups == group` is False for NaN, so those images would never be scored and would
         # pass. Images where segmentation found nothing are the ones likely to lack a plate.
         raise ValueError(
-            f"{int(pd.isna(groups).sum())} of {len(table)} images have no {by!r}, so they cannot be "
+            f"{unassigned} of {len(table)} images have no {by!r}, so they cannot be "
             "thresholded within their group. Fill the column, drop those images, or pass by=None "
             "to pool every image."
         )
@@ -165,7 +157,6 @@ def image_qc(
 
     table["qc_image_score"] = score
     table["qc_image_pass"] = passed
-    store["image_qc"] = table
 
     if "Metadata_ImageNumber" not in adata.obs:
         raise KeyError("obs has no 'Metadata_ImageNumber' column to broadcast image QC onto")
@@ -177,14 +168,28 @@ def image_qc(
             UserWarning,
             stacklevel=3,
         )
+    # Both writes happen after the last thing that can fail, so a call that raises leaves no
+    # verdict in uns for pl.image_qc to plot and no obs column disagreeing with one.
     adata.obs["qc_image_pass"] = broadcast.fillna(True).to_numpy(dtype=bool)
+    store["image_qc"] = table
     get_logger().info("image_qc(%s) flagged %d of %d images", method, int((~passed).sum()), len(table))
     return None
 
 
 @inplace_or_copy()
 def filter_images(adata: AnnData, copy: bool = False) -> AnnData | None:
-    """Drop every cell belonging to an image that failed :func:`~mantispy.pp.image_qc`."""
+    """Drop every cell belonging to an image that failed :func:`~mantispy.pp.image_qc`.
+
+    Args:
+        adata: Object carrying ``obs["qc_image_pass"]``.
+        copy: Return a filtered copy instead of filtering in place.
+
+    Returns:
+        ``None``, or the filtered copy. Subsets ``obs`` to the cells whose image passed, and reports how many were dropped.
+
+    Raises:
+        KeyError: If ``obs`` has no ``qc_image_pass``, which :func:`~mantispy.pp.image_qc` writes.
+    """
     if "qc_image_pass" not in adata.obs:
         raise KeyError("obs has no 'qc_image_pass'; run mt.pp.image_qc first")
     keep = as_frame(adata.obs)["qc_image_pass"].to_numpy(dtype=bool)

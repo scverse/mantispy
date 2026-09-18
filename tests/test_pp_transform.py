@@ -63,3 +63,33 @@ def test_it_is_reproducible(cells):
     first = mt.pp.rank_int(cells, copy=True)
     second = mt.pp.rank_int(cells, copy=True)
     np.testing.assert_array_equal(np.asarray(first.X), np.asarray(second.X))
+
+
+def test_a_single_measured_value_is_not_erased():
+    """The fewer-than-two-finite-values guard skipped the column without writing, so the
+    NaN prefill was returned and a measured value came back missing, although the transform
+    is well defined at n=1: ndtri((1 - 0.375) / (1 - 0.75 + 1)) = 0.0."""
+    values = np.array([[1.0, np.nan], [np.nan, np.nan], [np.nan, 3.0], [np.nan, 4.0], [np.nan, 5.0]])
+
+    out = rank_inverse_normal(values)
+    assert out[0, 0] == pytest.approx(0.0)
+    assert np.isnan(out[1:, 0]).all(), "only missing entries come back missing"
+    assert np.isfinite(out[2:, 1]).all()
+
+
+def test_rank_int_keeps_a_feature_measured_once_per_group():
+    """Ranking within a group hit the same guard, so a feature measured in exactly one well
+    per plate lost all three of its values under by='Metadata_Plate' while keeping them
+    under by=None."""
+    from mantispy.ds import synthetic_plate
+
+    adata = synthetic_plate(n_plates=3, n_wells=6, n_cells=1, n_features=8, seed=0)
+    plate = adata.obs["Metadata_Plate"].astype(str).to_numpy()
+    values = np.asarray(adata.X, dtype=np.float64).copy()
+    values[:, 1] = np.nan
+    for index, name in enumerate(sorted(set(plate))):
+        values[np.flatnonzero(plate == name)[0], 1] = 1.0 + index
+    adata.X = values.astype(np.float32)
+
+    mt.pp.rank_int(adata, by="Metadata_Plate", key_added="ranked")
+    assert int(np.isfinite(np.asarray(adata.layers["ranked"])[:, 1]).sum()) == 3

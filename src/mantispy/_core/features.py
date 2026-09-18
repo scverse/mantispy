@@ -1,15 +1,13 @@
 """Parse CellProfiler and cp_measure column names into structured annotations.
 
-This is the only module that parses feature names. Its output populates ``adata.var``,
-and nothing downstream re-parses names.
+This is the only module that parses feature names.
+Its output populates ``adata.var``, and nothing downstream re-parses names.
 
 The grammar handled here is::
 
     [<Object>_]<Group>_<feature words>[_<channel>...][_<numeric params>][_<NofM>]
 
-Columns that are not measurements (object numbers, parent/child links, locations, file
-names, metadata) get ``is_feature = False`` so callers can route them somewhere other
-than ``X``.
+Columns that are not measurements (object numbers, parent/child links, locations, file names, metadata) get ``is_feature = False`` so callers can route them somewhere other than ``X``.
 """
 
 from __future__ import annotations
@@ -84,8 +82,8 @@ PLAIN_FEATURE_GROUPS = frozenset({"AreaShape", "Neighbors", "AreaOccupied", "Zer
 
 _KNOWN_GROUPS = NON_FEATURE_GROUPS | CHANNEL_BEARING_GROUPS | PLAIN_FEATURE_GROUPS
 
-#: Maps a lower-cased channel token to the stain it stands for, so that datasets naming
-#: a channel differently stay comparable. Adapted from scverse/cell-painting-io (MIT).
+#: Maps a lower-cased channel token to the stain it stands for, so that datasets naming a channel differently stay comparable.
+#: Adapted from scverse/cell-painting-io (MIT).
 #: Nothing is renamed unless a caller asks for canonical channels.
 CHANNEL_ALIASES: dict[str, str] = {
     "dna": "dna",
@@ -109,9 +107,8 @@ CHANNEL_ALIASES: dict[str, str] = {
 def canonical_channel(channel: str | None, aliases: dict[str, str] | None = None) -> str | None:
     """Map a channel name onto its canonical stain, or return it unchanged.
 
-    Multi-channel values such as ``"DNA|ER"`` are mapped component-wise. Unknown names
-    pass through lower-cased, so an unfamiliar vocabulary still compares consistently
-    with itself.
+    Multi-channel values such as ``"DNA|ER"`` are mapped component-wise.
+    Unknown names pass through lower-cased, so an unfamiliar vocabulary still compares consistently with itself.
     """
     if channel is None or (isinstance(channel, float) and pd.isna(channel)):
         return None
@@ -133,9 +130,8 @@ def _is_numeric(token: str) -> bool:
 def _infer_channels(names: Sequence[str]) -> list[str]:
     """Guess the channel vocabulary from a list of column names.
 
-    A token counts as a channel when it trails a channel-bearing group, is neither
-    numeric nor a radial bin, and shows up with at least two distinct feature names in
-    that group. Used only when the caller does not pass ``channels``.
+    A token counts as a channel when it trails a channel-bearing group, is neither numeric nor a radial bin, and shows up with at least two distinct feature names in that group.
+    Used only when the caller does not pass ``channels``.
     """
     seen: dict[str, set[str]] = defaultdict(set)
     for name in names:
@@ -209,13 +205,12 @@ def parse_feature_names(names: Sequence[str], channels: Sequence[str] | None = N
 
     Args:
         names: Column names from a CellProfiler or cp_measure table.
-        channels: The channel vocabulary. When omitted it is inferred from ``names``, which is
-            less reliable than passing the channels the reader found in ``Image.csv``.
+        channels: The channel vocabulary.
+            When omitted it is inferred from ``names``, which is less reliable than passing the channels the reader found in ``Image.csv``.
 
     Returns:
-        A frame indexed by ``names`` with the columns listed in :data:`COLUMNS`. Text
-        columns are ``category`` dtype (so they survive an h5ad round trip even when they
-        are entirely missing) and ``is_feature`` is ``bool``.
+        A frame indexed by ``names`` with the columns listed in :data:`COLUMNS`.
+        Text columns are ``category`` dtype (so they survive an h5ad round trip even when they are entirely missing) and ``is_feature`` is ``bool``.
     """
     names = list(names)
     channel_set = frozenset(channels if channels is not None else _infer_channels(names))
@@ -243,13 +238,9 @@ def load_blocklist(name: str = "default") -> list[str]:
 def blocklist_hits(candidates: Sequence[np.ndarray], blocklist: str | Sequence[str] = "default") -> np.ndarray:
     """Boolean mask, ``True`` where any of ``candidates`` names a blocked feature.
 
-    ``candidates`` is normally the current ``var_names`` together with
-    ``var["original_name"]``, so a blocklist matches before and after
-    :func:`~mantispy.pp.standardize_feature_names`. That function rewrites channel-bearing
-    names into a grammar no blocklist entry matches, but keeps the incoming name in
-    ``original_name``. Both call sites that apply a blocklist
-    (:func:`~mantispy.pp.filter_features` and the ``blocklist`` operation of
-    :func:`~mantispy.pp.feature_select`) use this function.
+    ``candidates`` is normally the current ``var_names`` together with ``var["original_name"]``, so a blocklist matches before and after :func:`~mantispy.pp.standardize_feature_names`.
+    That function rewrites channel-bearing names into a grammar no blocklist entry matches, but keeps the incoming name in ``original_name``.
+    Both call sites that apply a blocklist (:func:`~mantispy.pp.filter_features` and the ``blocklist`` operation of :func:`~mantispy.pp.feature_select`) use this function.
     """
     blocked = set(load_blocklist(blocklist) if isinstance(blocklist, str) else blocklist)
     return np.logical_or.reduce([np.isin(np.asarray(candidate), list(blocked)) for candidate in candidates])

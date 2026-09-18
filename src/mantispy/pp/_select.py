@@ -1,14 +1,11 @@
 """Feature selection, with pycytominer's semantics.
 
-Every operation returns a boolean keep mask over ``var``. :func:`feature_select` combines
-them into one boolean column without dropping anything, and :func:`subset_features` does
-the subsetting.
+Every operation returns a boolean keep mask over ``var``.
+:func:`feature_select` combines them into one boolean column without dropping anything, and :func:`subset_features` does the subsetting.
 
-Operation names and behavior follow pycytominer. ``variance_threshold`` is an
-sklearn-style variance cut, and the frequency and uniqueness rules are in the separate
-``frequency_threshold``. ``correlation_threshold`` judges each pair against a ranking
-computed once from the full matrix instead of sweeping greedily, and thresholds the signed
-correlation, so two features correlated at -1.0 are both kept.
+Operation names and behavior follow pycytominer.
+``variance_threshold`` is an sklearn-style variance cut, and the frequency and uniqueness rules are in the separate ``frequency_threshold``.
+``correlation_threshold`` judges each pair against a ranking computed once from the full matrix instead of sweeping greedily, and thresholds the signed correlation, so two features correlated at -1.0 are both kept.
 """
 
 from __future__ import annotations
@@ -19,9 +16,11 @@ import numpy as np
 from anndata import AnnData
 
 from mantispy._core._corr import correlated_pairs
-from mantispy._core._reduce import get_matrix, group_codes
-from mantispy._core._utils import as_frame, get_logger, inplace_or_copy
+from mantispy._core._reduce import get_matrix, group_codes, group_offsets
 from mantispy._core.features import blocklist_hits
+from mantispy._core.frames import as_frame
+from mantispy._core.logging import get_logger
+from mantispy._core.mutation import inplace_or_copy
 
 #: Operations, in the order pycytominer applies them by default.
 OPERATIONS = (
@@ -45,8 +44,7 @@ DEFAULT_OPERATIONS = (
 def _op_variance_threshold(X: np.ndarray, min_variance: float = 1e-6) -> np.ndarray:
     """Drop features whose variance is at or below ``min_variance``.
 
-    sklearn's ``VarianceThreshold`` keeps ``variance > threshold`` and uses the
-    population variance, so ``ddof=0``.
+    sklearn's ``VarianceThreshold`` keeps ``variance > threshold`` and uses the population variance, so ``ddof=0``.
     """
     with np.errstate(invalid="ignore"):
         variance = np.nanvar(X, axis=0, ddof=0)
@@ -72,10 +70,8 @@ def _op_frequency_threshold(X: np.ndarray, freq_cut: float = 0.05, unique_cut: f
 def _op_correlation_threshold(X: np.ndarray, threshold: float = 0.9, method: str = "pearson") -> np.ndarray:
     """Drop one feature from every pair correlated above ``threshold``.
 
-    Each over-threshold pair is judged on its own against a ranking of total absolute
-    correlation computed once from the full matrix; the member ranked as more correlated
-    overall is dropped. There is no iterative sweep, so a feature already dropped by one
-    pair does not spare its partner in another.
+    Each over-threshold pair is judged on its own against a ranking of total absolute correlation computed once from the full matrix; the member ranked as more correlated overall is dropped.
+    There is no iterative sweep, so a feature already dropped by one pair does not spare its partner in another.
     """
     n_vars = X.shape[1]
     # Signed correlation, as in pycytominer, which keeps a pair correlated at -1.0.
@@ -111,9 +107,7 @@ def _op_drop_outliers(X: np.ndarray, outlier_cutoff: float = 500.0) -> np.ndarra
 def _op_blocklist(adata: AnnData, blocklist: str | Sequence[str] = "default") -> np.ndarray:
     """Drop features named in the blocklist.
 
-    Matched against the current names and, like :func:`~mantispy.pp.filter_features`,
-    against ``var["original_name"]``, so the blocklist still applies after
-    :func:`~mantispy.pp.standardize_feature_names` has renamed the features.
+    Matched against the current names and, like :func:`~mantispy.pp.filter_features`, against ``var["original_name"]``, so the blocklist still applies after :func:`~mantispy.pp.standardize_feature_names` has renamed the features.
     """
     names = [adata.var_names.to_numpy()]
     if "original_name" in adata.var:
@@ -124,12 +118,14 @@ def _op_blocklist(adata: AnnData, blocklist: str | Sequence[str] = "default") ->
 def _op_noise_removal(X: np.ndarray, codes: np.ndarray, stdev_cutoff: float = 0.8) -> np.ndarray:
     """Drop features that vary too much within a perturbation group.
 
-    The statistic is the mean, over groups, of each group's population standard
-    deviation (``ddof=0``).
+    The statistic is the mean, over groups, of each group's population standard deviation (``ddof=0``).
     """
     n_groups = int(codes.max()) + 1
+    order, offsets = group_offsets(codes, n_groups)
     with np.errstate(invalid="ignore"):
-        deviations = np.stack([np.nanstd(X[codes == group], axis=0, ddof=0) for group in range(n_groups)])
+        deviations = np.stack(
+            [np.nanstd(X[order[offsets[group] : offsets[group + 1]]], axis=0, ddof=0) for group in range(n_groups)]
+        )
     return ~(np.nan_to_num(deviations.mean(axis=0), nan=0.0) > stdev_cutoff)
 
 
@@ -154,38 +150,34 @@ def feature_select(
 
     Args:
         adata: Object to select features on. Usually well-level profiles.
-        operations: Which operations to run, from ``OPERATIONS``. The default omits
-            ``frequency_threshold``, ``drop_outliers`` and ``noise_removal``, matching
-            pycytominer's own default.
+        operations: Which operations to run, from ``OPERATIONS``. The default omits ``frequency_threshold``, ``drop_outliers`` and ``noise_removal``, matching pycytominer's own default.
         min_variance: ``variance_threshold``: keep features with variance above this.
-        freq_cut: ``frequency_threshold``: drop a feature when the count of its second most common
-            value divided by the count of its most common is below this. Either this rule or
-            ``unique_cut`` drops a feature.
-        unique_cut: ``frequency_threshold``: drop a feature when its share of distinct values is
-            below this.
+        freq_cut: ``frequency_threshold``: drop a feature when the count of its second most common value divided by the count of its most common is below this. Either this rule or ``unique_cut`` drops a feature.
+        unique_cut: ``frequency_threshold``: drop a feature when its share of distinct values is below this.
         corr_threshold: ``correlation_threshold``: drop one member of every pair correlated above this.
         corr_method: ``correlation_threshold``: ``"pearson"`` or ``"spearman"``.
         na_cutoff: ``drop_na_columns``: drop features missing in more than this fraction of rows.
         outlier_cutoff: ``drop_outliers``: drop features whose absolute value exceeds this.
-        blocklist: ``blocklist``: ``"default"`` for the bundled list, or explicit names. Matched
-            against the current names and against ``var["original_name"]``, so it works
-            either side of :func:`~mantispy.pp.standardize_feature_names`.
+        blocklist: ``blocklist``: ``"default"`` for the bundled list, or explicit names. Matched against the current names and against ``var["original_name"]``, so it works either side of :func:`~mantispy.pp.standardize_feature_names`.
         noise_removal_perturb_groups: ``noise_removal``: ``obs`` column grouping replicates.
-        noise_removal_stdev_cutoff: ``noise_removal``: drop features whose within-group standard
-            deviation, averaged over groups, is above this.
+        noise_removal_stdev_cutoff: ``noise_removal``: drop features whose within-group standard deviation, averaged over groups, is above this.
         key_added: Name of the boolean ``var`` column to write.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes ``var[key_added]`` and a per-operation count
-        of removals to ``uns["mantispy"]["feature_select"]``. Nothing is dropped; use
-        :func:`subset_features` for that.
+        ``None``, or the modified copy. Writes ``var[key_added]`` and a per-operation count of removals to ``uns["mantispy"]["feature_select"]``, each count being what that operation removes on its own. Nothing is dropped; use :func:`subset_features` for that.
+
+    Raises:
+        ValueError: If ``operations`` names an operation that is not in ``OPERATIONS``.
+        KeyError: If ``noise_removal`` is requested but ``noise_removal_perturb_groups`` is not an ``obs`` column.
 
     Notes:
-        ``correlation_threshold`` is the most expensive operation. pycytominer uses
-        ``pandas.DataFrame.corr``, one Cython pass per column pair. Here the pairs come from
-        chunked matrix products over blocks of columns, so no ``n_vars ** 2`` array is held in
-        memory.
+        Every operation judges the full feature set, so each count in ``uns["mantispy"]["feature_select"]`` says what that operation alone would remove and is the same whatever order ``operations`` runs in.
+        The counts therefore overlap: a feature that is both constant and mostly missing is counted by ``variance_threshold`` and by ``drop_na_columns``, and the counts sum to more than the number of features actually removed, which is ``n_vars`` minus ``var[key_added].sum()``.
+
+        ``correlation_threshold`` is the most expensive operation.
+        pycytominer uses ``pandas.DataFrame.corr``, one Cython pass per column pair.
+        Here the pairs come from chunked matrix products over blocks of columns, so no ``n_vars ** 2`` array is held in memory.
     """
     unknown = set(operations) - set(OPERATIONS)
     if unknown:
@@ -196,25 +188,27 @@ def feature_select(
     removed: dict[str, int] = {}
 
     for operation in operations:
-        before = keep.copy()
         if operation == "variance_threshold":
-            keep &= _op_variance_threshold(X, min_variance)
+            mask = _op_variance_threshold(X, min_variance)
         elif operation == "frequency_threshold":
-            keep &= _op_frequency_threshold(X, freq_cut, unique_cut)
+            mask = _op_frequency_threshold(X, freq_cut, unique_cut)
         elif operation == "correlation_threshold":
-            keep &= _op_correlation_threshold(X, corr_threshold, corr_method)
+            mask = _op_correlation_threshold(X, corr_threshold, corr_method)
         elif operation == "drop_na_columns":
-            keep &= _op_drop_na_columns(X, na_cutoff)
+            mask = _op_drop_na_columns(X, na_cutoff)
         elif operation == "blocklist":
-            keep &= _op_blocklist(adata, blocklist)
+            mask = _op_blocklist(adata, blocklist)
         elif operation == "drop_outliers":
-            keep &= _op_drop_outliers(X, outlier_cutoff)
-        elif operation == "noise_removal":
+            mask = _op_drop_outliers(X, outlier_cutoff)
+        else:
+            # Unknown names were rejected above, so what is left is `noise_removal`.
             if noise_removal_perturb_groups not in adata.obs:
                 raise KeyError(f"obs has no column {noise_removal_perturb_groups!r} to group replicates by")
             codes, _ = group_codes(adata, noise_removal_perturb_groups)
-            keep &= _op_noise_removal(X, codes, noise_removal_stdev_cutoff)
-        removed[operation] = int((before & ~keep).sum())
+            mask = _op_noise_removal(X, codes, noise_removal_stdev_cutoff)
+        # Counted against every feature rather than against the features its predecessors left, so the count does not depend on where the operation sits in `operations`.
+        removed[operation] = int((~mask).sum())
+        keep &= mask
 
     adata.var[key_added] = keep
     adata.uns.setdefault("mantispy", {})["feature_select"] = removed
@@ -228,7 +222,18 @@ def feature_select(
 
 
 def subset_features(adata: AnnData, key: str = "selected") -> AnnData:
-    """Return a new object holding only the features flagged by ``var[key]``."""
+    """Return a new object holding only the features flagged by ``var[key]``.
+
+    Args:
+        adata: Object to subset. Never modified.
+        key: Boolean ``var`` column naming the features to keep, as :func:`feature_select` writes.
+
+    Returns:
+        A new object holding only the flagged features.
+
+    Raises:
+        KeyError: If ``var`` has no column ``key``.
+    """
     if key not in adata.var:
         raise KeyError(f"var has no column {key!r}; run mt.pp.feature_select first")
     return adata[:, as_frame(adata.var)[key].to_numpy(dtype=bool)].copy()

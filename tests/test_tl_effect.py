@@ -129,7 +129,7 @@ def test_effect_size_pvalues_are_unchanged_by_the_fast_path(perturbed):
     from scipy.stats import mannwhitneyu
 
     from mantispy._core._reduce import get_matrix, group_codes
-    from mantispy._core._utils import reference_mask
+    from mantispy._core.masks import reference_mask
 
     mt.tl.effect_size(perturbed)
     values = get_matrix(perturbed).astype(np.float64)
@@ -169,7 +169,7 @@ def test_the_pre_sorted_wasserstein_matches_scipy(kind):
 def test_wasserstein_features_is_unchanged_by_the_pre_sorted_path(perturbed):
     """End to end: the same distances the per-group path would have written."""
     from mantispy._core._reduce import get_matrix, group_codes
-    from mantispy._core._utils import reference_mask
+    from mantispy._core.masks import reference_mask
 
     mt.tl.wasserstein_features(perturbed)
     values = get_matrix(perturbed)
@@ -226,3 +226,74 @@ def test_a_features_pvalue_does_not_depend_on_its_neighbours_in_the_array():
     # The untied features reach the exact null and land an order of magnitude below the
     # tied one, which keeps the approximation.
     assert got.iloc[1] * 10 < got.iloc[0]
+
+
+def test_an_infinity_is_dropped_like_a_missing_value_rather_than_returned_as_a_distance(perturbed):
+    """wasserstein_features splits usable columns on isfinite and ragged ones on isnan, so an inf column fell between the two and came back inf."""
+    rng = np.random.default_rng(0)
+    treated, control = rng.normal(1, 2, (60, 8)), rng.normal(size=(90, 8))
+    treated[3, 5] = np.inf
+
+    expected = wasserstein_distance(treated[np.isfinite(treated[:, 5]), 5], control[:, 5])
+    assert _wasserstein_columns(treated, control)[5] == pytest.approx(expected, rel=1e-10)
+    # The mask wasserstein_features passes: complete columns are left to the pre-sorted path.
+    usable = np.isfinite(control).all(axis=0) & np.isfinite(treated).all(axis=0)
+    assert _wasserstein_columns(treated, control, only=~usable)[5] == pytest.approx(expected, rel=1e-10)
+
+    values = perturbed.X.copy()
+    values[np.flatnonzero(perturbed.obs["Metadata_Control"].to_numpy())[0], 0] = np.inf
+    perturbed.X = values
+    mt.tl.wasserstein_features(perturbed)
+    assert np.isfinite(perturbed.varm["wasserstein"]).all()
+
+
+def _one_inf_control(n_control: int, n_treated: int, n_features: int = 3, seed: int = 1):
+    """Well profiles whose controls hold one ``-inf``, in one feature, with nothing missing."""
+    import anndata as ad
+    import pandas as pd
+
+    from mantispy._core.schema import stamp
+
+    rng = np.random.default_rng(seed)
+    values = np.vstack([rng.standard_normal((n_control, n_features)), rng.standard_normal((n_treated, n_features))])
+    values[2, 1] = -np.inf  # a control row, in one feature only
+    labels = ["DMSO"] * n_control + ["pert"] * n_treated
+    adata = ad.AnnData(
+        X=values,
+        obs=pd.DataFrame(
+            {"Metadata_Perturbation": labels, "Metadata_Control": [label == "DMSO" for label in labels]},
+            index=[str(index) for index in range(len(labels))],
+        ),
+    )
+    adata.var_names = [f"Cells_AreaShape_F{index}" for index in range(n_features)]
+    stamp(adata, resolution="well")
+    return adata, values[n_control:], values[:n_control]
+
+
+# An infinite control value gives the pooled spread of that feature no value, so the effect
+# estimate is NaN and numpy says so. This test is about the p-values.
+@pytest.mark.filterwarnings("ignore:invalid value encountered")
+def test_an_infinity_does_not_choose_a_different_branch_than_scipy_would():
+    """An infinity counted as unmeasured put nine controls at eight, which takes scipy's exact branch where its own auto takes the asymptotic one."""
+    from scipy.stats import mannwhitneyu
+
+    adata, treated, control = _one_inf_control(n_control=9, n_treated=12)
+    mt.tl.effect_size(adata, key_added="e")
+
+    table = adata.uns["mantispy"]["e"]
+    got = table[table["group"] == "pert"].set_index("feature")["pvalue"]
+    expected = mannwhitneyu(treated, control, axis=0, nan_policy="omit").pvalue
+    np.testing.assert_allclose(got.to_numpy(), expected, rtol=1e-9)
+
+
+def test_an_infinite_control_value_does_not_shift_the_pre_sorted_reference():
+    """Counting only the finite values left the reference one short, which cuts the largest control off its end."""
+    adata, treated, control = _one_inf_control(n_control=30, n_treated=12)
+    mt.tl.wasserstein_features(adata)
+
+    column = adata.uns["mantispy"]["wasserstein_groups"].index("pert")
+    expected = [
+        wasserstein_distance(treated[np.isfinite(treated[:, j]), j], control[np.isfinite(control[:, j]), j])
+        for j in range(treated.shape[1])
+    ]
+    np.testing.assert_allclose(adata.varm["wasserstein"][:, column], expected, rtol=1e-5)

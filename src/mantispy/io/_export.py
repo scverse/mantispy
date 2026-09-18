@@ -49,6 +49,33 @@ def _manifest(adata: ad.AnnData, plate: Path) -> tuple[pd.DataFrame, list[str]]:
     return mapping[ELEMENTS], channels
 
 
+class _LazyDataset:
+    """One HDF5 dataset that opens its file for each read instead of holding it open.
+
+    A dask array over a live ``h5py`` dataset keeps one file descriptor for as long as the array is referenced.
+    One plate of a 384-well export holds about ten thousand elements, which exhausts the process descriptor limit before the plate finishes reading.
+    Reopening per read costs an open per chunk and keeps the descriptor count flat.
+    """
+
+    def __init__(self, path: Path) -> None:
+        import h5py
+
+        self.path = path
+        with h5py.File(path, "r") as handle:
+            dataset = handle[DATASET]
+            self.shape: tuple[int, ...] = dataset.shape
+            self.dtype = dataset.dtype
+            #: The dataset's own chunking, which dask reads in as its chunks.
+            self.hdf5_chunks: tuple[int, ...] | None = dataset.chunks
+        self.ndim = len(self.shape)
+
+    def __getitem__(self, key: Any) -> npt.NDArray:
+        import h5py
+
+        with h5py.File(self.path, "r") as handle:
+            return handle[DATASET][key]
+
+
 def _read_array(path: Path, *, lazy: bool) -> npt.NDArray | da.Array:
     import h5py
 
@@ -57,9 +84,10 @@ def _read_array(path: Path, *, lazy: bool) -> npt.NDArray | da.Array:
             return handle[DATASET][()]
     import dask.array as da
 
+    dataset = _LazyDataset(path)
     # lock: HDF5 is not thread-safe and dask reads on several threads.
-    dataset = h5py.File(path, "r")[DATASET]
-    return da.from_array(dataset, chunks=dataset.chunks or "auto", lock=True)
+    # name: the path identifies the contents, and tokenizing the reader object would not.
+    return da.from_array(dataset, chunks=dataset.hdf5_chunks or "auto", lock=True, name=f"mantispy-h5-{path}")
 
 
 def read_cellprofiler_export(path: Path | str, *, lazy: bool = True) -> SpatialData:
@@ -70,6 +98,7 @@ def read_cellprofiler_export(path: Path | str, *, lazy: bool = True) -> SpatialD
     Args:
         path: A plate folder of an export, the directory holding ``images/``, ``labels/`` and ``tables/``.
         lazy: Read arrays through dask, one HDF5 dataset per element, instead of loading them into memory.
+            Each read reopens the file, so a plate of many fields holds no descriptor per element.
 
     Returns:
         The plate as a :class:`~spatialdata.SpatialData` object, with the Images and Labels the manifest lists as written and a ``cells`` Table annotating them.
@@ -123,7 +152,12 @@ def read_cellprofiler_export(path: Path | str, *, lazy: bool = True) -> SpatialD
 def is_export_plate_dir(path: Path) -> bool:
     """Whether `path` is one plate folder of an export.
 
-    A SpatialData zarr store also holds a ``tables/`` directory, so the table itself has to be there.
+    Args:
+        path: The directory to test.
+
+    Returns:
+        Whether `path` is a directory holding an ``.h5ad`` table under ``tables/``.
+        A SpatialData zarr store also holds a ``tables/`` directory, so the table itself has to be there.
     """
     return path.is_dir() and any((path / "tables").glob("*.h5ad"))
 

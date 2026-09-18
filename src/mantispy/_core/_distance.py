@@ -1,8 +1,7 @@
 """Pairwise distance kernels shared by hit calling, e-distance and local density.
 
-Distances are computed in row chunks. A full pairwise matrix between two blocks of n rows
-is n^2 floats, so without chunking a per-perturbation loop over a single-cell object would
-allocate a matrix larger than the data.
+Distances are computed in row chunks.
+A full pairwise matrix between two blocks of n rows is n^2 floats, so without chunking a per-perturbation loop over a single-cell object would allocate a matrix larger than the data.
 """
 
 from __future__ import annotations
@@ -39,17 +38,16 @@ def _mean_distance(A: np.ndarray, B: np.ndarray, exclude_diagonal: bool = False)
 def energy_distance(A: np.ndarray, B: np.ndarray) -> float:
     """Energy distance between two samples.
 
-    Computed as ``2 E|a - b| - E|a - a'| - E|b - b'|``. It is zero if and only if the two
-    distributions match, grows as they move apart, and assumes no shape for either.
+    Computed as ``2 E|a - b| - E|a - a'| - E|b - b'|``.
+    It is zero if and only if the two distributions match, grows as they move apart, and assumes no shape for either.
     """
     return 2.0 * _mean_distance(A, B) - _mean_distance(A, A, True) - _mean_distance(B, B, True)
 
 
-def mahalanobis_transform(reference: np.ndarray, regularization: float = 1e-6):
+def mahalanobis_transform(reference: np.ndarray, regularization: float = 1e-6) -> tuple[np.ndarray, np.ndarray]:
     """Center and whitening matrix that give the reference identity covariance.
 
-    Distances measured after this transform are Mahalanobis distances under the
-    reference's covariance, so "far from the controls" means the same in every direction.
+    Distances measured after this transform are Mahalanobis distances under the reference's covariance, so "far from the controls" means the same in every direction.
     """
     reference = np.asarray(reference, dtype=np.float64)
     # np.cov spreads a single NaN over the whole matrix and eigh then fails to converge, so

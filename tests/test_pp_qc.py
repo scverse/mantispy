@@ -138,3 +138,104 @@ def test_the_blocklist_still_matches_after_standardizing_the_names():
     selected = renamed.copy()
     mt.pp.feature_select(selected, operations=("blocklist",))
     assert int(selected.var["selected"].sum()) == renamed.n_vars - len(blocked)
+
+
+def _two_wells(passing_in_a01: int = 12):
+    """One plate with A01 holding 60 cells and A02 holding 55, only some of A01's passing QC.
+
+    Args:
+        passing_in_a01: How many of A01's 60 cells carry ``qc_pass``.
+
+    Returns:
+        The object, already annotated, so no QC call is needed.
+    """
+    import anndata as ad
+
+    from mantispy._core.schema import stamp
+
+    wells = ["A01"] * 60 + ["A02"] * 55
+    passes = [index < passing_in_a01 for index in range(60)] + [True] * 55
+    obs = pd.DataFrame(
+        {"Metadata_Plate": "P1", "Metadata_Well": wells, "qc_pass": passes},
+        index=[str(index) for index in range(len(wells))],
+    )
+    adata = ad.AnnData(
+        X=np.random.default_rng(0).normal(size=(len(wells), 3)).astype(np.float32),
+        obs=obs,
+        var=pd.DataFrame(index=[f"Cells_AreaShape_F{index}" for index in range(3)]),
+    )
+    stamp(adata, resolution="cell")
+    return adata
+
+
+def test_the_cell_floor_counts_only_the_cells_that_survive():
+    """Counting the cells the same call is about to drop left A01 with 12 cells past a
+    50-cell floor, so tl.aggregate built a well profile from 12 cells; the same two steps
+    taken one call at a time dropped A01, so the two paths disagreed."""
+    one_call = mt.pp.filter_cells(_two_wells(), min_cells_per_well=50, qc_pass=True, copy=True)
+    assert set(one_call.obs["Metadata_Well"]) == {"A02"}
+
+    two_calls = mt.pp.filter_cells(_two_wells(), min_cells_per_well=0, qc_pass=True, copy=True)
+    two_calls = mt.pp.filter_cells(two_calls, min_cells_per_well=50, qc_pass=False, copy=True)
+    assert one_call.n_obs == two_calls.n_obs
+
+
+def _area_cells(nuclei_first: bool):
+    """40 cells with one huge nucleus, with the two Area columns in either ``var`` order."""
+    import anndata as ad
+
+    from mantispy._core.features import parse_feature_names
+    from mantispy._core.schema import stamp
+
+    names = ["Cells_AreaShape_Area", "Nuclei_AreaShape_Area"]
+    if nuclei_first:
+        names = names[::-1]
+    values = np.random.default_rng(0).normal(500.0, 10.0, (40, 2)).astype(np.float32)
+    values[7, names.index("Nuclei_AreaShape_Area")] = 5000.0
+    obs = pd.DataFrame(
+        {"Metadata_Plate": "P1", "Metadata_Well": [f"A{index % 8 + 1:02d}" for index in range(40)]},
+        index=[str(index) for index in range(40)],
+    )
+    adata = ad.AnnData(X=values, obs=obs, var=parse_feature_names(names))
+    stamp(adata, resolution="cell")
+    return adata
+
+
+def test_the_area_outlier_flag_does_not_depend_on_var_column_order():
+    """Matching every compartment's AreaShape_Area and taking the first made qc_area_outlier,
+    and so qc_pass, depend on column order: Cells-first flagged 0 of 40 cells and
+    Nuclei-first flagged 1, on the same data and with no warning."""
+    flagged = []
+    for nuclei_first in (False, True):
+        adata = _area_cells(nuclei_first)
+        mt.pp.calculate_qc_metrics(adata)
+        flagged.append(int(adata.obs["qc_area_outlier"].sum()))
+    assert flagged == [1, 1]
+
+
+def test_qc_metrics_refuses_a_var_table_without_a_feature_column():
+    """Downgrading the missing column to a log line and an all-false flag let qc_pass skip
+    the area check silently: a cell of area 1e6 passed while obs carried a complete-looking
+    set of qc_ columns, and the notice disappeared entirely once the log level was raised.
+    The column is a schema requirement that io.validate reports as an error."""
+    import anndata as ad
+
+    from mantispy._core.schema import stamp
+
+    values = np.random.default_rng(0).normal(500.0, 10.0, (50, 2)).astype(np.float32)
+    values[7, 0] = 1e6
+    adata = ad.AnnData(
+        X=values,
+        obs=pd.DataFrame(
+            {"Metadata_Plate": "P1", "Metadata_Well": [f"A{index % 8 + 1:02d}" for index in range(50)]},
+            index=[str(index) for index in range(50)],
+        ),
+        # The real CellProfiler names, but a var table built by hand and never parsed.
+        var=pd.DataFrame(index=["Cells_AreaShape_Area", "Cells_Intensity_MeanIntensity_DNA"]),
+    )
+    stamp(adata, resolution="cell")
+
+    with pytest.raises(KeyError, match="parse_feature_names"):
+        mt.pp.calculate_qc_metrics(adata)
+    assert "qc_pass" not in adata.obs, "and no qc_ column is written before the check fails"
+    assert "qc_variance" not in adata.var

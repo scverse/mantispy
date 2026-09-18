@@ -1,9 +1,7 @@
 """Matrix access and grouping for every grouped operation.
 
-Nothing outside ``_core`` reads ``adata.X`` or ``adata.layers`` directly, as
-``tests/test_api_guards.py`` checks. Every read goes through :func:`get_matrix` and every
-grouping through :func:`group_codes`, so a backed, chunked implementation would go into
-those two functions.
+Nothing outside ``_core`` reads ``adata.X`` or ``adata.layers`` directly, as ``tests/test_api_guards.py`` checks.
+Every read goes through :func:`get_matrix` and every grouping through :func:`group_codes`, so a backed, chunked implementation would go into those two functions.
 
 Built on them:
 
@@ -11,11 +9,10 @@ Built on them:
 * :func:`transform_grouped`: rewrite the matrix group by group (the write path).
 * :func:`iter_groups`: the ``(key, rows, block)`` iteration both are built on.
 
-Sixteen call sites across ``pp`` and ``tl`` run their own ``np.flatnonzero(codes == group)``
-loop over the matrix from :func:`get_matrix`, because what they compute per group (a
-whitening, a permutation null, a chi-square) is not a statistic the kernels can express.
-Each loop would need rewriting for a streaming backend. They still take the matrix and
-the grouping from this module, so the code to change is easy to find.
+A dozen call sites across ``pp`` and ``tl`` loop over the groups themselves, because what they compute per group (a whitening, a permutation null, a chi-square) is not a statistic the kernels can express.
+They take their rows from :func:`~mantispy._core._numba.group_offsets`, re-exported here, rather than scanning ``codes == group`` once per group: that scan is O(n_obs) per group, so a loop over g groups costs O(g * n_obs) where one stable ordering serves every group.
+Each loop would need rewriting for a streaming backend.
+They still take the matrix and the grouping from this module, so the code to change is easy to find.
 """
 
 from __future__ import annotations
@@ -26,8 +23,8 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 
-from ._numba import MAD, MEAN, MEDIAN, QUANTILE, STD, group_counts, grouped_stat
-from ._utils import as_frame
+from ._numba import MAD, MEAN, MEDIAN, QUANTILE, STD, group_counts, group_offsets, grouped_stat
+from .frames import as_frame
 
 if TYPE_CHECKING:
     from anndata import AnnData
@@ -40,6 +37,7 @@ __all__ = [
     "STD",
     "get_matrix",
     "group_codes",
+    "group_offsets",
     "iter_groups",
     "reduce_grouped",
     "representation",
@@ -50,9 +48,8 @@ __all__ = [
 def get_matrix(adata: AnnData, layer: str | None = None, rows: np.ndarray | None = None) -> np.ndarray:
     """Return the requested matrix as a dense ``float32`` array.
 
-    ``rows`` reads only those rows, so a backed object holds one group in memory instead of
-    the whole screen. h5py accepts a fancy index only in increasing order, so the indices
-    are sorted for the read and the requested order is restored afterwards.
+    ``rows`` reads only those rows, so a backed object holds one group in memory instead of the whole screen.
+    h5py accepts a fancy index only in increasing order, so the indices are sorted for the read and the requested order is restored afterwards.
     """
     matrix: Any = adata.X if layer is None else adata.layers[layer]
     if matrix is None:
@@ -77,9 +74,8 @@ def get_matrix(adata: AnnData, layer: str | None = None, rows: np.ndarray | None
 def _reads_from_disk(matrix: Any) -> bool:
     """Whether this matrix is an on-disk dataset rather than an array in memory.
 
-    ``shape`` and ``dtype`` are not enough, because a scipy sparse matrix has both and is in
-    memory. ``toarray`` separates them: every in-memory sparse container has it, and an h5py
-    or zarr dataset does not.
+    ``shape`` and ``dtype`` are not enough, because a scipy sparse matrix has both and is in memory.
+    ``toarray`` separates them: every in-memory sparse container has it, and an h5py or zarr dataset does not.
     """
     if isinstance(matrix, np.ndarray) or hasattr(matrix, "toarray"):
         return False
@@ -89,8 +85,7 @@ def _reads_from_disk(matrix: Any) -> bool:
 def representation(adata: AnnData, use_rep: str | None) -> np.ndarray:
     """``obsm[use_rep]`` if given, otherwise ``X``, as float64.
 
-    Every tool that can score an embedding instead of the features uses this, so the input
-    is chosen in one place and the missing-key error says how to compute an embedding.
+    Every tool that can score an embedding instead of the features uses this, so the input is chosen in one place and the missing-key error says how to compute an embedding.
     """
     if use_rep is None:
         return get_matrix(adata).astype(np.float64)
@@ -102,8 +97,8 @@ def representation(adata: AnnData, use_rep: str | None) -> np.ndarray:
 def group_codes(adata: AnnData, by: str | Sequence[str] | None) -> tuple[np.ndarray, pd.Index]:
     """Per-row integer group codes plus the ordered group keys.
 
-    Values are used without conversion to strings, so numeric metadata keeps its dtype and
-    ``0.4`` and ``0.40`` are one group. Missing values raise instead of forming a group.
+    Values are used without conversion to strings, so numeric metadata keeps its dtype and ``0.4`` and ``0.40`` are one group.
+    Missing values raise instead of forming a group.
     """
     if by is None:
         return np.zeros(adata.n_obs, dtype=np.int32), pd.Index(["all"])
@@ -153,25 +148,23 @@ def reduce_grouped(
         by: Grouping column(s), or ``None`` for a single group.
         stat: One of :data:`MEAN`, :data:`MEDIAN`, :data:`MAD`, :data:`STD`, :data:`QUANTILE`.
         layer: Layer to read instead of ``X``.
-        mask: Boolean row mask restricting which rows contribute, e.g. controls only. Groups
-            are still keyed by the full set of groups present in ``adata``.
+        mask: Boolean row mask restricting which rows contribute, e.g. controls only.
+            Groups are still keyed by the full set of groups present in ``adata``.
         q: Quantile to compute for :data:`QUANTILE`.
         ddof: Delta degrees of freedom for :data:`STD`.
 
     Returns:
-        ``(values, keys, counts)`` where ``values`` is ``(n_groups, n_vars)`` float64,
-        ``keys`` indexes the groups and ``counts`` holds the contributing row count.
+        ``(values, keys, counts)`` where ``values`` is ``(n_groups, n_vars)`` float64, ``keys`` indexes the groups and ``counts`` holds the contributing row count.
     """
     codes, keys = group_codes(adata, by)
     source: Any = adata.X if layer is None else adata.layers[layer]
     selected = np.ones(adata.n_obs, dtype=bool) if mask is None else np.asarray(mask, dtype=bool)
 
     if _reads_from_disk(source):
-        # One group at a time, so a screen that does not fit in memory still reduces. Each
-        # group's statistic depends only on its own rows, so the result matches the single
-        # kernel call (tests/test_backed.py).
-        # A group with no contributing rows is NaN, as in the in-memory kernel. Zero would
-        # read as a measurement and center a plate with no controls left on 0.0.
+        # One group at a time, so a screen that does not fit in memory still reduces.
+        # Each group's statistic depends only on its own rows, so the result matches the single kernel call (tests/test_backed.py).
+        # A group with no contributing rows is NaN, as in the in-memory kernel.
+        # Zero would read as a measurement and center a plate with no controls left on 0.0.
         values = np.full((len(keys), adata.n_vars), np.nan)
         counts = np.zeros(len(keys), dtype=np.int64)
         for index in range(len(keys)):
@@ -198,9 +191,8 @@ def transform_grouped(
 ) -> np.ndarray:
     """Rewrite the matrix one group at a time.
 
-    ``func(key, block)`` receives a group's rows as ``float32`` and returns the
-    replacement block. The output is written into one preallocated ``float32`` array, so
-    the peak cost is the input plus the output, with no full-size ``float64`` temporaries.
+    ``func(key, block)`` receives a group's rows as ``float32`` and returns the replacement block.
+    The output is written into one preallocated ``float32`` array, so the peak cost is the input plus the output, with no full-size ``float64`` temporaries.
     """
     out = np.empty_like(get_matrix(adata, layer))
     for key, rows, block in iter_groups(adata, by, layer=layer):

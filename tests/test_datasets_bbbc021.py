@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 import mantispy as mt
-from mantispy._core._utils import as_frame
+from mantispy._core.frames import as_frame
 
 
 @pytest.fixture(scope="module")

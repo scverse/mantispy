@@ -16,10 +16,16 @@ def scored():
 
 
 @pytest.mark.parametrize("method", ["mahalanobis", "ks"])
-def test_treated_groups_are_hits_and_the_controls_are_not(scored, method):
+def test_treated_groups_are_hits_and_sit_further_out_than_the_controls(scored, method):
+    """Whether the reference row is called is not asserted here.
+
+    It is an honest draw from the null, so it is called at about the nominal rate by
+    construction, and a single seed that happens not to call it would pin the bias rather
+    than the behaviour. Its distribution is pinned across seeds by
+    test_the_reference_row_is_not_scored_on_the_rows_that_fitted_the_covariance.
+    """
     mt.tl.hit_calling(scored, method=method, n_permutations=200)
     table = scored.uns["mantispy"]["hits"].set_index("group")
-    assert not bool(table.loc["DMSO", "is_hit"])
     assert table.drop(index="DMSO")["is_hit"].all()
     assert table.drop(index="DMSO")["distance"].min() > table.loc["DMSO", "distance"]
 
@@ -129,6 +135,49 @@ def test_a_missing_feature_does_not_make_a_group_maximally_control_like(pure_noi
     with_gap = adata.uns["mantispy"]["hits"].set_index("group").loc["p00", "distance"]
 
     assert with_gap > 0.5 * intact, f"one NaN feature took the distance from {intact} to {with_gap}"
+
+
+def test_the_reference_row_is_not_scored_on_the_rows_that_fitted_the_covariance(pure_noise_screen):
+    """The controls carry a perturbation label of their own, so one row of the table is the reference against itself.
+
+    Scoring that row on all of the control rows puts the covariance-fitting half, which sits
+    closer to the centroid than any other group's rows can, on the tested side. Its median
+    then comes out below the null it is compared with, and the row cannot reach significance
+    however the controls fall: its p-value is pinned near one instead of being a draw from
+    the null like every other group's.
+
+    The mean is bounded on both sides, so a row that is systematically small fails here too.
+    The bound is wide enough that a calibrated row passes it however the seeds fall; the
+    rate in the tail is what the row is for, and separating a 5% tail from a 1% one needs
+    more draws than a unit test can afford.
+    """
+    pvalues = []
+    for seed in range(24):
+        adata = pure_noise_screen(n_control=192, n_groups=4, per_group=48, n_features=10, seed=seed)
+        mt.tl.hit_calling(adata, n_permutations=200, seed=seed)
+        table = adata.uns["mantispy"]["hits"].set_index("group")
+        assert table.loc["DMSO", "n_obs"] == 48, "a quarter of the controls: half held out, and half of those tested"
+        pvalues.append(float(table.loc["DMSO", "pvalue"]))
+    assert 0.25 < float(np.mean(pvalues)) < 0.75, f"a draw from the null is uniform, got {pvalues}"
+
+
+def test_the_reference_row_is_not_halved_along_the_plate_order(well_profiles):
+    """The reference group's held-out rows are halved at random, not by row order.
+
+    Rows arrive ordered by plate and well, so the first half in row order is one set of plates
+    and the second is another. With the controls carrying a between-plate offset, that makes
+    the reference row a comparison between plates rather than a draw from the null, and it is
+    called far above the nominal rate. Both methods draw that half from the same generator;
+    ``ks`` is used here because it reads the two halves against each other directly, which
+    separates a leaking split from a calibrated one in the fewest seeds.
+    """
+    called = 0
+    for seed in range(30):
+        adata = well_profiles(n_plates=8, per_plate=128, n_features=10, plate_sd=3.0, seed=seed)
+        mt.tl.hit_calling(adata, method="ks", seed=seed)
+        table = adata.uns["mantispy"]["hits"].set_index("group")
+        called += int(float(table.loc["DMSO", "pvalue"]) < 0.05)
+    assert called <= 4, f"{called}/30 seeds called the reference row at p < 0.05, where 0.05 is calibrated"
 
 
 def test_edistance_does_not_call_a_screen_of_pure_noise(pure_noise_screen):
@@ -283,3 +332,16 @@ def test_edistance_caps_both_sides_and_says_so(scored, caplog):
     assert (table["n_obs"] <= 6).all(), "no group may enter the statistic above the cap"
     messages = " ".join(record.message for record in caplog.records)
     assert "sampled" in messages, "sampling down changes the answer and must be logged"
+
+
+def test_the_pairwise_edistance_caps_its_groups_too(scored):
+    """max_reference and seed were accepted and ignored on the reference=None path, where memory is quadratic in the two largest groups."""
+
+    def pairwise(**kwargs):
+        out = mt.tl.edistance(scored, reference=None, copy=True, **kwargs)
+        return out.uns["mantispy"]["edistance_pairwise"].to_numpy(dtype=float)
+
+    capped = pairwise(max_reference=20)
+    assert not np.allclose(capped, pairwise()), "20 of ~480 rows per group must change the distances"
+    np.testing.assert_array_equal(capped, pairwise(max_reference=20, seed=0), "and the same seed must repeat them")
+    assert not np.allclose(capped, pairwise(max_reference=20, seed=1)), "while another seed samples other rows"

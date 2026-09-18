@@ -129,12 +129,37 @@ def test_results_survive_a_round_trip(two_batches, tmp_path):
     assert loaded.uns["mantispy"]["transport_units"].shape == (4, 4)
 
 
-def test_both_plots_draw(two_batches):
+def test_both_plots_draw_what_the_table_holds(two_batches):
+    """An axes that drew nothing is still not None, so a plot scrambling its rows passed these checks."""
     mt.tl.transport(two_batches, by=["Metadata_Batch", "Metadata_Plate"])
-    assert mt.pl.transport(two_batches) is not None
-    assert mt.pl.transport(two_batches, level="Metadata_Batch") is not None
-    assert mt.pl.setting_agreement(two_batches) is not None
-    assert mt.pl.setting_agreement(two_batches, by="Metadata_Batch") is not None
+    table = two_batches.uns["mantispy"]["transport"]
+
+    for level in ("Metadata_Plate", "Metadata_Batch"):
+        block = table[table["level"] == level].sort_values("agreement", ascending=False)
+        assert len(block) <= 25, "beyond top= only the extremes are drawn, and this compares them all"
+        ax = mt.pl.transport(two_batches, level=level)
+        assert [label.get_text() for label in ax.get_yticklabels()] == list(block["group"].astype(str))
+        widths = [patch.get_width() for patch in ax.patches]
+        np.testing.assert_allclose(widths, block["agreement"].to_numpy(), rtol=1e-6)
+        assert ax.get_title() == f"{int(block['transports'].sum())} of {len(block)} reproduce"
+
+    matrix = two_batches.uns["mantispy"]["transport_units"]
+    ax = mt.pl.setting_agreement(two_batches)
+    labels = [label.get_text() for label in ax.get_xticklabels()]
+    assert sorted(labels) == sorted(str(name) for name in matrix.columns)
+    assert [label.get_text() for label in ax.get_yticklabels()] == labels
+    drawn = np.asarray(ax.get_images()[0].get_array(), dtype=float)
+    np.testing.assert_allclose(drawn, matrix.loc[labels, labels].to_numpy(dtype=float), equal_nan=True)
+
+    # With by= the settings are ordered by it and a line is drawn at each boundary.
+    ax = mt.pl.setting_agreement(two_batches, by="Metadata_Batch")
+    labels = [label.get_text() for label in ax.get_xticklabels()]
+    obs = two_batches.obs
+    batch_of = obs.groupby(obs["Metadata_Plate"].astype(str), observed=True)["Metadata_Batch"].first().astype(str)
+    annotation = [batch_of[label] for label in labels]
+    assert annotation == sorted(annotation), f"plates are grouped by batch, got {annotation}"
+    assert len(ax.lines) == 2, "one horizontal and one vertical line at the single batch boundary"
+
     with pytest.raises(KeyError, match="no level"):
         mt.pl.transport(two_batches, level="Metadata_Nonsense")
     plt.close("all")

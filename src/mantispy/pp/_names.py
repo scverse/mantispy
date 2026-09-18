@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
+from typing import Any
+
 import numpy as np
 import pandas as pd
 from anndata import AnnData
 
-from mantispy._core._utils import as_frame, inplace_or_copy
+from mantispy._core.frames import as_frame
+from mantispy._core.mutation import inplace_or_copy
 
 TARGETS = ("cp_measure",)
 
 
-def _canonical(row: dict) -> str:
+def _canonical(row: dict[Hashable, Any]) -> str:
     """Rebuild a name from its parsed components, in cp_measure order."""
     parts = [row["object"], row["feature_group"], row["feature"], row["channel"]]
     tokens = [str(part) for part in parts if isinstance(part, str) and part]
@@ -25,8 +29,7 @@ def _canonical(row: dict) -> str:
 def standardize_feature_names(adata: AnnData, target: str = "cp_measure", copy: bool = False) -> AnnData | None:
     """Rename features to ``target`` grammar, keeping the original in ``var``.
 
-    CellProfiler feature names differ between versions, so renaming makes a dataset from
-    an older pipeline comparable with one from a newer pipeline.
+    CellProfiler feature names differ between versions, so renaming makes a dataset from an older pipeline comparable with one from a newer pipeline.
 
     Args:
         adata: Object to rename.
@@ -34,12 +37,10 @@ def standardize_feature_names(adata: AnnData, target: str = "cp_measure", copy: 
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes ``var["original_name"]`` on the first call and
-        never overwrites it afterwards, so the incoming names survive repeated calls.
+        ``None``, or the modified copy. Rewrites ``var_names`` and writes ``var["original_name"]`` on the first call, never overwriting it afterwards, so the incoming names survive repeated calls.
 
     Raises:
-        ValueError: If ``target`` is not supported, or renaming would give two features the same
-            name (for example two Zernike orders).
+        ValueError: If ``target`` is not supported, or renaming would give two features the same name (for example two Zernike orders).
     """
     if target not in TARGETS:
         raise ValueError(f"target must be one of {TARGETS}, got {target!r}")

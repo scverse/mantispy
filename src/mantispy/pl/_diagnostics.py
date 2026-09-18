@@ -7,16 +7,19 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
 from mantispy._core._reduce import get_matrix
-from mantispy._core._utils import as_frame, reference_mask
+from mantispy._core.frames import as_frame
+from mantispy._core.masks import reference_mask
 from mantispy._core.plate import well_col, well_row
+from mantispy.pl._common import axes as _axes
+from mantispy.pl._common import table as _table
 
 if TYPE_CHECKING:
     from anndata import AnnData
+    from matplotlib.axes import Axes
 
 
 def _feature_values(adata: AnnData, feature: str | None) -> np.ndarray:
@@ -28,18 +31,22 @@ def _feature_values(adata: AnnData, feature: str | None) -> np.ndarray:
         return np.nanmean(matrix, axis=1)
 
 
-def plate_effects(adata: AnnData, feature: str | None = None, axes: np.ndarray | None = None):
+def plate_effects(adata: AnnData, feature: str | None = None, axes: np.ndarray | None = None) -> np.ndarray:
     """Row and column medians per plate, for spotting plate position artifacts.
 
     Args:
         adata: Object to draw, at any resolution.
         feature: A single feature, or ``None`` for the mean across features.
-        axes: A ``(n_plates, 2)`` array of axes to draw into.
+        axes: A ``(n_plates, 2)`` array of axes to draw into, or ``None`` for a new figure.
 
     Returns:
-        The axes array, one row per plate, with the row marginal on the left and the column marginal on the
-        right, each with the plate median drawn as a reference line.
+        The axes array, one row per plate, with the row marginal on the left and the column marginal on the right, each with the plate median drawn as a reference line.
+
+    Raises:
+        KeyError: ``feature`` is not one of ``var_names``, or ``obs`` has no ``Metadata_Plate`` or ``Metadata_Well`` column.
     """
+    import matplotlib.pyplot as plt
+
     values = _feature_values(adata, feature)
     frame = pd.DataFrame(
         {
@@ -67,13 +74,22 @@ def plate_effects(adata: AnnData, feature: str | None = None, axes: np.ndarray |
     return axes
 
 
-def image_qc(adata: AnnData, ax: plt.Axes | None = None):
-    """Image quality score per image, with the flagged images marked."""
-    if "image_qc" not in adata.uns.get("mantispy", {}):
-        raise KeyError("uns['mantispy']['image_qc'] is missing; run mt.pp.image_qc first")
-    table = pd.DataFrame(adata.uns["mantispy"]["image_qc"])
+def image_qc(adata: AnnData, ax: Axes | None = None) -> Axes:
+    """Image quality score per image, with the flagged images marked.
 
-    ax = ax or plt.subplots(figsize=(8, 4))[1]
+    Args:
+        adata: Object :func:`~mantispy.pp.image_qc` has run on.
+        ax: Axes to draw on, or ``None`` for a new figure.
+
+    Returns:
+        The axes drawn on, with one point per image in the order of the table and the flagged images drawn larger and in crimson.
+
+    Raises:
+        KeyError: ``uns["mantispy"]`` holds no ``image_qc`` table.
+    """
+    table = _table(adata, "image_qc", "mt.pp.image_qc")
+    ax = _axes(ax, (8, 4))
+
     failed = ~table["qc_image_pass"].to_numpy(dtype=bool)
     positions = np.arange(len(table))
     ax.scatter(positions[~failed], table["qc_image_score"].to_numpy()[~failed], s=6, label="pass")
@@ -88,12 +104,24 @@ def control_drift(
     adata: AnnData,
     groupby: str = "Metadata_Plate",
     n_components: int = 2,
-    ax: plt.Axes | None = None,
-):
+    ax: Axes | None = None,
+) -> Axes:
     """Control wells projected onto principal components fitted on the controls alone.
 
-    Fitting on the controls alone shows how the reference moves between plates or batches,
-    which is the drift normalization should remove.
+    Fitting on the controls alone shows how the reference moves between plates or batches, which is the drift normalization should remove.
+
+    Args:
+        adata: Object whose ``obs["Metadata_Control"]`` marks the wells to draw.
+        groupby: ``obs`` column that colors the control wells, normally the plate or the batch.
+        n_components: Components fitted on the controls. The first two are the ones drawn.
+        ax: Axes to draw on, or ``None`` for a new figure.
+
+    Returns:
+        The axes drawn on, with one scatter per group of ``groupby`` in the space of the first two control components.
+
+    Raises:
+        KeyError: ``obs`` has no ``Metadata_Control`` column to select the controls with, or no ``groupby`` column.
+        ValueError: There are ``n_components`` control rows or fewer, too few to fit that many components.
     """
     from sklearn.decomposition import PCA
 
@@ -105,7 +133,7 @@ def control_drift(
     embedding = PCA(n_components=n_components).fit_transform(controls)
     labels = adata.obs[groupby].astype(str).to_numpy()[is_control]
 
-    ax = ax or plt.subplots(figsize=(5, 4))[1]
+    ax = _axes(ax, (5, 4))
     for group in pd.unique(labels):
         selected = labels == group
         ax.scatter(embedding[selected, 0], embedding[selected, 1], s=12, label=str(group))
@@ -115,8 +143,22 @@ def control_drift(
     return ax
 
 
-def outliers(adata: AnnData, key: str = "qc_outlier", axes: np.ndarray | None = None):
-    """Outlier score distribution, and the flagged fraction per plate."""
+def outliers(adata: AnnData, key: str = "qc_outlier", axes: np.ndarray | None = None) -> np.ndarray:
+    """Outlier score distribution, and the flagged fraction per plate.
+
+    Args:
+        adata: Object :func:`~mantispy.pp.outliers` has run on.
+        key: ``obs`` column holding the flag, whose score is read from ``key + "_score"``.
+        axes: A pair of axes to draw into, or ``None`` for a new figure.
+
+    Returns:
+        The two axes: the score histogram split into kept and flagged, and the flagged fraction per plate.
+
+    Raises:
+        KeyError: ``obs`` has no ``key`` column.
+    """
+    import matplotlib.pyplot as plt
+
     if key not in adata.obs:
         raise KeyError(f"obs has no {key!r}; run mt.pp.outliers first")
     if axes is None:

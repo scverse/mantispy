@@ -1,11 +1,9 @@
 """Feature-set enrichment over the parsed feature annotation.
 
-``var`` records the object, measurement family and channel of every feature, which defines a
-set-membership table. Scoring those sets reports which kinds of measurement changed, such as
-the mitochondrial texture features, instead of a list of individual columns.
+``var`` records the object, measurement family and channel of every feature, which defines a set-membership table.
+Scoring those sets reports which kinds of measurement changed, such as the mitochondrial texture features, instead of a list of individual columns.
 
-The sets are passed to decoupler, so the same call works for sets built from the feature
-names and for sets from prior knowledge.
+The sets are passed to decoupler, so the same call works for sets built from the feature names and for sets from prior knowledge.
 """
 
 from __future__ import annotations
@@ -20,7 +18,9 @@ import pandas as pd
 from anndata import AnnData
 
 from mantispy._core._reduce import get_matrix
-from mantispy._core._utils import as_frame, get_logger, inplace_or_copy
+from mantispy._core.frames import as_frame
+from mantispy._core.logging import get_logger
+from mantispy._core.mutation import inplace_or_copy
 
 METHODS = ("ulm", "mlm", "ora")
 
@@ -33,13 +33,14 @@ def feature_sets(adata: AnnData, by: str | Sequence[str] = "feature_group") -> p
 
     Args:
         adata: Object whose ``var`` carries the parser's columns.
-        by: A ``var`` column, several of them (joined with ``|``), or ``"group_by_channel"``
-            for the ``feature_group``-and-``channel`` combination.
+        by: A ``var`` column, several of them (joined with ``|``), or ``"group_by_channel"`` for the ``feature_group``-and-``channel`` combination.
 
     Returns:
-        A frame with ``source``, ``target`` and ``weight``, ready for :func:`enrich` or for
-        decoupler directly. Features with a missing annotation in any of the columns are left
-        out.
+        A frame with ``source``, ``target`` and ``weight``, ready for :func:`enrich` or for decoupler directly.
+        Features with a missing annotation in any of the columns are left out.
+
+    Raises:
+        KeyError: ``var`` has none of the columns named by ``by``.
     """
     requested = COMPOSITES.get(by, by) if isinstance(by, str) else list(by)
     columns = [requested] if isinstance(requested, str) else list(requested)
@@ -75,21 +76,19 @@ def enrich(
 
     Args:
         adata: Profiles to score. Normalize first, since the methods use the values as given.
-        net: A decoupler network with ``source``, ``target`` and ``weight``, for example
-            prior-knowledge sets. Built from ``by`` when omitted.
+        net: A decoupler network with ``source``, ``target`` and ``weight``, for example prior-knowledge sets. Built from ``by`` when omitted.
         by: Passed to :func:`feature_sets` when ``net`` is not given.
-        method: ``"ulm"`` fits a linear model per set and is the usual choice; ``"mlm"`` fits all
-            sets jointly, which handles overlapping sets; ``"ora"`` is an over-representation
-            test on the extremes.
-        top_fraction: Fraction of features, ranked by value, that ``method="ora"`` counts as
-            extreme. The default 0.05 tests the top twentieth against the rest. Ignored when
-            ``n_up`` is passed, and by ``"ulm"`` and ``"mlm"``, which use every feature.
+        method: ``"ulm"`` fits a linear model per set and is the usual choice; ``"mlm"`` fits all sets jointly, which handles overlapping sets; ``"ora"`` is an over-representation test on the extremes.
+        top_fraction: Fraction of features, ranked by value, that ``method="ora"`` counts as extreme. The default 0.05 tests the top twentieth against the rest. Ignored when ``n_up`` is passed, and by ``"ulm"`` and ``"mlm"``, which use every feature.
         copy: Return a modified copy instead of mutating in place.
         decoupler_kwargs: Passed through to decoupler, e.g. ``tmin`` for the smallest usable set.
 
     Returns:
-        ``None``, or the modified copy. decoupler writes ``obsm["score_<method>"]`` and
-        ``obsm["padj_<method>"]``, both frames indexed by set name.
+        ``None``, or the modified copy.
+        decoupler writes ``obsm["score_<method>"]`` and ``obsm["padj_<method>"]``, both frames indexed by set name.
+
+    Raises:
+        ValueError: ``method`` is not one of ``METHODS``, no feature set could be built from ``by``, or ``top_fraction`` is outside (0, 1).
     """
     import decoupler as dc
 
@@ -120,8 +119,7 @@ def rank_features(
 ) -> AnnData | None:
     """Rank features by how well they separate each group, with the annotation attached.
 
-    Wraps :func:`scanpy.tl.rank_genes_groups` and joins the parsed ``var`` annotation onto the
-    result, so each ranked feature carries its object, feature group and channel.
+    Wraps :func:`scanpy.tl.rank_genes_groups` and joins the parsed ``var`` annotation onto the result, so each ranked feature carries its object, feature group and channel.
 
     Args:
         adata: Object to rank.
@@ -131,14 +129,13 @@ def rank_features(
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes ``uns["mantispy"][key_added]`` with ``group``,
-        ``feature``, ``score``, ``pvalue``, ``qvalue`` and the ``object``, ``feature_group``
-        and ``channel`` the feature belongs to.
+        ``None``, or the modified copy.
+        Writes ``uns["mantispy"][key_added]`` with ``group``, ``feature``, ``score``, ``pvalue``, ``qvalue`` and the ``object``, ``feature_group`` and ``channel`` the feature belongs to.
 
     Notes:
-        scanpy's ``logfoldchanges`` column is dropped. Normalized morphology features are
-        signed, so the ratio is often negative and its log is NaN or meaningless. Rank by
-        ``score``.
+        scanpy's ``logfoldchanges`` column is dropped.
+        Normalized morphology features are signed, so the ratio is often negative and its log is NaN or meaningless.
+        Rank by ``score``.
     """
     import scanpy as sc
 
@@ -146,15 +143,15 @@ def rank_features(
     # A shallow object: X is shared, so ranking a large matrix does not double memory.
     scratch = ad.AnnData(X=get_matrix(adata), obs=as_frame(adata.obs)[[groupby]].astype("category"), var=var[[]])
     with warnings.catch_warnings():
-        # scanpy always computes log fold changes, which warn on the negative ratios of signed
-        # features. The column is dropped below.
+        # scanpy always computes log fold changes, which warn on the negative ratios of signed features.
+        # The column is dropped below.
         warnings.filterwarnings("ignore", "invalid value encountered in log2", RuntimeWarning)
         sc.tl.rank_genes_groups(scratch, groupby=groupby, method=method)
 
     table = sc.get.rank_genes_groups_df(scratch, group=None).rename(
         columns={"names": "feature", "scores": "score", "pvals": "pvalue", "pvals_adj": "qvalue"}
     )
-    table = table.drop(columns=[column for column in ("logfoldchanges",) if column in table])
+    table = table.drop(columns=["logfoldchanges"], errors="ignore")
     annotation = [column for column in ("object", "feature_group", "channel") if column in var]
     table = table.merge(var[annotation].astype(str), left_on="feature", right_index=True, how="left")
     adata.uns.setdefault("mantispy", {})[key_added] = table
@@ -179,8 +176,12 @@ def rank_sets(
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes ``uns["mantispy"][key_added]`` with ``group``,
-        ``set`` and ``score``, the group's mean enrichment score minus the mean over all other rows.
+        ``None``, or the modified copy.
+        Writes ``uns["mantispy"][key_added]`` with ``group``, ``set`` and ``score``, the group's mean enrichment score minus the mean over all other rows.
+
+    Raises:
+        KeyError: ``obsm`` has no ``score_key``.
+        ValueError: ``groupby`` has a single group, leaving nothing to rank it against.
     """
     if score_key not in adata.obsm:
         raise KeyError(f"obsm has no {score_key!r}; run mt.tl.enrich first, which writes it")

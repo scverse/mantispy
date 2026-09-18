@@ -51,6 +51,20 @@ def test_resolution_and_provenance(adata):
     assert perturbations.n_obs == adata.obs["Metadata_Perturbation"].nunique()
 
 
+def test_a_grouping_finer_than_the_well_stays_at_well_resolution(adata):
+    """A site is a subdivision of a well, so a per-site profile is still per-well or finer.
+    Stamping it "perturbation" would stop validate requiring the plate and well columns it holds."""
+    adata.obs["Metadata_Site"] = np.tile(["1", "2"], adata.n_obs // 2)
+    sites = mt.tl.aggregate(adata, by=("Metadata_Plate", "Metadata_Well", "Metadata_Site"), min_cells=0)
+
+    assert sites.n_obs == 96  # 2 plates x 24 wells x 2 sites
+    assert sites.uns["mantispy"]["resolution"] == "well"
+
+    stripped = sites.copy()
+    del stripped.obs["Metadata_Plate"]
+    assert not validate(stripped).ok
+
+
 def test_channels_are_inherited_but_cell_level_provenance_is_not(adata):
     """Carrying the input's image_table or params forward would misdescribe the result."""
     wells = mt.tl.aggregate(adata, min_cells=0)

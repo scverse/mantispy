@@ -5,7 +5,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from mantispy._core._utils import inplace_or_copy, record_params, warn_resolution
+from mantispy._core.mutation import inplace_or_copy, warn_resolution
+from mantispy._core.provenance import record_params
 
 
 def _adata():
@@ -158,6 +159,22 @@ def test_every_control_mask_goes_through_reference_mask(cells):
 
     mt.pp.well_qc(round_tripped, min_cells=0)
     assert round_tripped.uns["mantispy"]["well_qc"]["control_cv"].notna().any()
+
+
+def test_every_feature_selection_goes_through_feature_mask(cells):
+    """The same round trip on var: a category of "True"/"False" coerces to all-true, which runs
+    every consumer of key="selected" on every feature instead of on the selection."""
+    import mantispy as mt
+
+    cells.var["selected"] = np.arange(cells.n_vars) < 3
+    round_tripped = cells.copy()
+    round_tripped.var["selected"] = pd.Categorical(cells.var["selected"].astype(str))
+    assert mt.get.features(round_tripped, key="selected") == list(cells.var_names[:3])
+
+    holed = cells.copy()
+    holed.var["selected"] = [1.0, np.nan] + [0.0] * (cells.n_vars - 2)
+    with pytest.raises(ValueError, match="missing value"):
+        mt.get.features(holed, key="selected")
 
 
 def test_two_layer_writing_calls_keep_separate_provenance():

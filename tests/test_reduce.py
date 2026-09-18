@@ -2,7 +2,17 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from mantispy._core._numba import MAD, MEAN, MEDIAN, QUANTILE, STD, grouped_stat
+from mantispy._core._numba import (
+    IQR,
+    MAD,
+    MEAN,
+    MEDIAN,
+    QUANTILE,
+    STD,
+    group_offsets,
+    grouped_median_spread,
+    grouped_stat,
+)
 from mantispy._core._reduce import (
     get_matrix,
     group_codes,
@@ -75,6 +85,76 @@ def test_all_nan_column_and_empty_group_yield_nan():
     out = grouped_stat(X, codes, 3, MEDIAN)
     assert np.isnan(out[0, 0]) and out[0, 1] == 1.5
     assert np.isnan(out[1]).all() and np.isnan(out[2]).all()
+
+
+@pytest.mark.parametrize("spread", [MAD, IQR], ids=["mad", "iqr"])
+def test_median_spread_matches_the_separate_passes_exactly(kernel_data, spread):
+    """One sort per slice replaced a median pass plus a spread pass that sorted it again.
+
+    The agreement has to be exact rather than close: pp.normalize divides every value by this
+    scale, so a last-bit difference would move every normalized profile in the screen.
+    """
+    X, codes, n_groups = kernel_data
+    X = X.copy()
+    X[:20, 3] = np.nan  # measured in some rows of every group, but not all
+    X[:, 5] = np.nan  # measured nowhere, so the slice is empty
+    n_groups += 1  # and one group with no rows at all
+
+    centre, scale = grouped_median_spread(X, codes, n_groups, spread)
+    if spread == MAD:
+        expected = grouped_stat(X, codes, n_groups, MAD)
+    else:
+        upper = grouped_stat(X, codes, n_groups, QUANTILE, q=0.75)
+        expected = upper - grouped_stat(X, codes, n_groups, QUANTILE, q=0.25)
+
+    np.testing.assert_array_equal(centre, grouped_stat(X, codes, n_groups, MEDIAN))
+    np.testing.assert_array_equal(scale, expected)
+    assert np.isnan(centre[:, 5]).all() and np.isnan(scale[:, 5]).all()
+    assert np.isnan(centre[-1]).all(), "a group with no rows has no median"
+
+
+def test_median_spread_refuses_a_stat_that_is_not_a_spread():
+    """MEDIAN reads as a valid selector everywhere else, and would silently give the IQR here."""
+    with pytest.raises(ValueError, match="MAD or IQR"):
+        grouped_median_spread(np.ones((4, 2), dtype=np.float32), np.zeros(4, dtype=np.int32), 1, MEDIAN)
+
+
+@pytest.mark.parametrize(
+    ("codes", "n_groups"),
+    [
+        (np.array([], dtype=np.int32), 0),
+        (np.array([], dtype=np.int32), 5),
+        (np.zeros(1, dtype=np.int32), 1),
+        (np.array([2, 2, 2], dtype=np.int32), 5),
+        (np.array([4, 0, 4, 0], dtype=np.int32), 5),
+        (np.arange(50, dtype=np.int32), 50),
+        (np.zeros(100, dtype=np.int32), 3),
+        (np.tile(np.arange(4), 25).astype(np.int32), 4),
+    ],
+    ids=[
+        "no rows",
+        "no rows but groups",
+        "one row",
+        "one occupied group",
+        "empty groups between",
+        "all singletons",
+        "one group holds everything",
+        "interleaved",
+    ],
+)
+def test_group_offsets_selects_exactly_what_scanning_for_the_code_selects(codes, n_groups):
+    """A dozen loops over groups take their rows from here instead of scanning ``codes == group`` once per group.
+
+    The two orderings have to agree exactly rather than as sets, because the loops that draw a permutation null from a group's rows feed those rows to a seeded generator: a permuted group would be the same rows and a different answer.
+    The degenerate shapes are the ones that would go unnoticed, since a group with no rows and a group with one row both come back from a scan as an array no loop body looks twice at.
+    """
+    order, offsets = group_offsets(codes, n_groups)
+    assert offsets[0] == 0
+    assert offsets[-1] == codes.size, "every row belongs to exactly one group"
+    for group in range(n_groups):
+        selected = order[offsets[group] : offsets[group + 1]]
+        np.testing.assert_array_equal(selected, np.flatnonzero(codes == group))
+        assert selected.dtype == np.int64, "an index array, so a group's rows can index a matrix directly"
 
 
 # --- the seam --------------------------------------------------------------

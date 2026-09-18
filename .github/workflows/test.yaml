@@ -125,5 +125,5 @@ jobs:
         with:
           path: ~/.cache/mantispy
           key: mantispy-datasets-${{ hashFiles('src/mantispy/ds/registry.yaml') }}
-      - name: Build the documentation, executing every notebook
-        run: uvx hatch run docs:build -D nb_execution_mode=cache
+      - name: Execute every notebook
+        run: uvx hatch run tutorials:run
