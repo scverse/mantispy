@@ -70,6 +70,22 @@ def hit_calling(
 ) -> AnnData | None:
     """Call hits by testing each group's distance from the controls.
 
+    Each group is scored against the half of the reference rows that did not fit the centroid and
+    covariance, and its null is the other ways to draw a group of its size from the group and those
+    controls pooled. Under the null the two are exchangeable, so the null is calibrated; bootstrapping
+    the controls alone is not, because it is centred on that sample's own median rather than the
+    population's and leaves the error in that centre out of its spread.
+
+    This wants a well-replicated design. The statistic is a group's median distance, so a group of one
+    or two wells is dominated by whichever wells it holds and no number of permutations recovers that;
+    :func:`mantispy.tl.map` with ``mode="activity"`` ranks replicate pairs instead and is the usual
+    readout on screens with little replication. JUMP-Target-2 read as a single plate gives every
+    compound one well and is the common way to land in that regime, while the same plate map read
+    across its twelve plates gives twelve.
+
+    Distance from the controls also rises when a treatment kills cells. Read the calls beside a cell
+    count, or beside :func:`mantispy.tl.cytotoxicity`, before taking them for morphology.
+
     Args:
         adata: Object to score, at cell or well resolution.
         groupby: Column defining the groups to test.
@@ -128,8 +144,6 @@ def hit_calling(
         )
 
     generator = np.random.default_rng(seed)
-    # Halving the reference group's held-out rows draws from a child of the seeded generator, so that it leaves the stream the permutation draws come from where it was.
-    half_generator = generator.spawn(1)[0]
     fit_rows, null_rows = split_reference(np.flatnonzero(is_control), generator)
     if fit_rows.size <= values.shape[1]:
         warnings.warn(
@@ -149,8 +163,6 @@ def hit_calling(
     fitted[fit_rows] = True
     # The split partitions the control rows, so the held-out half is the controls that did not fit.
     held_out = is_control & ~fitted
-    # Only a group that holds control rows has rows of its own in the null, so every other group is tested against all of them.
-    null_distances = to_control[null_rows]
 
     codes, keys = group_codes(adata, groupby)
 
@@ -166,14 +178,13 @@ def hit_calling(
         # The controls carry a perturbation label of their own, so one group is the reference against itself.
         # Half of its held-out rows are the sample and half are what it is tested against, drawn at random because the rows are ordered by plate and well.
         shared = np.flatnonzero(held_out[rows])
-        keep[half_generator.permutation(shared)[: shared.size // 2]] = False
+        keep[generator.permutation(shared)[: shared.size // 2]] = False
         tested = rows[keep]
-        against = null_distances
-        if shared.size:
-            # This group's sample came out of the held-out rows, so it is tested against the rest of them.
-            in_sample = np.zeros(adata.n_obs, dtype=bool)
-            in_sample[tested] = True
-            against = null_distances[~in_sample[null_rows]]
+        # A row is never on both sides: the reference group's sample comes out of the held-out rows, so it is tested against the rest of them, and every other group is tested against all of them.
+        in_sample = np.zeros(adata.n_obs, dtype=bool)
+        in_sample[tested] = True
+        against_rows = null_rows[~in_sample[null_rows]]
+        against = to_control[against_rows]
         sizes[index] = tested.size
         observed[index] = _statistic(to_control[tested], against, method)[0]
         if method == "ks":
@@ -181,13 +192,27 @@ def hit_calling(
             # A permutation null drawn from the reference rows is too small, since each draw is a subset of its own reference, and a further split cannot supply pseudo-groups as large as the real ones.
             pvalues[index] = float(ks_2samp(to_control[tested], against).pvalue)
             continue
-        # The draw is as wide as the group and the null takes as many of its columns as the sample has rows, so that trimming the reference group's sample leaves the draws of the groups after it where they were.
-        draws = generator.choice(null_rows, size=(n_permutations, max(rows.size, 1)), replace=True)
-        if shared.size:
-            # The reference group's sample is half of the held-out rows, so its null is the other ways to halve them, drawn without replacement rather than bootstrapped.
-            spread = np.random.default_rng([seed, index]).random((n_permutations, null_rows.size))
-            draws = null_rows[np.argsort(spread, axis=1)[:, : tested.size]]
-        null[index] = _statistic(to_control[draws[:, : max(tested.size, 1)]], against, method)
+        # Under the null this group is exchangeable with the controls it is measured against, so the null is the other ways to draw a group of its size from the two of them pooled.
+        # Bootstrapping the controls alone instead centres the null on that sample's own median rather than the population's, and leaves the error in that centre out of the spread, so the observed lands in the tail more often than it should: the rate goes as the one-sided tail of z / sqrt(1 + tested/held-out), which called 9 to 11% of pure noise at 24 rows against 48 held-out controls.
+        # Drawing without replacement from the controls alone is worse still, since it narrows the null further.
+        pool = np.concatenate([tested, against_rows])
+        spread = np.random.default_rng([seed, index]).random((n_permutations, pool.size))
+        draws = pool[np.argsort(spread, axis=1)[:, : max(tested.size, 1)]]
+        null[index] = _statistic(to_control[draws], against, method)
+
+    # A group of one or two rows has a median dominated by whichever well it happens to hold, and the null
+    # cannot separate that from the controls however many permutations it draws. JUMP-Target-2 read as a
+    # single plate is the common way to land here: every compound has one well, and the calls that come back
+    # track cell loss rather than morphology.
+    thin = int(np.sum(sizes < 3))
+    if thin > len(keys) // 2:
+        warnings.warn(
+            f"{thin} of {len(keys)} groups have fewer than three rows, so their statistic is the median of "
+            "one or two wells. Aggregate more replicates, or score activity with mt.tl.map(mode='activity'), "
+            "which ranks replicate pairs and is built for screens with little replication.",
+            UserWarning,
+            stacklevel=3,
+        )
 
     if method != "ks":
         pvalues = permutation_pvalue(observed, null)
