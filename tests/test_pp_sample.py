@@ -82,3 +82,39 @@ def test_chatterjee_rejects_a_constant_feature_it_cannot_measure(plate):
     assert scores[1] < 0.1 and scores[2] < 0.1, "a constant feature carries no information"
     assert scores[3] > 0.5, "and the dose-response feature still scores high"
     assert not plate.var["selected_chatterjee"].to_numpy()[[1, 2]].any()
+
+
+def test_chatterjee_does_not_read_missingness_as_a_dependence(plate):
+    """Ranking sorts NaN last, so a feature that is merely unmeasured in one group is read as a
+    step function of the group: pure noise missing in one of four groups scored 0.34, above the
+    0.1 threshold and in reach of the largest score a real screen produces, so selection kept a
+    feature for being absent. Scoring only the rows where it was measured is what the coefficient
+    is defined on."""
+    codes = plate.obs["Metadata_Perturbation"].cat.codes.to_numpy()
+    generator = np.random.default_rng(2)
+    values = plate.X.copy()
+    values[:, 4] = generator.normal(0.0, 1.0, plate.n_obs)
+    values[codes == 1, 4] = np.nan
+    values[:, 5] = 2.0 * codes + generator.normal(0.0, 0.2, plate.n_obs)
+    plate.X = values
+
+    mt.pp.feature_select_chatterjee(plate)
+    scores = plate.var["chatterjee_xi"].to_numpy()
+    selected = plate.var["selected_chatterjee"].to_numpy()
+    assert scores[4] < 0.1, "noise missing in one group does not depend on the group"
+    assert scores[5] > 0.5, "and a real group effect still scores high"
+    assert not selected[4]
+    assert selected[5]
+
+
+def test_chatterjee_refuses_a_feature_it_has_too_few_measurements_of(plate):
+    """Twelve finite values leave too few pairs for xi to be told from its own noise floor, so the
+    feature scores NaN rather than a number that a threshold would compare."""
+    values = plate.X.copy()
+    values[:, 6] = np.nan
+    values[:12, 6] = np.arange(12.0)
+    plate.X = values
+
+    mt.pp.feature_select_chatterjee(plate)
+    assert np.isnan(plate.var["chatterjee_xi"].to_numpy()[6])
+    assert not plate.var["selected_chatterjee"].to_numpy()[6]

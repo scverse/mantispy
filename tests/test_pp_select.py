@@ -1,5 +1,6 @@
 """Behaviour of feature_select beyond equivalence, which test_equivalence_* covers."""
 
+import numpy as np
 import pytest
 
 import mantispy as mt
@@ -11,6 +12,26 @@ def test_writes_a_bool_column_and_a_per_operation_count(wells):
     counts = wells.uns["mantispy"]["feature_select"]
     assert set(counts) == set(mt.pp._select.DEFAULT_OPERATIONS)
     assert all(isinstance(value, int) for value in counts.values())
+
+
+def test_counts_are_what_each_operation_removes_on_its_own(wells):
+    """A feature two operations both remove is counted by both, in whichever order they run."""
+    values = wells.X.copy()
+    values[:, 0] = 1.0  # Constant, so variance_threshold removes it.
+    values[: int(0.6 * wells.n_obs), 0] = np.nan  # And mostly missing, so drop_na_columns removes it too.
+    wells.X = values
+
+    alone = {}
+    for operation in ("drop_na_columns", "variance_threshold"):
+        trial = wells.copy()
+        mt.pp.feature_select(trial, operations=(operation,))
+        alone[operation] = int((~trial.var["selected"].to_numpy()).sum())
+    assert min(alone.values()) > 0, "neither operation removes anything; the test proves nothing"
+
+    for operations in (("drop_na_columns", "variance_threshold"), ("variance_threshold", "drop_na_columns")):
+        run = wells.copy()
+        mt.pp.feature_select(run, operations=operations)
+        assert dict(run.uns["mantispy"]["feature_select"]) == alone, f"counts changed with order {operations}"
 
 
 def test_nothing_is_dropped_or_reordered(wells):

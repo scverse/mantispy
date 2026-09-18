@@ -165,13 +165,16 @@ def feature_select(
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes ``var[key_added]`` and a per-operation count of removals to ``uns["mantispy"]["feature_select"]``. Nothing is dropped; use :func:`subset_features` for that.
+        ``None``, or the modified copy. Writes ``var[key_added]`` and a per-operation count of removals to ``uns["mantispy"]["feature_select"]``, each count being what that operation removes on its own. Nothing is dropped; use :func:`subset_features` for that.
 
     Raises:
         ValueError: If ``operations`` names an operation that is not in ``OPERATIONS``.
         KeyError: If ``noise_removal`` is requested but ``noise_removal_perturb_groups`` is not an ``obs`` column.
 
     Notes:
+        Every operation judges the full feature set, so each count in ``uns["mantispy"]["feature_select"]`` says what that operation alone would remove and is the same whatever order ``operations`` runs in.
+        The counts therefore overlap: a feature that is both constant and mostly missing is counted by ``variance_threshold`` and by ``drop_na_columns``, and the counts sum to more than the number of features actually removed, which is ``n_vars`` minus ``var[key_added].sum()``.
+
         ``correlation_threshold`` is the most expensive operation.
         pycytominer uses ``pandas.DataFrame.corr``, one Cython pass per column pair.
         Here the pairs come from chunked matrix products over blocks of columns, so no ``n_vars ** 2`` array is held in memory.
@@ -185,25 +188,27 @@ def feature_select(
     removed: dict[str, int] = {}
 
     for operation in operations:
-        before = keep.copy()
         if operation == "variance_threshold":
-            keep &= _op_variance_threshold(X, min_variance)
+            mask = _op_variance_threshold(X, min_variance)
         elif operation == "frequency_threshold":
-            keep &= _op_frequency_threshold(X, freq_cut, unique_cut)
+            mask = _op_frequency_threshold(X, freq_cut, unique_cut)
         elif operation == "correlation_threshold":
-            keep &= _op_correlation_threshold(X, corr_threshold, corr_method)
+            mask = _op_correlation_threshold(X, corr_threshold, corr_method)
         elif operation == "drop_na_columns":
-            keep &= _op_drop_na_columns(X, na_cutoff)
+            mask = _op_drop_na_columns(X, na_cutoff)
         elif operation == "blocklist":
-            keep &= _op_blocklist(adata, blocklist)
+            mask = _op_blocklist(adata, blocklist)
         elif operation == "drop_outliers":
-            keep &= _op_drop_outliers(X, outlier_cutoff)
-        elif operation == "noise_removal":
+            mask = _op_drop_outliers(X, outlier_cutoff)
+        else:
+            # Unknown names were rejected above, so what is left is `noise_removal`.
             if noise_removal_perturb_groups not in adata.obs:
                 raise KeyError(f"obs has no column {noise_removal_perturb_groups!r} to group replicates by")
             codes, _ = group_codes(adata, noise_removal_perturb_groups)
-            keep &= _op_noise_removal(X, codes, noise_removal_stdev_cutoff)
-        removed[operation] = int((before & ~keep).sum())
+            mask = _op_noise_removal(X, codes, noise_removal_stdev_cutoff)
+        # Counted against every feature rather than against the features its predecessors left, so the count does not depend on where the operation sits in `operations`.
+        removed[operation] = int((~mask).sum())
+        keep &= mask
 
     adata.var[key_added] = keep
     adata.uns.setdefault("mantispy", {})["feature_select"] = removed

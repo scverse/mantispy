@@ -14,14 +14,57 @@ if TYPE_CHECKING:
     from anndata import AnnData
 
 
+def _flag_mask(values: pd.Series, label: str, subject: str, remedy: str) -> np.ndarray:
+    """Read a flag column as a boolean mask, refusing the dtypes that would coerce to all-true.
+
+    ``Series.to_numpy(dtype=bool)`` is true for every non-empty string and for NaN, so a column that is not boolean silently selects everything instead of failing.
+    Both flag columns in mantispy go through here so that the two cannot drift apart.
+
+    Args:
+        values: The column to read.
+        label: How to name the column in an error message, such as ``"obs['Metadata_Control']"``.
+        subject: What a true entry means, such as ``"a control row"``, named in the error messages.
+        remedy: What the caller can do about missing values, appended to that message.
+
+    Returns:
+        One boolean per entry of ``values``.
+
+    Raises:
+        ValueError: The column has missing values, which coerce to ``True``.
+        TypeError: The column is neither boolean, nor 0/1, nor the ``"True"``/``"False"`` categorical an h5ad round trip produces.
+    """
+    missing = int(values.isna().sum())
+    if missing:
+        raise ValueError(
+            f"{label} has {missing} missing value(s) and cannot be used as a flag, because NaN coerces "
+            f"to True and would read as {subject}.{remedy}"
+        )
+
+    known = set(values.unique())
+    # An h5ad round trip can bring a bool column back as a category of "True"/"False".
+    if known <= {"True", "False"}:
+        return (values == "True").to_numpy()
+    if not (pd.api.types.is_bool_dtype(values) or known <= {0, 1}):
+        raise TypeError(
+            f"{label} must be boolean, got dtype {values.dtype}. A string column would read every entry as {subject}."
+        )
+    return values.to_numpy(dtype=bool)
+
+
 def feature_mask(adata: AnnData, key: str | None) -> np.ndarray:
     """Boolean mask over ``var``: the features flagged by ``key``, or all of them.
 
     A missing column is not an error.
     Callers pass ``key="selected"`` by default, so running after :func:`~mantispy.pp.feature_select` uses the selection and running before it uses every feature.
+    A column that is present must be boolean, on the same terms :func:`reference_mask` applies to ``obs``, because anything else would coerce to all-true and quietly use every feature.
     """
     if key is not None and key in adata.var:
-        return as_frame(adata.var)[key].to_numpy(dtype=bool)
+        return _flag_mask(
+            pd.Series(as_frame(adata.var)[key]),
+            f"var[{key!r}]",
+            "a selected feature",
+            " Fill them, or re-run mt.pp.feature_select.",
+        )
     if key is not None:
         get_logger().debug("var has no column %r; using every feature", key)
     return np.ones(adata.n_vars, dtype=bool)
@@ -40,22 +83,9 @@ def reference_mask(adata: AnnData, reference: str | None) -> np.ndarray:
         extra = " Run mt.pp.annotate_controls to create it." if column == "Metadata_Control" else ""
         raise KeyError(f"obs has no column {column!r} to use as reference.{extra}")
 
-    values = pd.Series(adata.obs[column])
-    missing = int(values.isna().sum())
-    if missing:
-        raise ValueError(
-            f"obs[{column!r}] has {missing} missing value(s) and cannot be used as a reference flag, "
-            "because NaN coerces to True and would mark those rows as controls. Fill them, or check "
-            "that the platemap covers every well."
-        )
-
-    known = set(values.unique())
-    # An h5ad round trip can bring a bool column back as a category of "True"/"False".
-    if known <= {"True", "False"}:
-        return (values == "True").to_numpy()
-    if not (pd.api.types.is_bool_dtype(values) or known <= {0, 1}):
-        raise TypeError(
-            f"obs[{column!r}] must be boolean to select reference rows, got dtype {values.dtype}. "
-            "A string column would select every row."
-        )
-    return values.to_numpy(dtype=bool)
+    return _flag_mask(
+        pd.Series(adata.obs[column]),
+        f"obs[{column!r}]",
+        "a control row",
+        " Fill them, or check that the platemap covers every well.",
+    )

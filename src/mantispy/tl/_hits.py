@@ -84,7 +84,7 @@ def hit_calling(
 
     Returns:
         ``None``, or the modified copy.
-        Writes ``uns["mantispy"][key_added]`` with ``group``, ``n_obs``, ``distance``, ``pvalue``, ``qvalue`` and ``is_hit``, and joins ``obs[key_added + "_distance"]`` and ``obs[key_added + "_qvalue"]`` back onto the rows.
+        Writes ``uns["mantispy"][key_added]`` with ``group``, ``n_obs``, ``distance``, ``pvalue``, ``qvalue`` and ``is_hit``, where ``n_obs`` counts the rows the statistic used rather than the rows the group has, and joins ``obs[key_added + "_distance"]`` and ``obs[key_added + "_qvalue"]`` back onto the rows.
 
     Raises:
         ValueError: ``method`` is not one of ``METHODS``, or ``reference`` selects fewer than four rows.
@@ -94,6 +94,10 @@ def hit_calling(
         One half estimates the centroid and the covariance, and the other supplies the null.
         A null drawn from the rows that defined the centroid would be in-sample while every tested group is out-of-sample, so it would come out too small and call pure noise as hits.
         Because only half the controls fit the covariance, the singular-covariance warning fires when there are fewer than about twice as many controls as features.
+
+        A row that fitted the centroid and the covariance sits closer to the centroid than any other group's row can, so it stays off the tested side of every group.
+        The controls carry a perturbation label of their own, and that group is therefore left with the held-out half, which is split once more so that the rows tested and the rows they are tested against are different rows.
+        Its row of the table is a draw from the null rather than a sample compared with part of itself measured against a centroid half of it placed, and ``n_obs`` reports about a quarter of the controls for it.
 
         The null is drawn from the controls only, and asks whether a group is further out than the same number of control rows would be.
         Drawing from every row would put real hits into the null, and a screen with many hits would look like one with none.
@@ -137,7 +141,10 @@ def hit_calling(
     # After whitening, the Mahalanobis distance to the control centroid is the norm of the row.
     # Fill gaps before whitening, which mixes columns; one NaN would otherwise zero the row's distance.
     to_control = np.linalg.norm(np.nan_to_num(values - centre) @ whitening, axis=1)
-    control_distances = to_control[null_rows]
+    fitted = np.zeros(adata.n_obs, dtype=bool)
+    fitted[fit_rows] = True
+    held_out = np.zeros(adata.n_obs, dtype=bool)
+    held_out[null_rows] = True
 
     codes, keys = group_codes(adata, groupby)
 
@@ -148,15 +155,25 @@ def hit_calling(
     order, offsets = group_offsets(codes, len(keys))
     for index in range(len(keys)):
         rows = order[offsets[index] : offsets[index + 1]]
-        sizes[index] = rows.size
-        observed[index] = _statistic(to_control[rows], control_distances, method)[0]
+        # A row that fitted the centroid and the covariance sits closer to the centroid than one that did not, so it stays off the tested side of every group.
+        keep = ~fitted[rows]
+        # The controls carry a perturbation label of their own, so one group is the reference against itself.
+        # Half of its held-out rows are the sample and half are what it is tested against.
+        shared = np.flatnonzero(keep & held_out[rows])
+        keep[shared[: shared.size // 2]] = False
+        tested = rows[keep]
+        against_rows = np.setdiff1d(null_rows, tested)
+        against = to_control[against_rows]
+        sizes[index] = tested.size
+        observed[index] = _statistic(to_control[tested], against, method)[0]
         if method == "ks":
             # The KS statistic has a known null distribution.
             # A permutation null drawn from the reference rows is too small, since each draw is a subset of its own reference, and a further split cannot supply pseudo-groups as large as the real ones.
-            pvalues[index] = float(ks_2samp(to_control[rows], control_distances).pvalue)
+            pvalues[index] = float(ks_2samp(to_control[tested], against).pvalue)
             continue
+        # The draw is as wide as the group and the null takes as many of its columns as the sample has rows, so that trimming the reference group's sample leaves the draws of the groups after it where they were.
         draws = generator.choice(null_rows, size=(n_permutations, max(rows.size, 1)), replace=True)
-        null[index] = _statistic(to_control[draws], control_distances, method)
+        null[index] = _statistic(to_control[draws[:, : max(tested.size, 1)]], against, method)
 
     if method != "ks":
         pvalues = permutation_pvalue(observed, null)

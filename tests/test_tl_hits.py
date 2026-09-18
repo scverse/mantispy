@@ -131,6 +131,25 @@ def test_a_missing_feature_does_not_make_a_group_maximally_control_like(pure_noi
     assert with_gap > 0.5 * intact, f"one NaN feature took the distance from {intact} to {with_gap}"
 
 
+def test_the_reference_row_is_not_scored_on_the_rows_that_fitted_the_covariance(pure_noise_screen):
+    """The controls carry a perturbation label of their own, so one row of the table is the reference against itself.
+
+    Scoring that row on all of the control rows puts the covariance-fitting half, which sits
+    closer to the centroid than any other group's rows can, on the tested side. Its median
+    then comes out below the null it is compared with, and the row cannot reach significance
+    however the controls fall: its p-value is pinned near one instead of being a draw from
+    the null like every other group's.
+    """
+    pvalues = []
+    for seed in range(12):
+        adata = pure_noise_screen(n_control=192, n_groups=4, per_group=48, n_features=10, seed=seed)
+        mt.tl.hit_calling(adata, n_permutations=200, seed=seed)
+        table = adata.uns["mantispy"]["hits"].set_index("group")
+        assert table.loc["DMSO", "n_obs"] == 48, "a quarter of the controls: half held out, and half of those tested"
+        pvalues.append(float(table.loc["DMSO", "pvalue"]))
+    assert 0.3 < float(np.mean(pvalues)) < 0.7, f"a draw from the null is uniform, got {pvalues}"
+
+
 def test_edistance_does_not_call_a_screen_of_pure_noise(pure_noise_screen):
     """Pure noise calls at most one of twelve groups.
 

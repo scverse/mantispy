@@ -46,6 +46,7 @@ def aggregate(
     Returns:
         A new :class:`~anndata.AnnData` with one row per group.
         ``var`` is carried over unchanged; ``obs`` holds the grouping columns, ``Metadata_CellCount``, and every other ``Metadata_`` column that is constant within every group.
+        The resolution recorded is ``"well"`` when ``by`` holds both ``Metadata_Plate`` and ``Metadata_Well``, since a finer grouping such as one row per site is still per-well or finer, and ``"perturbation"`` otherwise.
 
     Raises:
         ValueError: ``func`` is not one of ``FUNCTIONS``.
@@ -69,7 +70,9 @@ def aggregate(
     obs.index = pd.Index([str(index) for index in range(len(obs))])
 
     result = ad.AnnData(X=values[keep].astype(np.float32), obs=obs, var=as_frame(adata.var).copy())
-    stamp(result, resolution="well" if set(columns) == _WELL_KEYS else "perturbation")
+    # A grouping that splits the well further, by site or by anything else, is still per-well or finer,
+    # and it carries the plate and well columns that validate requires of a well-resolution object.
+    stamp(result, resolution="well" if _WELL_KEYS <= set(columns) else "perturbation")
     store = adata.uns.get("mantispy", {})
     # Deep copies, so the aggregate and its source do not share mutable frames.
     result.uns["mantispy"].update({key: deepcopy(value) for key, value in store.items() if key in _INHERITED})

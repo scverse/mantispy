@@ -17,33 +17,9 @@ from mantispy._core.logging import get_logger
 from mantispy._core.mutation import inplace_or_copy
 
 
-def chatterjee_xi(x: np.ndarray, y: np.ndarray, m: int = 1, seed: int = 0) -> np.ndarray:
-    """Chatterjee's xi between ``x`` and every column of ``y``.
-
-    Args:
-        x: The variable the others are tested against, such as a group code, a dose or a covariate.
-        y: One column, or a matrix of them. Every column is scored against ``x`` in one pass.
-        m: Right nearest neighbors, as in Lin & Han (2023). ``m=1`` is Chatterjee's original coefficient. Larger ``m`` has the same limit under dependence and a lower noise floor under independence, so a fixed threshold is more reliable.
-        seed: Seed for the tie-breaking.
-
-    Returns:
-        One xi per column of ``y``.
-
-    Raises:
-        ValueError: If ``m`` is below 1.
-
-    Notes:
-        Ties in both ``x`` and ``y`` are broken at random, as the coefficient requires.
-        A group label is almost all ties, and breaking them by row order would score the row order as structure.
-        Ties in ``y`` matter just as much: breaking them in ``x``-order scores an all-zero column at 0.996 instead of 0.007, which is what a zero-inflated Zernike, Granularity or RadialDistribution column looks like.
-    """
-    if m < 1:
-        raise ValueError(f"m must be at least 1, got {m}")
-    values = np.atleast_2d(y.T).T if y.ndim > 1 else y[:, None]
+def _xi(x: np.ndarray, values: np.ndarray, m: int, seed: int) -> np.ndarray:
+    """Chatterjee's xi between ``x`` and every column of ``values``, all of which must be finite."""
     n = x.size
-    if n < m + 2:
-        return np.zeros(values.shape[1])
-
     generator = np.random.default_rng(seed)
     shuffled = generator.permutation(n)
     order = shuffled[np.argsort(x[shuffled], kind="stable")]
@@ -62,6 +38,49 @@ def chatterjee_xi(x: np.ndarray, y: np.ndarray, m: int = 1, seed: int = 0) -> np
     return -2.0 + 6.0 * total / ((n + 1) * (n * m + m * (m + 1) / 4))
 
 
+def chatterjee_xi(x: np.ndarray, y: np.ndarray, m: int = 1, seed: int = 0, min_finite: int = 40) -> np.ndarray:
+    """Chatterjee's xi between ``x`` and every column of ``y``.
+
+    Args:
+        x: The variable the others are tested against, such as a group code, a dose or a covariate.
+        y: One column, or a matrix of them. Every column is scored against ``x`` in one pass.
+        m: Right nearest neighbors, as in Lin & Han (2023). ``m=1`` is Chatterjee's original coefficient. Larger ``m`` has the same limit under dependence and a lower noise floor under independence, so a fixed threshold is more reliable.
+        seed: Seed for the tie-breaking.
+        min_finite: Fewest finite pairs a column may be scored on, raised to ``m + 2`` when it is below that. Under independence xi has standard deviation ``sqrt(2 / (5 * n))``, which at 40 pairs equals the 0.1 threshold :func:`feature_select_chatterjee` selects on, so a column measured fewer times than this cannot be told from noise.
+
+    Returns:
+        One xi per column of ``y``, NaN for a column with fewer than ``min_finite`` finite pairs.
+
+    Raises:
+        ValueError: If ``m`` is below 1.
+
+    Notes:
+        Ties in both ``x`` and ``y`` are broken at random, as the coefficient requires.
+        A group label is almost all ties, and breaking them by row order would score the row order as structure.
+        Ties in ``y`` matter just as much: breaking them in ``x``-order scores an all-zero column at 0.996 instead of 0.007, which is what a zero-inflated Zernike, Granularity or RadialDistribution column looks like.
+
+        xi is defined on complete pairs, so each column is scored on the rows where both it and ``x`` are finite, and two columns missing different rows are scored on different subsets.
+        Ranking a column that still holds NaN sorts the missing rows last, which turns a feature that is merely unmeasured in one group into a step function of the group and scores it as dependence.
+        How much of a feature is missing is a question for :func:`~mantispy.pp.feature_select` and its ``drop_na_columns`` operation; xi reports on the part that was measured.
+    """
+    if m < 1:
+        raise ValueError(f"m must be at least 1, got {m}")
+    values = np.atleast_2d(y.T).T if y.ndim > 1 else y[:, None]
+    usable = np.isfinite(x)[:, None] & np.isfinite(values)
+    floor = max(min_finite, m + 2)
+
+    if usable.all():
+        return _xi(x, values, m, seed) if x.size >= floor else np.full(values.shape[1], np.nan)
+
+    # Columns missing different rows no longer share one ordering of x, so each is ranked over its own rows.
+    scores = np.full(values.shape[1], np.nan)
+    for column in range(values.shape[1]):
+        rows = np.flatnonzero(usable[:, column])
+        if rows.size >= floor:
+            scores[column] = _xi(x[rows], values[rows, column][:, None], m, seed)[0]
+    return scores
+
+
 @inplace_or_copy()
 def feature_select_chatterjee(
     adata: AnnData,
@@ -69,6 +88,7 @@ def feature_select_chatterjee(
     threshold: float = 0.1,
     m: int = 1,
     seed: int = 0,
+    min_finite: int = 40,
     key_added: str = "selected_chatterjee",
     copy: bool = False,
 ) -> AnnData | None:
@@ -80,11 +100,12 @@ def feature_select_chatterjee(
         threshold: Keep features scoring above this. xi is near zero under independence and approaches one when the feature is a deterministic function of the group, so the threshold is comparable across datasets in a way a correlation cutoff is not.
         m: Right nearest neighbors (Lin & Han 2023). ``m=1`` is Chatterjee's original coefficient; larger values lower the noise floor without changing what the statistic converges to.
         seed: Seed for the random tie-breaking.
+        min_finite: Fewest finite values a feature may be scored on. A feature measured fewer times than this scores NaN, which is above no threshold and so is never selected.
         key_added: Name of the boolean ``var`` column written.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes ``var[key_added]`` and the statistic itself to ``var["chatterjee_xi"]``.
+        ``None``, or the modified copy. Writes ``var[key_added]`` and the statistic itself to ``var["chatterjee_xi"]``, which is NaN for a feature too sparsely measured to score.
 
     Raises:
         ValueError: If ``groupby`` has a single group, so that no feature can depend on it.
@@ -92,6 +113,8 @@ def feature_select_chatterjee(
     Notes:
         Run it after :func:`~mantispy.pp.feature_select`, which drops redundant or unmeasurable features; this keeps the features that carry information about the perturbation.
         Subset with ``mt.pp.subset_features(adata, key="selected_chatterjee")``.
+
+        A feature is scored on the rows where it was measured, so one that is missing in a whole group is scored against the groups that do have it rather than against the pattern of what is missing.
 
         xi reaches one only for a noiseless function of the group, so real values are much lower.
         Over pki's 852 selected features and 38 treatments the largest was 0.32, and the default threshold of 0.1 kept about half of them.
@@ -106,8 +129,15 @@ def feature_select_chatterjee(
     if len(keys) < 2:
         raise ValueError(f"{groupby!r} has one group, so no feature can depend on it")
 
-    scores = chatterjee_xi(codes.astype(float), get_matrix(adata), m=m, seed=seed)
+    scores = chatterjee_xi(codes.astype(float), get_matrix(adata), m=m, seed=seed, min_finite=min_finite)
     adata.var["chatterjee_xi"] = scores
-    adata.var[key_added] = scores > threshold
-    get_logger().info("chatterjee kept %d of %d features", int((scores > threshold).sum()), adata.n_vars)
+    # NaN is above no threshold, so a feature too sparsely measured to score drops out here.
+    selected = scores > threshold
+    adata.var[key_added] = selected
+    get_logger().info(
+        "chatterjee kept %d of %d features, %d too sparsely measured to score",
+        int(selected.sum()),
+        adata.n_vars,
+        int(np.isnan(scores).sum()),
+    )
     return None
