@@ -303,6 +303,9 @@ Plotting functions return Matplotlib axes and do not modify the object.
     ds.rohban
     ds.pki
     ds.jump_target2
+    ds.jump_cells
+    ds.jump_export
+    ds.jump_plate
     ds.agnp
     ds.amish
     ds.chroma
@@ -318,6 +321,16 @@ By default `io.read_profiles` keeps features from the three compartments (`Cells
 `pycytominer.infer_cp_features`. Whole-field `Image_` measurements are excluded (a JUMP plate has 1077 of them
 against 3634 per-cell features); `objects=None` keeps them.
 
+`jump_cells`, `jump_export` and `jump_plate` are three layers of one plate, `BR00121438`, whose well-level profiles
+`jump_target2` already reads, so a profile aggregated from the cells can be compared with the published one.
+`jump_cells` returns single cells, `jump_export` the directory one field of view was measured in, as CellProfiler
+wrote it, and `jump_plate` the images and segmentations of one well as `SpatialData`. They share one download, so
+asking for more than one costs little beyond the first.
+
+The four compounds in `jump_cells` were chosen from the wells that still hold cells. Ranking this plate's wells by
+distance from the controls selects almost entirely for cytotoxicity: wells with fewer than 20 cells sit at a median
+distance of 2213, and wells with at least 120 cells at 25.7.
+
 `synthetic_plate` and `blobs` are generated locally. `synthetic_plate` is a single-cell profile table with injected
 artifacts for quality control to find; `blobs` is a small `SpatialData` plate of images, labels and tables. The other
 datasets download once, checked against a pinned sha256, into `mt.settings.cache_dir` (set `MANTISPY_CACHE_DIR` to
@@ -329,6 +342,7 @@ change it). Four of them carry the annotations the analysis functions need:
 | `rohban` | ~27 MB | 194 overexpressed genes | cell counts, ~10 replicates per gene |
 | `pki` | ~71 MB | 15 kinase inhibitors x 7 doses | cell counts, MOA labels, 32-64 replicates |
 | `jump_target2` | ~40 MB | 302 compounds, one shared plate map | the same plate run at two sites, so any difference between them is technical |
+| `jump_cells` | ~205 MB | 4 compounds and DMSO | single cells, 6 wells x 2 fields of view of `BR00121438` |
 
 The other nine are further gallery accessions, normalized and feature-selected by their authors and read with the
 `io.read_profiles` defaults. Use them to run a method across a range of screens.
