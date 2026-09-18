@@ -92,8 +92,8 @@ def test_jump_cells_holds_controls_and_treatments_at_cell_resolution() -> None:
     adata = mt.ds.jump_cells()
 
     assert adata.uns["mantispy"]["resolution"] == "cell"
-    assert adata.obs["Metadata_Well"].nunique() == 6
-    assert adata.obs["Metadata_Site"].nunique() == 2
+    assert adata.obs["Metadata_Well"].nunique() == 24
+    assert adata.obs["Metadata_Site"].nunique() == 4
     assert bool(adata.obs["Metadata_Control"].any()) and not bool(adata.obs["Metadata_Control"].all())
     assert adata.obs_names.is_unique
     assert mt.io.validate(adata).ok

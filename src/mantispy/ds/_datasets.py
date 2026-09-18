@@ -6,6 +6,7 @@ loading different data. Downloads land in :attr:`mantispy.settings.cache_dir`.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -478,16 +479,16 @@ def jump_export(cache_dir: str | Path | None = None) -> Path:
 def jump_cells(annotate: bool = True, cache_dir: str | Path | None = None) -> AnnData:
     """Single cells from one JUMP plate, as CellProfiler measured them.
 
-    Six wells of ``BR00121438`` at two fields of view each: two DMSO wells and four compounds that moved the
-    well profile while leaving the cells alive. The strongest movers on this plate are cytotoxic, so ranking
-    wells by distance alone selects for empty wells; these four were chosen from the wells that still hold
-    more than 120 cells.
+    Twenty-four wells of ``BR00121438`` at four fields of view each: eight DMSO wells, four compounds with both
+    of their replicate wells, and eight more compounds at one well. The strongest movers on this plate are
+    cytotoxic, so ranking wells by distance alone selects for empty wells; every well here holds more than 120
+    cells in its first field.
 
     The same plate's well-level profiles are :func:`jump_target2`, so a profile aggregated from these cells can
     be compared with the one the consortium published.
 
-    The first call downloads about 205 MB of CellProfiler output and writes the assembled object next to it, so
-    later calls read one file.
+    The first call downloads about 1.5 GB of CellProfiler output, reads 480 tables and writes the assembled
+    object next to them, which takes a few minutes. Later calls read that one file.
 
     Args:
         annotate: Join the JUMP annotation, which supplies ``Metadata_Perturbation`` and ``Metadata_Control``.
@@ -505,13 +506,15 @@ def jump_cells(annotate: bool = True, cache_dir: str | Path | None = None) -> An
     """
     import anndata as ad
 
+    entry = _DATASETS["jump_cells"]
     root = Path(cache_dir or settings.cache_dir)
-    # The schema version is in the name so a schema bump writes a new file instead of reading a stale one.
-    derived = root / f"jump_cells-schema{SCHEMA_VERSION}-{'annotated' if annotate else 'raw'}.h5ad"
+    # The name carries the schema version and a fingerprint of the files the entry pins, so neither a schema
+    # bump nor a change to which wells are read can be answered from a stale assembly.
+    fingerprint = hashlib.sha256("".join(file.name for file in entry.files).encode()).hexdigest()[:12]
+    derived = root / f"jump_cells-{SCHEMA_VERSION}-{fingerprint}-{'annotated' if annotate else 'raw'}.h5ad"
     if derived.exists():
         return read(derived)
 
-    entry = _DATASETS["jump_cells"]
     source = str(entry.metadata["source"])
     paths = _files("jump_cells", cache_dir)
     channels = [str(channel) for channel in entry.metadata["channels"]]
