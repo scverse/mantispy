@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import os
+import warnings
 from pathlib import Path
 from typing import Any, cast
 
 import anndata as ad
+import imageio.v3 as iio
 import numpy as np
 import pandas as pd
 import pytest
@@ -13,7 +15,7 @@ from _testdata import BATCH, CELL_PAINTING_CHANNELS, EXPORT_OBJECTS, EXPORT_SHAP
 from skimage.segmentation import find_boundaries
 
 import mantispy as mt
-from mantispy.io._gallery import _fov_offsets, _labels_from_outlines, _outline_file, _parse_well
+from mantispy.io._gallery import _fov_offsets, _labels_from_outlines, _outline_file, _outline_index, _parse_well
 from mantispy.io._plate import Layout
 
 
@@ -199,16 +201,72 @@ def test_labels_from_outlines_degenerate_input() -> None:
         _labels_from_outlines(np.zeros((2, 10, 10)), _centres([1], [1.0], [1.0], [1.0]))
 
 
-@pytest.mark.parametrize("name", ["a01_1--cell_outlines.png", "A01_s1--cell_outlines.png"])
-def test_outlines_are_found_whatever_the_source_capitalised(tmp_path: Path, name: str) -> None:
+@pytest.mark.parametrize(
+    "name",
+    [
+        "a01_1--cell_outlines.png",
+        "A01_s1--cell_outlines.png",
+        "A01_s1--cell_outlines.ome.tiff",
+        "A01_s1--cell_outlines.OME.TIFF",
+        "A01_s1--cell_outlines.tif.gz",
+        "A01_s1_cell_outlines.ome.tiff",
+    ],
+)
+def test_outlines_are_found_whatever_the_source_named_them(tmp_path: Path, name: str) -> None:
     """Path.glob is case-sensitive on POSIX, macOS included, so the lowercase layout the
-    docstring documents never matched and those sites came back with no labels at all."""
+    docstring documents never matched, and a name keyed by Path.stem keeps one extension of
+    a multi-extension spelling, so an .ome.tiff outline matched nothing either. Both came
+    back with no labels at all."""
     directory = tmp_path / f"{PLATE}-A01-1"
     (directory / "outlines").mkdir(parents=True)
     (directory / "outlines" / name).write_bytes(b"")
 
-    assert _outline_file(directory, "A01", 1, "cell") == directory / "outlines" / name
-    assert _outline_file(directory, "B02", 1, "cell") is None
+    assert _outline_file(_outline_index(directory), "A01", 1, "cell") == directory / "outlines" / name
+    assert _outline_file(_outline_index(directory), "B02", 1, "cell") is None
+
+
+def _outline_dirs(root: Path, plate: str) -> list[Path]:
+    return sorted((root / "workspace/analysis" / BATCH / plate / "analysis").glob("*/outlines"))
+
+
+def test_multi_extension_outlines_read_like_single_extension_ones(gallery: Path) -> None:
+    """``.ome.tiff`` is the standard OME spelling, so a source using it must read whole."""
+    for directory in _outline_dirs(gallery, PLATE):
+        for path in sorted(directory.glob("*_outlines.png")):
+            iio.imwrite(path.with_name(f"{path.name.removesuffix('.png')}.ome.tiff"), iio.imread(path))
+            path.unlink()
+
+    sdata = mt.io.read_plate(gallery, PLATE, batch=BATCH, profile="test")
+
+    objects = ("nuclei", "cells", "cytoplasm")
+    assert set(sdata.labels) == {f"{PLATE}_A01_s{s}_{o}" for s in (1, 2) for o in objects}
+    assert sdata.tables["cells"].n_obs == 4
+
+
+def test_outlines_the_reader_cannot_name_warn(gallery: Path) -> None:
+    """Outline images present but unmatched are a broken read, not a plate without segmentations."""
+    for directory in _outline_dirs(gallery, PLATE):
+        for path in sorted(directory.glob("A01_s*_outlines.png")):
+            path.rename(path.with_name(path.name.replace("A01_s", "A01_site")))
+
+    with pytest.warns(UserWarning, match="could not name"):
+        sdata = mt.io.read_plate(gallery, PLATE, batch=BATCH, profile="test")
+
+    assert not sdata.labels
+
+
+def test_a_plate_without_outlines_reads_quietly(gallery: Path) -> None:
+    """Not every plate carries segmentations, so their absence alone is no reason to warn."""
+    for directory in _outline_dirs(gallery, PLATE):
+        for path in sorted(directory.glob("*")):
+            path.unlink()
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        sdata = mt.io.read_plate(gallery, PLATE, batch=BATCH, profile="test")
+
+    assert not sdata.labels
+    assert not [record for record in caught if "could not name" in str(record.message)]
 
 
 def test_an_export_reads_whole(export: Path) -> None:

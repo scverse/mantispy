@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 from anndata import AnnData
 
@@ -48,7 +50,7 @@ def outliers(
     Args:
         adata: Object to flag.
         method: ``"ecod"`` is parameter-free and interpretable per feature, ``"isolation_forest"`` catches outliers defined by feature interactions, and ``"mad"`` takes the largest robust z-score across features, which is easy to explain but sees each feature alone.
-        contamination: Fraction of cells to flag, rounded to the nearest whole cell within each ``by`` group, so a group smaller than ``1 / (2 * contamination)`` flags none of its cells. Ignored when ``score_cutoff`` is given.
+        contamination: Fraction of cells to flag, rounded up to a whole cell within each ``by`` group, so a non-empty group always flags its most outlying cell and the flagged fraction is higher than asked for in a group smaller than ``1 / contamination``. Ignored when ``score_cutoff`` is given.
         score_cutoff: Threshold the score absolutely instead of by quantile. With ``method="mad"`` the score is a robust z-score, so ``score_cutoff=5`` gives the usual rule.
         key: Restrict to features flagged by this boolean ``var`` column, usually ``"selected"``. Falls back to every feature when the column is absent.
         by: Threshold within each group of this ``obs`` column, e.g. per plate, rather than globally.
@@ -84,11 +86,11 @@ def outliers(
             flagged[rows] = block > score_cutoff
         else:
             # Flag by rank: `> quantile` flags too few cells when scores tie, and none when an
-            # infinite feature value makes the quantile infinite. The count is rounded and not
-            # rounded up, because rounding up flags a cell in every group however small, which
-            # made contamination a no-op below 1/group_size: 0.01 and 0.001 both flagged 24 of
-            # 360 cells per well, a 6.7x overshoot.
-            k = int(contamination * rows.size + 0.5)
+            # infinite feature value makes the quantile infinite. The count is rounded up, so a
+            # contamination the group is too small to express asks for the most outlying cell
+            # rather than for none at all; pyod's threshold at the `1 - contamination`
+            # percentile likewise flags the top cell of a sample that small.
+            k = math.ceil(contamination * rows.size)
             flagged[rows[np.argsort(block)[::-1][:k]]] = True
 
     adata.obs[key_added] = flagged

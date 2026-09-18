@@ -50,8 +50,9 @@ def _center_and_scale(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Per-group center and scale, plus the features that cannot be normalized somewhere.
 
-    Returned as ``(center, scale, degenerate, uncentred)``, the first two ``(n_groups, n_vars)`` float32 and the last two boolean masks over features.
-    ``degenerate`` flags a spread of zero in some group and ``uncentred`` a group whose reference rows hold no usable value at all.
+    Returned as ``(center, scale, no_spread, uncentred)``, the first two ``(n_groups, n_vars)`` float32 and the last two boolean masks over features.
+    ``no_spread`` flags a spread of zero in some group and ``uncentred`` a group whose reference rows hold no usable centre or spread at all.
+    The two overlap: a feature can be constant in one group and unmeasured in another, and both facts have to reach the caller.
     """
     if method == "standardize":
         centre, _, _ = reduce_grouped(adata, by, MEAN, layer=layer, mask=mask)
@@ -65,15 +66,16 @@ def _center_and_scale(
 
     # A feature that is constant within a group has zero spread there. sklearn clamps such a
     # scale to 1.0, giving 0.0. mad_robustize divides by epsilon as pycytominer does, which
-    # multiplies the feature by up to 1e18, so those features are flagged.
-    degenerate = ((scale == 0) | ~np.isfinite(scale) | (scale <= epsilon)).any(axis=0)
+    # multiplies the feature by up to 1e18. A NaN or infinite scale fails this comparison, so
+    # it is left to `uncentred` along with the missing values behind it.
+    no_spread = (scale <= epsilon).any(axis=0)
     # A feature whose reference rows are all missing in a group has no centre there either.
     # Repairing only the scale would subtract NaN from every row of the group and wipe the
     # values that were measured outside the reference rows.
-    uncentred = ~np.isfinite(centre).all(axis=0)
+    uncentred = ~(np.isfinite(centre) & np.isfinite(scale)).all(axis=0)
     centre = np.where(np.isfinite(centre), centre, 0.0)
     scale = np.where((scale == 0) | ~np.isfinite(scale), 1.0, scale)
-    return centre.astype(np.float32), scale.astype(np.float32), degenerate, uncentred
+    return centre.astype(np.float32), scale.astype(np.float32), no_spread, uncentred
 
 
 @inplace_or_copy()
@@ -120,7 +122,8 @@ def normalize(
         empty = [str(keys[int(index)]) for index in np.flatnonzero(present == 0)]
         raise ValueError(f"no reference rows in group(s): {empty[:5]}")
 
-    centre, scale, degenerate, uncentred = _center_and_scale(adata, method, by, layer, mask, epsilon)
+    centre, scale, no_spread, uncentred = _center_and_scale(adata, method, by, layer, mask, epsilon)
+    degenerate = no_spread | uncentred
     # One flag column per output matrix. A single unsuffixed column lets a second call writing
     # another layer reset the flags describing the first, and the remedy below then keeps a
     # feature whose value in that layer is 1e18.
@@ -132,13 +135,14 @@ def normalize(
         warnings.warn(
             f"{int(uncentred.sum())} of {adata.n_vars} features have no reference values to centre on "
             f"in at least one group of {by!r}{scope}, because every value there is missing or infinite. "
-            "Their centre is set to 0 and their scale to 1 in that group, so the values measured "
+            "Their centre is set to 0 where it is missing and their scale to 1, so the values measured "
             "outside the reference rows pass through unnormalized instead of becoming NaN, and are not "
             f"comparable across groups. {remedy}",
             UserWarning,
             stacklevel=3,
         )
-    no_spread = degenerate & ~uncentred
+    # Both conditions report, because a feature that is constant in one group and unmeasured
+    # in another is still multiplied by 1e18 in the first.
     if no_spread.any():
         warnings.warn(
             f"{int(no_spread.sum())} of {adata.n_vars} features have no spread in at least one "

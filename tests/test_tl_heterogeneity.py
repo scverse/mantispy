@@ -29,13 +29,39 @@ def test_composition_rows_are_wells_and_sum_to_one(clustered):
 
 
 def test_composition_carries_metadata_and_tests_against_the_controls(clustered):
-    composition = mt.tl.cluster_composition(clustered)
+    values = np.asarray(clustered.X, dtype=float)
+    is_control = clustered.obs["Metadata_Control"].to_numpy(dtype=bool)
+    # At effect_size=4 leiden gives one cluster per perturbation, so the controls occupy one of
+    # them and no composition can be set against theirs. Split on distance from the control
+    # centre at the control median instead, a state both conditions hold cells in.
+    distance = np.linalg.norm(values - np.nanmean(values[is_control], axis=0), axis=1)
+    clustered.obs["state"] = np.where(distance > np.median(distance[is_control]), "far", "near")
+
+    composition = mt.tl.cluster_composition(clustered, cluster_key="state")
     assert "Metadata_Perturbation" in composition.obs
     test = composition.uns["mantispy"]["composition_test"]
     assert {"group", "statistic", "pvalue", "qvalue"} <= set(test.columns)
     assert len(test) == composition.n_obs, "one row per well, in the order of the rows"
-    # At effect_size=4 leiden gives one cluster per perturbation and the controls hold one of
-    # them, so no well's composition can be set against theirs.
+
+    control = composition.obs["Metadata_Control"].to_numpy(dtype=bool)
+    statistic = test["statistic"].to_numpy()
+    # Every treated well's composition departs further than any control well's.
+    assert statistic[~control].min() > statistic[control].max()
+    assert (test["qvalue"].to_numpy()[~control] < 0.05).all()
+
+
+def test_controls_confined_to_one_cluster_warn_rather_than_return_a_table_of_nan(clustered):
+    """A chi-square over a single category has no degrees of freedom, so the test is NaN.
+
+    A full-looking table of NaN handed back without a word reads as no well's composition
+    differing from the controls'.
+    """
+    leiden = clustered.obs["leiden"].astype(str)
+    assert leiden[clustered.obs["Metadata_Control"].to_numpy(dtype=bool)].nunique() == 1
+    with pytest.warns(UserWarning, match="controls occupy 1 of"):
+        composition = mt.tl.cluster_composition(clustered)
+    test = composition.uns["mantispy"]["composition_test"]
+    assert len(test) == composition.n_obs
     assert test["pvalue"].isna().all()
 
 
@@ -143,6 +169,23 @@ def test_subpopulation_hits_does_not_call_pure_noise():
         total += len(pseudo)
     assert total == 120
     assert called / total < 0.1, f"{called}/{total} pure-noise pseudo-treatments called at raw p < 0.05"
+
+
+def test_the_reference_group_is_tested_only_on_cells_that_did_not_place_the_centroid():
+    """The controls carry a perturbation label too, so one row of the table is the reference group against itself.
+
+    Tested on every control cell, that row compares a sample with the half of itself it is
+    tested against, measured from a centre the other half placed.
+    """
+    adata = _noise_cells(n_control=36, n_features=120, per_group=200, n_groups=1, seed=0)
+    mt.tl.subpopulation_hits(adata, cluster_key="state")
+    table = adata.uns["mantispy"]["subpopulation_hits"].set_index("group")
+
+    # Eighteen of the 36 controls place the centroid, and the held-out half is split again.
+    assert int(table.loc["DMSO", "n_cells"]) <= 9
+    assert np.isfinite(float(table.loc["DMSO", "statistic"]))
+    # A group that is not the reference keeps every cell it has.
+    assert int(table.loc["p00", "n_cells"]) == 200
 
 
 def _clustered_wells(layout: dict[str, dict[int, int]], n_clusters: int):

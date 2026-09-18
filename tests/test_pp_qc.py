@@ -213,25 +213,29 @@ def test_the_area_outlier_flag_does_not_depend_on_var_column_order():
     assert flagged == [1, 1]
 
 
-def test_qc_metrics_survives_a_var_table_without_a_feature_column(caplog):
-    """``var['feature']`` was read before any guard, so calculate_qc_metrics raised a bare
-    KeyError('feature') on tl.feature_signature's own public output, while the very next
-    line guarded its sibling precondition."""
-    import logging
-
+def test_qc_metrics_refuses_a_var_table_without_a_feature_column():
+    """Downgrading the missing column to a log line and an all-false flag let qc_pass skip
+    the area check silently: a cell of area 1e6 passed while obs carried a complete-looking
+    set of qc_ columns, and the notice disappeared entirely once the log level was raised.
+    The column is a schema requirement that io.validate reports as an error."""
     import anndata as ad
 
     from mantispy._core.schema import stamp
 
+    values = np.random.default_rng(0).normal(500.0, 10.0, (50, 2)).astype(np.float32)
+    values[7, 0] = 1e6
     adata = ad.AnnData(
-        X=np.ones((3, 2), dtype=np.float32),
-        obs=pd.DataFrame({"Metadata_Plate": "P1", "Metadata_Well": ["A01", "A02", "A03"]}, index=["a", "b", "c"]),
-        var=pd.DataFrame(index=["Intensity | DNA | Cells", "Texture | RNA | Nuclei"]),
+        X=values,
+        obs=pd.DataFrame(
+            {"Metadata_Plate": "P1", "Metadata_Well": [f"A{index % 8 + 1:02d}" for index in range(50)]},
+            index=[str(index) for index in range(50)],
+        ),
+        # The real CellProfiler names, but a var table built by hand and never parsed.
+        var=pd.DataFrame(index=["Cells_AreaShape_Area", "Cells_Intensity_MeanIntensity_DNA"]),
     )
-    stamp(adata, resolution="perturbation")
+    stamp(adata, resolution="cell")
 
-    with caplog.at_level(logging.WARNING, logger="mantispy"):
+    with pytest.raises(KeyError, match="parse_feature_names"):
         mt.pp.calculate_qc_metrics(adata)
-    assert "feature" in caplog.text and "parse_feature_names" in caplog.text
-    assert not adata.obs["qc_area_outlier"].any()
-    assert "qc_variance" in adata.var, "the other metrics are still computed"
+    assert "qc_pass" not in adata.obs, "and no qc_ column is written before the check fails"
+    assert "qc_variance" not in adata.var

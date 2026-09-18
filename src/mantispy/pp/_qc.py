@@ -68,23 +68,27 @@ def calculate_qc_metrics(
 
     Returns:
         ``None``, or the modified copy. Writes the ``obs`` columns ``qc_n_nan_features``, ``qc_nan_fraction``, ``qc_is_border``, ``qc_area_outlier`` and ``qc_pass``, and the ``var`` columns ``qc_n_nan``, ``qc_variance`` and ``qc_n_unique``.
+
+    Raises:
+        KeyError: If ``var`` has no ``feature`` column, which ``qc_area_outlier`` needs to find the area features, and which the schema requires.
     """
     X = get_matrix(adata)
     missing = np.isnan(X)
+    nan_fraction = missing.mean(axis=1)
+    # Both flags before the first write, so a missing requirement cannot leave the object
+    # carrying a complete-looking set of qc_ columns.
+    border = _border_flag(adata, image_shape, border_margin)
+    area_outlier = _area_outlier_flag(adata, X)
 
     adata.obs["qc_n_nan_features"] = missing.sum(axis=1).astype(np.int32)
-    adata.obs["qc_nan_fraction"] = missing.mean(axis=1)
+    adata.obs["qc_nan_fraction"] = nan_fraction
     adata.var["qc_n_nan"] = missing.sum(axis=0).astype(np.int32)
     adata.var["qc_variance"] = _nanvar(X)
     adata.var["qc_n_unique"] = _n_unique(X, missing)
 
-    adata.obs["qc_is_border"] = _border_flag(adata, image_shape, border_margin)
-    adata.obs["qc_area_outlier"] = _area_outlier_flag(adata, X)
-    adata.obs["qc_pass"] = (
-        ~adata.obs["qc_is_border"].to_numpy()
-        & ~adata.obs["qc_area_outlier"].to_numpy()
-        & (adata.obs["qc_nan_fraction"].to_numpy() <= max_nan_fraction)
-    )
+    adata.obs["qc_is_border"] = border
+    adata.obs["qc_area_outlier"] = area_outlier
+    adata.obs["qc_pass"] = ~border & ~area_outlier & (nan_fraction <= max_nan_fraction)
     return None
 
 
@@ -108,15 +112,20 @@ def _area_outlier_flag(adata: AnnData, X: np.ndarray) -> np.ndarray:
 
     Every compartment that measured an area is scored within its own plate and the flags are OR-ed, so a cell is an outlier when any of its areas is.
     Scoring only the first matching column made the flag, and so ``qc_pass``, depend on the order of ``var``.
+
+    Raises:
+        KeyError: If ``var`` has no ``feature`` column, since the check cannot run without it.
     """
     if "feature" not in adata.var:
-        get_logger().warning(
-            "var has no 'feature' column, so no cell can be flagged as an area outlier. The column is "
-            "written by mt.io.read_profiles, and by mantispy._core.features.parse_feature_names for a "
-            "var table built by hand; an object from tl.feature_signature carries no per-feature "
-            "annotation to read."
+        # Returning an all-false flag for a check that did not run makes qc_pass a weaker
+        # statement than it claims to be: a cell of any area passes. 'feature' is a schema
+        # requirement, and mt.io.validate reports it as an error too.
+        raise KeyError(
+            "var has no 'feature' column, which qc_area_outlier needs to find the area features. "
+            "mt.io.read_profiles writes it, and mantispy._core.features.parse_feature_names builds it "
+            "for a var table made by hand; an object from tl.feature_signature carries no per-feature "
+            "annotation, and cell-level QC does not apply to it."
         )
-        return np.zeros(adata.n_obs, dtype=bool)
 
     area = adata.var_names[adata.var["feature"].astype(str).eq("Area")]
     if not len(area) or "Metadata_Plate" not in adata.obs:

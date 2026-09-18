@@ -154,6 +154,31 @@ def test_a_feature_constant_among_the_controls_is_flagged(cells):
     assert np.abs(np.asarray(kept.X)).max() < 1e6
 
 
+def test_a_feature_both_constant_and_unmeasured_reports_both_conditions(adata):
+    """Suppressing the spread warning whenever a feature was also uncentred somewhere hid the
+    1e18 multiplication exactly when it was happening: a feature constant among the first
+    plate's controls and unmeasured among the second's left the first plate's treated rows at
+    1.0e19, with only the centring warning to show for it."""
+    plate = adata.obs["Metadata_Plate"].astype(str).to_numpy()
+    control = adata.obs["Metadata_Control"].to_numpy(dtype=bool)
+    first, second = sorted(set(plate))
+
+    values = adata.X.copy()
+    values[(plate == first) & control, 3] = 7.0  # constant among these controls, varying outside them
+    values[(plate == second) & control, 3] = np.nan  # never measured among those
+    adata.X = values
+    treated = (plate == first) & ~control
+
+    with pytest.warns(UserWarning) as record:
+        mt.pp.normalize(adata, method="mad_robustize", by="Metadata_Plate", reference="negcon")
+    messages = [str(warning.message) for warning in record]
+
+    assert any("no spread" in message and "1e18" in message for message in messages), "the multiplication"
+    assert any("no reference values" in message for message in messages), "and the missing centre"
+    assert adata.var["degenerate_scale"].to_numpy()[3]
+    assert np.abs(np.asarray(adata.X)[treated, 3]).max() > 1e6
+
+
 @pytest.mark.parametrize("method", ["mad_robustize", "standardize", "robustize"])
 def test_a_feature_unmeasured_among_one_groups_controls_keeps_its_measured_values(adata, method):
     """Repairing the zero scale to 1.0 but leaving the centre NaN turns every measured value

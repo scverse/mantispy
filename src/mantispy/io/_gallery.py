@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import warnings
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, cast
@@ -224,23 +225,37 @@ def _site_dir(root: Path, batch: str, plate: str, well: str, site: int) -> Path:
     return root / "workspace/analysis" / batch / plate / "analysis" / f"{plate}-{well}-{site}"
 
 
-def _outline_file(directory: Path, well: str, site: int, kind: str) -> Path | None:
-    """Find one outline image, whatever the source called it.
+def _outline_index(directory: Path) -> dict[str, Path]:
+    """Index the files of one site's analysis directory by name, lowercased, up to the first dot.
 
-    Seen across the gallery: ``outlines/A01_s1--cell_outlines.png``, ``outlines/a01_1--cell_outlines.png``, and ``A01_s1_cell_outlines.tiff`` in a directory named after the plate.
+    The key keeps the name before the first dot rather than dropping one extension, so a ``.ome.tiff`` or ``.tif.gz`` outline answers to the same name as a ``.png`` one.
     Names are compared without regard to case, because ``Path.glob`` is case-sensitive on POSIX, macOS included, and the lowercase spelling would never match a well named ``A01``.
     """
     # Files beside the analysis first, then one level down, which is the order the globs had.
-    found: dict[str, Path] = {}
+    index: dict[str, Path] = {}
     for path in [*sorted(directory.glob("*")), *sorted(directory.glob("*/*"))]:
-        if path.suffix and path.is_file():
-            found.setdefault(path.stem.lower(), path)
-    for stem in (
+        name, _, extension = path.name.partition(".")
+        if extension and path.is_file():
+            index.setdefault(name.lower(), path)
+    return index
+
+
+def _holds_outlines(directory: Path) -> bool:
+    """Whether a site holds outline images at all, which tells a source without segmentations from one this reader cannot name."""
+    return any("outlines" in name for name in _outline_index(directory))
+
+
+def _outline_file(index: Mapping[str, Path], well: str, site: int, kind: str) -> Path | None:
+    """Find one outline image in an index of a site's files, whatever the source called it.
+
+    Seen across the gallery: ``outlines/A01_s1--cell_outlines.png``, ``outlines/a01_1--cell_outlines.png``, and ``A01_s1_cell_outlines.tiff`` in a directory named after the plate.
+    """
+    for name in (
         f"{well}_s{site}--{kind}_outlines",
         f"{well}_{site}--{kind}_outlines",
         f"{well}_s{site}_{kind}_outlines",
     ):
-        if (match := found.get(stem.lower())) is not None:
+        if (match := index.get(name.lower())) is not None:
             return match
     return None
 
@@ -275,9 +290,10 @@ def _centre_columns(objects: pd.DataFrame) -> tuple[str, str]:
 def _site_labels(directory: Path, well: str, site: int) -> dict[str, npt.NDArray[np.uint32]]:
     import imageio.v3 as iio
 
+    index = _outline_index(directory)
     masks = {}
     for name, kind, csv in (("nuclei", "nuclei", "Nuclei"), ("cells", "cell", "Cells")):
-        path = _outline_file(directory, well, site, kind)
+        path = _outline_file(index, well, site, kind)
         if path is None or not (directory / f"{csv}.csv").exists():
             return {}
         candidates = _outline_candidates(np.squeeze(iio.imread(path)))
@@ -432,7 +448,7 @@ def read_gallery_plate(
             if isinstance(key, tuple) and _image_path(root, batch, row, prefix, channels[0]).exists()
         ]
 
-    images, labels, masks, analysed = {}, {}, {}, []
+    images, labels, masks, analysed, unnamed = {}, {}, {}, [], []
     for well in wells:
         for site in sorted(load_data.loc[well].index):
             fov = f"{plate}_{well}_s{site}"
@@ -451,11 +467,21 @@ def read_gallery_plate(
             directory = _site_dir(root, batch, plate, well, site)
             site_labels = _site_labels(directory, well, site) if directory.is_dir() else {}
             if not site_labels:
+                # A site holding no outline images has no segmentation to read; one whose outlines went unmatched has.
+                if directory.is_dir() and _holds_outlines(directory):
+                    unnamed.append(directory.name)
                 continue
             analysed.append(directory / "Cells.csv")
             for name, mask in site_labels.items():
                 masks[f"{fov}_{name}"] = mask
                 labels[f"{fov}_{name}"] = Labels2DModel.parse(mask, dims=("y", "x"), transformations=transformations)
+
+    if unnamed:
+        warnings.warn(
+            f"read no labels for {len(unnamed)} analysed sites holding outline images this reader could not name, {unnamed[0]} among them",
+            UserWarning,
+            stacklevel=2,
+        )
 
     tables, shapes = {}, {}
     if analysed:

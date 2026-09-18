@@ -63,29 +63,32 @@ def _map_row(adata: AnnData, map_key: str, label_key: str) -> pd.DataFrame:
 
 def evaluate_correction(
     adata: AnnData,
+    *,
     reps: Sequence[str] = ("X_pca",),
     label_key: str = "Metadata_Perturbation",
     batch_key: str = "Metadata_Batch",
-    perplexity: float = 30,
     map_key: str | None = None,
+    perplexity: float = 30,
 ) -> pd.DataFrame:
     """Run every metric for every representation and stack the results.
+
+    Every argument after ``adata`` is keyword-only, so a later metric parameter can be added without changing what an existing argument means.
 
     Args:
         adata: Object holding the representations in ``obsm``.
         reps: Representations to compare, e.g. ``("X_pca", "X_pca_harmony")``.
         label_key: ``obs`` column with the biological grouping.
         batch_key: ``obs`` column with the nuisance grouping.
-        perplexity: Perplexity for both :func:`~mantispy.metrics.lisi` rows. The default needs more than 90 rows, so a smaller object needs a smaller value.
         map_key: Name of a table written by :func:`~mantispy.tl.map`, to add its mean mAP as one more row. That table is read rather than recomputed, so the row appears once, under the representation that run scored, and not once per entry of ``reps``.
+        perplexity: Perplexity for both :func:`~mantispy.metrics.lisi` rows. The default needs more than 90 rows, and on a smaller object those two rows are NaN unless a smaller value is passed.
 
     Returns:
         A tidy frame with ``metric``, ``representation``, ``key``, ``value`` and ``better``, the last saying which direction is an improvement for that metric.
+        A metric that is undefined for this object, such as a LISI whose perplexity the row count cannot support or a silhouette over one row per label, is NaN in that frame rather than an error, so one undefined metric still leaves the others readable.
 
     Raises:
         KeyError: ``obsm`` holds nothing under one of ``reps``.
         KeyError: ``map_key`` names no table, or nothing recorded the representation behind it.
-        ValueError: The object has too few rows for ``perplexity``.
     """
     frames = []
     for rep in reps:

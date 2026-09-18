@@ -59,7 +59,9 @@ def cluster_composition(
         Their fractions stay in ``X``, and :func:`subpopulation_hits` compares within a cluster.
 
         The test holds one row per well, in the order of the rows of the returned object.
-        A well with no cells in the clusters the controls occupy gets ``NaN``, as does every well when the controls occupy fewer than two clusters, since a composition cannot then differ from theirs.
+        A well with no cells in the clusters the controls occupy gets ``NaN``.
+        So does every well when the controls occupy fewer than two clusters, since a chi-square over a single category has no degrees of freedom.
+        That case warns, because the table keeps its row per well and would otherwise read as no well's composition differing.
     """
     if cluster_key not in adata.obs:
         raise KeyError(f"obs has no column {cluster_key!r}; cluster first, e.g. sc.tl.leiden(adata)")
@@ -111,10 +113,14 @@ def _composition_test(composition: AnnData, counts: np.ndarray, reference: str |
     comparable = int(reached.sum()) >= 2
     share = pooled[reached] / pooled[reached].sum() if reached.any() else pooled[reached]
     if not comparable:
-        get_logger().info(
-            "cluster_composition: the controls occupy %d cluster(s), too few for another composition to differ "
-            "from theirs, so the test is NaN",
-            int(reached.sum()),
+        warnings.warn(
+            f"the controls occupy {int(reached.sum())} of {len(reached)} clusters, so the composition test has no "
+            "second category to set a well against and every statistic, pvalue and qvalue is NaN. The clustering "
+            "is following the perturbation rather than a cell state the conditions share: cluster on fewer "
+            "components so that they mix, or at a higher resolution so that the controls' own cluster splits into "
+            "sub-states. To compare whole populations instead, use mt.tl.hit_calling or mt.tl.edistance.",
+            UserWarning,
+            stacklevel=3,
         )
     elif not reached.all():
         get_logger().info(
@@ -255,7 +261,7 @@ def subpopulation_hits(
         groupby: ``obs`` column holding the perturbation.
         reference: Which rows are the controls, ``"negcon"`` or the name of a boolean ``obs`` column.
         use_rep: Measure in ``obsm[use_rep]`` instead of ``X``.
-        min_cells: Skip a (cluster, group) pair with fewer cells than this on either side. A cluster needs twice as many controls, and at least four, since half of them place the centroid and half supply the distances tested against.
+        min_cells: Skip a (cluster, group) pair with fewer cells than this on either side. A cluster needs twice as many controls, and at least four, since half of them place the centroid and half supply the distances tested against. The reference group's own row needs four times as many, since it comes from a second split of the held-out half.
         seed: Seed for the split of a cluster's controls.
         key_added: Name for the output table.
         copy: Return a modified copy instead of mutating in place.
@@ -276,7 +282,12 @@ def subpopulation_hits(
         One half places the centroid and the other supplies the distances tested against, so the null is out of sample.
         Controls measured against a centroid they defined themselves sit closer to it than any other group can.
         That bias grows with features per control, which is the shape of real Cell Painting data.
-        On pure noise with 36 controls and 120 features, the in-sample null called 0.40 of pseudo-treatments at raw ``p < 0.05``, and the split called none.
+        On pure noise with 36 controls and 120 features, a null drawn from the rows that placed the centroid called 0.40 of pseudo-treatments at raw ``p < 0.05``, and the split called 0.03.
+
+        The controls carry a perturbation label of their own, so one row of the table is the reference group against itself.
+        That row is computed from the held-out half alone, split once more so that the cells tested and the cells they are tested against are different cells.
+        It is therefore a draw from the null, rather than a sample compared with part of itself measured against a centre half of it placed.
+        A cluster with too few controls to split twice has no such row.
     """
     if cluster_key not in adata.obs:
         raise KeyError(f"obs has no column {cluster_key!r}; cluster first, e.g. sc.tl.leiden(adata)")
@@ -301,11 +312,17 @@ def subpopulation_hits(
         fit_rows, null_rows = split_reference(controls, generator)
         centre = np.nanmean(values[fit_rows], axis=0, keepdims=True)
         distance = np.sqrt(pairwise_sqeuclidean(np.nan_to_num(values[in_cluster]), np.nan_to_num(centre))).ravel()
-        control_distance = distance[np.isin(in_cluster, null_rows)]
+        fitted, held_out = np.isin(in_cluster, fit_rows), np.isin(in_cluster, null_rows)
 
         for group in pd.unique(groups[in_cluster]):
-            treated = distance[groups[in_cluster] == group]
-            if treated.size < min_cells:
+            # A cell that placed the centroid sits closer to it than one that did not, so it stays off the tested side.
+            in_group = (groups[in_cluster] == group) & ~fitted
+            # The reference group is the controls under their own perturbation label.
+            # Half its held-out cells are the sample and half are what it is tested against.
+            shared = np.flatnonzero(in_group & held_out)
+            in_group[shared[: shared.size // 2]] = False
+            treated, control_distance = distance[in_group], distance[held_out & ~in_group]
+            if treated.size < min_cells or control_distance.size < min_cells:
                 continue
             statistic = float(ks_statistic(treated[None, :], control_distance)[0])
             # Two-sample KS p-value, the asymptotic form scipy uses for large samples.

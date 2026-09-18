@@ -75,14 +75,21 @@ def test_an_infinite_feature_value_is_flagged_not_hidden(adata):
     assert np.isinf(adata.obs["qc_outlier_score"].to_numpy()[7])
 
 
-def test_contamination_bounds_the_flagged_fraction_within_small_groups(adata):
-    """Rounding the per-group count up flags at least one cell in every group, so
-    contamination stopped meaning anything below 1/group_size: 0.01 and 0.001 both flagged
-    24 of 360 cells with by='Metadata_Well', a 6.7x overshoot."""
-    mt.pp.outliers(adata, method="ecod", contamination=0.01, by="Metadata_Well")
-    sparse = int(adata.obs["qc_outlier"].sum())
-    mt.pp.outliers(adata, method="ecod", contamination=0.10, by="Metadata_Well")
-    dense = int(adata.obs["qc_outlier"].sum())
+def test_contamination_still_flags_within_groups_too_small_to_express_it(adata):
+    """Rounding the per-group count to the nearest whole cell made contamination a silent
+    no-op on small groups: int(0.01 * 40 + 0.5) is 0, so every well of 40 cells flagged none
+    of them and a caller filtering on the flag removed nothing. pyod thresholds at the
+    1 - contamination percentile, which flags the top cell of a sample this size."""
+    well = adata.obs["Metadata_Well"].astype(str).to_numpy()
+    injected = [int(np.flatnonzero(well == name)[0]) for name in sorted(set(well))]
+    values = adata.X.copy()
+    values[injected] += 200.0
+    adata.X = values
 
-    assert sparse <= 0.02 * adata.n_obs, "contamination has to bound the flagged fraction"
-    assert sparse < dense
+    mt.pp.outliers(adata, method="ecod", contamination=0.01, by="Metadata_Well")
+    flagged = adata.obs["qc_outlier"].to_numpy()
+    assert flagged[injected].all(), "a blatant outlier in every well has to be reachable"
+    assert int(flagged.sum()) == len(injected), "and rounding up asks for exactly one per well"
+
+    mt.pp.outliers(adata, method="ecod", contamination=0.10, by="Metadata_Well")
+    assert int(adata.obs["qc_outlier"].sum()) > len(injected), "contamination still scales"
