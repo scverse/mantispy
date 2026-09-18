@@ -49,7 +49,7 @@ def outliers(
 
     Args:
         adata: Object to flag.
-        method: ``"ecod"`` :cite:p:`Li_2023` is parameter-free and interpretable per feature, ``"isolation_forest"`` catches outliers defined by feature interactions, and ``"mad"`` takes the largest robust z-score across features, which is easy to explain but sees each feature alone.
+        method: ``"ecod"`` :cite:p:`Li_2023`, scored as pyod scores it, is parameter-free and interpretable per feature, ``"isolation_forest"`` catches outliers defined by feature interactions, and ``"mad"`` takes the largest robust z-score across features, which is easy to explain but sees each feature alone.
         contamination: Fraction of cells to flag, rounded up to a whole cell within each ``by`` group, so a non-empty group always flags its most outlying cell and the flagged fraction is higher than asked for in a group smaller than ``1 / contamination``. Ignored when ``score_cutoff`` is given.
         score_cutoff: Threshold the score absolutely instead of by quantile. With ``method="mad"`` the score is a robust z-score, so ``score_cutoff=5`` gives the usual rule.
         key: Restrict to features flagged by this boolean ``var`` column, usually ``"selected"``. Falls back to every feature when the column is absent.

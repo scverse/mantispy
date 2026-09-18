@@ -2,6 +2,7 @@
 
 import ast
 import pathlib
+import re
 
 import mantispy as mt
 
@@ -74,3 +75,23 @@ def test_no_wrappers_for_what_scanpy_already_does():
     for namespace in (mt.pp, mt.tl, mt.pl, mt.get, mt.metrics):
         clashing = {name for name in dir(namespace) if name in SCANPY_TERRITORY}
         assert not clashing, f"mt.{namespace.__name__.split('.')[-1]} defines {sorted(clashing)}"
+
+
+def test_every_cited_key_is_in_the_bibliography():
+    """Sphinx checks the keys it renders; this also covers comments, private modules and tests."""
+    root = pathlib.Path(__file__).parents[1]
+    known = set(re.findall(r"^@\w+\{(\w+),", (root / "docs/references.bib").read_text(), re.MULTILINE))
+    paths = [
+        *SRC.rglob("*.py"),
+        *root.glob("tests/*.py"),
+        *root.glob("docs/*.md"),
+        *root.glob("docs/tutorials/*.ipynb"),
+    ]
+    cited = {
+        key.strip()
+        for path in paths
+        for keys in re.findall(r"(?::cite:[tp]:|\{cite:[tp]\})`(\w+(?:,\s*\w+)*)`", path.read_text())
+        for key in keys.split(",")
+    }
+    assert cited, "no citations found"
+    assert cited <= known, sorted(cited - known)

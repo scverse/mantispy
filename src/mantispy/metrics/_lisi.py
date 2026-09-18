@@ -55,7 +55,7 @@ _BATCH_HINTS = ("batch", "plate", "source", "week", "run")
 
 
 def lisi(adata: AnnData, key: str, use_rep: str = "X_pca", perplexity: float = 30, kind: str = "auto") -> pd.DataFrame:
-    """Median LISI :cite:p:`Korsunsky_2019` over rows.
+    """Median LISI over rows :cite:p:`Korsunsky_2019`.
 
     Args:
         adata: Object with the embedding to measure in.

@@ -309,7 +309,8 @@ def harmony(
 ) -> AnnData | None:
     """Correct an embedding for batch with Harmony.
 
-    Harmony and Seurat RPCA ranked in the top three in every scenario of the batch-correction benchmark for image-based profiling of :cite:t:`Arevalo_2024`, and Harmony is the last step of the `JUMP profiling recipe <https://github.com/broadinstitute/jump-profiling-recipe>`_ for compound and ORF profiles.
+    Harmony ranked in the top three in every scenario of the batch-correction benchmark of :cite:t:`Arevalo_2024`, as did Seurat RPCA.
+    It is the last step of the `JUMP profiling recipe <https://github.com/broadinstitute/jump-profiling-recipe>`_ for compound and ORF profiles.
     It iterates soft clustering and per-cluster linear correction on an embedding, so it writes a corrected ``obsm`` and leaves ``X`` unchanged.
 
     Args:

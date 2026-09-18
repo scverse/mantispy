@@ -45,7 +45,7 @@ MODES = {
         "neg_diffby": ["__annotation__"],
     },
     # Do a perturbation's replicates retrieve each other against all other profiles?
-    # Like the "mAP-nonrep" of :cite:t:`Arevalo_2024`, which also restricts the negatives to the query's plate.
+    # The "mAP-nonrep" of :cite:t:`Arevalo_2024`, without its restriction of negatives to the query's plate.
     "replicability": {
         "pos_sameby": ["Metadata_Perturbation"],
         "pos_diffby": [],
@@ -105,7 +105,7 @@ def map(
                 Needs ``annotation_key`` (a mechanism, target or gene column) and is meant for consensus profiles of perturbations already known to be active.
             ``"replicability"``
                 Do a perturbation's replicates retrieve each other against all other profiles?
-                Like the ``mAP-nonrep`` of the batch-correction benchmark of :cite:t:`Arevalo_2024`, which also restricts the negatives to the query's plate.
+                The ``mAP-nonrep`` of :cite:t:`Arevalo_2024`, without its restriction of negatives to the query's plate.
             ``"cross_plate"``
                 As ``"replicability"``, but a replicate counts only if it is on a different plate, which separates reproducible biology from plate effects.
         annotation_key: The ``obs`` column ``mode="consistency"`` groups by.

@@ -48,7 +48,7 @@ def _treatment_consensus(bbbc021, sphere: bool):
 
 
 def _not_same_compound_accuracy(consensus) -> float:
-    """Ljosa 2013's NSC rule: the nearest neighbour of a different compound must share the MOA."""
+    """The NSC rule of :cite:t:`Ljosa_2013`: the nearest neighbour of a different compound must share the MOA."""
     mt.tl.similarity(consensus, metric="cosine")
     similarity = np.asarray(consensus.obsp["similarity"]).copy()
     np.fill_diagonal(similarity, -np.inf)

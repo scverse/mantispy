@@ -7,7 +7,7 @@ Aggregating to wells first calls none.
 Wells are in turn nested in plates.
 A perturbation whose wells all sit on plates without control wells cannot be separated from its plate, and an unblocked test is most confident in that layout, so :func:`differential_features` checks the layout.
 
-The test is the moderated t of Smyth (2004), the statistic behind ``limma``.
+The test is the moderated t of :cite:t:`Smyth_2004`, the statistic behind ``limma``.
 Each feature's residual variance is shrunk towards a prior estimated from all features.
 This suits morphology profiles, with thousands of features and three or four replicates, and keeps a feature that happens to look quiet in three wells from producing a large t.
 The gain is about sevenfold in true positives at three replicates and none by six.

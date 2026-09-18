@@ -4,7 +4,7 @@ Parameter-free and interpretable: a row's score is the sum, over features, of ho
 Reimplemented here instead of depending on pyod, and checked against pyod's formulation by an equivalence test.
 
 The score is the sum over dimensions of the elementwise maximum of the three tail matrices, as pyod computes it.
-Algorithm 1 of :cite:t:`Li_2023` takes the maximum of the three per-row sums instead, which gives different scores.
+Algorithm 1 of the paper takes the maximum of the three per-row sums instead, which gives different scores.
 """
 
 from __future__ import annotations

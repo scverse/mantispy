@@ -87,7 +87,7 @@ def _profiles(name: str, cache_dir: str | Path | None, **kwargs: Any) -> AnnData
 def bbbc021(cache_dir: str | Path | None = None) -> AnnData:
     """BBBC021, MCF-7 cells treated with small molecules, the standard mechanism-of-action benchmark.
 
-    Well-level CellProfiler profiles from :cite:t:`Ljosa_2013` (``cpg0010-caie-drugresponse``), joined to the compound, concentration and mechanism of action the Broad Bioimage Benchmark Collection publishes with the image set.
+    Well-level CellProfiler profiles (``cpg0010-caie-drugresponse``), joined to the compound, concentration and mechanism of action the Broad Bioimage Benchmark Collection publishes with the image set.
     The image set covers 113 compounds.
     This returns the annotated subset the benchmark uses: 38 compounds plus DMSO, 103 treatments (a compound at a concentration) across 12 mechanisms.
     Downloads about 10 MB.
@@ -152,7 +152,7 @@ def bbbc021(cache_dir: str | Path | None = None) -> AnnData:
 
 
 def rohban(plates: Sequence[str] | None = None, cache_dir: str | Path | None = None) -> AnnData:
-    """The ORF overexpression screen of :cite:t:`Rohban_2017`, with the genes and cell counts that BBBC021 lacks.
+    """An ORF overexpression screen, with the genes and cell counts that BBBC021 lacks.
 
     ``cpg0017-rohban-pathways``: U2OS cells, one gene overexpressed per well, roughly ten replicate wells per gene over five plates.
     Downloads about 27 MB for all five.
