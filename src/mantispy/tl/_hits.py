@@ -70,6 +70,22 @@ def hit_calling(
 ) -> AnnData | None:
     """Call hits by testing each group's distance from the controls.
 
+    Each group is scored against the half of the reference rows that did not fit the centroid and
+    covariance, and its null is the other ways to draw a group of its size from the group and those
+    controls pooled. Under the null the two are exchangeable, so the null is calibrated; bootstrapping
+    the controls alone is not, because it is centred on that sample's own median rather than the
+    population's and leaves the error in that centre out of its spread.
+
+    This wants a well-replicated design. The statistic is a group's median distance, so a group of one
+    or two wells is dominated by whichever wells it holds and no number of permutations recovers that;
+    :func:`mantispy.tl.map` with ``mode="activity"`` ranks replicate pairs instead and is the usual
+    readout on screens with little replication. JUMP-Target-2 read as a single plate gives every
+    compound one well and is the common way to land in that regime, while the same plate map read
+    across its twelve plates gives twelve.
+
+    Distance from the controls also rises when a treatment kills cells. Read the calls beside a cell
+    count, or beside :func:`mantispy.tl.cytotoxicity`, before taking them for morphology.
+
     Args:
         adata: Object to score, at cell or well resolution.
         groupby: Column defining the groups to test.
@@ -183,6 +199,20 @@ def hit_calling(
         spread = np.random.default_rng([seed, index]).random((n_permutations, pool.size))
         draws = pool[np.argsort(spread, axis=1)[:, : max(tested.size, 1)]]
         null[index] = _statistic(to_control[draws], against, method)
+
+    # A group of one or two rows has a median dominated by whichever well it happens to hold, and the null
+    # cannot separate that from the controls however many permutations it draws. JUMP-Target-2 read as a
+    # single plate is the common way to land here: every compound has one well, and the calls that come back
+    # track cell loss rather than morphology.
+    thin = int(np.sum(sizes < 3))
+    if thin > len(keys) // 2:
+        warnings.warn(
+            f"{thin} of {len(keys)} groups have fewer than three rows, so their statistic is the median of "
+            "one or two wells. Aggregate more replicates, or score activity with mt.tl.map(mode='activity'), "
+            "which ranks replicate pairs and is built for screens with little replication.",
+            UserWarning,
+            stacklevel=3,
+        )
 
     if method != "ks":
         pvalues = permutation_pvalue(observed, null)

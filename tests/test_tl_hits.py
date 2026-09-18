@@ -1,5 +1,7 @@
 """Hit calling and energy distance."""
 
+import warnings
+
 import anndata as ad
 import numpy as np
 import pytest
@@ -373,3 +375,29 @@ def test_the_null_is_calibrated_on_pure_noise():
 
     rate = float(np.mean(np.asarray(pvalues) < 0.05))
     assert rate < 0.08, f"called {rate:.1%} of pure noise at a nominal 5%"
+
+
+def _plate(group_size: int, n_groups: int = 20, n_controls: int = 24, seed: int = 0):
+    """A plate of pure noise where every treated group holds `group_size` wells."""
+    rng = np.random.default_rng(seed)
+    n = n_controls + n_groups * group_size
+    adata = ad.AnnData(X=rng.normal(size=(n, 8)).astype(np.float32))
+    adata.obs["Metadata_Plate"] = "P1"
+    adata.obs["Metadata_Well"] = [f"{chr(65 + i // 24)}{i % 24 + 1:02d}" for i in range(n)]
+    adata.obs["Metadata_Perturbation"] = ["DMSO"] * n_controls + [
+        f"p{g:02d}" for g in range(n_groups) for _ in range(group_size)
+    ]
+    adata.obs["Metadata_Control"] = adata.obs["Metadata_Perturbation"] == "DMSO"
+    return adata
+
+
+def test_a_screen_without_replication_says_so():
+    """A group of one or two wells has a median no permutation null can rescue, so say so rather than call it."""
+    with pytest.warns(UserWarning, match="fewer than three rows"):
+        mt.tl.hit_calling(_plate(group_size=2), n_permutations=200)
+
+
+def test_a_replicated_screen_does_not_warn():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        mt.tl.hit_calling(_plate(group_size=6), n_permutations=200)
