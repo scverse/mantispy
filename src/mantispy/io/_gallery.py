@@ -421,23 +421,27 @@ def read_gallery_plate(
             plate_format=plate_format,
         )
 
-    if wells is None:
-        first = load_data.groupby(level="well").head(1)
-        wells = [
-            str(key[0])
-            for key, row in first.iterrows()
-            if isinstance(key, tuple) and _image_path(root, batch, row, prefix, channels[0]).exists()
-        ]
+    # A partial download holds some fields and not others, and reads back as itself rather than failing on
+    # the first one nobody asked for. Which fields are present is asked once, here, so the well the caller
+    # named and the wells we pick for them are decided the same way.
+    present = load_data[
+        [_image_path(root, batch, row, prefix, channels[0]).exists() for _, row in load_data.iterrows()]
+    ]
+    if len(present) < len(load_data):
+        get_logger().info(
+            "read_plate: %d of %d field(s) of view are not present under %s",
+            len(load_data) - len(present),
+            len(load_data),
+            root,
+        )
+    requested = None if wells is None else list(wells)
+    if requested is not None:
+        present = present[present.index.get_level_values("well").isin(requested)]
+    wells = list(dict.fromkeys(present.index.get_level_values("well").astype(str)))
 
     images, labels, masks, analysed = {}, {}, {}, []
-    skipped = 0
     for well in wells:
-        for site in sorted(load_data.loc[well].index):
-            # A well is already skipped when its images are absent, so a site is too: a partial download
-            # reads back as itself rather than failing on the first field nobody asked for.
-            if not _image_path(root, batch, load_data.loc[(well, site)], prefix, channels[0]).exists():
-                skipped += 1
-                continue
+        for site in sorted(present.loc[well].index):
             fov = f"{plate}_{well}_s{site}"
             transformations: dict[str, Identity | Translation] = {fov: Identity()}
             if located:
@@ -460,10 +464,8 @@ def read_gallery_plate(
                 masks[f"{fov}_{name}"] = mask
                 labels[f"{fov}_{name}"] = Labels2DModel.parse(mask, dims=("y", "x"), transformations=transformations)
 
-    if skipped:
-        get_logger().info("read_plate: %d field(s) of view are not present under %s", skipped, root)
     if not images:
-        raise FileNotFoundError(f"no images for well(s) {list(wells)} of {plate} under {root}")
+        raise FileNotFoundError(f"no images for well(s) {requested or 'on the plate'} of {plate} under {root}")
 
     tables, shapes = {}, {}
     if analysed:
