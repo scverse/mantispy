@@ -55,37 +55,6 @@ def test_every_registered_dataset_has_a_loader_and_hashed_files(name: str) -> No
 
 @pytest.mark.network
 @pytest.mark.slow
-@pytest.mark.parametrize(
-    "name",
-    [
-        "agnp",
-        "amish",
-        "bbbc021",
-        "chroma",
-        "jump_crispr",
-        "jump_target2",
-        "luad",
-        "miami",
-        "neuropainting",
-        "oasis_pilot",
-        "pki",
-        "rohban",
-    ],
-)
-def test_every_well_level_dataset_carries_its_cell_count(name: str) -> None:
-    """Regression test for #63: each of these publishes an exact per-well count upstream."""
-    obs = getattr(mt.ds, name)().obs
-    counts = obs["Metadata_CellCount"].to_numpy(dtype=float)
-    assert np.isfinite(counts).all()
-    assert (counts > 0).all()
-    # jump-profiling-recipe's count table, which jump_crispr reads, has no field count.
-    if name != "jump_crispr":
-        sites = obs["Metadata_SiteCount"].to_numpy(dtype=float)
-        assert ((sites >= 1) & (sites <= 36)).all()
-
-
-@pytest.mark.network
-@pytest.mark.slow
 # Entries without a shape do not return an AnnData: jump_plate is a SpatialData and jump_export a directory.
 @pytest.mark.parametrize("name", sorted(name for name, entry in _DATASETS.items() if "shape" in entry.metadata))
 def test_the_downloads_read_back_at_the_shape_the_registry_claims(name: str) -> None:
@@ -96,6 +65,12 @@ def test_the_downloads_read_back_at_the_shape_the_registry_claims(name: str) -> 
     if name == "bbbc021":
         assert adata.obs["Metadata_MOA"].notna().all()
         assert adata.obs["Metadata_Control"].sum() == 330
+    # Regression test for #63: every well-level dataset publishes an exact per-well count upstream.
+    if name not in ("jump_cells", "pooled_rare"):
+        assert (adata.obs["Metadata_CellCount"] > 0).all()
+        # jump-profiling-recipe's count table, which jump_crispr reads, has no field count.
+        if name != "jump_crispr":
+            assert adata.obs["Metadata_SiteCount"].between(1, 36).all()
 
 
 @pytest.mark.network

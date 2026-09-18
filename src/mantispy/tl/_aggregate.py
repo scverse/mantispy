@@ -24,6 +24,9 @@ FUNCTIONS = {"median": MEDIAN, "mean": MEAN}
 #: Result tables are keyed on the input rows and are dropped.
 _INHERITED = frozenset({"channels", "dataset", "truth", "feature_select", "blocklist"})
 
+#: Columns that add up over a group, so they are recomputed for it rather than carried as constant metadata.
+_TALLIES = ("Metadata_CellCount", "Metadata_SiteCount", "Metadata_ReplicateCount")
+
 
 def aggregate(
     adata: AnnData,
@@ -31,21 +34,25 @@ def aggregate(
     func: str = "median",
     min_cells: int = 10,
     layer: str | None = None,
+    count_key: str = "Metadata_CellCount",
+    site_key: str = "Metadata_SiteCount",
 ) -> AnnData:
     """Aggregate ``adata`` to one profile per group.
 
     Args:
-        adata: Single cells, or profiles carrying ``Metadata_CellCount`` to aggregate further. Which one is read from the recorded resolution.
+        adata: Single cells, or profiles to aggregate further, as its recorded resolution says.
         by: Columns defining a profile. The default is one profile per well.
         func: ``"median"`` (the pycytominer default) or ``"mean"``.
         min_cells: Groups with fewer cells than this are dropped.
         layer: Aggregate this layer instead of ``X``.
+        count_key: ``obs`` column the cell count is written to, and read from when ``adata`` holds profiles.
+        site_key: ``obs`` column the number of fields of view is written to, and read from when ``adata`` holds profiles.
 
     Returns:
         A new :class:`~anndata.AnnData` with one row per group.
-        ``var`` is carried over unchanged; ``obs`` holds the grouping columns, ``Metadata_CellCount``, ``Metadata_SiteCount`` when the fields of view are known, and every other ``Metadata_`` column that is constant within every group.
-        ``Metadata_CellCount`` is the number of cells behind a row, so its scope follows ``by``: grouping by site counts the cells of one field of view, grouping by well those of every field. Profiles contribute the cells they carry rather than one each.
-        ``Metadata_SiteCount`` is the number of fields that contributed cells, summed where the rows carry it and counted from ``Metadata_Site`` otherwise.
+        ``var`` is carried over unchanged; ``obs`` holds the grouping columns, `count_key`, `site_key` when the fields of view are known, and every other ``Metadata_`` column that is constant within every group.
+        `count_key` is the number of cells behind a row, so its scope follows ``by``: grouping by site counts the cells of one field of view, grouping by well those of every field. Profiles contribute the cells they carry rather than one each.
+        `site_key` is the number of fields that contributed cells, summed where the rows carry it and counted from ``Metadata_Site`` otherwise.
         The resolution recorded is ``"well"`` when ``by`` holds both ``Metadata_Plate`` and ``Metadata_Well``, since a finer grouping such as one row per site is still per-well or finer, and ``"perturbation"`` otherwise.
 
     Raises:
@@ -61,18 +68,19 @@ def aggregate(
     values, keys, counts = reduce_grouped(adata, columns, FUNCTIONS[func], layer=layer)
     codes, _ = group_codes(adata, columns)
     frame = as_frame(adata.obs)
-    # Rows that are already profiles stand for the cells they summarize, not one cell each. A cell may carry its
-    # well's count as a covariate, which is not a count of the cell itself.
-    profiles = get_resolution(adata) != "cell"
-    if profiles and "Metadata_CellCount" in frame:
-        counts = np.bincount(codes, weights=frame["Metadata_CellCount"].to_numpy(dtype=float), minlength=len(keys))
+    tallies = {count_key: counts}
+    # The recorded resolution decides, not the column: a cell may carry its well's count as a covariate.
+    if get_resolution(adata) != "cell":
+        # Profiles stand for the cells and fields they summarize, not one cell each.
+        for column in (count_key, site_key):
+            if column in frame:
+                tallies[column] = np.bincount(codes, weights=frame[column].to_numpy(dtype=float), minlength=len(keys))
+    elif "Metadata_Site" in frame:
+        tallies[site_key] = _site_counts(frame, codes, len(keys))
 
-    obs = _group_obs(adata, columns, keys, codes, counts)
-    if (sites := _site_counts(frame, codes, len(keys), profiles)) is not None:
-        # _group_obs writes the grouping columns and then the cell count, which the site count follows.
-        obs.insert(len(columns) + 1, "Metadata_SiteCount", sites)
+    obs = _group_obs(adata, columns, keys, codes, tallies)
     # A group whose count is unknown is kept rather than dropped as too small.
-    keep = ~(counts < min_cells)
+    keep = ~(tallies[count_key] < min_cells)
     if not keep.any():
         get_logger().warning("aggregate dropped every group; min_cells=%d exceeds every group size", min_cells)
 
@@ -93,47 +101,50 @@ def aggregate(
         "n_obs": int(adata.n_obs),
         "min_cells": int(min_cells),
     }
-    record_params(result, "aggregate", {"by": columns, "func": func, "min_cells": min_cells, "layer": layer})
+    record_params(
+        result,
+        "aggregate",
+        {
+            "by": columns,
+            "func": func,
+            "min_cells": min_cells,
+            "layer": layer,
+            "count_key": count_key,
+            "site_key": site_key,
+        },
+    )
     return result
 
 
-def _site_counts(frame: pd.DataFrame, codes: np.ndarray, n_groups: int, profiles: bool) -> np.ndarray | None:
-    """Fields of view behind each group: summed over profiles that carry them, or the distinct sites among its cells."""
-    if profiles:
-        if "Metadata_SiteCount" not in frame:
-            return None
-        return np.bincount(codes, weights=frame["Metadata_SiteCount"].to_numpy(dtype=float), minlength=n_groups)
-    if "Metadata_Site" not in frame:
-        return None
-    # Site 1 of one well and site 1 of the next are different fields.
-    field = [column for column in ("Metadata_Plate", "Metadata_Well", "Metadata_Site") if column in frame]
-    fields = pd.MultiIndex.from_frame(frame[field]).factorize()[0].astype(np.int64)
-    known = fields >= 0
-    if not known.any():
-        return None
-    width = int(fields.max()) + 1
-    pairs = np.unique(codes[known].astype(np.int64) * width + fields[known])
-    return np.bincount(pairs // width, minlength=n_groups)
+def _site_counts(frame: pd.DataFrame, codes: np.ndarray, n_groups: int) -> np.ndarray:
+    """Distinct fields of view among each group's cells, where site 1 of one well and of the next are different fields."""
+    # One integer per field, built from per-column codes rather than a MultiIndex of tuples, which is 7x slower.
+    field = np.zeros(len(frame), dtype=np.int64)
+    for column in ("Metadata_Plate", "Metadata_Well", "Metadata_Site"):
+        if column in frame:
+            level, uniques = pd.factorize(frame[column])
+            field = field * (len(uniques) + 1) + level + 1
+    width = int(field.max()) + 1
+    return np.bincount(np.unique(codes.astype(np.int64) * width + field) // width, minlength=n_groups)
 
 
 def _group_obs(
-    adata: AnnData, columns: list[str], keys: pd.Index, codes: np.ndarray, counts: np.ndarray
+    adata: AnnData, columns: list[str], keys: pd.Index, codes: np.ndarray, tallies: dict[str, np.ndarray]
 ) -> pd.DataFrame:
-    """Build the aggregated ``obs``: grouping keys, cell count, constant metadata."""
+    """Build the aggregated ``obs``: grouping keys, the per-group tallies, constant metadata."""
     if len(columns) == 1:
         obs = pd.DataFrame({columns[0]: np.asarray(keys)})
     else:
         obs = pd.DataFrame({name: keys.get_level_values(position) for position, name in enumerate(columns)})
     obs = obs.reset_index(drop=True)
-    obs["Metadata_CellCount"] = counts
+    for name, values in tallies.items():
+        obs[name] = values
 
     frame = as_frame(adata.obs)
     carried = [
         column
         for column in frame.columns
-        if column.startswith("Metadata_")
-        and column not in columns
-        and column not in ("Metadata_CellCount", "Metadata_SiteCount")
+        if column.startswith("Metadata_") and column not in {*columns, *_TALLIES, *tallies}
     ]
     if carried:
         grouped = frame[carried].groupby(codes, observed=True)

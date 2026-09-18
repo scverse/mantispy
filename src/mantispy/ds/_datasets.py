@@ -66,28 +66,29 @@ def _plate_files(name: str, plates: Sequence[str] | None, cache_dir: str | Path 
     return _files(name, cache_dir, select=lambda file_name: _plate(file_name) in wanted)
 
 
-def _adopt_counts(frame: pd.DataFrame) -> None:
-    """Rename the per-well counts pycytominer writes to the ``Metadata_CellCount`` and ``Metadata_SiteCount`` mantispy reads.
-
-    ``Metadata_Object_Count``, the number of cells pycytominer aggregated, equals ``Metadata_Count_Cells`` in every well of the 58 plates here that publish both, and stands in where only it is published.
-    ``Metadata_Site_Count`` counts the fields of view that held a cell, as :func:`mantispy.tl.aggregate` does, not the fields imaged: on ``BR00121438`` it falls below nine only in wells of 26 cells or fewer.
-    """
-    source = next((column for column in ("Metadata_Count_Cells", "Metadata_Object_Count") if column in frame), None)
-    if source is not None:
-        frame["Metadata_CellCount"] = frame.pop(source).to_numpy(dtype=float)
-    if "Metadata_Site_Count" in frame:
-        frame["Metadata_SiteCount"] = frame.pop("Metadata_Site_Count").to_numpy(dtype=float)
+#: pycytominer's per-well counts and the names mantispy reads them under, the first present winning.
+#: ``Metadata_Object_Count``, the cells it aggregated, equals ``Metadata_Count_Cells`` wherever both are published.
+#: ``Metadata_Site_Count`` counts the fields of view that held a cell, as :func:`mantispy.tl.aggregate` does, not those imaged.
+_UPSTREAM_COUNTS = {
+    "Metadata_Count_Cells": "Metadata_CellCount",
+    "Metadata_Object_Count": "Metadata_CellCount",
+    "Metadata_Site_Count": "Metadata_SiteCount",
+}
 
 
-def _join_counts(adata: AnnData, counts: pd.DataFrame) -> None:
-    """Write the count columns of `counts`, indexed by plate and well, onto the matching rows of `adata`."""
-    obs = as_frame(adata.obs)
-    wells = pd.MultiIndex.from_arrays([obs["Metadata_Plate"].astype(str), obs["Metadata_Well"].astype(str)])
-    matched = counts.reindex(wells)
-    for column in matched.columns:
-        obs[column] = matched[column].to_numpy(dtype=float)
-    if missing := int(matched["Metadata_CellCount"].isna().sum()):
-        get_logger().warning("%d of %d wells have no cell count", missing, len(obs))
+def _adopt_counts(frame: pd.DataFrame) -> pd.DataFrame:
+    """Rename the upstream counts in `frame` to the names mantispy reads, in place, and return it."""
+    for source, target in _UPSTREAM_COUNTS.items():
+        if source in frame and target not in frame:
+            frame[target] = frame.pop(source).to_numpy(dtype=float)
+    return frame
+
+
+def _read_counts(path: Path) -> pd.DataFrame:
+    """The plate, well and counts of a per-well table, which may hold thousands of other columns."""
+    header = pd.read_csv(path, nrows=0).columns
+    wanted = [column for column in ("Metadata_Plate", "Metadata_Well", *_UPSTREAM_COUNTS) if column in header]
+    return _adopt_counts(pd.read_csv(path, usecols=wanted, dtype={"Metadata_Plate": str}, engine="pyarrow"))
 
 
 def _augmented(name: str, plates: Sequence[str] | None, cache_dir: str | Path | None) -> AnnData:
@@ -130,7 +131,7 @@ def bbbc021(cache_dir: str | Path | None = None) -> AnnData:
         Ljosa et al. (2013) J Biomol Screen 18:1321, these profiles and the benchmark.
         Images courtesy of Peter Caie and David Westwood, available from the Broad Bioimage Benchmark Collection (Ljosa et al. 2012, Nature Methods 9:637).
     """
-    profiles_path, images_path, moa_path = _files("bbbc021", cache_dir, select=lambda name: "/" not in name)
+    profiles_path, images_path, moa_path, *fields = _files("bbbc021", cache_dir)
     wells = (
         pd.read_csv(images_path)[
             [
@@ -158,13 +159,14 @@ def bbbc021(cache_dir: str | Path | None = None) -> AnnData:
     profiles = pd.read_csv(profiles_path).rename(
         columns={"Image_Metadata_Plate": "Metadata_Plate", "Image_Metadata_Well": "Metadata_Well"}
     )
-    merged = profiles.merge(annotations, on=["Metadata_Plate", "Metadata_Well"], how="left")
+    merged = profiles.merge(annotations, on=["Metadata_Plate", "Metadata_Well"], how="left").merge(
+        _bbbc021_counts(fields), on=["Metadata_Plate", "Metadata_Well"], how="left"
+    )
     if unmatched := int(merged["Metadata_Compound"].isna().sum()):
         get_logger().warning("%d wells have no compound annotation and are dropped", unmatched)
         merged = merged[merged["Metadata_Compound"].notna()]
 
     adata = from_dataframe(merged, resolution="well")
-    _join_counts(adata, _bbbc021_counts(cache_dir))
     obs = as_frame(adata.obs)
     obs["Metadata_Control"] = (obs["Metadata_Compound"] == "DMSO").to_numpy()
     # Replicates share a compound at a concentration; the mode= shorthands of mt.tl.map need this column.
@@ -176,14 +178,13 @@ def bbbc021(cache_dir: str | Path | None = None) -> AnnData:
     return adata
 
 
-def _bbbc021_counts(cache_dir: str | Path | None) -> pd.DataFrame:
+def _bbbc021_counts(paths: Sequence[Path]) -> pd.DataFrame:
     """Cells, and fields that held one, per well, from the per-field ``Image.csv`` of the run the ljosa_2013 profiles aggregate."""
-    records = {}
-    for path in _files("bbbc021", cache_dir, select=lambda name: name.endswith("/Image.csv")):
+    rows = []
+    for path in paths:
         cells = pd.read_csv(path, usecols=["Count_Cells"])["Count_Cells"]
-        plate, well = path.parent.name.rsplit("-", 1)
-        records[(plate, well)] = (float(cells.sum()), float((cells > 0).sum()))
-    return pd.DataFrame.from_dict(records, orient="index", columns=["Metadata_CellCount", "Metadata_SiteCount"])
+        rows.append((*path.parent.name.rsplit("-", 1), cells.sum(), (cells > 0).sum()))
+    return pd.DataFrame(rows, columns=["Metadata_Plate", "Metadata_Well", "Metadata_CellCount", "Metadata_SiteCount"])
 
 
 def rohban(plates: Sequence[str] | None = None, cache_dir: str | Path | None = None) -> AnnData:
@@ -293,15 +294,10 @@ def jump_target2(
         KeyError: A plate is not one of the twelve.
     """
     paths = _plate_files("jump_target2", plates, cache_dir)
+    # The profiles carry no count; each plate's backend table does, among 7,600 other columns.
+    counts = pd.concat([_read_counts(path) for path in paths if path.suffix == ".csv"])
     profiles = [path for path in paths if path.suffix == ".parquet"]
-    adata = read_jump(profiles, annotate=annotate, on_column_mismatch="intersect")
-    columns = ["Metadata_Plate", "Metadata_Well", "Metadata_Count_Cells", "Metadata_Site_Count"]
-    # The profiles carry no count; the plate's backend table beside them does, among 7,600 other columns.
-    counts = pd.concat(
-        [pd.read_csv(path, usecols=columns, dtype={"Metadata_Plate": str}) for path in paths if path.suffix == ".csv"]
-    )
-    _adopt_counts(counts)
-    _join_counts(adata, counts.set_index(["Metadata_Plate", "Metadata_Well"]))
+    adata = read_jump(profiles, annotate=annotate, on_column_mismatch="intersect", platemap=counts)
     batches = {_plate(file.name): file.name.split("__")[0] for file in _DATASETS["jump_target2"].files}
     adata.obs["Metadata_Batch"] = [batches[str(plate)] for plate in adata.obs["Metadata_Plate"]]
     adata.uns["mantispy"]["dataset"] = "cpg0016-jump"
@@ -468,12 +464,8 @@ def jump_crispr(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
     References:
         Chandrasekaran et al. (2024), *Three million images and morphological profiles of cells treated with matched chemical and genetic perturbations*, Nature Methods.
     """
-    adata = _profiles("jump_crispr", cache_dir, **kwargs)
-    (path,) = _files("_jump_cell_counts", cache_dir)
-    counts = pd.read_csv(path, dtype={"Metadata_Plate": str})
-    _adopt_counts(counts)
-    _join_counts(adata, counts.set_index(["Metadata_Plate", "Metadata_Well"]))
-    return adata
+    (counts,) = _files("_jump_cell_counts", cache_dir)
+    return _profiles("jump_crispr", cache_dir, platemap=_read_counts(counts), **kwargs)
 
 
 def _read_site(directory: Path, source: str, channels: Sequence[str]) -> AnnData:

@@ -49,8 +49,7 @@ RESERVED_OBS: tuple[str, ...] = (
     "Metadata_Concentration",
     "Metadata_MOA",
     "Metadata_Control",
-    # The cells a row summarizes, and the fields of view that contributed them: one for a per-site row, every
-    # field that held a cell for a per-well row. tl.aggregate writes both; the datasets carry upstream's.
+    # Cells behind a row and the fields of view that held them, written by tl.aggregate
     "Metadata_CellCount",
     "Metadata_SiteCount",
     "Metadata_Center_X",

@@ -102,6 +102,13 @@ def test_jump_target2_loads_two_sources():
 
 
 @pytest.mark.network
+def test_jump_target2_counts_a_source_that_publishes_only_the_object_count():
+    """source_6's backend tables have Metadata_Object_Count and no Metadata_Count_Cells."""
+    adata = mt.ds.jump_target2(plates=["110000294936"], annotate=False)
+    assert (adata.obs["Metadata_CellCount"] > 0).all()
+
+
+@pytest.mark.network
 def test_jump_target2_rejects_a_plate_it_does_not_have():
     with pytest.raises(KeyError, match="available:"):
         mt.ds.jump_target2(plates=["nope"])

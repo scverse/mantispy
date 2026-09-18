@@ -226,9 +226,8 @@ def cytotoxicity(
     obs = as_frame(adata.obs)
     if count_key not in obs:
         raise KeyError(
-            f"obs has no column {count_key!r}. Aggregate single cells with mt.tl.aggregate, which counts them; "
-            "load a dataset that ships a count, as every well-level mt.ds dataset does; or pass count_key= naming "
-            "a per-well count of your own"
+            f"obs has no column {count_key!r}; mt.tl.aggregate and every well-level mt.ds dataset write "
+            "Metadata_CellCount, or name another column with count_key="
         )
     if distance_key not in obs:
         raise KeyError(
@@ -238,7 +237,7 @@ def cytotoxicity(
 
     is_control = reference_mask(adata, reference)
     counts = obs[count_key].to_numpy(dtype=float)
-    if site_key is not None and site_key in obs:
+    if site_key in obs:
         counts = counts / np.maximum(obs[site_key].to_numpy(dtype=float), 1)
     distances = obs[distance_key].to_numpy(dtype=float)
     control_count = float(np.nanmedian(counts[is_control]))

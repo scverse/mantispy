@@ -141,9 +141,7 @@ def consensus(
             weights[rows] = block
             values[index] = block @ X[rows]
 
-    obs = _group_obs(adata, [by], keys, codes, counts)
-    # _group_obs writes the group size as Metadata_CellCount; here a group is replicates.
-    obs = obs.rename(columns={"Metadata_CellCount": "Metadata_ReplicateCount"})
+    obs = _group_obs(adata, [by], keys, codes, {"Metadata_ReplicateCount": counts})
 
     keep = counts >= min_replicates
     report_drop("group(s)", int((~keep).sum()), int(keep.size), remedy=f"lower min_replicates below {min_replicates}")

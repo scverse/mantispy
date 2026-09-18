@@ -42,6 +42,18 @@ def test_aggregating_profiles_counts_their_cells_not_their_rows(adata):
     assert mt.tl.aggregate(wells, by=("Metadata_Plate",), min_cells=361).n_obs == 0
 
 
+def test_the_count_columns_can_be_named(adata):
+    adata.obs["Metadata_Site"] = np.tile(["1", "2"], adata.n_obs // 2)
+    wells = mt.tl.aggregate(adata, min_cells=0, count_key="n_cells", site_key="n_fields")
+    assert (wells.obs["n_cells"] == 15).all()
+    assert (wells.obs["n_fields"] == 2).all()
+    assert "Metadata_CellCount" not in wells.obs
+
+    plates = mt.tl.aggregate(wells, by=("Metadata_Plate",), min_cells=0, count_key="n_cells", site_key="n_fields")
+    assert (plates.obs["n_cells"] == 360).all()
+    assert (plates.obs["n_fields"] == 48).all()
+
+
 def test_an_unknown_count_keeps_its_group(adata):
     wells = mt.tl.aggregate(adata, min_cells=0)
     wells.obs["Metadata_CellCount"] = np.where(np.arange(wells.n_obs) == 0, np.nan, 15.0)
@@ -52,6 +64,7 @@ def test_an_unknown_count_keeps_its_group(adata):
 
 def test_the_site_count_follows_the_grouping(adata):
     """A per-site row counts one field of view, a per-well row every field that held a cell."""
+    assert "Metadata_SiteCount" not in mt.tl.aggregate(adata, min_cells=0).obs
     adata.obs["Metadata_Site"] = np.tile(["1", "2"], adata.n_obs // 2)
     sites = mt.tl.aggregate(adata, by=("Metadata_Plate", "Metadata_Well", "Metadata_Site"), min_cells=0)
     wells = mt.tl.aggregate(adata, min_cells=0)
@@ -62,11 +75,10 @@ def test_the_site_count_follows_the_grouping(adata):
     plates = mt.tl.aggregate(sites, by=("Metadata_Plate",), min_cells=0)
     assert (plates.obs["Metadata_SiteCount"] == 48).all()
     # A consensus counts replicates, and a constant site count is not carried onto it.
-    assert "Metadata_SiteCount" not in mt.tl.consensus(wells, method="median").obs
-
-
-def test_no_site_count_without_sites(adata):
-    assert "Metadata_SiteCount" not in mt.tl.aggregate(adata, min_cells=0).obs
+    consensus = mt.tl.consensus(wells, method="median")
+    assert "Metadata_SiteCount" not in consensus.obs
+    # Nor is a replicate count carried onto a coarser grouping of consensus profiles.
+    assert "Metadata_ReplicateCount" not in mt.tl.aggregate(consensus, by=("Metadata_Control",), min_cells=0).obs
 
 
 def test_constant_metadata_carried_and_varying_dropped(adata):
