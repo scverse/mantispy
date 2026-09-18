@@ -110,3 +110,20 @@ def test_jump_plate_reads_the_fields_that_were_downloaded() -> None:
     # The channel vocabulary comes from load_data, so no invented channel reaches var.
     channels = {part for value in sdata.tables["cells"].var["channel"].dropna() for part in str(value).split("|")}
     assert channels <= {"AGP", "Brightfield", "Brightfield_H", "Brightfield_L", "DNA", "ER", "Mito", "RNA"}
+
+
+@pytest.mark.network
+@pytest.mark.slow
+def test_jump_cells_can_hand_back_only_the_selected_features() -> None:
+    full = mt.ds.jump_cells()
+    selected = mt.ds.jump_cells(selected=True)
+
+    assert selected.n_obs == full.n_obs
+    assert selected.n_vars < full.n_vars
+    assert list(selected.var_names) == list(full.var_names[full.var["selected"].to_numpy()])
+
+
+def test_selecting_without_the_annotation_is_refused() -> None:
+    """The mask is computed against the negative controls, which only the annotation names."""
+    with pytest.raises(KeyError, match="needs annotate"):
+        mt.ds.jump_cells(annotate=False, selected=True)

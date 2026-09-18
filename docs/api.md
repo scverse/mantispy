@@ -323,6 +323,10 @@ against 3634 per-cell features); `objects=None` keeps them.
 
 `jump_cells`, `jump_export` and `jump_plate` are three layers of one plate, `BR00121438`, whose well-level profiles
 `jump_target2` already reads, so a profile aggregated from the cells can be compared with the published one.
+`jump_cells` marks the features feature selection keeps in `var["selected"]`, as scanpy marks `highly_variable`, and
+`jump_cells(selected=True)` hands back only those, 1607 of 5857. The reduced object is kept beside the whole one, so
+a notebook that wants it reads 87 MB rather than 308 MB. No step of the selection draws a random number, so the same
+pinned files always give the same 1607 features.
 `jump_cells` returns single cells, `jump_export` the directory one field of view was measured in, as CellProfiler
 wrote it, and `jump_plate` the images and segmentations of one well as `SpatialData`. They share one download, so
 asking for more than one costs little beyond the first.

@@ -20,6 +20,7 @@ from mantispy._core.schema import SCHEMA_VERSION, stamp
 from mantispy._settings import settings
 from mantispy.io._jump import join_jump_annotation, read_jump
 from mantispy.io._profiles import from_dataframe, read, read_profiles, write
+from mantispy.pp._select import subset_features
 
 if TYPE_CHECKING:
     from anndata import AnnData
@@ -32,6 +33,9 @@ _TYPE = "mantispy"
 
 #: One plate from each of two sources, enough to see a source effect with a small download.
 TARGET2_DEFAULT = ("BR00121438", "JCPQC051")
+
+#: Bumped whenever the assembled jump_cells object changes, so an older cached assembly is not reused.
+_ASSEMBLY_VERSION = 2
 
 #: The field of view :func:`jump_export` hands out, a DMSO well of the plate :func:`jump_cells` reads.
 _EXPORT_PLATE, _EXPORT_WELL, _EXPORT_SITE = "BR00121438", "J04", 1
@@ -449,6 +453,33 @@ def _read_site(directory: Path, source: str, channels: Sequence[str]) -> AnnData
     return adata
 
 
+def _select(adata: AnnData, path: Path) -> AnnData:
+    """The selected features of `adata`, kept at `path` so the next call reads only those."""
+    chosen = subset_features(adata)
+    write(chosen, path)
+    return chosen
+
+
+def _mark_selected(adata: AnnData) -> None:
+    """Write the feature-selection mask into ``var["selected"]``, as :func:`mantispy.pp.feature_select` does.
+
+    The mask is computed on a normalized copy, because variance and correlation are only comparable between
+    features once each is on its own plate's control scale, and the values on `adata` stay as CellProfiler
+    measured them. The recipe is the one the tutorials use: ``pp.normalize`` against the negative controls,
+    drop what ``var["degenerate_scale"]`` flags, then ``pp.feature_select``. No step of it draws a random
+    number, so the same pinned files always give the same mask.
+    """
+    from mantispy.pp._normalize import normalize
+    from mantispy.pp._select import feature_select
+
+    scratch = adata.copy()
+    normalize(scratch, method="mad_robustize", by="Metadata_Plate", reference="negcon")
+    scratch = scratch[:, ~scratch.var["degenerate_scale"].to_numpy()].copy()
+    feature_select(scratch)
+    kept = set(scratch.var_names[scratch.var["selected"].to_numpy()])
+    adata.var["selected"] = adata.var_names.isin(kept)
+
+
 def jump_export(cache_dir: str | Path | None = None) -> Path:
     """One real ``ExportToSpreadsheet`` directory, as CellProfiler wrote it.
 
@@ -476,7 +507,7 @@ def jump_export(cache_dir: str | Path | None = None) -> Path:
     return paths[0].parent
 
 
-def jump_cells(annotate: bool = True, cache_dir: str | Path | None = None) -> AnnData:
+def jump_cells(annotate: bool = True, selected: bool = False, cache_dir: str | Path | None = None) -> AnnData:
     """Single cells from one JUMP plate, as CellProfiler measured them.
 
     Twenty-four wells of ``BR00121438`` at four fields of view each: eight DMSO wells, four compounds with both
@@ -492,13 +523,21 @@ def jump_cells(annotate: bool = True, cache_dir: str | Path | None = None) -> An
 
     Args:
         annotate: Join the JUMP annotation, which supplies ``Metadata_Perturbation`` and ``Metadata_Control``.
-            Downloads another 14 MB.
+            Downloads another 14 MB. Needed for `selected`, which is computed against the controls.
+        selected: Return only the features ``var["selected"]`` marks, 1607 of 5857, as
+            :func:`mantispy.pp.subset_features` would. The subset is kept beside the whole object, so a
+            notebook that only wants the reduced one reads 87 MB instead of 486 MB.
         cache_dir: Where to keep the download. Defaults to :attr:`mantispy.settings.cache_dir`.
+
+    Raises:
+        KeyError: `selected` was asked for without `annotate`, so there are no controls to select against.
 
     Returns:
         Cells by features at cell resolution, carrying ``Metadata_Source``, ``Metadata_Plate``,
         ``Metadata_Well``, ``Metadata_Site`` and, when annotated, ``Metadata_JCP2022``,
-        ``Metadata_Perturbation``, ``Metadata_InChIKey`` and ``Metadata_Control``.
+        ``Metadata_Perturbation``, ``Metadata_InChIKey`` and ``Metadata_Control``. When annotated,
+        ``var["selected"]`` marks the features feature selection keeps, so the object can be reduced with
+        ``adata[:, adata.var["selected"]]`` the way scanpy's ``highly_variable`` is used.
 
     References:
         Chandrasekaran et al. (2024), *Three million images and morphological profiles of cells treated with
@@ -506,14 +545,22 @@ def jump_cells(annotate: bool = True, cache_dir: str | Path | None = None) -> An
     """
     import anndata as ad
 
+    if selected and not annotate:
+        raise KeyError("selected=True needs annotate=True: the mask is computed against the negative controls")
+
     entry = _DATASETS["jump_cells"]
     root = Path(cache_dir or settings.cache_dir)
-    # The name carries the schema version and a fingerprint of the files the entry pins, so neither a schema
-    # bump nor a change to which wells are read can be answered from a stale assembly.
-    fingerprint = hashlib.sha256("".join(file.name for file in entry.files).encode()).hexdigest()[:12]
-    derived = root / f"jump_cells-{SCHEMA_VERSION}-{fingerprint}-{'annotated' if annotate else 'raw'}.h5ad"
+    # The name carries the schema version and a fingerprint of the files the entry pins and of how they are
+    # assembled, so no change to the schema, to which wells are read, or to what assembly produces can be
+    # answered from a stale file.
+    material = f"{_ASSEMBLY_VERSION}:" + "".join(file.name for file in entry.files)
+    fingerprint = hashlib.sha256(material.encode()).hexdigest()[:12]
+    stem = f"jump_cells-{SCHEMA_VERSION}-{fingerprint}-{'annotated' if annotate else 'raw'}"
+    derived, subset = root / f"{stem}.h5ad", root / f"{stem}-selected.h5ad"
+    if selected and subset.exists():
+        return read(subset)
     if derived.exists():
-        return read(derived)
+        return _select(read(derived), subset) if selected else read(derived)
 
     source = str(entry.metadata["source"])
     paths = _files("jump_cells", cache_dir)
@@ -536,8 +583,10 @@ def jump_cells(annotate: bool = True, cache_dir: str | Path | None = None) -> An
         len(parts),
         adata.obs["Metadata_Well"].nunique(),
     )
+    if annotate:
+        _mark_selected(adata)
     write(adata, derived)
-    return adata
+    return _select(adata, subset) if selected else adata
 
 
 def jump_plate(cache_dir: str | Path | None = None, **kwargs: Any) -> SpatialData:

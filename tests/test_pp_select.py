@@ -55,3 +55,16 @@ def test_an_unknown_blocklist_name_is_an_error(wells):
         mt.pp.feature_select(wells, operations=("blocklist",), blocklist="not_a_real_list")
     with pytest.raises(ValueError, match="unknown blocklist"):
         mt.pp.filter_features(wells, blocklist="not_a_real_list")
+
+
+def test_the_same_input_always_gives_the_same_mask(wells):
+    """No operation draws a random number, so a staged selection stays reproducible."""
+    import numpy as np
+
+    masks = []
+    for _ in range(2):
+        trial = wells.copy()
+        mt.pp.feature_select(trial)
+        masks.append(trial.var["selected"].to_numpy())
+
+    assert np.array_equal(*masks)
