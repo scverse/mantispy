@@ -1,10 +1,10 @@
-"""ECOD: empirical-cumulative-distribution outlier detection (Li et al. 2022).
+"""ECOD: empirical-cumulative-distribution outlier detection :cite:p:`Li_2023`.
 
 Parameter-free and interpretable: a row's score is the sum, over features, of how far into a tail its value sits.
 Reimplemented here instead of depending on pyod, and checked against pyod's formulation by an equivalence test.
 
-The score is the sum over dimensions of the elementwise maximum of the three tail matrices (sum of max, not max of sum).
-The reverse order gives plausible scores that are not ECOD.
+The score is the sum over dimensions of the elementwise maximum of the three tail matrices, as pyod computes it.
+Algorithm 1 of :cite:t:`Li_2023` takes the maximum of the three per-row sums instead, which gives different scores.
 """
 
 from __future__ import annotations

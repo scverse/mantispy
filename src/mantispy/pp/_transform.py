@@ -1,7 +1,7 @@
 """Rank-based inverse normal transformation.
 
 After per-plate normalization, each feature is replaced by the normal quantile of its rank.
-This is the ``_int`` step of the JUMP consortium's recipe and the third step of the baseline in Arevalo et al. (2024).
+This is the ``_int`` step of the `JUMP profiling recipe <https://github.com/broadinstitute/jump-profiling-recipe>`_ for compound profiles and the third step of the baseline in :cite:t:`Arevalo_2024`.
 Morphology features are heavy-tailed and differ in shape, so a few extreme wells can dominate distances; ranking removes both the shape differences and the outliers, at the cost of the original units.
 
 Reference: the ``rank_int_array`` implementation in ``broadinstitute/jump-profiling-recipe``, which this reproduces on data with no missing values.

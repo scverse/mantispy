@@ -10,7 +10,7 @@ Sources, all public over HTTPS:
 * annotation: ``jump-cellpainting/datasets`` on GitHub
 
 References:
-    Chandrasekaran et al. (2024) Nature Methods 21:1114, the JUMP Cell Painting datasets.
+    :cite:t:`Chandrasekaran_2023`, the JUMP Cell Painting datasets.
 """
 
 from __future__ import annotations

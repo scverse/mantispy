@@ -63,7 +63,7 @@ def _not_same_compound_accuracy(consensus) -> float:
 def test_the_recipe_reproduces_the_moa_benchmark(bbbc021):
     """The published benchmark's shape, and MOA retrieval far above chance."""
     consensus = _treatment_consensus(bbbc021, sphere=False)
-    assert consensus.n_obs == 103  # the 103 treatments of Ljosa et al. 2013
+    assert consensus.n_obs == 103  # the 103 treatments of :cite:t:`Ljosa_2013`
     assert consensus.obs["Metadata_MOA"].nunique() == 12
 
     accuracy = _not_same_compound_accuracy(consensus)

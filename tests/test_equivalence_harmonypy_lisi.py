@@ -1,4 +1,4 @@
-"""LISI equivalence against harmonypy, which is Korsunsky et al. 2019's own implementation.
+"""LISI equivalence against harmonypy, the Python port of the Harmony and LISI code of :cite:t:`Korsunsky_2019`.
 
 Published LISI values come from this code, so an iLISI of 1.49 is only comparable with a
 paper if the values agree. A variant with the right monotonicity but different values

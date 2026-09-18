@@ -2,7 +2,7 @@
 
 The effective number of distinct labels in a neighborhood, weighting each neighbor by ``exp(-beta * d)`` with ``beta`` calibrated so the neighborhood's entropy matches the requested perplexity. On a batch key it is iLISI (higher is better mixed); on a label key it is cLISI (lower means the biological groups stay separated).
 
-Values match ``harmonypy.lisi.compute_lisi`` (Korsunsky et al. 2019) to machine precision, so they are comparable with published LISI values.
+Values match ``harmonypy.lisi.compute_lisi`` :cite:p:`Korsunsky_2019` to machine precision, so they are comparable with published LISI values.
 """
 
 from __future__ import annotations
@@ -55,7 +55,7 @@ _BATCH_HINTS = ("batch", "plate", "source", "week", "run")
 
 
 def lisi(adata: AnnData, key: str, use_rep: str = "X_pca", perplexity: float = 30, kind: str = "auto") -> pd.DataFrame:
-    """Median LISI over rows.
+    """Median LISI :cite:p:`Korsunsky_2019` over rows.
 
     Args:
         adata: Object with the embedding to measure in.
