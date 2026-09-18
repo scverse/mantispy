@@ -397,6 +397,271 @@ datasets:
       s3_key: cpg0016-jump/source_6/workspace/profiles/p210920CPU2OS48hw384exp028JUMP/110000296356/110000296356.parquet
       sha256: f9b4adbc93a15c408d32af65713e2d91bcc891d0e6f6fb3f22083c7d5baa948e
 
+  jump_cells:
+    type: mantispy
+    doc_header: Single cells from one JUMP plate, six wells of two sites each, as CellProfiler wrote them.
+    accession: cpg0016-jump
+    plate: BR00121438
+    batch: 2021_04_26_Batch1
+    source: source_4
+    shape: [1840, 5857]
+    channels: [AGP, Brightfield, Brightfield_H, Brightfield_L, DNA, ER, Mito, RNA]
+    files:
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B04-1/Cells.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B04-1/Cells.csv
+      sha256: 7a63ad3cb7b345f9fe53fb39c5ee9b3b00c8ddd7447b505362c554d0a30977a0
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B04-1/Cytoplasm.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B04-1/Cytoplasm.csv
+      sha256: bba2842aa3eb7d52bc7adf85d18c0782714d448fb3c9b3a83de9a37ae1775a15
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B04-1/Experiment.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B04-1/Experiment.csv
+      sha256: 255a1ae251c2893828a83713ed17836a970694c76f532b7a3c2c516415dd7cf7
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B04-1/Image.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B04-1/Image.csv
+      sha256: 7d51ce951a28e413676490d8bb907062de3c0fa048783304c1f55a808a81cce2
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B04-1/Nuclei.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B04-1/Nuclei.csv
+      sha256: 3003528188b5c1365df8bb262593d994926c2e25b9a06065716d18cc873578c5
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B04-2/Cells.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B04-2/Cells.csv
+      sha256: b2724e1f70eb627ffcca6048c5e8d6f9500b310cec7b8a34266ac5bcca47ac45
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B04-2/Cytoplasm.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B04-2/Cytoplasm.csv
+      sha256: 27d00036053711843d6bf24744c00d914867105bf497096ec93f3e8dde5a86e0
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B04-2/Experiment.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B04-2/Experiment.csv
+      sha256: d61bc5734bb52b332959bee5668762bf494255e800640d9fe2c5dd68006579fd
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B04-2/Image.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B04-2/Image.csv
+      sha256: ddf5cf7f9185247feb9f74f9fa711423eb3dbc42dc25626ebcbff7ae410b75b6
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B04-2/Nuclei.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B04-2/Nuclei.csv
+      sha256: b716275127ed5c2cd9f8d1073121ac3a5ba30d4950ffe6e8bc4974f3d8bf4a50
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B09-1/Cells.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B09-1/Cells.csv
+      sha256: 197b34b4580cc542f6cc454dc5569bdf1fb45eedebeab6757276d3ad50b41887
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B09-1/Cytoplasm.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B09-1/Cytoplasm.csv
+      sha256: d9cafb1034697d6bee251e32a68a8548848f462441c4859e8259819454be4dc9
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B09-1/Experiment.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B09-1/Experiment.csv
+      sha256: beb75793623fdba192499ca2311376cf0b9dd297c5375c5af315815bc2ef0bc1
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B09-1/Image.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B09-1/Image.csv
+      sha256: fdc5cea728e4f545c1ae9015e3d033d16e9b22b938ff240f8f5560180351ccdd
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B09-1/Nuclei.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B09-1/Nuclei.csv
+      sha256: 8846dc4bc3e2169e287d432ecdcb4c01ad21701dbd2f514f6dda1b44bbe3ec23
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B09-2/Cells.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B09-2/Cells.csv
+      sha256: 963bf4e34449de2a8c27ab1a872f6085020b3b3eb5eb882ab384a6230f8d2039
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B09-2/Cytoplasm.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B09-2/Cytoplasm.csv
+      sha256: e2c1bc365daf959c1e34d94f6c88d9fd03392d2b02e494f18b73ea806f58cdaf
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B09-2/Experiment.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B09-2/Experiment.csv
+      sha256: 05f377b1530a5a07c8a30ef9fae27dd007175fdbdae629b83c5fcddd8d74a4a2
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B09-2/Image.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B09-2/Image.csv
+      sha256: 978b517bc26dc22a1cffa094bbb598b62ad3fe869b38110675f7604492bb4cac
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B09-2/Nuclei.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-B09-2/Nuclei.csv
+      sha256: e658fb98f0048bfe0c6432ce9a88852197ae9ba958777910fd167a1a9fd80b60
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-C03-1/Cells.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-C03-1/Cells.csv
+      sha256: 77ad75721c412471f40c65ed262c504cffa9e00ccc6b62f8d2df02d10159c941
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-C03-1/Cytoplasm.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-C03-1/Cytoplasm.csv
+      sha256: 5838dd4b7a5dbed42aabf0b103426fea6ddb560a8cd58acead10c9318b9aedd9
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-C03-1/Experiment.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-C03-1/Experiment.csv
+      sha256: 869a6c71dbb6eabe6f503c0049746eb1863fffe862994804fa4401bd5287aa51
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-C03-1/Image.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-C03-1/Image.csv
+      sha256: dd361474072f5c2fc9509906baf54eb4c20b85dedb0f8300f75277990c3a4ae0
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-C03-1/Nuclei.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-C03-1/Nuclei.csv
+      sha256: c8cb1cea72942775d4c1d7d162005d6c87e3fda226cbfd53902724aa18031974
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-C03-2/Cells.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-C03-2/Cells.csv
+      sha256: 9f5c621cecccfcc5f25620ee2a614179be03d0d1026cf736dab3f0ddf3696e8f
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-C03-2/Cytoplasm.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-C03-2/Cytoplasm.csv
+      sha256: d546a1baf6d7fca474f1f2fc29771b6710f13c4f8fc3752ba2a809e21f06e67b
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-C03-2/Experiment.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-C03-2/Experiment.csv
+      sha256: bf454a431b0e65eb10bffe34f7917bef7fa4e68f216cdfce41b30d6c5797b1eb
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-C03-2/Image.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-C03-2/Image.csv
+      sha256: e768944603dd07f1b83e5834d846c7b95f35ce96454cbdf467068d174a5a0aea
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-C03-2/Nuclei.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-C03-2/Nuclei.csv
+      sha256: ee6d1ab053149714c6f4cce396d707a01f5a3c0ec4b7af4feb01428787997557
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-F05-1/Cells.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-F05-1/Cells.csv
+      sha256: 3a533ad051e346ebcec164319d04704ac444bf4258a7e07c429913b0e6131f7a
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-F05-1/Cytoplasm.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-F05-1/Cytoplasm.csv
+      sha256: 5863e57fee9c1c9bbbca3ed350fb858cab658ffdf686d08ebc1c8f2b0705dc82
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-F05-1/Experiment.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-F05-1/Experiment.csv
+      sha256: 68ff7307142b815a97c2a2bdfd260e5676da4dfee8b53c2ef00c29cca7bf763e
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-F05-1/Image.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-F05-1/Image.csv
+      sha256: d47f13f753284567b15a016682ef3c78630e7243f4f5adee796c7ddb60ca3657
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-F05-1/Nuclei.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-F05-1/Nuclei.csv
+      sha256: 538ad1ea4dfe86c2f095483125a0cfea4acee54dfc75f298e0f68fe7b72c59e6
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-F05-2/Cells.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-F05-2/Cells.csv
+      sha256: 48c4856b697438bc0272fabb9abef149e828a480331ebb4b028d1574b1503df9
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-F05-2/Cytoplasm.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-F05-2/Cytoplasm.csv
+      sha256: 6d29df8baec6e709b3ea878bea2bb73c235175560fa6a031d3baa9cd287f0cdc
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-F05-2/Experiment.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-F05-2/Experiment.csv
+      sha256: 7bfbe239fef6ffaffbc02870e4201cd7bd26eeffba57160c4b6c443ac8f666ba
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-F05-2/Image.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-F05-2/Image.csv
+      sha256: 6c4d1a206db7d0384dd48f20eb6e9f98ddd4fe554b9c649efeeb36c39fce2894
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-F05-2/Nuclei.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-F05-2/Nuclei.csv
+      sha256: 55254461311f62cc166e9773eb84d1fefacc465c4c3da3725608ecc12703bfec
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-J04-1/Cells.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-J04-1/Cells.csv
+      sha256: 1bc392a18fbfbbc683d62be7c9ea9bc6ff583eb2b2389cca26787738ea97ea7d
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-J04-1/Cytoplasm.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-J04-1/Cytoplasm.csv
+      sha256: 1f49de280c94f5d598d9af2a2a830d260c11e81056deba38f400e91e67fe3d85
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-J04-1/Experiment.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-J04-1/Experiment.csv
+      sha256: b62a35b97c5de820141441cdd89296da1c2e26c53517046b72efbee04108f9d3
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-J04-1/Image.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-J04-1/Image.csv
+      sha256: be9782231199b953f3b2e50d7e94b48d40c075554406ac3c6cc3415e16b7f1d9
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-J04-1/Nuclei.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-J04-1/Nuclei.csv
+      sha256: d72a1eb1b8e9323a15a8ce72aae938f5cdb5cfba68ab121c4c784106a9a23373
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-J04-2/Cells.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-J04-2/Cells.csv
+      sha256: 7b26fcae372378f7b337de2440f0f568a9ca4fc5cf20536377827f147c5d6a33
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-J04-2/Cytoplasm.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-J04-2/Cytoplasm.csv
+      sha256: 840f89d985dfa2b69d175694a37d8ab7e28530baf8061715f6bef9749d83c895
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-J04-2/Experiment.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-J04-2/Experiment.csv
+      sha256: 634000af9d418a374e14ea6e0cf334fc363981ab6bd7e8145c523e2fc53cf55d
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-J04-2/Image.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-J04-2/Image.csv
+      sha256: fd79af5cc3963f90f85f4b0c5c8a35ff1dd22d7d3cc349d0389ff3f2691a52f7
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-J04-2/Nuclei.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-J04-2/Nuclei.csv
+      sha256: c50497f124fec49eff6e52ebc49f9718a533acc9c05219a5e5e91c348735d660
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-1/Cells.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-1/Cells.csv
+      sha256: 9382f75a300c8ecabc30db3397196f86e0e3bd86eb68178e104bed56e2d81445
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-1/Cytoplasm.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-1/Cytoplasm.csv
+      sha256: 8bf3ea4372ebfb9c15864f4839845556b7260e90bfc489fda717b41adb4fc58e
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-1/Experiment.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-1/Experiment.csv
+      sha256: 8e25a310d9a31ce9443a50c086a14dbd3810f32896f2c5ccb17d3b99e2aff478
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-1/Image.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-1/Image.csv
+      sha256: 6c634bddc38aa712397e446ae3bf320ea8e36cc26b54f4843e641e7a2a22c0bf
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-1/Nuclei.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-1/Nuclei.csv
+      sha256: fd5816e5cbbc142cde96ac748e752c7e2e30e55b56b44d8c8f68b135380b48ef
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-2/Cells.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-2/Cells.csv
+      sha256: abb334975bf3e974b98a350166b55a8d47e2a9d7a96ada124ade4b2b2494a727
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-2/Cytoplasm.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-2/Cytoplasm.csv
+      sha256: 10ed0dbaa3c7282ff583bd2c858ce9bdac2af4fdb5b00ce08247e72f7b6aef80
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-2/Experiment.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-2/Experiment.csv
+      sha256: 6461ce0a869faf20ff865edd330059832e75d0469201035b7377c6a217869bfb
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-2/Image.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-2/Image.csv
+      sha256: 4dc365972cd54438a6a2b67d3f0f475f15fcc8c27b41d9e03ffa70af4ad8acf1
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-2/Nuclei.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-2/Nuclei.csv
+      sha256: 7a13c8fa5436fa1948862125ea0af9c43fcda380522730b2d6f8a55d0a201340
+
+  jump_plate:
+    type: mantispy
+    doc_header: The images, segmentations and load_data of one well of BR00121438, for io.read_plate.
+    accession: cpg0016-jump
+    plate: BR00121438
+    batch: 2021_04_26_Batch1
+    source: source_4
+    well: O09
+    channels: [AGP, Brightfield, Brightfield_H, Brightfield_L, DNA, ER, Mito, RNA]
+    files:
+    - name: cpg0016-jump/source_4/images/2021_04_26_Batch1/images/BR00121438__2021-05-01T00_20_49-Measurement1/Images/r15c09f01p01-ch1sk1fk1fl1.tiff
+      s3_key: cpg0016-jump/source_4/images/2021_04_26_Batch1/images/BR00121438__2021-05-01T00_20_49-Measurement1/Images/r15c09f01p01-ch1sk1fk1fl1.tiff
+      sha256: 63e31ba104946bc22968c309d91d9543f960a630061dcc9e7c3d6686f45c9958
+    - name: cpg0016-jump/source_4/images/2021_04_26_Batch1/images/BR00121438__2021-05-01T00_20_49-Measurement1/Images/r15c09f01p01-ch2sk1fk1fl1.tiff
+      s3_key: cpg0016-jump/source_4/images/2021_04_26_Batch1/images/BR00121438__2021-05-01T00_20_49-Measurement1/Images/r15c09f01p01-ch2sk1fk1fl1.tiff
+      sha256: c5b84578fb4852a62c2e54e73320dca32b45c56a5686c72c6c949bf91f677b7d
+    - name: cpg0016-jump/source_4/images/2021_04_26_Batch1/images/BR00121438__2021-05-01T00_20_49-Measurement1/Images/r15c09f01p01-ch3sk1fk1fl1.tiff
+      s3_key: cpg0016-jump/source_4/images/2021_04_26_Batch1/images/BR00121438__2021-05-01T00_20_49-Measurement1/Images/r15c09f01p01-ch3sk1fk1fl1.tiff
+      sha256: dedceb099aebecf16adb9a3dffd198a747724429a0b07c32ad2ee121fda85b11
+    - name: cpg0016-jump/source_4/images/2021_04_26_Batch1/images/BR00121438__2021-05-01T00_20_49-Measurement1/Images/r15c09f01p01-ch4sk1fk1fl1.tiff
+      s3_key: cpg0016-jump/source_4/images/2021_04_26_Batch1/images/BR00121438__2021-05-01T00_20_49-Measurement1/Images/r15c09f01p01-ch4sk1fk1fl1.tiff
+      sha256: 3cbcf58470d6bcfbbb2f39fa81e01aa66305df135a8aa05448b8a1823f069c28
+    - name: cpg0016-jump/source_4/images/2021_04_26_Batch1/images/BR00121438__2021-05-01T00_20_49-Measurement1/Images/r15c09f01p01-ch5sk1fk1fl1.tiff
+      s3_key: cpg0016-jump/source_4/images/2021_04_26_Batch1/images/BR00121438__2021-05-01T00_20_49-Measurement1/Images/r15c09f01p01-ch5sk1fk1fl1.tiff
+      sha256: 857673c241bbab6f4c29740178142021abddf27add4eb53df2da73fa51e9d2ac
+    - name: cpg0016-jump/source_4/images/2021_04_26_Batch1/images/BR00121438__2021-05-01T00_20_49-Measurement1/Images/r15c09f01p01-ch6sk1fk1fl1.tiff
+      s3_key: cpg0016-jump/source_4/images/2021_04_26_Batch1/images/BR00121438__2021-05-01T00_20_49-Measurement1/Images/r15c09f01p01-ch6sk1fk1fl1.tiff
+      sha256: 57ec53dd1c938d91bb9f48c525f127bbf9c951be465352c24216e754d2256947
+    - name: cpg0016-jump/source_4/images/2021_04_26_Batch1/images/BR00121438__2021-05-01T00_20_49-Measurement1/Images/r15c09f01p01-ch7sk1fk1fl1.tiff
+      s3_key: cpg0016-jump/source_4/images/2021_04_26_Batch1/images/BR00121438__2021-05-01T00_20_49-Measurement1/Images/r15c09f01p01-ch7sk1fk1fl1.tiff
+      sha256: 20f41a1874d999be32e8b6df5de821734fdccdf9a96c05ce27f54f700aa04f6b
+    - name: cpg0016-jump/source_4/images/2021_04_26_Batch1/images/BR00121438__2021-05-01T00_20_49-Measurement1/Images/r15c09f01p01-ch8sk1fk1fl1.tiff
+      s3_key: cpg0016-jump/source_4/images/2021_04_26_Batch1/images/BR00121438__2021-05-01T00_20_49-Measurement1/Images/r15c09f01p01-ch8sk1fk1fl1.tiff
+      sha256: 97b766b8bc2cd2353220d1df62869ca8c1e1e3537422c56c034a1465e74086af
+    - name: cpg0016-jump/source_4/images/2021_04_26_Batch1/images/BR00121438__2021-05-01T00_20_49-Measurement1/Images/r15c09f02p01-ch1sk1fk1fl1.tiff
+      s3_key: cpg0016-jump/source_4/images/2021_04_26_Batch1/images/BR00121438__2021-05-01T00_20_49-Measurement1/Images/r15c09f02p01-ch1sk1fk1fl1.tiff
+      sha256: f28a416e59f446a48e1fa0007a1efbcc68e5cea5a8f2c4ac520e671653553363
+    - name: cpg0016-jump/source_4/images/2021_04_26_Batch1/images/BR00121438__2021-05-01T00_20_49-Measurement1/Images/r15c09f02p01-ch2sk1fk1fl1.tiff
+      s3_key: cpg0016-jump/source_4/images/2021_04_26_Batch1/images/BR00121438__2021-05-01T00_20_49-Measurement1/Images/r15c09f02p01-ch2sk1fk1fl1.tiff
+      sha256: 83f6adb581446a7871d4dc9d6dc28f7774bd1670589400b260892542a7edb0c6
+    - name: cpg0016-jump/source_4/images/2021_04_26_Batch1/images/BR00121438__2021-05-01T00_20_49-Measurement1/Images/r15c09f02p01-ch3sk1fk1fl1.tiff
+      s3_key: cpg0016-jump/source_4/images/2021_04_26_Batch1/images/BR00121438__2021-05-01T00_20_49-Measurement1/Images/r15c09f02p01-ch3sk1fk1fl1.tiff
+      sha256: 87c19b32070234a9125070955dfec915ebaafc24335fccc823c74984063754db
+    - name: cpg0016-jump/source_4/images/2021_04_26_Batch1/images/BR00121438__2021-05-01T00_20_49-Measurement1/Images/r15c09f02p01-ch4sk1fk1fl1.tiff
+      s3_key: cpg0016-jump/source_4/images/2021_04_26_Batch1/images/BR00121438__2021-05-01T00_20_49-Measurement1/Images/r15c09f02p01-ch4sk1fk1fl1.tiff
+      sha256: 551b82e2df09f8450045b3dff8b60b1fac5beab2e8ad775668870fe05c067b7f
+    - name: cpg0016-jump/source_4/images/2021_04_26_Batch1/images/BR00121438__2021-05-01T00_20_49-Measurement1/Images/r15c09f02p01-ch5sk1fk1fl1.tiff
+      s3_key: cpg0016-jump/source_4/images/2021_04_26_Batch1/images/BR00121438__2021-05-01T00_20_49-Measurement1/Images/r15c09f02p01-ch5sk1fk1fl1.tiff
+      sha256: 0a967854338450c217bd4a9522d762d028da3b5e739cd6cb0e2cc2c973df204f
+    - name: cpg0016-jump/source_4/images/2021_04_26_Batch1/images/BR00121438__2021-05-01T00_20_49-Measurement1/Images/r15c09f02p01-ch6sk1fk1fl1.tiff
+      s3_key: cpg0016-jump/source_4/images/2021_04_26_Batch1/images/BR00121438__2021-05-01T00_20_49-Measurement1/Images/r15c09f02p01-ch6sk1fk1fl1.tiff
+      sha256: 251b2dae8c0fafc2c2b573ae18d54b89984537c301af29ae46808507b4372fd9
+    - name: cpg0016-jump/source_4/images/2021_04_26_Batch1/images/BR00121438__2021-05-01T00_20_49-Measurement1/Images/r15c09f02p01-ch7sk1fk1fl1.tiff
+      s3_key: cpg0016-jump/source_4/images/2021_04_26_Batch1/images/BR00121438__2021-05-01T00_20_49-Measurement1/Images/r15c09f02p01-ch7sk1fk1fl1.tiff
+      sha256: 3fb67aeb9e297653c195388fed023a5f1a0411bd5104f9dce351304ce1dd8fbe
+    - name: cpg0016-jump/source_4/images/2021_04_26_Batch1/images/BR00121438__2021-05-01T00_20_49-Measurement1/Images/r15c09f02p01-ch8sk1fk1fl1.tiff
+      s3_key: cpg0016-jump/source_4/images/2021_04_26_Batch1/images/BR00121438__2021-05-01T00_20_49-Measurement1/Images/r15c09f02p01-ch8sk1fk1fl1.tiff
+      sha256: 83e5a4da7683e17a57e58fa2a3aa932f2e7730e651ef437adca7a4000e17be41
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-1/outlines/O09_s1--cell_outlines.png
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-1/outlines/O09_s1--cell_outlines.png
+      sha256: 1aaa2b88bc088f5e02b494c34a2bb656cbd07c91a98316afbcd312d8b64856db
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-1/outlines/O09_s1--nuclei_outlines.png
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-1/outlines/O09_s1--nuclei_outlines.png
+      sha256: cbe0007d20060b41924e29286368ccb6501f22cabed9e990e3d396f89fd70165
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-2/outlines/O09_s2--cell_outlines.png
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-2/outlines/O09_s2--cell_outlines.png
+      sha256: cb4879398fa3592c9a558bc414cd46a19dafda7a53ed45686ac6401accb1fda1
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-2/outlines/O09_s2--nuclei_outlines.png
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-2/outlines/O09_s2--nuclei_outlines.png
+      sha256: 4b198d57340949e27fd1a3d78093296fceb927653e51fb39f1d383ccb12d4f93
+    - name: cpg0016-jump/source_4/workspace/load_data_csv/2021_04_26_Batch1/BR00121438/load_data.csv
+      s3_key: cpg0016-jump/source_4/workspace/load_data_csv/2021_04_26_Batch1/BR00121438/load_data.csv
+      sha256: 8b34b9aa061982b210395b1da907c922e58cddddea3c59069b739970ffa4a709
+
   _jump_annotation:
     type: mantispy
     doc_header: The plate, well and compound tables of jump-cellpainting/datasets, which the profiles are keyed into.

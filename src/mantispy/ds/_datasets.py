@@ -15,13 +15,15 @@ import pandas as pd
 from scverse_misc.datasets import fetch, parse_registry, register_loader
 
 from mantispy._core._utils import as_frame, get_logger
+from mantispy._core.schema import SCHEMA_VERSION, stamp
 from mantispy._settings import settings
-from mantispy.io._jump import read_jump
-from mantispy.io._profiles import from_dataframe, read_profiles
+from mantispy.io._jump import join_jump_annotation, read_jump
+from mantispy.io._profiles import from_dataframe, read, read_profiles, write
 
 if TYPE_CHECKING:
     from anndata import AnnData
     from scverse_misc.datasets import DatasetEntry, DownloadCB
+    from spatialdata import SpatialData
 
 _BASE_URL, _DATASETS = parse_registry(Path(__file__).parent / "registry.yaml")
 # scverse-misc registers loaders by type name across all packages in the process, so ours uses the package name.
@@ -29,6 +31,9 @@ _TYPE = "mantispy"
 
 #: One plate from each of two sources, enough to see a source effect with a small download.
 TARGET2_DEFAULT = ("BR00121438", "JCPQC051")
+
+#: The field of view :func:`jump_export` hands out, a DMSO well of the plate :func:`jump_cells` reads.
+_EXPORT_PLATE, _EXPORT_WELL, _EXPORT_SITE = "BR00121438", "J04", 1
 
 
 @register_loader(_TYPE)
@@ -416,3 +421,158 @@ def jump_crispr(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
         chemical and genetic perturbations*, Nature Methods.
     """
     return _profiles("jump_crispr", cache_dir, **kwargs)
+
+
+def _site_key(directory: Path) -> tuple[str, str, int]:
+    """Plate, well and site of an analysis directory named ``<plate>-<well>-<site>``."""
+    plate, well, site = directory.name.rsplit("-", 2)
+    return plate, well, int(site)
+
+
+def _read_site(directory: Path, source: str, channels: Sequence[str]) -> AnnData:
+    """One analysis directory as cells, checked against the name it is filed under.
+
+    The JUMP pipeline gives ``Cytoplasm`` a ``Parent_Cells`` and a ``Parent_Nuclei`` and gives ``Cells`` no
+    parent at all, so ``Cytoplasm`` is the only primary object that joins all three tables. One cytoplasm is
+    one cell here, and the three tables have equal length.
+    """
+    adata = read_profiles(directory, primary_object="Cytoplasm", resolution="cell", channels=channels)
+    expected = _site_key(directory)
+    obs = as_frame(adata.obs)
+    found = (str(obs["Metadata_Plate"].iloc[0]), str(obs["Metadata_Well"].iloc[0]), int(obs["Metadata_Site"].iloc[0]))
+    if found != expected:
+        raise ValueError(f"{directory.name} holds plate/well/site {found}, not {expected} as its name says")
+    obs["Metadata_Source"] = source
+    plate, well, site = expected
+    adata.obs_names = [f"{plate}:{well}:{site}:{number}" for number in obs["Metadata_ObjectNumber"]]
+    return adata
+
+
+def jump_export(cache_dir: str | Path | None = None) -> Path:
+    """One real ``ExportToSpreadsheet`` directory, as CellProfiler wrote it.
+
+    A single field of view of a DMSO well of ``BR00121438``: ``Image.csv`` plus the ``Cells``, ``Cytoplasm``
+    and ``Nuclei`` tables, unmodified, for reading with :func:`mantispy.io.read_profiles`. About 18 MB, and
+    part of the download :func:`jump_cells` makes, so asking for both costs nothing extra.
+
+    The images this was measured from are in :func:`jump_plate`, and the well-level profiles of the same
+    plate are in :func:`jump_target2`.
+
+    Args:
+        cache_dir: Where to keep the download. Defaults to :attr:`mantispy.settings.cache_dir`.
+
+    Returns:
+        The directory, to pass to :func:`mantispy.io.read_profiles`.
+
+    References:
+        Chandrasekaran et al. (2024), *Three million images and morphological profiles of cells treated with
+        matched chemical and genetic perturbations*, Nature Methods.
+    """
+    wanted = f"{_EXPORT_PLATE}-{_EXPORT_WELL}-{_EXPORT_SITE}/"
+    paths = _files("jump_cells", cache_dir, select=lambda name: wanted in name)
+    if not paths:
+        raise FileNotFoundError(f"no files for {wanted} in the jump_cells registry entry")
+    return paths[0].parent
+
+
+def jump_cells(annotate: bool = True, cache_dir: str | Path | None = None) -> AnnData:
+    """Single cells from one JUMP plate, as CellProfiler measured them.
+
+    Six wells of ``BR00121438`` at two fields of view each: two DMSO wells and four compounds that moved the
+    well profile while leaving the cells alive. The strongest movers on this plate are cytotoxic, so ranking
+    wells by distance alone selects for empty wells; these four were chosen from the wells that still hold
+    more than 120 cells.
+
+    The same plate's well-level profiles are :func:`jump_target2`, so a profile aggregated from these cells can
+    be compared with the one the consortium published.
+
+    The first call downloads about 205 MB of CellProfiler output and writes the assembled object next to it, so
+    later calls read one file.
+
+    Args:
+        annotate: Join the JUMP annotation, which supplies ``Metadata_Perturbation`` and ``Metadata_Control``.
+            Downloads another 14 MB.
+        cache_dir: Where to keep the download. Defaults to :attr:`mantispy.settings.cache_dir`.
+
+    Returns:
+        Cells by features at cell resolution, carrying ``Metadata_Source``, ``Metadata_Plate``,
+        ``Metadata_Well``, ``Metadata_Site`` and, when annotated, ``Metadata_JCP2022``,
+        ``Metadata_Perturbation``, ``Metadata_InChIKey`` and ``Metadata_Control``.
+
+    References:
+        Chandrasekaran et al. (2024), *Three million images and morphological profiles of cells treated with
+        matched chemical and genetic perturbations*, Nature Methods.
+    """
+    import anndata as ad
+
+    root = Path(cache_dir or settings.cache_dir)
+    # The schema version is in the name so a schema bump writes a new file instead of reading a stale one.
+    derived = root / f"jump_cells-schema{SCHEMA_VERSION}-{'annotated' if annotate else 'raw'}.h5ad"
+    if derived.exists():
+        return read(derived)
+
+    entry = _DATASETS["jump_cells"]
+    source = str(entry.metadata["source"])
+    paths = _files("jump_cells", cache_dir)
+    channels = [str(channel) for channel in entry.metadata["channels"]]
+    parts = [_read_site(directory, source, channels) for directory in sorted({path.parent for path in paths})]
+    adata = ad.concat(parts, join="inner", merge="first", uns_merge="first")
+    if adata.n_vars < min(part.n_vars for part in parts):
+        get_logger().warning(
+            "jump_cells: kept the %d features shared by all %d fields of view", adata.n_vars, len(parts)
+        )
+
+    if annotate:
+        adata.obs = join_jump_annotation(as_frame(adata.obs)).set_axis(adata.obs_names)
+    stamp(adata, resolution="cell")
+    adata.uns["mantispy"]["dataset"] = entry.metadata["accession"]
+    get_logger().info(
+        "jump_cells: %d cells x %d features from %d field(s) of view in %d well(s)",
+        adata.n_obs,
+        adata.n_vars,
+        len(parts),
+        adata.obs["Metadata_Well"].nunique(),
+    )
+    write(adata, derived)
+    return adata
+
+
+def jump_plate(cache_dir: str | Path | None = None, **kwargs: Any) -> SpatialData:
+    """The images and segmentations behind one well of ``BR00121438``.
+
+    Two fields of view of well ``O09``, a compound that changed the cells without killing them: the eight
+    channel images of each field, the CellProfiler outlines they were segmented with, and the plate's
+    ``load_data.csv``. About 44 MB, and needs the spatial extra.
+
+    The cells measured from these fields are in :func:`jump_cells`, and the well-level profiles of the same
+    plate in :func:`jump_target2`.
+
+    Args:
+        cache_dir: Where to keep the download. Defaults to :attr:`mantispy.settings.cache_dir`.
+        kwargs: Passed to :func:`mantispy.io.read_plate`.
+
+    Returns:
+        The well, with its fields as Images, the Nuclei, Cells and Cytoplasm segmentations as Labels, and the
+        ``cells`` Table.
+
+    References:
+        Chandrasekaran et al. (2024), *Three million images and morphological profiles of cells treated with
+        matched chemical and genetic perturbations*, Nature Methods.
+    """
+    from mantispy.io._plate import read_plate
+
+    entry = _DATASETS["jump_plate"]
+    _files("jump_plate", cache_dir)
+    # Every file is named by its gallery key, so the download reconstructs the source tree and read_plate
+    # reads it as it would read the bucket.
+    root = (
+        Path(cache_dir or settings.cache_dir) / _TYPE / str(entry.metadata["accession"]) / str(entry.metadata["source"])
+    )
+    return read_plate(
+        root,
+        str(entry.metadata["plate"]),
+        batch=str(entry.metadata["batch"]),
+        wells=[str(entry.metadata["well"])],
+        profile=None,
+        **kwargs,
+    )
