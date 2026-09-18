@@ -43,41 +43,46 @@ def _one_feature_per_operation():
     per_group = n_obs // n_groups
 
     plain = rng.normal(scale=0.2, size=n_obs)  # no NaN, small, quiet within a group: every operation keeps it
-    noisy = rng.normal(scale=5.0, size=n_obs)  # within-group standard deviation above the 0.8 cutoff
+    jitter = rng.normal(scale=5.0, size=n_obs)  # within-group standard deviation above the 0.8 cutoff
     ratio = np.repeat(np.arange(1, n_groups + 1) * 1000.0, per_group)  # above the 500 cutoff, flat within a group
-    sparse = np.full(n_obs, np.nan)  # missing in 60% of rows, two values per group so no group is all-NaN
-    for group in range(n_groups):
-        start = group * per_group
-        sparse[start] = group * 0.5
-        sparse[start + 1] = group * 0.5 + 0.1
+    sparse = np.full((n_groups, per_group), np.nan)  # missing in 60% of rows, two per group so no group is all-NaN
+    sparse[:, :2] = (np.arange(n_groups) * 0.5)[:, None] + [0.0, 0.1]
 
     obs = pd.DataFrame(
         {"Metadata_Perturbation": np.repeat([f"g{group}" for group in range(n_groups)], per_group)},
         index=[str(index) for index in range(n_obs)],
     )
-    adata = ad.AnnData(X=np.column_stack([plain, sparse, ratio, noisy]).astype(np.float32), obs=obs)
-    adata.var_names = [
-        "Cells_AreaShape_Plain",
-        "Cells_AreaShape_Sparse",
-        "Cells_Intensity_Ratio",
-        "Cells_AreaShape_Jitter",
-    ]
+    # Bound to their names here, so a column cannot drift away from the name the assertion reads.
+    features = {
+        "Cells_AreaShape_Plain": plain,
+        "Cells_AreaShape_Sparse": sparse.ravel(),
+        "Cells_Intensity_Ratio": ratio,
+        "Cells_AreaShape_Jitter": jitter,
+    }
+    adata = ad.AnnData(X=np.column_stack(list(features.values())).astype(np.float32), obs=obs)
+    adata.var_names = list(features)
     return adata
 
 
 def test_each_operation_counts_the_features_it_actually_removed():
-    """The counts are the only thing that notices one of these three operations turning into a no-op that selects every feature."""
+    """Each operation meets a case built to give it exactly one feature to remove, so turning it into a no-op that selects everything fails on the count and misattributing its removal fails on the name.
+
+    ``drop_outliers`` and ``noise_removal`` have no other cover; ``drop_na_columns`` is also caught by the order test above, and is kept here because this states the tighter property.
+    """
     adata = _one_feature_per_operation()
     operations = ("drop_na_columns", "drop_outliers", "noise_removal")
 
-    mt.pp.feature_select(adata, operations=operations)
+    # Passed rather than defaulted, so a change to the defaults cannot fail this for an unrelated reason.
+    mt.pp.feature_select(
+        adata, operations=operations, na_cutoff=0.05, outlier_cutoff=500.0, noise_removal_stdev_cutoff=0.8
+    )
 
     assert adata.uns["mantispy"]["feature_select"] == dict.fromkeys(operations, 1)
-    assert sorted(adata.var_names[~adata.var["selected"]]) == [
-        "Cells_AreaShape_Jitter",
+    assert set(adata.var_names[~adata.var["selected"]]) == {
         "Cells_AreaShape_Sparse",
         "Cells_Intensity_Ratio",
-    ]
+        "Cells_AreaShape_Jitter",
+    }
 
 
 def test_nothing_is_dropped_or_reordered(wells):
