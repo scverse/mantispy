@@ -87,7 +87,7 @@ def _profiles(name: str, cache_dir: str | Path | None, **kwargs: Any) -> AnnData
 def bbbc021(cache_dir: str | Path | None = None) -> AnnData:
     """BBBC021, MCF-7 cells treated with small molecules, the standard mechanism-of-action benchmark.
 
-    Well-level CellProfiler profiles from Ljosa et al. 2013 (``cpg0010-caie-drugresponse``), joined to the compound, concentration and mechanism of action the Broad Bioimage Benchmark Collection publishes with the image set.
+    Well-level CellProfiler profiles (``cpg0010-caie-drugresponse``), joined to the compound, concentration and mechanism of action the Broad Bioimage Benchmark Collection publishes with the image set.
     The image set covers 113 compounds.
     This returns the annotated subset the benchmark uses: 38 compounds plus DMSO, 103 treatments (a compound at a concentration) across 12 mechanisms.
     Downloads about 10 MB.
@@ -102,9 +102,9 @@ def bbbc021(cache_dir: str | Path | None = None) -> AnnData:
         632 wells by 473 features at well resolution, with ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Compound``, ``Metadata_Concentration``, ``Metadata_MOA``, ``Metadata_Perturbation`` (compound at concentration) and ``Metadata_Control``.
 
     References:
-        Caie et al. (2010) Mol Cancer Ther 9:1913, the image set.
-        Ljosa et al. (2013) J Biomol Screen 18:1321, these profiles and the benchmark.
-        Images courtesy of Peter Caie and David Westwood, available from the Broad Bioimage Benchmark Collection (Ljosa et al. 2012, Nature Methods 9:637).
+        :cite:t:`Caie_2010`, the image set.
+        :cite:t:`Ljosa_2013`, these profiles and the benchmark.
+        Images courtesy of Peter Caie and David Westwood, available from the Broad Bioimage Benchmark Collection :cite:p:`Ljosa_2012`.
     """
     profiles_path, images_path, moa_path = _files("bbbc021", cache_dir)
     wells = (
@@ -152,7 +152,7 @@ def bbbc021(cache_dir: str | Path | None = None) -> AnnData:
 
 
 def rohban(plates: Sequence[str] | None = None, cache_dir: str | Path | None = None) -> AnnData:
-    """The Rohban 2017 ORF overexpression screen, with the genes and cell counts that BBBC021 lacks.
+    """An ORF overexpression screen, with the genes and cell counts that BBBC021 lacks.
 
     ``cpg0017-rohban-pathways``: U2OS cells, one gene overexpressed per well, roughly ten replicate wells per gene over five plates.
     Downloads about 27 MB for all five.
@@ -173,7 +173,7 @@ def rohban(plates: Sequence[str] | None = None, cache_dir: str | Path | None = N
         The untreated wells (``Metadata_gene_name == "EMPTY"``) were never transfected and are not flagged; drop them if a gene-level analysis should not see them.
 
     References:
-        Rohban et al. (2017) eLife 6:e24060.
+        :cite:t:`Rohban_2017`.
     """
     adata = _augmented("rohban", plates, cache_dir)
     obs = as_frame(adata.obs)
@@ -239,7 +239,7 @@ def jump_target2(
 ) -> AnnData:
     """JUMP-Target-2, one 384-well plate map run at many sites.
 
-    The JUMP consortium ran the same plate map in every participating laboratory, so differences between plates from different sources are technical.
+    The JUMP consortium :cite:p:`Chandrasekaran_2023` ran the same plate map in every participating laboratory, so differences between plates from different sources are technical.
     This makes it suited to studying batch and source effects.
     Twelve of the 141 plates in ``cpg0016-jump`` are pinned here (three sources, two batches each, two plates per batch), which lets :func:`~mantispy.tl.transport` separate a laboratory effect from a plate effect.
 
@@ -318,9 +318,6 @@ def agnp(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
 
     Returns:
         Wells by features, indexed by plate and well.
-
-    References:
-        Garcia-Fossa et al. (2023), *Interpreting image-based profiles using similarity clustering and single-cell visualization*, Current Protocols.
     """
     return _profiles("agnp", cache_dir, **kwargs)
 
@@ -423,7 +420,7 @@ def jump_crispr(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
         Wells by features, indexed by plate and well.
 
     References:
-        Chandrasekaran et al. (2024), *Three million images and morphological profiles of cells treated with matched chemical and genetic perturbations*, Nature Methods.
+        :cite:t:`Chandrasekaran_2023`.
     """
     return _profiles("jump_crispr", cache_dir, **kwargs)
 
@@ -515,7 +512,7 @@ def jump_export(cache_dir: str | Path | None = None) -> Path:
         The directory, to pass to :func:`mantispy.io.read_profiles`.
 
     References:
-        Chandrasekaran et al. (2024), *Three million images and morphological profiles of cells treated with matched chemical and genetic perturbations*, Nature Methods.
+        :cite:t:`Chandrasekaran_2023`.
     """
     paths = _files("jump_cells", cache_dir, select=lambda name: f"{_EXPORT_FOV}/" in name)
     if not paths:
@@ -546,7 +543,7 @@ def jump_cells(annotate: bool = True, selected: bool = False, cache_dir: str | P
         Cells by features at cell resolution, carrying ``Metadata_Source``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Site`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_InChIKey`` and ``Metadata_Control``. When annotated, ``var["selected"]`` marks the features feature selection keeps, so the object can be reduced with ``adata[:, adata.var["selected"]]`` the way scanpy's ``highly_variable`` is used.
 
     References:
-        Chandrasekaran et al. (2024), *Three million images and morphological profiles of cells treated with matched chemical and genetic perturbations*, Nature Methods.
+        :cite:t:`Chandrasekaran_2023`.
     """
     if selected and not annotate:
         raise KeyError("selected=True needs annotate=True: the mask is computed against the negative controls")
@@ -585,7 +582,7 @@ def jump_plate(cache_dir: str | Path | None = None, **kwargs: Any) -> SpatialDat
         The well, with its fields as Images, the Nuclei, Cells and Cytoplasm segmentations as Labels, and the ``cells`` Table.
 
     References:
-        Chandrasekaran et al. (2024), *Three million images and morphological profiles of cells treated with matched chemical and genetic perturbations*, Nature Methods.
+        :cite:t:`Chandrasekaran_2023`.
     """
     from mantispy.io._plate import read_plate
 

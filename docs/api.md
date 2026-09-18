@@ -33,8 +33,8 @@ The Stores column in the tables below lists the keys each function writes.
 `io.read_profiles` reads the output of a profiling pipeline, and the input type decides how. CSV, TSV or parquet
 files are stacked, a CellProfiler `ExportToSpreadsheet` directory is joined across its objects, and a directory of
 CytoTable parquet parts is read as single cells. `io.read_plate` reads the images and segmentations
-behind the profiles into `SpatialData`, from a Cell Painting Gallery source or an `ExportForSpatialData` plate
-folder, and needs the spatial extra:
+behind the profiles into `SpatialData`, from a Cell Painting Gallery source {cite:p}`Weisbart_2024` or an
+`ExportForSpatialData` plate folder, and needs the spatial extra:
 
 ```bash
 pip install 'mantispy[spatial]'
@@ -403,9 +403,10 @@ sc.pp.neighbors(wells)
 sc.tl.umap(wells)
 ```
 
-Harmony is wrapped as `pp.harmony`. It is the last step of the JUMP consortium's recipe
-{cite:p}`Chandrasekaran_2024` and the best performer in {cite:t}`Arevalo_2024`. It needs the
-optional extra:
+Harmony is wrapped as `pp.harmony`. It is the last step of the
+[JUMP profiling recipe](https://github.com/broadinstitute/jump-profiling-recipe) for compound and ORF profiles. It ranked in
+the top three in every scenario of {cite:t}`Arevalo_2024`, as did Seurat RPCA. It needs the optional
+extra:
 
 ```bash
 pip install 'mantispy[harmony]'

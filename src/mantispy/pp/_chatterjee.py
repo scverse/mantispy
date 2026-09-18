@@ -3,8 +3,8 @@
 Chatterjee's xi measures whether one variable is a function of another, monotonic or not.
 A feature that is high at both extremes of a treatment and low in the middle has a near-zero Pearson correlation but a large xi, so this keeps features that a correlation filter drops.
 
-References: Chatterjee (2021), "A new coefficient of correlation", JASA 116:2009, and Lin & Han (2023), "On boosting the power of Chatterjee's rank correlation", Biometrika 110:283, which generalizes xi to ``m`` right nearest neighbors.
-The two agree at ``m=1``, and larger ``m`` has a lower noise floor.
+References: :cite:t:`Chatterjee_2020` and :cite:t:`Lin_2022`, which generalizes xi to ``m`` right nearest neighbors.
+At ``m=1`` the two differ by a term of order ``1/n``, and larger ``m`` has a lower noise floor.
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ def chatterjee_xi(x: np.ndarray, y: np.ndarray, m: int = 1, seed: int = 0, min_f
     Args:
         x: The variable the others are tested against, such as a group code, a dose or a covariate.
         y: One column, or a matrix of them. Every column is scored against ``x`` in one pass.
-        m: Right nearest neighbors, as in Lin & Han (2023). ``m=1`` is Chatterjee's original coefficient. Larger ``m`` has the same limit under dependence and a lower noise floor under independence, so a fixed threshold is more reliable.
+        m: Right nearest neighbors, as in :cite:t:`Lin_2022`. Larger ``m`` has the same limit under dependence and a lower noise floor under independence, so a fixed threshold is more reliable.
         seed: Seed for the tie-breaking.
         min_finite: Fewest finite pairs a column may be scored on, raised to ``m + 2`` when it is below that. Under independence xi has standard deviation ``sqrt(2 / (5 * n))``, which at 40 pairs equals the 0.1 threshold :func:`feature_select_chatterjee` selects on, so a column measured fewer times than this cannot be told from noise.
 
@@ -117,7 +117,7 @@ def feature_select_chatterjee(
         adata: Object to select features on.
         groupby: ``obs`` column the features are tested against.
         threshold: Keep features scoring above this. xi is near zero under independence and approaches one when the feature is a deterministic function of the group, so the threshold is comparable across datasets in a way a correlation cutoff is not.
-        m: Right nearest neighbors (Lin & Han 2023). ``m=1`` is Chatterjee's original coefficient; larger values lower the noise floor without changing what the statistic converges to.
+        m: Right nearest neighbors :cite:p:`Lin_2022`. ``m=1`` is the coefficient of :cite:t:`Chatterjee_2020` up to a term of order ``1/n``; larger values lower the noise floor without changing what the statistic converges to.
         seed: Seed for the random tie-breaking.
         min_finite: Fewest finite values a feature may be scored on. A feature measured fewer times than this scores NaN, which is above no threshold and so is never selected.
         key_added: Name of the boolean ``var`` column written.
