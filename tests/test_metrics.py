@@ -229,6 +229,53 @@ def test_silhouette_batch_skips_labels_where_mixing_is_undefined():
     assert np.isfinite(result["value"].iloc[0])  # 'b' is usable; 'a' is skipped
 
 
+def _labelled_blobs(labels=False, batches=False):
+    """Two labels and two batches in one embedding; each flag splits that grouping into distant blobs instead of leaving it in a single one."""
+    import anndata as ad
+
+    rng = np.random.default_rng(0)
+    n_per_label = 12
+    n_obs = 2 * n_per_label
+    label_of = np.repeat(["alpha", "beta"], n_per_label)
+    batch_of = np.tile(np.repeat(["b1", "b2"], n_per_label // 2), 2)
+
+    coords = rng.normal(scale=0.05, size=(n_obs, 2))
+    if labels:
+        coords[label_of == "beta", 0] += 10.0
+    if batches:
+        coords[batch_of == "b2", 1] += 10.0
+
+    obs = pd.DataFrame(
+        {"Metadata_Perturbation": label_of, "Metadata_Batch": batch_of},
+        index=[str(index) for index in range(n_obs)],
+    )
+    adata = ad.AnnData(X=coords.astype(np.float32), obs=obs)
+    adata.obsm["X_pca"] = coords
+    return adata
+
+
+def test_the_label_silhouette_scores_separated_labels_near_one():
+    """Sign, not magnitude: evaluate_correction reports this as 'higher is better', so an inverted silhouette would score maximally separated labels near zero."""
+    key = "Metadata_Perturbation"
+    apart = _value(mt.metrics.silhouette_label(_labelled_blobs(labels=True), label_key=key), "silhouette_label")
+    together = _value(mt.metrics.silhouette_label(_labelled_blobs(), label_key=key), "silhouette_label")
+
+    assert apart == pytest.approx(1.0, abs=0.01)
+    assert apart > together
+
+
+def test_the_batch_silhouette_puts_mixed_batches_above_split_ones():
+    """Sign, not magnitude: it reports 1 - mean|silhouette|, so batches sharing one blob must land above the midpoint of its [0, 1] range and batches in their own blobs below it.
+
+    The midpoint is the one bound that means something here, and a direction flip crosses it in both directions rather than merely shifting the value.
+    """
+    keys = {"label_key": "Metadata_Perturbation", "batch_key": "Metadata_Batch"}
+    mixed = _value(mt.metrics.silhouette_batch(_labelled_blobs(labels=True), **keys), "silhouette_batch")
+    split = _value(mt.metrics.silhouette_batch(_labelled_blobs(labels=True, batches=True), **keys), "silhouette_batch")
+
+    assert mixed > 0.5 > split
+
+
 def test_diagnose_testing_measures_the_hit_callers_on_this_screen(pure_noise_screen):
     """Both hit callers are only approximately calibrated, to a degree that depends on the
     control count, so diagnose_testing measures them on the screen at hand."""
