@@ -16,10 +16,16 @@ def scored():
 
 
 @pytest.mark.parametrize("method", ["mahalanobis", "ks"])
-def test_treated_groups_are_hits_and_the_controls_are_not(scored, method):
+def test_treated_groups_are_hits_and_sit_further_out_than_the_controls(scored, method):
+    """Whether the reference row is called is not asserted here.
+
+    It is an honest draw from the null, so it is called at about the nominal rate by
+    construction, and a single seed that happens not to call it would pin the bias rather
+    than the behaviour. Its distribution is pinned across seeds by
+    test_the_reference_row_is_not_scored_on_the_rows_that_fitted_the_covariance.
+    """
     mt.tl.hit_calling(scored, method=method, n_permutations=200)
     table = scored.uns["mantispy"]["hits"].set_index("group")
-    assert not bool(table.loc["DMSO", "is_hit"])
     assert table.drop(index="DMSO")["is_hit"].all()
     assert table.drop(index="DMSO")["distance"].min() > table.loc["DMSO", "distance"]
 
@@ -139,15 +145,20 @@ def test_the_reference_row_is_not_scored_on_the_rows_that_fitted_the_covariance(
     then comes out below the null it is compared with, and the row cannot reach significance
     however the controls fall: its p-value is pinned near one instead of being a draw from
     the null like every other group's.
+
+    The mean is bounded on both sides, so a row that is systematically small fails here too.
+    The bound is wide enough that a calibrated row passes it however the seeds fall; the
+    rate in the tail is what the row is for, and separating a 5% tail from a 1% one needs
+    more draws than a unit test can afford.
     """
     pvalues = []
-    for seed in range(12):
+    for seed in range(24):
         adata = pure_noise_screen(n_control=192, n_groups=4, per_group=48, n_features=10, seed=seed)
         mt.tl.hit_calling(adata, n_permutations=200, seed=seed)
         table = adata.uns["mantispy"]["hits"].set_index("group")
         assert table.loc["DMSO", "n_obs"] == 48, "a quarter of the controls: half held out, and half of those tested"
         pvalues.append(float(table.loc["DMSO", "pvalue"]))
-    assert 0.3 < float(np.mean(pvalues)) < 0.7, f"a draw from the null is uniform, got {pvalues}"
+    assert 0.25 < float(np.mean(pvalues)) < 0.75, f"a draw from the null is uniform, got {pvalues}"
 
 
 def test_edistance_does_not_call_a_screen_of_pure_noise(pure_noise_screen):

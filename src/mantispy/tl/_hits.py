@@ -98,6 +98,8 @@ def hit_calling(
         A row that fitted the centroid and the covariance sits closer to the centroid than any other group's row can, so it stays off the tested side of every group.
         The controls carry a perturbation label of their own, and that group is therefore left with the held-out half, which is split once more so that the rows tested and the rows they are tested against are different rows.
         Its row of the table is a draw from the null rather than a sample compared with part of itself measured against a centroid half of it placed, and ``n_obs`` reports about a quarter of the controls for it.
+        Its null is the other ways to halve those rows rather than a bootstrap of them, which would be too wide because the sample is part of what it is drawn from.
+        That row is therefore an honest draw from the null: its p-value is uniform and falls below any cutoff about as often as the cutoff says, so a control group appearing in a hit list is this test working rather than a fault.
 
         The null is drawn from the controls only, and asks whether a group is further out than the same number of control rows would be.
         Drawing from every row would put real hits into the null, and a screen with many hits would look like one with none.
@@ -173,6 +175,10 @@ def hit_calling(
             continue
         # The draw is as wide as the group and the null takes as many of its columns as the sample has rows, so that trimming the reference group's sample leaves the draws of the groups after it where they were.
         draws = generator.choice(null_rows, size=(n_permutations, max(rows.size, 1)), replace=True)
+        if shared.size:
+            # The reference group's sample is half of the held-out rows, so its null is the other ways to halve them, drawn without replacement rather than bootstrapped.
+            spread = np.random.default_rng([seed, index]).random((n_permutations, null_rows.size))
+            draws = null_rows[np.argsort(spread, axis=1)[:, : tested.size]]
         null[index] = _statistic(to_control[draws[:, : max(tested.size, 1)]], against, method)
 
     if method != "ks":
