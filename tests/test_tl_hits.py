@@ -387,7 +387,7 @@ def _plate(group_size: int, n_groups: int = 20, n_controls: int = 24, seed: int 
     adata.obs["Metadata_Perturbation"] = ["DMSO"] * n_controls + [
         f"p{g:02d}" for g in range(n_groups) for _ in range(group_size)
     ]
-    adata.obs["Metadata_Control"] = adata.obs["Metadata_Perturbation"] == "DMSO"
+    adata.obs["Metadata_Control"] = np.arange(n) < n_controls
     return adata
 
 
