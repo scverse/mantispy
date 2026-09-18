@@ -85,6 +85,24 @@ def test_reading_part_of_a_plate(gallery: Path, kwargs: dict[str, Any], images: 
     assert set(sdata.tables) == tables
 
 
+def test_a_partly_downloaded_plate_reads_the_fields_it_has(gallery: Path) -> None:
+    """A registry that pins some fields of a well, as mt.ds.jump_plate does, leaves the rest absent."""
+    for path in (gallery / "images" / BATCH).rglob("*f02p01*"):
+        path.unlink()
+
+    sdata = mt.io.read_plate(gallery, PLATE, batch=BATCH, wells=["A01"], profile=None)
+
+    assert set(sdata.images) == {f"{PLATE}_A01_s1_image"}
+
+
+def test_a_plate_with_no_images_at_all_raises(gallery: Path) -> None:
+    for path in (gallery / "images" / BATCH).rglob("*.tiff"):
+        path.unlink()
+
+    with pytest.raises(FileNotFoundError, match="no images for well"):
+        mt.io.read_plate(gallery, PLATE, batch=BATCH, wells=["A01"], profile=None)
+
+
 def test_two_plates_concatenate(sdata: sd.SpatialData, gallery: Path) -> None:
     """Element names carry the plate barcode, so two plates merge without renaming."""
     other = mt.io.read_plate(gallery, OVERLAY_PLATE, batch=BATCH, profile="test")

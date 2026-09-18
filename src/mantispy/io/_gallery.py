@@ -10,6 +10,7 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
+from mantispy._core.logging import get_logger
 from mantispy.io._cellprofiler import _prefix
 from mantispy.io._profiles import from_dataframe, read_profiles
 
@@ -345,7 +346,7 @@ def _well_table(path: Path, *, region: str | None, plate_format: int) -> ad.AnnD
     return TableModel.parse(adata, region=region, region_key="region", instance_key="well_index")
 
 
-def _cell_table(files: Sequence[Path], masks: Mapping[str, npt.NDArray]) -> ad.AnnData:
+def _cell_table(files: Sequence[Path], masks: Mapping[str, npt.NDArray], channels: Sequence[str]) -> ad.AnnData:
     from spatialdata import sanitize_table
     from spatialdata.models import TableModel
 
@@ -354,7 +355,9 @@ def _cell_table(files: Sequence[Path], masks: Mapping[str, npt.NDArray]) -> ad.A
         [_prefix(pd.read_csv(file), "Cells").assign(Metadata_Key=file.parent.name) for file in files],
         ignore_index=True,
     ).rename(columns={"ImageNumber": "Metadata_ImageNumber", "ObjectNumber": "Metadata_ObjectNumber"})
-    adata = from_dataframe(frame, resolution="cell")
+    # The channels are known from load_data, so the parser is told them rather than guessing a
+    # vocabulary from the column names, which invents entries like 'tubeness' and 'Overflow'.
+    adata = from_dataframe(frame, resolution="cell", channels=channels)
     obs = cast("pd.DataFrame", adata.obs)
     keys = obs.pop("Metadata_Key").astype(str).str.rsplit("-", n=2, expand=True)
     plates, wells, sites = (keys[i].astype(str) for i in range(3))
@@ -439,17 +442,27 @@ def read_gallery_plate(
             plate_format=plate_format,
         )
 
-    if wells is None:
-        first = load_data.groupby(level="well").head(1)
-        wells = [
-            str(key[0])
-            for key, row in first.iterrows()
-            if isinstance(key, tuple) and _image_path(root, batch, row, prefix, channels[0]).exists()
-        ]
+    # A partial download holds some fields and not others, and reads back as itself rather than failing on
+    # the first one nobody asked for. Which fields are present is asked once, here, so the well the caller
+    # named and the wells we pick for them are decided the same way.
+    present = load_data[
+        [_image_path(root, batch, row, prefix, channels[0]).exists() for _, row in load_data.iterrows()]
+    ]
+    if len(present) < len(load_data):
+        get_logger().info(
+            "read_plate: %d of %d field(s) of view are not present under %s",
+            len(load_data) - len(present),
+            len(load_data),
+            root,
+        )
+    requested = None if wells is None else list(wells)
+    if requested is not None:
+        present = present[present.index.get_level_values("well").isin(requested)]
+    wells = list(dict.fromkeys(present.index.get_level_values("well").astype(str)))
 
     images, labels, masks, analysed, unnamed = {}, {}, {}, [], []
     for well in wells:
-        for site in sorted(load_data.loc[well].index):
+        for site in sorted(present.loc[well].index):
             fov = f"{plate}_{well}_s{site}"
             transformations: dict[str, Identity | Translation] = {fov: Identity()}
             if located:
@@ -477,6 +490,8 @@ def read_gallery_plate(
                 masks[f"{fov}_{name}"] = mask
                 labels[f"{fov}_{name}"] = Labels2DModel.parse(mask, dims=("y", "x"), transformations=transformations)
 
+    if not images:
+        raise FileNotFoundError(f"no images for well(s) {requested or 'on the plate'} of {plate} under {root}")
     if unnamed:
         warnings.warn(
             f"read no labels for {len(unnamed)} analysed sites holding outline images this reader could not name, {unnamed[0]} among them",
@@ -486,7 +501,7 @@ def read_gallery_plate(
 
     tables, shapes = {}, {}
     if analysed:
-        tables["cells"] = _cell_table(analysed, {k: v for k, v in masks.items() if k.endswith("_cells")})
+        tables["cells"] = _cell_table(analysed, {k: v for k, v in masks.items() if k.endswith("_cells")}, channels)
     if profile is not None:
         path = (
             Path(profile)
