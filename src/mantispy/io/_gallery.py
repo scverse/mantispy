@@ -9,6 +9,7 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
+from mantispy._core._utils import get_logger
 from mantispy.io._cellprofiler import _prefix
 from mantispy.io._profiles import from_dataframe, read_profiles
 
@@ -324,7 +325,7 @@ def _well_table(path: Path, *, region: str | None, plate_format: int) -> ad.AnnD
     return TableModel.parse(adata, region=region, region_key="region", instance_key="well_index")
 
 
-def _cell_table(files: Sequence[Path], masks: Mapping[str, npt.NDArray]) -> ad.AnnData:
+def _cell_table(files: Sequence[Path], masks: Mapping[str, npt.NDArray], channels: Sequence[str]) -> ad.AnnData:
     from spatialdata import sanitize_table
     from spatialdata.models import TableModel
 
@@ -333,7 +334,9 @@ def _cell_table(files: Sequence[Path], masks: Mapping[str, npt.NDArray]) -> ad.A
         [_prefix(pd.read_csv(file), "Cells").assign(Metadata_Key=file.parent.name) for file in files],
         ignore_index=True,
     ).rename(columns={"ImageNumber": "Metadata_ImageNumber", "ObjectNumber": "Metadata_ObjectNumber"})
-    adata = from_dataframe(frame, resolution="cell")
+    # The channels are known from load_data, so the parser is told them rather than guessing a
+    # vocabulary from the column names, which invents entries like 'tubeness' and 'Overflow'.
+    adata = from_dataframe(frame, resolution="cell", channels=channels)
     obs = cast("pd.DataFrame", adata.obs)
     keys = obs.pop("Metadata_Key").astype(str).str.rsplit("-", n=2, expand=True)
     plates, wells, sites = (keys[i].astype(str) for i in range(3))
@@ -427,8 +430,14 @@ def read_gallery_plate(
         ]
 
     images, labels, masks, analysed = {}, {}, {}, []
+    skipped = 0
     for well in wells:
         for site in sorted(load_data.loc[well].index):
+            # A well is already skipped when its images are absent, so a site is too: a partial download
+            # reads back as itself rather than failing on the first field nobody asked for.
+            if not _image_path(root, batch, load_data.loc[(well, site)], prefix, channels[0]).exists():
+                skipped += 1
+                continue
             fov = f"{plate}_{well}_s{site}"
             transformations: dict[str, Identity | Translation] = {fov: Identity()}
             if located:
@@ -451,9 +460,14 @@ def read_gallery_plate(
                 masks[f"{fov}_{name}"] = mask
                 labels[f"{fov}_{name}"] = Labels2DModel.parse(mask, dims=("y", "x"), transformations=transformations)
 
+    if skipped:
+        get_logger().info("read_plate: %d field(s) of view are not present under %s", skipped, root)
+    if not images:
+        raise FileNotFoundError(f"no images for well(s) {list(wells)} of {plate} under {root}")
+
     tables, shapes = {}, {}
     if analysed:
-        tables["cells"] = _cell_table(analysed, {k: v for k, v in masks.items() if k.endswith("_cells")})
+        tables["cells"] = _cell_table(analysed, {k: v for k, v in masks.items() if k.endswith("_cells")}, channels)
     if profile is not None:
         path = (
             Path(profile)
