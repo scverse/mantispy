@@ -6,6 +6,7 @@ loading different data. Downloads land in :attr:`mantispy.settings.cache_dir`.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -14,14 +15,17 @@ import numpy as np
 import pandas as pd
 from scverse_misc.datasets import fetch, parse_registry, register_loader
 
-from mantispy._core._utils import as_frame, get_logger
+from mantispy._core._utils import as_frame, get_logger, report_drop
+from mantispy._core.schema import SCHEMA_VERSION, stamp
 from mantispy._settings import settings
-from mantispy.io._jump import read_jump
-from mantispy.io._profiles import from_dataframe, read_profiles
+from mantispy.io._jump import join_jump_annotation, read_jump
+from mantispy.io._profiles import from_dataframe, read, read_profiles, write
+from mantispy.pp._select import subset_features
 
 if TYPE_CHECKING:
     from anndata import AnnData
     from scverse_misc.datasets import DatasetEntry, DownloadCB
+    from spatialdata import SpatialData
 
 _BASE_URL, _DATASETS = parse_registry(Path(__file__).parent / "registry.yaml")
 # scverse-misc registers loaders by type name across all packages in the process, so ours uses the package name.
@@ -29,6 +33,12 @@ _TYPE = "mantispy"
 
 #: One plate from each of two sources, enough to see a source effect with a small download.
 TARGET2_DEFAULT = ("BR00121438", "JCPQC051")
+
+#: Bumped whenever the assembled jump_cells object changes, so an older cached assembly is not reused.
+_ASSEMBLY_VERSION = 2
+
+#: The field of view :func:`jump_export` hands out, a DMSO well of the plate :func:`jump_cells` reads.
+_EXPORT_FOV = "BR00121438-J04-1"
 
 
 @register_loader(_TYPE)
@@ -416,3 +426,207 @@ def jump_crispr(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
         chemical and genetic perturbations*, Nature Methods.
     """
     return _profiles("jump_crispr", cache_dir, **kwargs)
+
+
+def _read_site(directory: Path, source: str, channels: Sequence[str]) -> AnnData:
+    """One analysis directory as cells, checked against the ``<plate>-<well>-<site>`` name it is filed under.
+
+    The JUMP pipeline gives ``Cytoplasm`` a ``Parent_Cells`` and a ``Parent_Nuclei`` and gives ``Cells`` no
+    parent at all, so ``Cytoplasm`` is the only primary object that joins all three tables. One cytoplasm is
+    one cell here, and the three tables have equal length.
+    """
+    adata = read_profiles(
+        directory,
+        primary_object="Cytoplasm",
+        resolution="cell",
+        channels=channels,
+        index_columns=("Metadata_Plate", "Metadata_Well", "Metadata_Site", "Metadata_ObjectNumber"),
+    )
+    plate, well, site = directory.name.rsplit("-", 2)
+    obs = as_frame(adata.obs)
+    found = (str(obs["Metadata_Plate"].iloc[0]), str(obs["Metadata_Well"].iloc[0]), int(obs["Metadata_Site"].iloc[0]))
+    if found != (plate, well, int(site)):
+        raise ValueError(f"{directory.name} holds plate/well/site {found}, not what its name says")
+    obs["Metadata_Source"] = source
+    return adata
+
+
+def _assemble_cells(entry: DatasetEntry, cache_dir: str | Path | None, *, annotate: bool) -> AnnData:
+    """Read every analysis directory the entry pins and join them into one object."""
+    import anndata as ad
+
+    source = str(entry.metadata["source"])
+    channels = [str(channel) for channel in entry.metadata["channels"]]
+    paths = _files("jump_cells", cache_dir)
+    parts = [_read_site(directory, source, channels) for directory in sorted({path.parent for path in paths})]
+    adata = ad.concat(parts, join="inner", merge="first", uns_merge="first")
+    # The parts hold as much again as the result, and nothing below needs them.
+    n_parts, widest = len(parts), max(part.n_vars for part in parts)
+    del parts
+    report_drop("features measured in only some fields of view", widest - adata.n_vars, widest)
+
+    if annotate:
+        adata.obs = join_jump_annotation(as_frame(adata.obs)).set_axis(adata.obs_names)
+        _mark_selected(adata)
+    stamp(adata, resolution="cell")
+    adata.uns["mantispy"]["dataset"] = entry.metadata["accession"]
+    get_logger().info(
+        "jump_cells: %d cells x %d features from %d field(s) of view in %d well(s)",
+        adata.n_obs,
+        adata.n_vars,
+        n_parts,
+        adata.obs["Metadata_Well"].nunique(),
+    )
+    return adata
+
+
+def _select(adata: AnnData, path: Path) -> AnnData:
+    """The selected features of `adata`, kept at `path` so the next call reads only those."""
+    chosen = subset_features(adata)
+    write(chosen, path)
+    return chosen
+
+
+def _mark_selected(adata: AnnData) -> None:
+    """Write the feature-selection mask into ``var["selected"]``, as :func:`mantispy.pp.feature_select` does.
+
+    The mask is computed on a normalized copy, because variance and correlation are only comparable between
+    features once each is on its own plate's control scale, and the values on `adata` stay as CellProfiler
+    measured them. The recipe is the one the tutorials use: ``pp.normalize`` against the negative controls,
+    drop what ``var["degenerate_scale"]`` flags, then ``pp.feature_select``. No step of it draws a random
+    number, so the same pinned files always give the same mask.
+    """
+    from mantispy.pp._normalize import normalize
+    from mantispy.pp._select import feature_select
+
+    scratch = adata.copy()
+    normalize(scratch, method="mad_robustize", by="Metadata_Plate", reference="negcon")
+    scratch = scratch[:, ~scratch.var["degenerate_scale"].to_numpy()].copy()
+    feature_select(scratch)
+    kept = set(scratch.var_names[scratch.var["selected"].to_numpy()])
+    adata.var["selected"] = adata.var_names.isin(kept)
+
+
+def jump_export(cache_dir: str | Path | None = None) -> Path:
+    """One real ``ExportToSpreadsheet`` directory, as CellProfiler wrote it.
+
+    A single field of view of a DMSO well of ``BR00121438``: ``Image.csv`` plus the ``Cells``, ``Cytoplasm``
+    and ``Nuclei`` tables, unmodified, for reading with :func:`mantispy.io.read_profiles`. About 18 MB, and
+    part of the download :func:`jump_cells` makes, so asking for both costs nothing extra.
+
+    The images this was measured from are in :func:`jump_plate`, and the well-level profiles of the same
+    plate are in :func:`jump_target2`.
+
+    Args:
+        cache_dir: Where to keep the download. Defaults to :attr:`mantispy.settings.cache_dir`.
+
+    Returns:
+        The directory, to pass to :func:`mantispy.io.read_profiles`.
+
+    References:
+        Chandrasekaran et al. (2024), *Three million images and morphological profiles of cells treated with
+        matched chemical and genetic perturbations*, Nature Methods.
+    """
+    paths = _files("jump_cells", cache_dir, select=lambda name: f"{_EXPORT_FOV}/" in name)
+    if not paths:
+        raise FileNotFoundError(f"no files for {_EXPORT_FOV} in the jump_cells registry entry")
+    return paths[0].parent
+
+
+def jump_cells(annotate: bool = True, selected: bool = False, cache_dir: str | Path | None = None) -> AnnData:
+    """Single cells from one JUMP plate, as CellProfiler measured them.
+
+    Twenty-four wells of ``BR00121438`` at four fields of view each: eight DMSO wells, four compounds with both
+    of their replicate wells, and eight more compounds at one well. The strongest movers on this plate are
+    cytotoxic, so ranking wells by distance alone selects for empty wells; every well here holds more than 120
+    cells in its first field.
+
+    The same plate's well-level profiles are :func:`jump_target2`, so a profile aggregated from these cells can
+    be compared with the one the consortium published.
+
+    The first call downloads about 1.5 GB of CellProfiler output, reads 480 tables and writes the assembled
+    object next to them, which takes a few minutes. Later calls read that one file.
+
+    Args:
+        annotate: Join the JUMP annotation, which supplies ``Metadata_Perturbation`` and ``Metadata_Control``.
+            Downloads another 14 MB. Needed for `selected`, which is computed against the controls.
+        selected: Return only the features ``var["selected"]`` marks, 1607 of 5857, as
+            :func:`mantispy.pp.subset_features` would. The subset is kept beside the whole object, so a
+            notebook that only wants the reduced one reads 87 MB instead of 308 MB.
+        cache_dir: Where to keep the download. Defaults to :attr:`mantispy.settings.cache_dir`.
+
+    Raises:
+        KeyError: `selected` was asked for without `annotate`, so there are no controls to select against.
+
+    Returns:
+        Cells by features at cell resolution, carrying ``Metadata_Source``, ``Metadata_Plate``,
+        ``Metadata_Well``, ``Metadata_Site`` and, when annotated, ``Metadata_JCP2022``,
+        ``Metadata_Perturbation``, ``Metadata_InChIKey`` and ``Metadata_Control``. When annotated,
+        ``var["selected"]`` marks the features feature selection keeps, so the object can be reduced with
+        ``adata[:, adata.var["selected"]]`` the way scanpy's ``highly_variable`` is used.
+
+    References:
+        Chandrasekaran et al. (2024), *Three million images and morphological profiles of cells treated with
+        matched chemical and genetic perturbations*, Nature Methods.
+    """
+    if selected and not annotate:
+        raise KeyError("selected=True needs annotate=True: the mask is computed against the negative controls")
+
+    entry = _DATASETS["jump_cells"]
+    root = Path(cache_dir or settings.cache_dir)
+    # The name carries the schema version and a fingerprint of the files the entry pins and of how they are
+    # assembled, so no change to the schema, to which wells are read, or to what assembly produces can be
+    # answered from a stale file.
+    material = f"{_ASSEMBLY_VERSION}:" + "".join(str(file.sha256) for file in entry.files)
+    fingerprint = hashlib.sha256(material.encode()).hexdigest()[:12]
+    stem = f"jump_cells-{SCHEMA_VERSION}-{fingerprint}-{'annotated' if annotate else 'raw'}"
+    derived, subset = root / f"{stem}.h5ad", root / f"{stem}-selected.h5ad"
+    if selected and subset.exists():
+        return read(subset)
+    if derived.exists():
+        return _select(read(derived), subset) if selected else read(derived)
+
+    adata = _assemble_cells(entry, cache_dir, annotate=annotate)
+    write(adata, derived)
+    return _select(adata, subset) if selected else adata
+
+
+def jump_plate(cache_dir: str | Path | None = None, **kwargs: Any) -> SpatialData:
+    """The images and segmentations behind one well of ``BR00121438``.
+
+    Two fields of view of well ``O09``, a compound that changed the cells without killing them: the eight
+    channel images of each field, the CellProfiler outlines they were segmented with, and the plate's
+    ``load_data.csv``. About 44 MB, and needs the spatial extra.
+
+    The cells measured from these fields are in :func:`jump_cells`, and the well-level profiles of the same
+    plate in :func:`jump_target2`.
+
+    Args:
+        cache_dir: Where to keep the download. Defaults to :attr:`mantispy.settings.cache_dir`.
+        kwargs: Passed to :func:`mantispy.io.read_plate`.
+
+    Returns:
+        The well, with its fields as Images, the Nuclei, Cells and Cytoplasm segmentations as Labels, and the
+        ``cells`` Table.
+
+    References:
+        Chandrasekaran et al. (2024), *Three million images and morphological profiles of cells treated with
+        matched chemical and genetic perturbations*, Nature Methods.
+    """
+    from mantispy.io._plate import read_plate
+
+    entry = _DATASETS["jump_plate"]
+    paths = _files("jump_plate", cache_dir)
+    # Every file is named by its gallery key, so the download reconstructs the source tree and read_plate
+    # reads it as it would read the bucket. Stripping that key off a downloaded path gives the tree's root,
+    # rather than assuming where fetch put it.
+    downloaded = Path(str(paths[0]).removesuffix(entry.files[0].name))
+    root = downloaded / str(entry.metadata["accession"]) / str(entry.metadata["source"])
+    return read_plate(
+        root,
+        str(entry.metadata["plate"]),
+        batch=str(entry.metadata["batch"]),
+        wells=[str(entry.metadata["well"])],
+        profile=None,
+        **kwargs,
+    )

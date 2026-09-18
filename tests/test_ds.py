@@ -55,7 +55,8 @@ def test_every_registered_dataset_has_a_loader_and_hashed_files(name: str) -> No
 
 @pytest.mark.network
 @pytest.mark.slow
-@pytest.mark.parametrize("name", sorted(name for name in _DATASETS if not name.startswith("_")))
+# Entries without a shape do not return an AnnData: jump_plate is a SpatialData and jump_export a directory.
+@pytest.mark.parametrize("name", sorted(name for name, entry in _DATASETS.items() if "shape" in entry.metadata))
 def test_the_downloads_read_back_at_the_shape_the_registry_claims(name: str) -> None:
     adata = getattr(mt.ds, name)()
 
@@ -64,3 +65,65 @@ def test_the_downloads_read_back_at_the_shape_the_registry_claims(name: str) -> 
     if name == "bbbc021":
         assert adata.obs["Metadata_MOA"].notna().all()
         assert adata.obs["Metadata_Control"].sum() == 330
+
+
+@pytest.mark.network
+@pytest.mark.slow
+def test_jump_export_is_an_export_directory_that_reads() -> None:
+    """The fixture tutorial 1 reads: a real ExportToSpreadsheet directory, untouched."""
+    directory = mt.ds.jump_export()
+
+    assert {path.name for path in directory.glob("*.csv")} == {
+        "Cells.csv",
+        "Cytoplasm.csv",
+        "Experiment.csv",
+        "Image.csv",
+        "Nuclei.csv",
+    }
+    # JUMP gives Cytoplasm both parents and Cells none, so Cytoplasm is the primary that joins all three.
+    adata = mt.io.read_profiles(directory, primary_object="Cytoplasm")
+    assert str(adata.obs["Metadata_Well"].iloc[0]) == "J04"
+    assert mt.io.validate(adata).ok
+
+
+@pytest.mark.network
+@pytest.mark.slow
+def test_jump_cells_holds_controls_and_treatments_at_cell_resolution() -> None:
+    adata = mt.ds.jump_cells()
+
+    assert adata.uns["mantispy"]["resolution"] == "cell"
+    assert adata.obs["Metadata_Well"].nunique() == 24
+    assert adata.obs["Metadata_Site"].nunique() == 4
+    assert bool(adata.obs["Metadata_Control"].any()) and not bool(adata.obs["Metadata_Control"].all())
+    assert adata.obs_names.is_unique
+    assert mt.io.validate(adata).ok
+
+
+@pytest.mark.network
+@pytest.mark.slow
+def test_jump_plate_reads_the_fields_that_were_downloaded() -> None:
+    sdata = mt.ds.jump_plate()
+
+    assert len(sdata.images) == 2
+    assert len(sdata.labels) == 2 * 3
+    assert sdata.tables["cells"].n_obs > 0
+    # The channel vocabulary comes from load_data, so no invented channel reaches var.
+    channels = {part for value in sdata.tables["cells"].var["channel"].dropna() for part in str(value).split("|")}
+    assert channels <= {"AGP", "Brightfield", "Brightfield_H", "Brightfield_L", "DNA", "ER", "Mito", "RNA"}
+
+
+@pytest.mark.network
+@pytest.mark.slow
+def test_jump_cells_can_hand_back_only_the_selected_features() -> None:
+    full = mt.ds.jump_cells()
+    selected = mt.ds.jump_cells(selected=True)
+
+    assert selected.n_obs == full.n_obs
+    assert selected.n_vars < full.n_vars
+    assert list(selected.var_names) == list(full.var_names[full.var["selected"].to_numpy()])
+
+
+def test_selecting_without_the_annotation_is_refused() -> None:
+    """The mask is computed against the negative controls, which only the annotation names."""
+    with pytest.raises(KeyError, match="needs annotate"):
+        mt.ds.jump_cells(annotate=False, selected=True)
