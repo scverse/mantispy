@@ -111,7 +111,7 @@ def _composition_test(composition: AnnData, counts: np.ndarray, reference: str |
     pooled = counts[is_control].sum(axis=0)
     reached = pooled > 0
     comparable = int(reached.sum()) >= 2
-    share = pooled[reached] / pooled[reached].sum() if reached.any() else pooled[reached]
+    share = pooled[reached] / pooled[reached].sum()
     if not comparable:
         warnings.warn(
             f"the controls occupy {int(reached.sum())} of {len(reached)} clusters, so the composition test has no "
@@ -285,7 +285,7 @@ def subpopulation_hits(
         On pure noise with 36 controls and 120 features, a null drawn from the rows that placed the centroid called 0.40 of pseudo-treatments at raw ``p < 0.05``, and the split called 0.03.
 
         The controls carry a perturbation label of their own, so one row of the table is the reference group against itself.
-        That row is computed from the held-out half alone, split once more so that the cells tested and the cells they are tested against are different cells.
+        That row is computed from the held-out half alone, split once more, at random, so that the cells tested and the cells they are tested against are different cells.
         It is therefore a draw from the null, rather than a sample compared with part of itself measured against a centre half of it placed.
         A cluster with too few controls to split twice has no such row.
     """
@@ -299,6 +299,8 @@ def subpopulation_hits(
     groups = obs[groupby].astype(str).to_numpy()
 
     generator = np.random.default_rng(seed)
+    # Halving the reference group's held-out cells draws from a child of the seeded generator, so that it leaves the stream the cluster splits come from where it was.
+    half_generator = generator.spawn(1)[0]
     # Half the controls place the centroid and half form the distances tested against, so the null is out of sample like every group (see Notes).
     needed = max(2 * min_cells, 4)
 
@@ -312,15 +314,17 @@ def subpopulation_hits(
         fit_rows, null_rows = split_reference(controls, generator)
         centre = np.nanmean(values[fit_rows], axis=0, keepdims=True)
         distance = np.sqrt(pairwise_sqeuclidean(np.nan_to_num(values[in_cluster]), np.nan_to_num(centre))).ravel()
-        fitted, held_out = np.isin(in_cluster, fit_rows), np.isin(in_cluster, null_rows)
+        fitted = np.isin(in_cluster, fit_rows)
+        # The split partitions the cluster's control cells, so the held-out half is the controls that did not place the centroid.
+        held_out = is_control[in_cluster] & ~fitted
 
         for group in pd.unique(groups[in_cluster]):
             # A cell that placed the centroid sits closer to it than one that did not, so it stays off the tested side.
             in_group = (groups[in_cluster] == group) & ~fitted
             # The reference group is the controls under their own perturbation label.
-            # Half its held-out cells are the sample and half are what it is tested against.
+            # Half its held-out cells are the sample and half are what it is tested against, drawn at random because the cells are ordered by plate and well.
             shared = np.flatnonzero(in_group & held_out)
-            in_group[shared[: shared.size // 2]] = False
+            in_group[half_generator.permutation(shared)[: shared.size // 2]] = False
             treated, control_distance = distance[in_group], distance[held_out & ~in_group]
             if treated.size < min_cells or control_distance.size < min_cells:
                 continue

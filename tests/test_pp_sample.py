@@ -118,3 +118,26 @@ def test_chatterjee_refuses_a_feature_it_has_too_few_measurements_of(plate):
     mt.pp.feature_select_chatterjee(plate)
     assert np.isnan(plate.var["chatterjee_xi"].to_numpy()[6])
     assert not plate.var["selected_chatterjee"].to_numpy()[6]
+
+
+def test_chatterjee_scores_a_gapped_column_the_same_as_scoring_it_alone():
+    """One missing value used to send every column through the per-column loop; the complete columns are ranked together and only the gapped ones over their own rows.
+
+    The two paths have to agree exactly, because a feature's score decides whether selection keeps it.
+    Both break their ties from the same seed, so scoring a column alongside others has to give what scoring it alone gives.
+    """
+    from mantispy.pp._chatterjee import chatterjee_xi
+
+    generator = np.random.default_rng(0)
+    x = generator.normal(size=300)
+    values = np.column_stack([index * x + generator.normal(0.0, 1.0, 300) for index in range(6)])
+    values[:5, 1] = np.nan  # gaps in some columns and none in others
+    values[100:140, 4] = np.nan
+    values[:-10, 5] = np.nan  # and one feature measured too rarely to score
+
+    together = chatterjee_xi(x, values)
+    apart = [chatterjee_xi(x, values[:, [column]])[0] for column in range(values.shape[1])]
+
+    np.testing.assert_array_equal(together, apart)
+    assert np.isfinite(together[:5]).all()
+    assert np.isnan(together[5]), "ten finite values leave too few pairs to score"

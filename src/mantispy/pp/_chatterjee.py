@@ -12,9 +12,24 @@ from __future__ import annotations
 import numpy as np
 from anndata import AnnData
 
+from mantispy._core._corr import CHUNK_BYTES
 from mantispy._core._reduce import get_matrix, group_codes
 from mantispy._core.logging import get_logger
 from mantispy._core.mutation import inplace_or_copy
+
+
+def _complete_columns(values: np.ndarray) -> np.ndarray:
+    """Which columns hold a finite value in every row, reduced one column block at a time.
+
+    One ``np.isfinite`` over the whole input is a boolean the size of the matrix, four gigabytes at a million cells by four thousand features, and pairing it with ``x`` needs a second one.
+    """
+    n_obs, n_vars = values.shape
+    out = np.empty(n_vars, dtype=bool)
+    width = max(int(CHUNK_BYTES / max(n_obs, 1) / values.itemsize), 1)
+    for start in range(0, n_vars, width):
+        block = slice(start, start + width)
+        out[block] = np.isfinite(values[:, block]).all(axis=0)
+    return out
 
 
 def _xi(x: np.ndarray, values: np.ndarray, m: int, seed: int) -> np.ndarray:
@@ -66,16 +81,20 @@ def chatterjee_xi(x: np.ndarray, y: np.ndarray, m: int = 1, seed: int = 0, min_f
     if m < 1:
         raise ValueError(f"m must be at least 1, got {m}")
     values = np.atleast_2d(y.T).T if y.ndim > 1 else y[:, None]
-    usable = np.isfinite(x)[:, None] & np.isfinite(values)
+    finite_x = np.isfinite(x)
     floor = max(min_finite, m + 2)
+    complete = _complete_columns(values) if finite_x.all() else np.zeros(values.shape[1], dtype=bool)
 
-    if usable.all():
+    if complete.all():
         return _xi(x, values, m, seed) if x.size >= floor else np.full(values.shape[1], np.nan)
 
-    # Columns missing different rows no longer share one ordering of x, so each is ranked over its own rows.
+    # The complete columns share one ordering of x, so they are still ranked in one pass.
+    # The others are missing different rows and no longer share it, so each is ranked over its own.
     scores = np.full(values.shape[1], np.nan)
-    for column in range(values.shape[1]):
-        rows = np.flatnonzero(usable[:, column])
+    if complete.any() and x.size >= floor:
+        scores[complete] = _xi(x, values[:, complete], m, seed)
+    for column in np.flatnonzero(~complete):
+        rows = np.flatnonzero(finite_x & np.isfinite(values[:, column]))
         if rows.size >= floor:
             scores[column] = _xi(x[rows], values[rows, column][:, None], m, seed)[0]
     return scores

@@ -8,6 +8,7 @@ Resolution is advisory.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -169,6 +170,26 @@ def get_resolution(adata: AnnData) -> str:
     """Recorded resolution of ``adata``, defaulting to ``"cell"``."""
     resolution = adata.uns.get("mantispy", {}).get("resolution")
     return resolution if resolution in RESOLUTIONS else "cell"
+
+
+def resolution_for(columns: Iterable[str]) -> str:
+    """Resolution an object grouped by ``columns`` is at.
+
+    Args:
+        columns: Columns the grouping supplies, which become the identifier columns of the result.
+
+    Returns:
+        The finest resolution whose :data:`REQUIRED_OBS` columns ``columns`` covers, so that :func:`validate` requires of the result only what it carries.
+
+    Notes:
+        ``"cell"`` is never returned, since a grouping replaces the cells and requires the same columns as ``"well"`` anyway.
+        A grouping finer than the well, by site or by anything else, is still per-well or finer, and it carries the plate and well columns a well-resolution object needs.
+    """
+    supplied = set(columns)
+    for resolution in RESOLUTIONS[1:]:
+        if set(REQUIRED_OBS[resolution]) <= supplied:
+            return resolution
+    return RESOLUTIONS[-1]
 
 
 def validate(adata: AnnData, *, raise_on_error: bool = False) -> ValidationReport:

@@ -170,18 +170,19 @@ def diagnose_testing(
     if block is not None and block in obs.columns:
         blocks = obs[block].to_numpy()
         control_blocks = set(blocks[is_control])
-        # Both comprehensions want the same per-group rows, so the rows are taken once from one stable ordering.
+        # One stable ordering serves every group, and both answers are built in the same pass,
+        # so len(spans) - len(stranded) counts the treatments that do share a block.
         order, offsets = group_offsets(codes, len(keys))
-        treated = [
-            blocks[rows[~is_control[rows]]]
-            for rows in (order[offsets[index] : offsets[index + 1]] for index in range(len(keys)))
-        ]
-        stranded = [
-            str(keys[index])
-            for index in range(len(keys))
-            if sizes[index] >= 2 and not set(treated[index]) & control_blocks
-        ]
-        spans = [len(set(treated[index])) for index in range(len(keys)) if sizes[index] >= 2]
+        stranded: list[str] = []
+        spans: list[int] = []
+        for index in range(len(keys)):
+            if sizes[index] < 2:
+                continue
+            group = order[offsets[index] : offsets[index + 1]]
+            seen = set(blocks[group[~is_control[group]]])
+            spans.append(len(seen))
+            if not seen & control_blocks:
+                stranded.append(str(keys[index]))
         rows.append(
             {
                 "check": f"treatments sharing a {block} with the reference",

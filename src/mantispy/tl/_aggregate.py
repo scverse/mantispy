@@ -15,12 +15,10 @@ from mantispy._core._reduce import group_codes, reduce_grouped
 from mantispy._core.frames import as_frame, categorize_metadata
 from mantispy._core.logging import get_logger
 from mantispy._core.provenance import record_params
-from mantispy._core.schema import stamp
+from mantispy._core.schema import resolution_for, stamp
 
 #: Aggregation functions, mapped to the kernel selector that computes them.
 FUNCTIONS = {"median": MEDIAN, "mean": MEAN}
-
-_WELL_KEYS = {"Metadata_Plate", "Metadata_Well"}
 
 #: uns["mantispy"] keys that survive aggregation because they describe the features or the experiment.
 #: Result tables are keyed on the input rows and are dropped.
@@ -70,9 +68,7 @@ def aggregate(
     obs.index = pd.Index([str(index) for index in range(len(obs))])
 
     result = ad.AnnData(X=values[keep].astype(np.float32), obs=obs, var=as_frame(adata.var).copy())
-    # A grouping that splits the well further, by site or by anything else, is still per-well or finer,
-    # and it carries the plate and well columns that validate requires of a well-resolution object.
-    stamp(result, resolution="well" if _WELL_KEYS <= set(columns) else "perturbation")
+    stamp(result, resolution=resolution_for(columns))
     store = adata.uns.get("mantispy", {})
     # Deep copies, so the aggregate and its source do not share mutable frames.
     result.uns["mantispy"].update({key: deepcopy(value) for key, value in store.items() if key in _INHERITED})

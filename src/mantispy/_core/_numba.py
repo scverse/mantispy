@@ -47,11 +47,26 @@ def group_counts(codes: np.ndarray, n_groups: int) -> np.ndarray:
 
 
 @njit(cache=True, nogil=True)
-def _median_sorted(values: np.ndarray, n: int) -> float:
-    """Median of ``values[:n]``, already sorted ascending.
+def _longest_group(offsets: np.ndarray) -> int:
+    """Rows in the largest group, which is how wide a per-thread gather buffer has to be.
+
+    Both parallel kernels size their buffer from this, and two copies of the scan could diverge into a buffer one group too small.
+    """
+    longest = 0
+    for group in range(offsets.size - 1):
+        length = offsets[group + 1] - offsets[group]
+        if length > longest:
+            longest = length
+    return longest
+
+
+@njit(cache=True, nogil=True)
+def _median_sorted(values: np.ndarray) -> float:
+    """Median of ``values``, already sorted ascending.
 
     The arithmetic lives here rather than in :func:`_median_of` so that a caller holding a sorted buffer gets the same value without sorting it again.
     """
+    n = values.size
     if n == 0:
         return np.nan
     middle = n // 2
@@ -61,8 +76,9 @@ def _median_sorted(values: np.ndarray, n: int) -> float:
 
 
 @njit(cache=True, nogil=True)
-def _quantile_sorted(values: np.ndarray, n: int, q: float) -> float:
-    """Linearly interpolated quantile of ``values[:n]``, already sorted ascending."""
+def _quantile_sorted(values: np.ndarray, q: float) -> float:
+    """Linearly interpolated quantile of ``values``, already sorted ascending."""
+    n = values.size
     if n == 0:
         return np.nan
     position = q * (n - 1)
@@ -76,13 +92,13 @@ def _quantile_sorted(values: np.ndarray, n: int, q: float) -> float:
 @njit(cache=True, nogil=True)
 def _median_of(buffer: np.ndarray, n: int) -> float:
     """Median of the ``n`` gathered values in ``buffer``, which this sorts."""
-    return _median_sorted(np.sort(buffer[:n]), n)
+    return _median_sorted(np.sort(buffer[:n]))
 
 
 @njit(cache=True, nogil=True)
 def _quantile_of(buffer: np.ndarray, n: int, q: float) -> float:
     """Quantile of the ``n`` gathered values in ``buffer``, which this sorts."""
-    return _quantile_sorted(np.sort(buffer[:n]), n, q)
+    return _quantile_sorted(np.sort(buffer[:n]), q)
 
 
 @njit(parallel=True, cache=True, nogil=True)
@@ -91,11 +107,7 @@ def _grouped(
 ) -> np.ndarray:
     n_vars = X.shape[1]
     out = np.empty((n_groups, n_vars), dtype=np.float64)
-    longest = 0
-    for group in range(n_groups):
-        length = offsets[group + 1] - offsets[group]
-        if length > longest:
-            longest = length
+    longest = _longest_group(offsets)
 
     for group in prange(n_groups):
         start, stop = offsets[group], offsets[group + 1]
@@ -158,11 +170,7 @@ def _grouped_median_spread(
     n_vars = X.shape[1]
     centre = np.empty((n_groups, n_vars), dtype=np.float64)
     scale = np.empty((n_groups, n_vars), dtype=np.float64)
-    longest = 0
-    for group in range(n_groups):
-        length = offsets[group + 1] - offsets[group]
-        if length > longest:
-            longest = length
+    longest = _longest_group(offsets)
 
     for group in prange(n_groups):
         start, stop = offsets[group], offsets[group + 1]
@@ -179,7 +187,7 @@ def _grouped_median_spread(
                 scale[group, j] = np.nan
                 continue
             values = np.sort(buffer[:n])
-            middle = _median_sorted(values, n)
+            middle = _median_sorted(values)
             centre[group, j] = middle
             if spread == MAD:
                 # Deviations taken in sorted order rather than in gather order are a permutation of the same numbers, and the median of them sorts again either way, so this is the value the separate MAD pass produced.
@@ -187,7 +195,7 @@ def _grouped_median_spread(
                     buffer[k] = abs(values[k] - middle)
                 scale[group, j] = _median_of(buffer, n)
             else:
-                scale[group, j] = _quantile_sorted(values, n, 0.75) - _quantile_sorted(values, n, 0.25)
+                scale[group, j] = _quantile_sorted(values, 0.75) - _quantile_sorted(values, 0.25)
     return centre, scale
 
 

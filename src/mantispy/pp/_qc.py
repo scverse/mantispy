@@ -11,6 +11,7 @@ from anndata import AnnData
 from mantispy._core._corr import CHUNK_BYTES
 from mantispy._core._numba import MAD, grouped_median_spread
 from mantispy._core._reduce import get_matrix, group_codes
+from mantispy._core._stats import MAD_TO_SIGMA
 from mantispy._core.features import blocklist_hits
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger, report_drop
@@ -72,11 +73,20 @@ def calculate_qc_metrics(
     Raises:
         KeyError: If ``var`` has no ``feature`` column, which ``qc_area_outlier`` needs to find the area features, and which the schema requires.
     """
+    if "feature" not in adata.var:
+        # An all-false flag for a check that did not run makes qc_pass a weaker statement than
+        # it claims to be: a cell of any area passes. 'feature' is a schema requirement, and
+        # mt.io.validate reports it as an error too.
+        raise KeyError(
+            "var has no 'feature' column, which qc_area_outlier needs to find the area features. "
+            "mt.io.read_profiles writes it, and mantispy._core.features.parse_feature_names builds it "
+            "for a var table made by hand; an object from tl.feature_signature carries no per-feature "
+            "annotation, and cell-level QC does not apply to it."
+        )
+
     X = get_matrix(adata)
     missing = np.isnan(X)
     nan_fraction = missing.mean(axis=1)
-    # Both flags before the first write, so a missing requirement cannot leave the object
-    # carrying a complete-looking set of qc_ columns.
     border = _border_flag(adata, image_shape, border_margin)
     area_outlier = _area_outlier_flag(adata, X)
 
@@ -113,20 +123,8 @@ def _area_outlier_flag(adata: AnnData, X: np.ndarray) -> np.ndarray:
     Every compartment that measured an area is scored within its own plate and the flags are OR-ed, so a cell is an outlier when any of its areas is.
     Scoring only the first matching column made the flag, and so ``qc_pass``, depend on the order of ``var``.
 
-    Raises:
-        KeyError: If ``var`` has no ``feature`` column, since the check cannot run without it.
+    The ``feature`` column this needs is a precondition of :func:`calculate_qc_metrics`, checked there before anything is written.
     """
-    if "feature" not in adata.var:
-        # Returning an all-false flag for a check that did not run makes qc_pass a weaker
-        # statement than it claims to be: a cell of any area passes. 'feature' is a schema
-        # requirement, and mt.io.validate reports it as an error too.
-        raise KeyError(
-            "var has no 'feature' column, which qc_area_outlier needs to find the area features. "
-            "mt.io.read_profiles writes it, and mantispy._core.features.parse_feature_names builds it "
-            "for a var table made by hand; an object from tl.feature_signature carries no per-feature "
-            "annotation, and cell-level QC does not apply to it."
-        )
-
     area = adata.var_names[adata.var["feature"].astype(str).eq("Area")]
     if not len(area) or "Metadata_Plate" not in adata.obs:
         return np.zeros(adata.n_obs, dtype=bool)
@@ -138,7 +136,7 @@ def _area_outlier_flag(adata: AnnData, X: np.ndarray) -> np.ndarray:
     median, mad = grouped_median_spread(columns, codes, len(keys), MAD)
 
     with np.errstate(invalid="ignore", divide="ignore"):
-        z = np.abs(columns - median[codes]) / (1.4826 * mad[codes])
+        z = np.abs(columns - median[codes]) / (MAD_TO_SIGMA * mad[codes])
     # A quantized Area column can have zero MAD, which makes z infinite; posinf=0.0 stops
     # nan_to_num from turning that into 1.8e308 and flagging the whole plate.
     return (np.nan_to_num(z, nan=0.0, posinf=0.0, neginf=0.0) > AREA_Z_CUTOFF).any(axis=1)

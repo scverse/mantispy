@@ -161,6 +161,25 @@ def test_the_reference_row_is_not_scored_on_the_rows_that_fitted_the_covariance(
     assert 0.25 < float(np.mean(pvalues)) < 0.75, f"a draw from the null is uniform, got {pvalues}"
 
 
+def test_the_reference_row_is_not_halved_along_the_plate_order(well_profiles):
+    """The reference group's held-out rows are halved at random, not by row order.
+
+    Rows arrive ordered by plate and well, so the first half in row order is one set of plates
+    and the second is another. With the controls carrying a between-plate offset, that makes
+    the reference row a comparison between plates rather than a draw from the null, and it is
+    called far above the nominal rate. Both methods draw that half from the same generator;
+    ``ks`` is used here because it reads the two halves against each other directly, which
+    separates a leaking split from a calibrated one in the fewest seeds.
+    """
+    called = 0
+    for seed in range(30):
+        adata = well_profiles(n_plates=8, per_plate=128, n_features=10, plate_sd=3.0, seed=seed)
+        mt.tl.hit_calling(adata, method="ks", seed=seed)
+        table = adata.uns["mantispy"]["hits"].set_index("group")
+        called += int(float(table.loc["DMSO", "pvalue"]) < 0.05)
+    assert called <= 4, f"{called}/30 seeds called the reference row at p < 0.05, where 0.05 is calibrated"
+
+
 def test_edistance_does_not_call_a_screen_of_pure_noise(pure_noise_screen):
     """Pure noise calls at most one of twelve groups.
 

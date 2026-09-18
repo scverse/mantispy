@@ -57,3 +57,25 @@ def test_controls(cells):
 
 def test_scanpy_reexports_are_available():
     assert callable(mt.get.obs_df) and callable(mt.get.var_df)
+
+
+def test_importing_mantispy_does_not_import_scanpy():
+    """The re-exports are fetched on first access because importing scanpy pulls in sklearn and matplotlib.
+
+    A plain import that reached scanpy would pay that cost on every ``import mantispy``, which is what the lazy lookup exists to avoid.
+    """
+    import subprocess
+    import sys
+
+    probe = subprocess.run(
+        [sys.executable, "-c", "import sys, mantispy; print('scanpy' in sys.modules)"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert probe.stdout.strip() == "False", probe.stdout
+
+
+def test_an_unknown_name_is_still_an_attribute_error():
+    with pytest.raises(AttributeError, match="nope"):
+        _ = mt.get.nope

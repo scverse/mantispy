@@ -30,10 +30,11 @@ def __getattr__(name: str) -> Any:
     """
     if name not in _SCANPY_NAMES:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    from scanpy.get import obs_df, var_df
+    import scanpy.get
 
-    globals().update(obs_df=obs_df, var_df=var_df)
-    return globals()[name]
+    value = getattr(scanpy.get, name)
+    globals()[name] = value
+    return value
 
 
 def __dir__() -> list[str]:

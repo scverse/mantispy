@@ -96,7 +96,7 @@ def hit_calling(
         Because only half the controls fit the covariance, the singular-covariance warning fires when there are fewer than about twice as many controls as features.
 
         A row that fitted the centroid and the covariance sits closer to the centroid than any other group's row can, so it stays off the tested side of every group.
-        The controls carry a perturbation label of their own, and that group is therefore left with the held-out half, which is split once more so that the rows tested and the rows they are tested against are different rows.
+        The controls carry a perturbation label of their own, and that group is therefore left with the held-out half, which is split once more, at random, so that the rows tested and the rows they are tested against are different rows.
         Its row of the table is a draw from the null rather than a sample compared with part of itself measured against a centroid half of it placed, and ``n_obs`` reports about a quarter of the controls for it.
         Its null is the other ways to halve those rows rather than a bootstrap of them, which would be too wide because the sample is part of what it is drawn from.
         That row is therefore an honest draw from the null: its p-value is uniform and falls below any cutoff about as often as the cutoff says, so a control group appearing in a hit list is this test working rather than a fault.
@@ -128,6 +128,8 @@ def hit_calling(
         )
 
     generator = np.random.default_rng(seed)
+    # Halving the reference group's held-out rows draws from a child of the seeded generator, so that it leaves the stream the permutation draws come from where it was.
+    half_generator = generator.spawn(1)[0]
     fit_rows, null_rows = split_reference(np.flatnonzero(is_control), generator)
     if fit_rows.size <= values.shape[1]:
         warnings.warn(
@@ -145,8 +147,10 @@ def hit_calling(
     to_control = np.linalg.norm(np.nan_to_num(values - centre) @ whitening, axis=1)
     fitted = np.zeros(adata.n_obs, dtype=bool)
     fitted[fit_rows] = True
-    held_out = np.zeros(adata.n_obs, dtype=bool)
-    held_out[null_rows] = True
+    # The split partitions the control rows, so the held-out half is the controls that did not fit.
+    held_out = is_control & ~fitted
+    # Only a group that holds control rows has rows of its own in the null, so every other group is tested against all of them.
+    null_distances = to_control[null_rows]
 
     codes, keys = group_codes(adata, groupby)
 
@@ -160,12 +164,16 @@ def hit_calling(
         # A row that fitted the centroid and the covariance sits closer to the centroid than one that did not, so it stays off the tested side of every group.
         keep = ~fitted[rows]
         # The controls carry a perturbation label of their own, so one group is the reference against itself.
-        # Half of its held-out rows are the sample and half are what it is tested against.
-        shared = np.flatnonzero(keep & held_out[rows])
-        keep[shared[: shared.size // 2]] = False
+        # Half of its held-out rows are the sample and half are what it is tested against, drawn at random because the rows are ordered by plate and well.
+        shared = np.flatnonzero(held_out[rows])
+        keep[half_generator.permutation(shared)[: shared.size // 2]] = False
         tested = rows[keep]
-        against_rows = np.setdiff1d(null_rows, tested)
-        against = to_control[against_rows]
+        against = null_distances
+        if shared.size:
+            # This group's sample came out of the held-out rows, so it is tested against the rest of them.
+            in_sample = np.zeros(adata.n_obs, dtype=bool)
+            in_sample[tested] = True
+            against = null_distances[~in_sample[null_rows]]
         sizes[index] = tested.size
         observed[index] = _statistic(to_control[tested], against, method)[0]
         if method == "ks":

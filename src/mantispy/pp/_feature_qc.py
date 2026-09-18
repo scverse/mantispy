@@ -145,8 +145,8 @@ def feature_batch_sensitivity(
     blocks = [np.flatnonzero(codes == index) for index in range(len(keys))]
     pvalues = np.ones(adata.n_vars)
     for feature in range(adata.n_vars):
-        samples = [column[np.isfinite(column)] for column in (X[rows, feature] for rows in blocks)]
-        samples = [sample for sample in samples if sample.size > 1]
+        batches = (X[rows, feature] for rows in blocks)
+        samples = [finite for block in batches if (finite := block[np.isfinite(block)]).size > 1]
         if len(samples) > 1:
             try:
                 pvalues[feature] = kruskal(*samples).pvalue

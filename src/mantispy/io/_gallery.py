@@ -240,9 +240,9 @@ def _outline_index(directory: Path) -> dict[str, Path]:
     return index
 
 
-def _holds_outlines(directory: Path) -> bool:
+def _holds_outlines(index: Mapping[str, Path]) -> bool:
     """Whether a site holds outline images at all, which tells a source without segmentations from one this reader cannot name."""
-    return any("outlines" in name for name in _outline_index(directory))
+    return any("outlines" in name for name in index)
 
 
 def _outline_file(index: Mapping[str, Path], well: str, site: int, kind: str) -> Path | None:
@@ -287,10 +287,9 @@ def _centre_columns(objects: pd.DataFrame) -> tuple[str, str]:
     raise ValueError(msg)
 
 
-def _site_labels(directory: Path, well: str, site: int) -> dict[str, npt.NDArray[np.uint32]]:
+def _site_labels(directory: Path, index: Mapping[str, Path], well: str, site: int) -> dict[str, npt.NDArray[np.uint32]]:
     import imageio.v3 as iio
 
-    index = _outline_index(directory)
     masks = {}
     for name, kind, csv in (("nuclei", "nuclei", "Nuclei"), ("cells", "cell", "Cells")):
         path = _outline_file(index, well, site, kind)
@@ -465,10 +464,12 @@ def read_gallery_plate(
                 scale_factors=[2, 2],
             )
             directory = _site_dir(root, batch, plate, well, site)
-            site_labels = _site_labels(directory, well, site) if directory.is_dir() else {}
+            # The listing of a site's directory costs two globs and a stat per entry, so both readers share one.
+            index = _outline_index(directory) if directory.is_dir() else {}
+            site_labels = _site_labels(directory, index, well, site) if index else {}
             if not site_labels:
                 # A site holding no outline images has no segmentation to read; one whose outlines went unmatched has.
-                if directory.is_dir() and _holds_outlines(directory):
+                if _holds_outlines(index):
                     unnamed.append(directory.name)
                 continue
             analysed.append(directory / "Cells.csv")

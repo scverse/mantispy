@@ -65,7 +65,7 @@ def modz_weights(
     gaps = np.isnan(values)
     if gaps.any():
         present = np.maximum((~gaps).sum(axis=1, keepdims=True), 1)
-        centre = np.where(gaps, 0.0, values).sum(axis=1, keepdims=True) / present
+        centre = np.nansum(values, axis=1, keepdims=True) / present
         values = np.where(gaps, centre, values)
 
     matrix = similarity_matrix(values, metric="pearson").astype(np.float64)

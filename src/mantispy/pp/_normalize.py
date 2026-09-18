@@ -6,11 +6,12 @@ import warnings
 from typing import Any
 
 import numpy as np
+import pandas as pd
 from anndata import AnnData
 
 from mantispy._core._numba import IQR, MEAN, STD, grouped_median_spread
 from mantispy._core._numba import MAD as MAD_STAT
-from mantispy._core._reduce import get_matrix, group_codes, reduce_grouped, transform_grouped
+from mantispy._core._reduce import get_matrix, group_codes, group_offsets, reduce_grouped, transform_grouped
 from mantispy._core._stats import MAD_TO_SIGMA
 from mantispy._core.masks import reference_mask
 from mantispy._core.mutation import inplace_or_copy
@@ -19,19 +20,20 @@ METHODS = ("mad_robustize", "standardize", "robustize")
 
 
 def _median_and_spread(
-    adata: AnnData, spread: int, by: str | list[str] | None, layer: str | None, mask: np.ndarray
+    adata: AnnData, spread: int, codes: np.ndarray, keys: pd.Index, layer: str | None, mask: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray]:
     """Per-group median and robust spread, from one sort of each group-by-feature slice.
 
     Asking :func:`~mantispy._core._reduce.reduce_grouped` for the two separately sorted every slice three times: once for the median, then again inside the spread pass, which re-finds that same median before measuring the deviations from it, or takes two more quantiles of the same values.
     """
-    codes, keys = group_codes(adata, by)
     if adata.isbacked:
         # One group at a time, as the backed branch of reduce_grouped does, so a screen that does not fit in memory still normalizes.
         centre = np.full((len(keys), adata.n_vars), np.nan)
         scale = np.full((len(keys), adata.n_vars), np.nan)
+        selected = np.flatnonzero(mask)
+        order, offsets = group_offsets(codes[mask], len(keys))
         for index in range(len(keys)):
-            rows = np.flatnonzero((codes == index) & mask)
+            rows = selected[order[offsets[index] : offsets[index + 1]]]
             if rows.size:
                 block = get_matrix(adata, layer, rows=rows)
                 group_centre, group_scale = grouped_median_spread(block, np.zeros(rows.size, np.int32), 1, spread)
@@ -46,7 +48,14 @@ def _median_and_spread(
 
 
 def _center_and_scale(
-    adata: AnnData, method: str, by: str | list[str] | None, layer: str | None, mask: np.ndarray, epsilon: float
+    adata: AnnData,
+    method: str,
+    by: str | list[str] | None,
+    codes: np.ndarray,
+    keys: pd.Index,
+    layer: str | None,
+    mask: np.ndarray,
+    epsilon: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Per-group center and scale, plus the features that cannot be normalized somewhere.
 
@@ -59,10 +68,10 @@ def _center_and_scale(
         # ddof=0 matches pycytominer, which uses sklearn's StandardScaler (population SD).
         scale, _, _ = reduce_grouped(adata, by, STD, layer=layer, mask=mask, ddof=0)
     elif method == "mad_robustize":
-        centre, mad = _median_and_spread(adata, MAD_STAT, by, layer, mask)
+        centre, mad = _median_and_spread(adata, MAD_STAT, codes, keys, layer, mask)
         scale = MAD_TO_SIGMA * mad + epsilon
     else:  # robustize: median and interquartile range, as sklearn's RobustScaler
-        centre, scale = _median_and_spread(adata, IQR, by, layer, mask)
+        centre, scale = _median_and_spread(adata, IQR, codes, keys, layer, mask)
 
     # A feature that is constant within a group has zero spread there. sklearn clamps such a
     # scale to 1.0, giving 0.0. mad_robustize divides by epsilon as pycytominer does, which
@@ -122,7 +131,7 @@ def normalize(
         empty = [str(keys[int(index)]) for index in np.flatnonzero(present == 0)]
         raise ValueError(f"no reference rows in group(s): {empty[:5]}")
 
-    centre, scale, no_spread, uncentred = _center_and_scale(adata, method, by, layer, mask, epsilon)
+    centre, scale, no_spread, uncentred = _center_and_scale(adata, method, by, codes, keys, layer, mask, epsilon)
     degenerate = no_spread | uncentred
     # One flag column per output matrix. A single unsuffixed column lets a second call writing
     # another layer reset the flags describing the first, and the remedy below then keeps a

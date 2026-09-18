@@ -129,22 +129,42 @@ def test_round_trip(clustered, tmp_path):
     assert len(loaded.uns["mantispy"]["composition_test"]) == composition.n_obs
 
 
-def _noise_cells(n_control: int, n_features: int, per_group: int, n_groups: int = 12, seed: int = 0):
-    """Single cells with nothing in them: one shared cluster, controls, and pseudo-treatments."""
+def _noise_cells(
+    n_control: int,
+    n_features: int,
+    per_group: int,
+    n_groups: int = 12,
+    seed: int = 0,
+    n_plates: int = 1,
+    plate_sd: float = 0.0,
+):
+    """Single cells with nothing in them: one shared cluster, controls, and pseudo-treatments.
+
+    The rows are plate-major with each plate's controls first, the way a screen is read, so
+    `plate_sd` gives the controls a between-plate offset that follows their row order.
+    """
     generator = np.random.default_rng(seed)
-    labels = ["DMSO"] * n_control + [f"p{index:02d}" for index in range(n_groups) for _ in range(per_group)]
+    labels, plate_of = [], []
+    for plate in range(n_plates):
+        block = ["DMSO"] * (n_control // n_plates) + [
+            f"p{index:02d}" for index in range(n_groups) for _ in range(per_group // n_plates)
+        ]
+        labels += block
+        plate_of += [plate] * len(block)
     obs = pd.DataFrame(
         {
             "Metadata_Perturbation": labels,
             "Metadata_Control": [label == "DMSO" for label in labels],
-            "Metadata_Plate": "P1",
+            "Metadata_Plate": [f"P{plate + 1}" for plate in plate_of],
             "Metadata_Well": [f"A{index:04d}" for index in range(len(labels))],
             "state": "one",
         },
         index=[str(index) for index in range(len(labels))],
     )
+    values = generator.standard_normal((len(labels), n_features))
+    values += generator.normal(scale=plate_sd, size=(n_plates, n_features))[np.array(plate_of)]
     adata = ad.AnnData(
-        X=generator.standard_normal((len(labels), n_features)).astype(np.float32),
+        X=values.astype(np.float32),
         obs=obs,
         var=pd.DataFrame(index=[f"Cells_AreaShape_f{index}" for index in range(n_features)]),
     )
@@ -186,6 +206,24 @@ def test_the_reference_group_is_tested_only_on_cells_that_did_not_place_the_cent
     assert np.isfinite(float(table.loc["DMSO", "statistic"]))
     # A group that is not the reference keeps every cell it has.
     assert int(table.loc["p00", "n_cells"]) == 200
+
+
+def test_the_reference_group_is_not_halved_along_the_plate_order():
+    """The reference group's held-out cells are halved at random, not by row order.
+
+    Cells arrive ordered by plate and well, so the first half in row order is one set of
+    plates and the second is another. With the controls carrying a between-plate offset,
+    that makes the reference row a KS test between plates rather than a draw from the null,
+    and it is called on most seeds instead of one in twenty.
+    """
+    called = 0
+    for seed in range(15):
+        adata = _noise_cells(n_control=360, n_features=8, per_group=60, n_groups=2, n_plates=6, plate_sd=3.0, seed=seed)
+        mt.tl.subpopulation_hits(adata, cluster_key="state", seed=seed)
+        reference = adata.uns["mantispy"]["subpopulation_hits"].query("group == 'DMSO'")
+        assert len(reference) == 1, "one cluster, so one reference row per seed"
+        called += int((reference["pvalue"] < 0.05).sum())
+    assert called <= 3, f"{called}/15 reference rows called at raw p < 0.05, where 0.05 is calibrated"
 
 
 def _clustered_wells(layout: dict[str, dict[int, int]], n_clusters: int):

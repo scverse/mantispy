@@ -12,7 +12,7 @@ from __future__ import annotations
 import numpy as np
 from anndata import AnnData
 
-from mantispy._core._reduce import get_matrix, group_codes, group_offsets
+from mantispy._core._reduce import transform_grouped
 from mantispy._core.logging import get_logger
 from mantispy._core.mutation import inplace_or_copy
 
@@ -92,16 +92,9 @@ def rank_int(
         Effect sizes are lost as well: a feature that doubled and one that moved by one percent look the same if they reorder the same wells.
         Keep the untransformed values with ``key_added`` for effect sizes and dose-response curves.
     """
-    X = get_matrix(adata)
-    out = np.empty_like(X, dtype=np.float32)
-
-    codes, keys = group_codes(adata, by)
-    order, offsets = group_offsets(codes, len(keys))
-    for index in range(len(keys)):
-        rows = order[offsets[index] : offsets[index + 1]]
-        if rows.size:
-            out[rows] = rank_inverse_normal(X[rows], c=c, stochastic=stochastic, seed=seed).astype(np.float32)
-
+    out = transform_grouped(
+        adata, by, lambda _key, block: rank_inverse_normal(block, c=c, stochastic=stochastic, seed=seed)
+    )
     if key_added is None:
         adata.X = out
     else:
