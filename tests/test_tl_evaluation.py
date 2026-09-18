@@ -63,7 +63,7 @@ def test_activity_needs_controls_and_says_so(profiles):
 
 @requires_copairs
 def test_consistency_groups_by_an_annotation(profiles):
-    """Kalinin et al.'s phenotypic consistency: do perturbations sharing a mechanism look
+    """Phenotypic consistency :cite:p:`Kalinin_2025`: do perturbations sharing a mechanism look
     alike, against those that do not?"""
     with pytest.raises(ValueError, match="annotation_key"):
         mt.tl.map(profiles, mode="consistency", null_size=100)

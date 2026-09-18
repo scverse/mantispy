@@ -25,7 +25,7 @@ REFERENCE_COLUMN = "Metadata_reference_index"
 
 #: copairs pair definitions for each ``mode`` of :func:`map`.
 MODES = {
-    # Phenotypic activity (Kalinin et al., 2025), as in copairs' own example.
+    # Phenotypic activity :cite:p:`Kalinin_2025`, as in copairs' own example.
     # Is this perturbation distinguishable from the negative controls?
     "activity": {
         "pos_sameby": ["Metadata_Perturbation", REFERENCE_COLUMN],
@@ -33,7 +33,7 @@ MODES = {
         "neg_sameby": [],
         "neg_diffby": ["Metadata_Perturbation", REFERENCE_COLUMN],
     },
-    # Phenotypic consistency (Kalinin et al.).
+    # Phenotypic consistency :cite:p:`Kalinin_2025`.
     # Do perturbations sharing an annotation, such as a mechanism, target or gene, look more alike than those that do not?
     # Needs `annotation_key`; meant for consensus profiles of active perturbations.
     "consistency": {
@@ -45,7 +45,7 @@ MODES = {
         "neg_diffby": ["__annotation__"],
     },
     # Do a perturbation's replicates retrieve each other against all other profiles?
-    # The "mAP-nonrep" of the batch-correction benchmark of Arevalo et al. (2024).
+    # The "mAP-nonrep" of :cite:t:`Arevalo_2024`, without its restriction of negatives to the query's plate.
     "replicability": {
         "pos_sameby": ["Metadata_Perturbation"],
         "pos_diffby": [],
@@ -97,15 +97,15 @@ def map(
             ``"activity"``
                 Is this perturbation distinguishable from the negative controls?
                 Its replicates are retrieved against control profiles only.
-                This is the phenotypic activity of Kalinin et al. (2025), the number published JUMP results quote.
+                This is the phenotypic activity of :cite:t:`Kalinin_2025`.
                 Needs ``reference``.
             ``"consistency"``
                 Do perturbations sharing an annotation look more alike than those that do not?
-                This is the phenotypic consistency of Kalinin et al.
+                This is the phenotypic consistency of :cite:t:`Kalinin_2025`.
                 Needs ``annotation_key`` (a mechanism, target or gene column) and is meant for consensus profiles of perturbations already known to be active.
             ``"replicability"``
                 Do a perturbation's replicates retrieve each other against all other profiles?
-                The ``mAP-nonrep`` of the batch-correction benchmark of Arevalo et al. (2024).
+                The ``mAP-nonrep`` of :cite:t:`Arevalo_2024`, without its restriction of negatives to the query's plate.
             ``"cross_plate"``
                 As ``"replicability"``, but a replicate counts only if it is on a different plate, which separates reproducible biology from plate effects.
         annotation_key: The ``obs`` column ``mode="consistency"`` groups by.

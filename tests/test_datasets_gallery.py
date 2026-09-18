@@ -1,4 +1,4 @@
-"""Rohban 2017 and the PKI dose series. Network-dependent, so marked.
+"""The screen of :cite:t:`Rohban_2017` and the PKI dose series. Network-dependent, so marked.
 
 These keep the package from being tuned to BBBC021 alone. The assertions cover the two
 things BBBC021 lacks, cell counts and real doses.

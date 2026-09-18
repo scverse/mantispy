@@ -216,12 +216,12 @@ def cytotoxicity(
         Over rohban2017's ORF overexpression the same correlation is +0.00 (p = 0.95).
         Measure it on your own screen.
 
-        The cell count is a baseline in its own right. Across three bioactivity benchmarks, a model given only the cell count often matched one given the whole Cell Painting profile, because many assays' actives simply lower it (Seal et al. 2025).
-        Predicting two cytotoxicity readouts in hepatocytes, the profiles did no better than cell count, plate and well position on LDH release (Ewald et al. 2026).
+        The cell count is a baseline in its own right. Across three bioactivity benchmarks, a model given only the cell count often matched one given the whole Cell Painting profile, because many assays' actives simply lower it :cite:p:`Seal_2025`.
+        Predicting two cytotoxicity readouts in hepatocytes, the profiles did no better than cell count, plate and well position on LDH release :cite:p:`Ewald_2026`.
 
     References:
-        Seal et al. (2025) bioRxiv, doi:10.1101/2025.04.27.650853.
-        Ewald et al. (2026) Cell Systems 17:101566.
+        :cite:t:`Seal_2025`.
+        :cite:t:`Ewald_2026`.
     """
     obs = as_frame(adata.obs)
     if count_key not in obs:
