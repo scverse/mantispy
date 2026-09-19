@@ -193,8 +193,8 @@ reference implementation (0.9267 against 0.9267 over 301 JUMP compounds):
 | --- | --- | --- |
 | `"activity"` | is this perturbation distinguishable from the negative controls? | controls |
 | `"consistency"` | do perturbations sharing an annotation look alike, against those that do not? | `annotation_key` |
-| `"replicability"` | do a perturbation's replicates retrieve each other against everything else? | — |
-| `"cross_plate"` | the same, counting only replicates from a different plate | `Metadata_Plate` |
+| `"replicability"` | do a perturbation's replicates retrieve each other against the other perturbations on their plate? (mAP-nonrep) | `Metadata_Plate`, controls to leave out |
+| `"cross_plate"` | do a perturbation's replicates on other plates retrieve each other against everything else? | `Metadata_Plate` |
 
 ## Metrics
 
