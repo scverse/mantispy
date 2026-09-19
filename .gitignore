@@ -11,6 +11,8 @@ __pycache__/
 
 # Distribution / packaging
 /dist/
+# written by scripts/build_dataset.py
+/build/
 
 # Tests and coverage
 /data/

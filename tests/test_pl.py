@@ -6,6 +6,7 @@ something (the plate grid, the QC dashboard).
 
 import matplotlib
 import numpy as np
+import pandas as pd
 import pytest
 
 matplotlib.use("Agg")
@@ -47,6 +48,27 @@ def test_every_plot_draws_and_does_not_mutate(plotted, draw):
     assert all(isinstance(axis, matplotlib.axes.Axes) for axis in result.ravel())
     assert (list(plotted.obs.columns), list(plotted.var.columns)) == before[:2]
     np.testing.assert_array_equal(plotted.X, before[2])
+
+
+def test_cell_counts_draws_the_count_profiles_carry(plotted):
+    """A well is one row of a profile object; counting rows would draw one cell per well."""
+    wells = mt.tl.aggregate(plotted, min_cells=0)
+    ax = mt.pl.cell_counts(wells)
+    assert {float(y) for line in ax.get_lines() for y in line.get_ydata()} == {5.0}
+    # An unknown count is left out of its box rather than blanking it.
+    wells.obs["n"] = np.where(wells.obs_names == wells.obs_names[0], np.nan, 2.0)
+    ax = mt.pl.cell_counts(wells, count_key="n")
+    assert {float(y) for line in ax.get_lines() for y in line.get_ydata()} == {2.0}
+    # A missing label is a box of its own.
+    wells.obs["group"] = pd.array(["a"] * (wells.n_obs - 1) + [None], dtype="string")
+    ax = mt.pl.cell_counts(wells, groupby="group")
+    assert [label.get_text() for label in ax.get_xticklabels()] == ["a", "<NA>"]
+
+    del wells.obs["Metadata_CellCount"]
+    with pytest.raises(KeyError, match="count_key="):
+        mt.pl.cell_counts(wells)
+    # qc leaves out the panel it has nothing for.
+    assert np.asarray(mt.pl.qc(wells)).size == 4
 
 
 def test_plate_grid_matches_the_detected_format(plotted):

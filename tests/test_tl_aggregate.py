@@ -72,7 +72,7 @@ def test_an_unknown_count_keeps_its_group(adata):
 
 
 def test_the_site_count_follows_the_grouping(adata):
-    """A per-site row counts one field of view, a per-well row every field that held a cell."""
+    """A per-site row counts one field of view, a per-well row every field that contributed cells."""
     assert "Metadata_SiteCount" not in mt.tl.aggregate(adata, min_cells=0).obs
     adata.obs["Metadata_Site"] = np.tile(["1", "2"], adata.n_obs // 2)
     sites = mt.tl.aggregate(adata, by=("Metadata_Plate", "Metadata_Well", "Metadata_Site"), min_cells=0)
