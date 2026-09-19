@@ -2007,7 +2007,7 @@ datasets:
 
   agnp:
     type: mantispy
-    doc_header: Silver nanoparticles in Huh7 cells, two sizes at one dose each and untreated wells, at three timepoints.
+    doc_header: Silver nanoparticles at four sizes and three doses.
     accession: cpg0040-garcia-fossa-AgNP
     shape: [180, 112]
     read:

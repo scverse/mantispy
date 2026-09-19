@@ -24,10 +24,10 @@ def cell_counts(
     """Distribution of cells per well, split by ``groupby``.
 
     Args:
-        adata: Cells, which are counted per well, or profiles, whose `count_key` is drawn: the cells of a well, or of a field of view when the rows are sites.
+        adata: Cells, which are counted per well, or profiles, whose `count_key` is drawn.
         groupby: ``obs`` column whose groups become the boxes.
         ax: Axes to draw on, or ``None`` for a new figure.
-        count_key: ``obs`` column holding the count of profiles.
+        count_key: ``obs`` column holding the cell count of profiles.
 
     Returns:
         The axes drawn on.
@@ -35,21 +35,24 @@ def cell_counts(
     Raises:
         KeyError: Profiles carry no `count_key`.
     """
-    ax = _axes(ax, (6, 4))
-    if get_resolution(adata) == "cell":
+    obs = as_frame(adata.obs)
+    cells = get_resolution(adata) == "cell"
+    if cells:
         codes, keys = group_codes(adata, ["Metadata_Plate", "Metadata_Well"])
-        counts = np.bincount(codes, minlength=len(keys)).astype(float)
-        labels = as_frame(adata.obs).groupby(codes, observed=True)[groupby].first()
-    elif count_key in adata.obs:
-        counts = as_frame(adata.obs)[count_key].to_numpy(dtype=float)
-        labels = as_frame(adata.obs)[groupby]
+        counts = np.bincount(codes, minlength=len(keys))
+        labels = obs.groupby(codes, observed=True)[groupby].first()
+    elif count_key in obs:
+        counts = obs[count_key].to_numpy(dtype=float)
+        labels = obs[groupby]
     else:
         raise KeyError(f"obs has no column {count_key!r}; mt.tl.aggregate writes one, or name another with count_key=")
 
-    groups = list(dict.fromkeys(labels))
+    ax = _axes(ax, (6, 4))
+    # A missing label is a group of its own rather than one that matches nothing.
+    groups, names = labels.factorize(use_na_sentinel=False)
     known = np.isfinite(counts)
-    ax.boxplot([counts[known & (labels.to_numpy() == group)] for group in groups], tick_labels=[str(g) for g in groups])
-    ax.set_ylabel("cells per well")
+    ax.boxplot([counts[known & (groups == i)] for i in range(len(names))], tick_labels=[str(name) for name in names])
+    ax.set_ylabel("cells per well" if cells else count_key)
     ax.set_xlabel(groupby)
     ax.tick_params(axis="x", rotation=45)
     return ax
@@ -160,7 +163,8 @@ def qc(adata: AnnData, figsize: tuple[float, float] = (12, 8)) -> np.ndarray:
     import matplotlib.pyplot as plt
 
     figure, axes = plt.subplots(2, 2, figsize=figsize)
-    cell_counts(adata, ax=axes[0, 0])
+    if get_resolution(adata) == "cell" or "Metadata_CellCount" in adata.obs:
+        cell_counts(adata, ax=axes[0, 0])
 
     if "qc_n_nan" in adata.var:
         axes[0, 1].hist(adata.var["qc_n_nan"], bins=40)

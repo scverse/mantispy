@@ -88,10 +88,9 @@ myst_url_schemes = ("http", "https", "mailto")
 nb_output_stderr = "remove"
 # The tutorials claim things -- "it found exactly the images that were degraded" -- that the reader can only
 # believe if the output is there, so the outputs are committed and rendered as they are, and the Read the Docs
-# build downloads nothing. CI's "Tutorials run" job executes every notebook (-D nb_execution_mode=cache), so a
-# committed output cannot silently stop matching the code.
+# build downloads nothing. CI's "Tutorials run" job executes every tutorial (-D nb_execution_mode=cache), so a
+# committed output cannot silently stop matching the code. The dataset pages load about 3 GB, so it skips them.
 nb_execution_mode = "off"
-# The dataset pages load every dataset, about 3 GB, so they are executed locally and only rendered here.
 nb_execution_excludepatterns = ["datasets/*"]
 nb_execution_timeout = 900
 nb_execution_raise_on_error = True
