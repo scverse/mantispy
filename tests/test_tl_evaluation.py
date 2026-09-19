@@ -4,6 +4,7 @@ import warnings
 from importlib.util import find_spec
 
 import numpy as np
+import pandas as pd
 import pytest
 
 import mantispy as mt
@@ -39,19 +40,36 @@ def test_activity_scores_treatments_against_the_controls(profiles):
 
 @requires_copairs
 def test_activity_and_replicability_are_different_questions(profiles):
-    """They differ by an order of magnitude on real data (JUMP: 0.93 against 0.09), so they
-    have separate names."""
+    """They answer different questions, so they have separate names."""
     mt.tl.map(profiles, mode="activity", null_size=200, key_added="activity")
     mt.tl.map(profiles, mode="replicability", null_size=200, key_added="replicability")
 
     activity = profiles.uns["mantispy"]["activity"].set_index("Metadata_Perturbation")
     replicability = profiles.uns["mantispy"]["replicability"].set_index("Metadata_Perturbation")
 
-    # The controls are a group like any other under replicability, and the thing every
-    # other group is measured against under activity.
-    assert "DMSO" in replicability.index
+    # Both score the treatments; the controls are what activity retrieves against, and replicability leaves them out.
     assert "DMSO" not in activity.index
-    assert set(activity.index) == set(replicability.index) - {"DMSO"}
+    assert set(activity.index) == set(replicability.index)
+
+
+@requires_copairs
+def test_replicability_is_the_map_nonrep_of_arevalo(profiles):
+    """Regression test for #70: as in the paper's code, negatives come from the query's plate and the controls are left out."""
+    mt.tl.map(profiles, mode="replicability", null_size=200)
+    treated = profiles[~profiles.obs["Metadata_Control"].to_numpy()].copy()
+    mt.tl.map(
+        treated,
+        pos_sameby=["Metadata_Perturbation"],
+        neg_sameby=["Metadata_Plate"],
+        neg_diffby=["Metadata_Perturbation"],
+        null_size=200,
+    )
+    pd.testing.assert_frame_equal(
+        profiles.uns["mantispy"]["map"], treated.uns["mantispy"]["map"], check_categorical=False
+    )
+
+    mt.tl.map(profiles, mode="replicability", reference=None, null_size=200, key_added="with_controls")
+    assert "DMSO" in set(profiles.uns["mantispy"]["with_controls"]["Metadata_Perturbation"])
 
 
 @requires_copairs

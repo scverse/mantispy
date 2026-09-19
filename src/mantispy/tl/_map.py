@@ -44,15 +44,15 @@ MODES = {
         "neg_sameby": [],
         "neg_diffby": ["__annotation__"],
     },
-    # Do a perturbation's replicates retrieve each other against all other profiles?
-    # The "mAP-nonrep" of :cite:t:`Arevalo_2024`, without its restriction of negatives to the query's plate.
+    # Do a perturbation's replicates retrieve each other against the other perturbations on the query's plate?
+    # The "mAP-nonrep" of :cite:t:`Arevalo_2024`, which also leaves the controls out.
     "replicability": {
         "pos_sameby": ["Metadata_Perturbation"],
         "pos_diffby": [],
-        "neg_sameby": [],
+        "neg_sameby": ["Metadata_Plate"],
         "neg_diffby": ["Metadata_Perturbation"],
     },
-    # The same, but a replicate only counts if it comes from a different plate.
+    # Do a perturbation's replicates on other plates retrieve each other against all other profiles?
     "cross_plate": {
         "pos_sameby": ["Metadata_Perturbation"],
         "pos_diffby": ["Metadata_Plate"],
@@ -104,12 +104,13 @@ def map(
                 This is the phenotypic consistency of :cite:t:`Kalinin_2025`.
                 Needs ``annotation_key`` (a mechanism, target or gene column) and is meant for consensus profiles of perturbations already known to be active.
             ``"replicability"``
-                Do a perturbation's replicates retrieve each other against all other profiles?
-                The ``mAP-nonrep`` of :cite:t:`Arevalo_2024`, without its restriction of negatives to the query's plate.
+                Do a perturbation's replicates retrieve each other against the other perturbations on the query's plate?
+                This is the ``mAP-nonrep`` of :cite:t:`Arevalo_2024`, which leaves the controls out; ``reference=None`` keeps them in.
             ``"cross_plate"``
-                As ``"replicability"``, but a replicate counts only if it is on a different plate, which separates reproducible biology from plate effects.
+                Do a perturbation's replicates on other plates retrieve each other against all other profiles?
+                A replicate counts only if it is on a different plate, which separates reproducible biology from plate effects.
         annotation_key: The ``obs`` column ``mode="consistency"`` groups by.
-        reference: Which rows are the negative controls for ``mode="activity"``, either ``"negcon"`` or the name of a boolean ``obs`` column.
+        reference: Which rows are the negative controls, which ``mode="activity"`` retrieves against and ``mode="replicability"`` leaves out: ``"negcon"``, the name of a boolean ``obs`` column, or ``None`` for none.
         use_rep: Score ``obsm[use_rep]`` instead of ``X``.
         null_size: Size of the permutation null.
         threshold: Significance threshold passed to copairs.
@@ -125,7 +126,7 @@ def map(
     Raises:
         ImportError: copairs is not installed, which it is not by default because it needs Python < 3.13.
         ValueError: ``mode`` was passed together with explicit pair arguments or neither was passed, ``mode`` is not one of ``MODES``, ``mode="consistency"`` came without ``annotation_key``, ``mode="activity"`` found no controls, or the profiles hold missing values, which cannot be ranked.
-        KeyError: ``obs`` is missing a column the pair definitions name.
+        KeyError: ``obs`` is missing a column the pair definitions or ``reference`` name.
     """
     try:
         from copairs import map as copairs_map
@@ -197,6 +198,9 @@ def map(
                 "Run mt.pp.annotate_controls, or use mode='replicability', which needs no controls."
             )
         meta[REFERENCE_COLUMN] = np.where(is_control, np.arange(adata.n_obs), -1)
+    elif mode == "replicability" and reference is not None:
+        treated = ~reference_mask(adata, reference)
+        meta, features = meta[treated].reset_index(drop=True), features[treated]
 
     precision = copairs_map.average_precision(meta, features, **settings, distance=distance, progress_bar=False)
     if mode == "activity":
