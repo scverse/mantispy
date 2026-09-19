@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 
-from mantispy._core._reduce import get_matrix
+from mantispy._core._reduce import get_matrix, group_codes, group_offsets
 from mantispy._core.frames import as_frame
 from mantispy._core.plate import plate_grid, row_label, well_col, well_row
 
@@ -30,7 +30,7 @@ def _values(adata: AnnData, color: str) -> np.ndarray:
 
 
 def _natural(text: str) -> list[int | str]:
-    """``text`` with its digits read as numbers, so that source_2 sorts before source_10."""
+    """Sort key reading digit runs as numbers: source_2 before source_10."""
     return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", text)]
 
 
@@ -52,19 +52,19 @@ def plate(
         adata: Object to draw. Works at cell or well resolution; several rows landing in the same well are combined with ``agg``.
         color: A feature name or an ``obs`` column.
         plate: Draw only this plate. By default every plate gets a panel.
-        groupby: ``obs`` column the panels are ordered and titled by, such as ``"Metadata_Batch"``, so that the plates of one group sit together. Each panel is still one plate.
+        groupby: ``obs`` column, constant per plate, to order and title the panels by, such as ``"Metadata_Batch"``.
         agg: How to combine rows sharing a well: median, mean, max or min.
         ncols: Panels per row.
-        share_colorbar: Draw every panel on one color scale with one colorbar, so plates can be compared. Otherwise each panel gets its own.
+        share_colorbar: One color scale and colorbar for all panels, instead of one per panel.
         ax: Axes to draw into. Only valid together with ``plate``.
         cmap: Matplotlib colormap.
-        kwargs: Passed to :meth:`~matplotlib.axes.Axes.imshow`. ``vmin`` and ``vmax`` fix the scale.
+        kwargs: Passed to :meth:`~matplotlib.axes.Axes.imshow`. ``vmin``, ``vmax`` or ``norm`` set the scale.
 
     Returns:
         A single :class:`~matplotlib.axes.Axes`, or an array of them for several plates in panel order, each panel labeled with the plate's own well grid.
 
     Raises:
-        ValueError: ``agg`` is not one of ``AGGREGATIONS``, ``ax`` was passed for more than one plate, or ``groupby`` varies within a plate.
+        ValueError: ``agg`` is not one of ``AGGREGATIONS``, ``ax`` was passed for more than one plate, ``groupby`` varies within a drawn plate, or it or ``Metadata_Plate`` has missing values.
         KeyError: ``color`` is neither a feature name nor an ``obs`` column, ``groupby`` is not an ``obs`` column, or ``plate`` is not a plate of ``adata``.
     """
     import matplotlib.pyplot as plt
@@ -72,63 +72,51 @@ def plate(
     if agg not in AGGREGATIONS:
         raise ValueError(f"agg must be one of {AGGREGATIONS}, got {agg!r}")
     values = _values(adata, color)
-    obs = as_frame(adata.obs)
-    if groupby is not None and groupby not in obs:
-        raise KeyError(f"obs has no column {groupby!r}")
-
-    # One (group, plate) per panel, ordered by group and then plate.
-    keys = [*([groupby] if groupby else []), "Metadata_Plate"]
-    panels = sorted(
-        set(obs[keys].astype(str).itertuples(index=False, name=None)), key=lambda row: list(map(_natural, row))
-    )
-    if len({row[-1] for row in panels}) < len(panels):
+    codes, keys = group_codes(adata, [groupby, "Metadata_Plate"] if groupby else "Metadata_Plate")
+    panels = [key if isinstance(key, tuple) else (key,) for key in keys]
+    drawn = [index for index, panel in enumerate(panels) if plate is None or str(panel[-1]) == str(plate)]
+    if not drawn:
+        raise KeyError(f"obs has no plate {plate!r}")
+    if len({panels[index][-1] for index in drawn}) < len(drawn):
         raise ValueError(f"{groupby!r} varies within a plate, so it cannot label one")
-    if plate is not None:
-        panels = [row for row in panels if row[-1] == plate]
-        if not panels:
-            raise KeyError(f"obs has no plate {plate!r}")
-    if ax is not None and len(panels) > 1:
+    if ax is not None and len(drawn) > 1:
         raise ValueError("pass plate= when supplying a single ax, or leave ax=None")
+    drawn.sort(key=lambda index: [_natural(str(part)) for part in panels[index]])
 
+    # Each distinct well is parsed once, and each plate reads only its own rows.
+    wells = pd.Categorical(as_frame(adata.obs)["Metadata_Well"])
+    positions = np.array([(well_row(well), well_col(well)) for well in wells.categories])[wells.codes]
+    order, offsets = group_offsets(codes, len(keys))
     grids = []
-    for *_, name in panels:
-        mask = (obs["Metadata_Plate"].astype(str) == name).to_numpy()
-        wells = obs["Metadata_Well"][mask]
-        grid = np.full(plate_grid(wells.unique()), np.nan)
-        combined = (
-            pd.DataFrame(
-                {"row": [well_row(w) for w in wells], "col": [well_col(w) for w in wells], "value": values[mask]}
-            )
-            .groupby(["row", "col"])["value"]
-            .agg(agg)
-        )
-        grid[combined.index.get_level_values("row"), combined.index.get_level_values("col")] = combined.to_numpy()
+    for index in drawn:
+        rows = order[offsets[index] : offsets[index + 1]]
+        grid = np.full(plate_grid(wells.categories[np.unique(wells.codes[rows])]), np.nan)
+        combined = pd.Series(values[rows]).groupby([positions[rows, 0], positions[rows, 1]]).agg(agg)
+        grid[combined.index.get_level_values(0), combined.index.get_level_values(1)] = combined.to_numpy()
         grids.append(grid)
-    if share_colorbar:
-        kwargs.setdefault("vmin", min(np.nanmin(grid) for grid in grids))
-        kwargs.setdefault("vmax", max(np.nanmax(grid) for grid in grids))
+    if share_colorbar and "norm" not in kwargs:
+        everything = np.concatenate([grid.ravel() for grid in grids])
+        kwargs.setdefault("vmin", np.nanmin(everything))
+        kwargs.setdefault("vmax", np.nanmax(everything))
 
     if ax is None:
         width = min(ncols, len(grids))
         height = -(-len(grids) // width)
-        _, layout = plt.subplots(height, width, figsize=(4 * width, 3.2 * height), squeeze=False)
-        for unused in layout.ravel()[len(grids) :]:
-            unused.remove()
-        axes = layout.ravel()[: len(grids)]
+        figure = plt.figure(figsize=(4 * width, 3.2 * height))
+        axes = np.array([figure.add_subplot(height, width, number) for number in range(1, len(grids) + 1)])
     else:
         axes = np.array([ax])
 
-    for axis, grid, row in zip(axes, grids, panels, strict=True):
+    for axis, grid, index in zip(axes, grids, drawn, strict=True):
         image = axis.imshow(grid, cmap=cmap, aspect="equal", **kwargs)
-        axis.set_title(" · ".join(row), fontsize=9)
+        axis.set_title(" · ".join(map(str, panels[index])), fontsize=9)
         n_rows, n_cols = grid.shape
-        axis.set_xticks(columns := range(0, n_cols, max(1, n_cols // 12)))
-        axis.set_xticklabels([str(col + 1) for col in columns], fontsize=7)
-        axis.set_yticks(rows := range(0, n_rows, max(1, n_rows // 16)))
-        axis.set_yticklabels([row_label(row) for row in rows], fontsize=7)
+        xticks, yticks = range(0, n_cols, max(1, n_cols // 12)), range(0, n_rows, max(1, n_rows // 16))
+        axis.set_xticks(xticks, [str(col + 1) for col in xticks], fontsize=7)
+        axis.set_yticks(yticks, [row_label(row) for row in yticks], fontsize=7)
         if not share_colorbar:
             axis.figure.colorbar(image, ax=axis, fraction=0.04, label=color)
     if share_colorbar:
-        axes[0].figure.colorbar(image, ax=list(axes), fraction=0.04, label=color)
+        axes[0].figure.colorbar(image, ax=axes if len(axes) > 1 else axes[0], fraction=0.04, label=color)
 
     return axes[0] if len(axes) == 1 else axes
