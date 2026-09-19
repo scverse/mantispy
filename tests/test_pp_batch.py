@@ -191,29 +191,29 @@ def test_the_polish_kernel_matches_a_plain_median_polish(gaps):
 
 
 def test_one_infinity_does_not_spread_across_features(gradient_cells):
-    """A single inf affects only its own feature on its own plate.
+    """A single inf affects only its own value.
 
     ``np.linalg.lstsq`` with several right-hand sides returns NaN coefficients for all of
     them when any one column holds an infinity, which would turn the whole plate into NaN.
-    Three JUMP plates carry one inf each.
+    Three JUMP plates carry one inf each. Regression test for #66: the feature holding it
+    was then fitted with the inf and lost on its plate.
     """
     adata = gradient_cells.copy()
     adata.obs["Metadata_CellCount"] = np.arange(adata.n_obs) % 37 + 10
     values = np.asarray(adata.X, dtype=np.float32).copy()
     values[0, 2] = np.inf
     adata.X = values
+    gapped = adata.copy()
+    gapped.X[0, 2] = np.nan
 
-    mt.pp.regress_out(adata, keys=("Metadata_CellCount",), key_added="regressed")
-    corrected = adata.layers["regressed"]
+    for each in (adata, gapped):
+        mt.pp.regress_out(each, keys=("Metadata_CellCount",), key_added="regressed")
+    corrected, expected = adata.layers["regressed"], gapped.layers["regressed"]
 
-    # The fit is per plate, so only the plate holding the infinity can be affected.
-    plates = adata.obs["Metadata_Plate"].to_numpy()
-    spoiled = plates == plates[0]
-    others = np.delete(np.arange(adata.n_vars), 2)
-
-    assert np.isnan(corrected[spoiled, 2]).all(), "the infinite feature cannot be fitted"
-    assert np.isfinite(corrected[np.ix_(spoiled, others)]).all(), "and takes no neighbour with it"
-    assert np.isfinite(corrected[~spoiled]).all(), "nor any other plate"
+    assert np.isinf(corrected[0, 2]), "the infinity stays where it was"
+    corrected[0, 2] = expected[0, 2] = 0.0
+    np.testing.assert_array_equal(corrected, expected)  # everything else is fitted as if it were missing
+    assert np.isfinite(corrected).all()
 
 
 def test_one_nan_in_a_regression_key_does_not_spread_across_groups():
@@ -361,17 +361,19 @@ def test_regress_out_levels_a_fully_labelled_covariate():
     assert max(means) - min(means) < 0.05
 
 
-def test_regress_out_says_so_when_a_missing_covariate_value_disables_it():
+@pytest.mark.parametrize("value", [np.nan, np.inf])
+def test_regress_out_says_so_when_a_missing_covariate_value_disables_it(value):
     """``np.ptp`` is NaN for a covariate holding a NaN and ``NaN > 0`` is False, so the
     covariate is read as non-varying and dropped: the correction becomes a bitwise no-op
-    (corr 0.98 before and after) while the only log line claims the covariate was removed."""
+    (corr 0.98 before and after) while the only log line claims the covariate was removed.
+    An infinite value is dropped the same way, where it was fitted without a warning (#66)."""
     adata, _ = _operator_wells(missing_label=False)
     generator = np.random.default_rng(1)
     counts = generator.normal(1500.0, 200.0, adata.n_obs)
     values = np.asarray(adata.X, dtype=np.float64).copy()
     values[:, 0] = 0.05 * counts + generator.normal(0.0, 1.0, adata.n_obs)
     adata.X = values.astype(np.float32)
-    counts[3] = np.nan
+    counts[3] = value
     adata.obs["Metadata_CellCount"] = counts
 
     before = np.asarray(adata.X).copy()

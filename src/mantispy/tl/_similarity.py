@@ -28,7 +28,7 @@ def similarity_matrix(values: np.ndarray, metric: str = "cosine") -> np.ndarray:
 
     Returns:
         An ``(n_obs, n_obs)`` float32 matrix with 1.0 on the diagonal.
-        Missing values are filled with zero before the similarity is taken.
+        Missing and infinite values are filled with zero before the similarity is taken, so a profile holding an infinity is compared on its other features.
 
     Raises:
         ValueError: ``metric`` is not one of ``METRICS``, or the float64 matrix would exceed :data:`SIMILARITY_BYTES`. Memory is quadratic in the number of profiles (50,640 JUMP wells need 30 GB), so aggregate to consensus profiles first.
@@ -42,7 +42,7 @@ def similarity_matrix(values: np.ndarray, metric: str = "cosine") -> np.ndarray:
             "SIMILARITY_BYTES limit. Aggregate first with adata = mt.tl.consensus(adata), or subset "
             "the rows to compare."
         )
-    values = np.nan_to_num(np.asarray(values, dtype=np.float64), nan=0.0)
+    values = np.nan_to_num(np.asarray(values, dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
     if metric == "pearson":
         values = values - values.mean(axis=1, keepdims=True)
     norms = np.linalg.norm(values, axis=1, keepdims=True)

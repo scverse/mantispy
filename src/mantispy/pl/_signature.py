@@ -46,6 +46,7 @@ def feature_signature(
     from scipy.spatial import distance
 
     values = get_matrix(adata).astype(np.float64)
+    values[np.isinf(values)] = np.nan  # an infinity is missing, as tl.similarity reads it
     obs = as_frame(adata.obs)
     rows = pd.Index(adata.obs_names.astype(str))
 
