@@ -348,7 +348,7 @@ change it). Four of them carry the annotations the analysis functions need:
 | `bbbc021` | ~10 MB | 39 compounds | MOA labels, the classic retrieval benchmark |
 | `rohban` | ~27 MB | 194 overexpressed genes | cell counts, ~10 replicates per gene |
 | `pki` | ~71 MB | 15 kinase inhibitors x 7 doses | cell counts, MOA labels, 32-64 replicates |
-| `jump_target2` | ~40 MB | 302 compounds, one shared plate map | the same plate run at two sites, so any difference between them is technical |
+| `jump_target2` | ~0.7 GB | 302 compounds, one shared plate map | the same plate run at eleven sites, so any difference between them is technical |
 | `jump_cells` | ~1.5 GB | 12 compounds and DMSO | single cells, 24 wells x 4 fields of view of `BR00121438` |
 
 The other nine are further gallery accessions, normalized and feature-selected by their authors and read with the

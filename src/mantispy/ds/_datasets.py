@@ -32,7 +32,7 @@ _BASE_URL, _DATASETS = parse_registry(Path(__file__).parent / "registry.yaml")
 # scverse-misc registers loaders by type name across all packages in the process, so ours uses the package name.
 _TYPE = "mantispy"
 
-#: One plate from each of the eleven sources that ran Target-2, so every laboratory is represented in a 0.7 GB download.
+#: One plate from each of the eleven sources that ran Target-2.
 TARGET2_DEFAULT = (
     "1053600674",
     "JCPQC051",
