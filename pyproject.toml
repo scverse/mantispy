@@ -110,6 +110,8 @@ typecheck = [
 ]
 
 [tool.hatch]
+envs.data.features = [ "spatial" ]
+envs.data.scripts.download = "python .scripts/ci/download_data.py {args}"
 envs.default.installer = "uv"
 envs.default.dependency-groups = [ "dev" ]
 # The docs build renders the notebook outputs committed with them, so it downloads and executes nothing.

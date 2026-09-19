@@ -1,75 +1,86 @@
 """ECOD: empirical-cumulative-distribution outlier detection :cite:p:`Li_2023`.
 
-Parameter-free and interpretable: a row's score is the sum, over features, of how far into a tail its value sits.
+A row's score is the sum, over features, of how far into a tail its value sits.
 Reimplemented here instead of depending on pyod, and checked against pyod's formulation by an equivalence test.
-
-The score is the sum over dimensions of the elementwise maximum of the three tail matrices, as pyod computes it.
-Algorithm 1 of the paper takes the maximum of the three per-row sums instead, which gives different scores.
+Columns stream through a numba kernel, so memory grows with the number of rows and not with rows times features.
 """
 
 from __future__ import annotations
 
 import numpy as np
+from numba import njit
+
+from mantispy._core._numba import prange
+
+AGGREGATIONS = ("pyod", "paper")
+#: Fixed rather than the thread count, so the summation order, and with it every tie at a cutoff, is the same on any machine.
+_CHUNKS = 16
+_EPS = float(np.finfo(np.float64).eps)
 
 
-def column_ecdf(X: np.ndarray) -> np.ndarray:
-    """Column-wise empirical CDF, with ties taking the highest rank.
+@njit(cache=True, nogil=True)
+def _skew_sign(column: np.ndarray) -> int:
+    """Sign of the column's skewness, 0 where scipy's ``skew`` is zero or undefined."""
+    mean = column.mean()
+    m2 = m3 = 0.0
+    for value in column:
+        deviation = value - mean
+        m2 += deviation * deviation
+        m3 += deviation * deviation * deviation
+    if m2 / column.size <= (_EPS * mean) ** 2:
+        return 0
+    return 1 if m3 > 0 else -1 if m3 < 0 else 0
 
-    Counts values less than or equal to each entry, which is the tie handling pyod's explicit backwards pass produces.
+
+@njit(parallel=True, cache=True, nogil=True)
+def _ecod(X: np.ndarray, paper: bool) -> np.ndarray:
+    """Per-row tail sums: one row for ``"pyod"``, the left, right and skew-directed rows for ``"paper"``.
+
+    Chunk ``c`` owns every ``_CHUNKS``-th column and an accumulator of its own, so threads never write to the same row.
     """
-    return _tail_counts(X)[0] / X.shape[0]
+    n_obs, n_vars = X.shape
+    sums = np.zeros((_CHUNKS, 3 if paper else 1, n_obs))
+    log_n = np.log(n_obs)
+    for chunk in prange(_CHUNKS):
+        column = np.empty(n_obs)
+        for j in range(chunk, n_vars, _CHUNKS):
+            total, count = 0.0, 0
+            for i in range(n_obs):
+                column[i] = X[i, j]
+                if np.isfinite(column[i]):
+                    total += column[i]
+                    count += 1
+            # A missing value has no tail probability of its own, so it takes the mean of the finite values.
+            for i in range(n_obs):
+                if np.isnan(column[i]):
+                    column[i] = total / count if count else 0.0
+
+            sign = _skew_sign(column)
+            order = np.argsort(column)
+            start = 0
+            while start < n_obs:
+                # Equal values share a rank: <= counts to the end of their run, < to its start.
+                stop = start + 1
+                while stop < n_obs and column[order[stop]] == column[order[start]]:
+                    stop += 1
+                left, right = log_n - np.log(stop), log_n - np.log(n_obs - start)
+                for row in order[start:stop]:
+                    if paper:
+                        sums[chunk, 0, row] += left
+                        sums[chunk, 1, row] += right
+                        sums[chunk, 2, row] += left if sign < 0 else right
+                    else:
+                        # pyod's skew term adds both tails where the skewness is zero or undefined.
+                        sums[chunk, 0, row] += max(left, right) if sign else left + right
+                start = stop
+    return sums.sum(axis=0)
 
 
-def _tail_counts(X: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """``(#values <= x, #values < x)`` per column, from a single sort.
-
-    ECOD needs the empirical CDF of both ``X`` and ``-X``.
-    Since ``#(-X <= -x)`` is ``n - #(X < x)``, both counts come from one ``argsort`` and the run structure of the sorted column.
-    """
-    n_obs = X.shape[0]
-    order = np.argsort(X, axis=0, kind="stable")
-    ordered = np.take_along_axis(X, order, axis=0)
-
-    ends = np.empty(X.shape, dtype=bool)  # last member of a run of equal values
-    ends[:-1] = ordered[:-1] != ordered[1:]
-    ends[-1] = True
-    starts = np.empty(X.shape, dtype=bool)
-    starts[0] = True
-    starts[1:] = ends[:-1]
-
-    position = np.arange(1, n_obs + 1, dtype=np.float64)[:, None]
-    # The end of each entry's run is how many values are <= it; the start, less one, how
-    # many are strictly below.
-    highest = np.minimum.accumulate(np.where(ends, position, n_obs + 1)[::-1], axis=0)[::-1]
-    lowest = np.maximum.accumulate(np.where(starts, position, 0.0), axis=0) - 1
-
-    at_or_below, below = np.empty(X.shape), np.empty(X.shape)
-    np.put_along_axis(at_or_below, order, highest, axis=0)
-    np.put_along_axis(below, order, lowest, axis=0)
-    return at_or_below, below
-
-
-def ecod_scores(X: np.ndarray) -> np.ndarray:
-    """ECOD outlier score per row of ``X``. Higher is more outlying.
-
-    NaN is imputed with the column mean first, since a missing value has no tail probability of its own.
-    """
-    from scipy.stats import skew as _skew
-
-    X = np.asarray(X, dtype=np.float64)
-    missing = np.isnan(X)
-    if missing.any():
-        column_means = np.nanmean(np.where(missing, np.nan, X), axis=0)
-        X = np.where(missing, np.nan_to_num(column_means, nan=0.0), X)
-
-    at_or_below, below = _tail_counts(X)
-    left = -np.log(at_or_below / X.shape[0])
-    right = -np.log((X.shape[0] - below) / X.shape[0])
-
-    # skewness in {-1, 0, 1}: negative picks the left tail, positive the right, and a
-    # feature with zero skew contributes both.
-    skewness = np.sign(np.nan_to_num(_skew(X, axis=0)))
-    tail = left * -1 * np.sign(skewness - 1) + right * np.sign(skewness + 1)
-
-    combined = np.maximum(np.maximum(left, right), tail)
-    return combined.sum(axis=1)
+def ecod_scores(X: np.ndarray, aggregation: str = "pyod") -> np.ndarray:
+    """ECOD outlier score per row of ``X``, higher meaning more outlying, aggregated as one of :data:`AGGREGATIONS`."""
+    X = np.asarray(X)
+    if X.dtype not in (np.float32, np.float64):
+        X = X.astype(np.float64)
+    if not len(X):
+        return np.zeros(0)
+    return _ecod(X, aggregation == "paper").max(axis=0)
