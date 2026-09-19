@@ -70,15 +70,15 @@ def plate(
     else:
         axes = np.array([ax])
 
-    size = detect_plate_format(adata.obs["Metadata_Well"].unique())
-    n_rows, n_cols = PLATE_FORMATS[size]
-
     for axis, name in zip(axes, plates, strict=True):
         mask = (adata.obs["Metadata_Plate"] == name).to_numpy()
+        wells = adata.obs["Metadata_Well"][mask]
+        # Each plate's own format: one object can hold 384- and 1536-well plates.
+        n_rows, n_cols = PLATE_FORMATS[detect_plate_format(wells.unique())]
         frame = pd.DataFrame(
             {
-                "row": [well_row(well) for well in adata.obs["Metadata_Well"][mask]],
-                "col": [well_col(well) for well in adata.obs["Metadata_Well"][mask]],
+                "row": [well_row(well) for well in wells],
+                "col": [well_col(well) for well in wells],
                 "value": values[mask],
             }
         )
