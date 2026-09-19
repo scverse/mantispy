@@ -143,16 +143,19 @@ def control_drift(
     return ax
 
 
-def outliers(adata: AnnData, key: str = "qc_outlier", axes: np.ndarray | None = None) -> np.ndarray:
-    """Outlier score distribution, and the flagged fraction per plate.
+def outliers(
+    adata: AnnData, key: str = "qc_outlier", groupby: str = "Metadata_Plate", axes: np.ndarray | None = None
+) -> np.ndarray:
+    """Outlier score distribution, and the flagged fraction per ``groupby`` group.
 
     Args:
         adata: Object :func:`~mantispy.pp.outliers` has run on.
         key: ``obs`` column holding the flag, whose score is read from ``key + "_score"``.
+        groupby: ``obs`` column whose groups become the bars, e.g. ``"Metadata_Well"`` on a single plate.
         axes: A pair of axes to draw into, or ``None`` for a new figure.
 
     Returns:
-        The two axes: the score histogram split into kept and flagged, and the flagged fraction per plate.
+        The two axes: the score histogram split into kept and flagged, and the flagged fraction per group.
 
     Raises:
         KeyError: ``obs`` has no ``key`` column.
@@ -162,7 +165,7 @@ def outliers(adata: AnnData, key: str = "qc_outlier", axes: np.ndarray | None = 
     if key not in adata.obs:
         raise KeyError(f"obs has no {key!r}; run mt.pp.outliers first")
     if axes is None:
-        _, axes = plt.subplots(1, 2, figsize=(9, 3.5))
+        _, axes = plt.subplots(1, 2, figsize=(9, 3.5), layout="constrained")
 
     scores = as_frame(adata.obs)[f"{key}_score"].to_numpy(dtype=float)
     flagged = as_frame(adata.obs)[key].to_numpy(dtype=bool)
@@ -171,9 +174,10 @@ def outliers(adata: AnnData, key: str = "qc_outlier", axes: np.ndarray | None = 
     axes[0].set_xlabel("outlier score")
     axes[0].legend(fontsize=7)
 
-    per_plate = as_frame(adata.obs).groupby("Metadata_Plate", observed=True)[key].mean()
-    axes[1].bar(np.arange(len(per_plate)), per_plate.to_numpy())
-    axes[1].set_xticks(np.arange(len(per_plate)))
-    axes[1].set_xticklabels([str(name) for name in per_plate.index], rotation=45, fontsize=7)
+    per_group = as_frame(adata.obs).groupby(groupby, observed=True)[key].mean()
+    axes[1].bar(np.arange(len(per_group)), per_group.to_numpy())
+    axes[1].set_xticks(np.arange(len(per_group)))
+    axes[1].set_xticklabels([str(name) for name in per_group.index], rotation=45, fontsize=7)
+    axes[1].set_xlabel(groupby)
     axes[1].set_ylabel("fraction flagged")
     return axes

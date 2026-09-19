@@ -61,6 +61,13 @@ def test_plate_effects_has_a_row_and_column_panel_per_plate(diagnosed):
     assert mt.pl.plate_effects(diagnosed).shape == (2, 2)
 
 
+def test_outliers_draws_a_bar_per_group(diagnosed):
+    """On a single plate, one bar per plate is just the contamination; per well it shows the spread."""
+    assert len(mt.pl.outliers(diagnosed)[1].patches) == 2
+    per_well = mt.pl.outliers(diagnosed, groupby="Metadata_Well")[1]
+    assert len(per_well.patches) == diagnosed.obs["Metadata_Well"].nunique()
+
+
 def test_feature_correlation_is_ordered_by_annotation(diagnosed):
     """Ordering by feature group is what makes the block structure readable."""
     ax = mt.pl.feature_correlation(diagnosed, key=None)
