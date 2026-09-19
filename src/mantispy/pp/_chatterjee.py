@@ -44,17 +44,15 @@ def _xi(x: np.ndarray, values: np.ndarray, m: int, seed: int) -> np.ndarray:
     order = shuffled[np.argsort(x[shuffled], kind="stable")]
 
     # How many values of y are at or below each one, read in the order x puts the rows in; tied values share it.
-    # As integers: rankdata keeps float32 input float32, whose sums of ranks are inexact above 2**24.
+    # As integers: rankdata keeps float32 input float32, whose sums are inexact above 2**24.
     ranks = rankdata(values[order], method="max", axis=0).astype(np.int64)
-    total = np.zeros(values.shape[1])
-    for step in range(1, m + 1):
-        total += np.minimum(ranks[: n - step], ranks[step:]).sum(axis=0) + ranks[n - step :].sum(axis=0)
+    # How far y drops from each row to the m after it.
+    drop = sum(np.maximum(ranks[:-step] - ranks[step:], 0).sum(axis=0) for step in range(1, m + 1))
     # How many are strictly below; the scale is zero only for a constant column, which has no xi.
     below = rankdata(values, method="min", axis=0).astype(np.float64) - 1
-    scale = (below * (n - below)).sum(axis=0)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        centred = n * (n - 1) * (total - m * ranks.sum(axis=0)) / scale
-    return (centred + n * m - m * (m + 1) / 2) / (n * m + m * (m + 1) / 4)
+    with np.errstate(invalid="ignore"):
+        scaled = drop / (below * (n - below)).sum(axis=0) * n * (n - 1)
+    return -2 + (3 * n * m - scaled) / (n * m + m * (m + 1) / 4)
 
 
 def chatterjee_xi(x: np.ndarray, y: np.ndarray, m: int = 1, seed: int = 0, min_finite: int = 40) -> np.ndarray:
@@ -74,11 +72,10 @@ def chatterjee_xi(x: np.ndarray, y: np.ndarray, m: int = 1, seed: int = 0, min_f
         ValueError: If ``m`` is below 1.
 
     Notes:
-        Ties in ``x`` are broken at random, as the coefficient requires, so ``seed`` matters only when ``x`` has ties.
+        Ties in ``x`` are broken at random, as the coefficient requires.
         A group label is almost all ties, and breaking them by row order would score the row order as structure.
         Ties in ``y`` are handled as :cite:t:`Chatterjee_2020` handles them, without randomness: tied values share a rank.
         A zero-inflated Zernike, Granularity or RadialDistribution column is mostly ties, and breaking them at random scores one that is a step function of ``x`` at 0.51 instead of 0.99.
-        A constant column carries no information and scores NaN.
 
         xi is defined on complete pairs, so each column is scored on the rows where both it and ``x`` are finite, and two columns missing different rows are scored on different subsets.
         Ranking a column that still holds NaN sorts the missing rows last, which turns a feature that is merely unmeasured in one group into a step function of the group and scores it as dependence.

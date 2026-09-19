@@ -144,7 +144,7 @@ def regress_out(
         Missing and infinite values stay as they are, and a feature holding one is fitted on its finite rows.
         A group with no more rows than design columns is left uncorrected and logged.
 
-        A numeric covariate with a missing value does not vary within that group, so it is dropped from the group's design and nothing is regressed out for it there, with a warning.
+        A numeric covariate with a missing or infinite value is dropped from that group's design and nothing is regressed out for it there, with a warning.
         A categorical covariate with a missing label is refused instead: the all-zero encoding of a missing category is also the encoding of the level ``drop_first`` removed, so those rows would be corrected as the reference level and take every other row with them.
     """
     missing = [key for key in keys if key not in adata.obs]
@@ -169,19 +169,19 @@ def regress_out(
         block_design = design_all[rows]
         # A column that does not vary inside this group carries no within-group
         # information; its effect stays in the intercept.
-        varying = np.ptp(block_design, axis=0) > 0
+        # A covariate with a missing or infinite value cannot be fitted, so it is dropped too,
+        # which leaves the group uncorrected. Leaving it alone is the conservative choice; doing
+        # so silently is not, and the log line below reports the covariate as removed either way.
+        unusable = ~np.isfinite(block_design).all(axis=0)
+        varying = (np.ptp(block_design, axis=0) > 0) & ~unusable
         varying[0] = True
-        # np.ptp is NaN for a column holding a NaN and NaN > 0 is False, so a covariate with one
-        # missing value reads as non-varying and is dropped, which leaves the group uncorrected.
-        # Leaving it alone is the conservative choice; doing so silently is not, and the log line
-        # below reports the covariate as removed either way.
-        incomplete = sorted({str(name) for name in sources[np.isnan(block_design).any(axis=0)] if name})
+        incomplete = sorted({str(name) for name in sources[unusable] if name})
         if incomplete:
             scope = f" within {by}={keys_index[group]!r}" if by is not None else ""
             warnings.warn(
-                f"regress_out: {incomplete} has missing values{scope}, so it reads as non-varying and "
-                "is dropped from the design; nothing is regressed out for it there. Fill the column or "
-                "drop those rows to correct that group.",
+                f"regress_out: {incomplete} has missing or infinite values{scope}, so it is dropped from "
+                "the design; nothing is regressed out for it there. Fill the column or drop those rows to "
+                "correct that group.",
                 UserWarning,
                 stacklevel=3,
             )

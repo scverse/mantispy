@@ -45,7 +45,6 @@ def test_the_rest_contrast_leaves_the_reference_out(annotated):
         },
         index=[str(i) for i in range(len(labels))],
     )
-    import anndata as ad
 
     from mantispy._core.schema import stamp
 
@@ -128,8 +127,12 @@ def test_an_annotation_holding_the_separator_does_not_break_the_split(annotated)
     assert int(signature.var["n_features"].sum()) == adata.n_vars
 
 
-def test_the_heatmap_clusters_a_signature_holding_an_infinity():
-    """Regression test for #65: filled as the largest float, one infinity overflowed the clustering distances and raised."""
+def test_the_heatmap_reads_an_infinity_as_missing():
+    """Regression test for #65: one infinity overflowed the clustering distances and raised, and set the colour limits."""
     values = np.random.default_rng(0).normal(size=(6, 5))
-    values[0, 0] = np.inf
-    mt.pl.feature_signature(ad.AnnData(values))
+    drawn = []
+    for value in (np.inf, np.nan):
+        values[0, 0] = value
+        drawn.append(mt.pl.feature_signature(ad.AnnData(values.copy())).images[0])
+    assert drawn[0].get_clim() == drawn[1].get_clim()
+    np.testing.assert_array_equal(drawn[0].get_array(), drawn[1].get_array())

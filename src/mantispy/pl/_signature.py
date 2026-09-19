@@ -46,6 +46,7 @@ def feature_signature(
     from scipy.spatial import distance
 
     values = get_matrix(adata).astype(np.float64)
+    values[np.isinf(values)] = np.nan  # an infinity is missing, as tl.similarity reads it
     obs = as_frame(adata.obs)
     rows = pd.Index(adata.obs_names.astype(str))
 
@@ -64,7 +65,7 @@ def feature_signature(
     if cluster and values.shape[0] > 2 and values.shape[1] > 2:
         for axis in (0, 1):
             block = values if axis == 0 else values.T
-            finite = np.nan_to_num(block, nan=0.0, posinf=0.0, neginf=0.0)
+            finite = np.nan_to_num(block, nan=0.0)
             order = np.asarray(
                 hierarchy.leaves_list(
                     hierarchy.linkage(distance.pdist(finite, metric="correlation"), method="average")
