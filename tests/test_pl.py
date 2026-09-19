@@ -96,6 +96,32 @@ def test_plate_one_panel_per_plate_and_rejects_unknown_color(plotted):
     assert np.asarray(mt.pl.plate(plotted, color=plotted.var_names[0])).size == 2
     with pytest.raises(KeyError, match="nonexistent"):
         mt.pl.plate(plotted, color="nonexistent")
+    with pytest.raises(KeyError, match="Plate09"):
+        mt.pl.plate(plotted, color=plotted.var_names[0], plate="Plate09")
+
+
+def test_plates_fill_a_grid_on_one_shared_scale():
+    many = synthetic_plate(n_plates=5, n_wells=96, n_cells=2, n_features=3, seed=0)
+    axes = mt.pl.plate(many, color=many.var_names[0], ncols=2)
+    assert len(axes) == 5
+    assert axes[0].get_subplotspec().get_gridspec().get_geometry() == (3, 2)
+    assert len({axis.images[0].get_clim() for axis in axes}) == 1
+    assert len(axes[0].figure.axes) == 6, "five panels and one colorbar"
+
+    apart = mt.pl.plate(many, color=many.var_names[0], share_colorbar=False)
+    assert len({axis.images[0].get_clim() for axis in apart}) == 5
+
+
+def test_groupby_orders_and_titles_the_plates(plotted):
+    plotted.obs["Metadata_Batch"] = np.where(plotted.obs["Metadata_Plate"] == "Plate01", "batch10", "batch2")
+    axes = mt.pl.plate(plotted, color=plotted.var_names[0], groupby="Metadata_Batch")
+    assert [axis.get_title() for axis in axes] == ["batch2 · Plate02", "batch10 · Plate01"]  # digits sort as numbers
+
+    with pytest.raises(KeyError, match="Metadata_Nope"):
+        mt.pl.plate(plotted, color=plotted.var_names[0], groupby="Metadata_Nope")
+    plotted.obs["Metadata_Batch"] = np.arange(plotted.n_obs) % 2
+    with pytest.raises(ValueError, match="varies within a plate"):
+        mt.pl.plate(plotted, color=plotted.var_names[0], groupby="Metadata_Batch")
 
 
 def test_feature_distributions_shows_raw_and_current(plotted):
