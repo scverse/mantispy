@@ -9,6 +9,7 @@ import numpy as np
 
 from mantispy._core._reduce import get_matrix, group_codes
 from mantispy._core.frames import as_frame
+from mantispy._core.schema import get_resolution
 from mantispy.pl._common import axes as _axes
 from mantispy.pl._common import table as _table
 
@@ -17,24 +18,37 @@ if TYPE_CHECKING:
     from matplotlib.axes import Axes
 
 
-def cell_counts(adata: AnnData, groupby: str = "Metadata_Plate", ax: Axes | None = None) -> Axes:
+def cell_counts(
+    adata: AnnData, groupby: str = "Metadata_Plate", ax: Axes | None = None, count_key: str = "Metadata_CellCount"
+) -> Axes:
     """Distribution of cells per well, split by ``groupby``.
 
     Args:
-        adata: Object at cell resolution.
+        adata: Cells, which are counted per well, or profiles, whose `count_key` is drawn: the cells of a well, or of a field of view when the rows are sites.
         groupby: ``obs`` column whose groups become the boxes.
         ax: Axes to draw on, or ``None`` for a new figure.
+        count_key: ``obs`` column holding the count of profiles.
 
     Returns:
         The axes drawn on.
+
+    Raises:
+        KeyError: Profiles carry no `count_key`.
     """
     ax = _axes(ax, (6, 4))
-    codes, keys = group_codes(adata, ["Metadata_Plate", "Metadata_Well"])
-    counts = np.bincount(codes, minlength=len(keys))
-    labels = as_frame(adata.obs).groupby(codes, observed=True)[groupby].first()
+    if get_resolution(adata) == "cell":
+        codes, keys = group_codes(adata, ["Metadata_Plate", "Metadata_Well"])
+        counts = np.bincount(codes, minlength=len(keys)).astype(float)
+        labels = as_frame(adata.obs).groupby(codes, observed=True)[groupby].first()
+    elif count_key in adata.obs:
+        counts = as_frame(adata.obs)[count_key].to_numpy(dtype=float)
+        labels = as_frame(adata.obs)[groupby]
+    else:
+        raise KeyError(f"obs has no column {count_key!r}; mt.tl.aggregate writes one, or name another with count_key=")
 
     groups = list(dict.fromkeys(labels))
-    ax.boxplot([counts[labels.to_numpy() == group] for group in groups], tick_labels=[str(g) for g in groups])
+    known = np.isfinite(counts)
+    ax.boxplot([counts[known & (labels.to_numpy() == group)] for group in groups], tick_labels=[str(g) for g in groups])
     ax.set_ylabel("cells per well")
     ax.set_xlabel(groupby)
     ax.tick_params(axis="x", rotation=45)

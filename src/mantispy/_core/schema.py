@@ -49,7 +49,7 @@ RESERVED_OBS: tuple[str, ...] = (
     "Metadata_Concentration",
     "Metadata_MOA",
     "Metadata_Control",
-    # Cells behind a row and the fields of view that held them, written by tl.aggregate
+    # Cells behind a row and the fields of view that contributed them, written by tl.aggregate
     "Metadata_CellCount",
     "Metadata_SiteCount",
     "Metadata_Center_X",

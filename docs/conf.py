@@ -91,6 +91,8 @@ nb_output_stderr = "remove"
 # build downloads nothing. CI's "Tutorials run" job executes every notebook (-D nb_execution_mode=cache), so a
 # committed output cannot silently stop matching the code.
 nb_execution_mode = "off"
+# The dataset pages load every dataset, about 3 GB, so they are executed locally and only rendered here.
+nb_execution_excludepatterns = ["datasets/*"]
 nb_execution_timeout = 900
 nb_execution_raise_on_error = True
 nb_merge_streams = True

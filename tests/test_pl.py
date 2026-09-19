@@ -49,6 +49,16 @@ def test_every_plot_draws_and_does_not_mutate(plotted, draw):
     np.testing.assert_array_equal(plotted.X, before[2])
 
 
+def test_cell_counts_draws_the_count_profiles_carry(plotted):
+    """A well is one row of a profile object; counting rows would draw one cell per well."""
+    wells = mt.tl.aggregate(plotted, min_cells=0)
+    ax = mt.pl.cell_counts(wells)
+    assert {float(y) for line in ax.get_lines() for y in line.get_ydata()} == {5.0}
+    del wells.obs["Metadata_CellCount"]
+    with pytest.raises(KeyError, match="count_key="):
+        mt.pl.cell_counts(wells)
+
+
 def test_plate_grid_matches_the_detected_format(plotted):
     ax = mt.pl.plate(plotted, color=plotted.var_names[0], plate="Plate01")
     assert isinstance(ax, matplotlib.axes.Axes)

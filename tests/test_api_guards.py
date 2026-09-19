@@ -85,7 +85,7 @@ def test_every_cited_key_is_in_the_bibliography():
         *SRC.rglob("*.py"),
         *root.glob("tests/*.py"),
         *root.glob("docs/*.md"),
-        *root.glob("docs/tutorials/*.ipynb"),
+        *(path for path in root.glob("docs/**/*.ipynb") if "_build" not in path.parts),
     ]
     cited = {
         key.strip()

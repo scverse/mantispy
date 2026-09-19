@@ -104,7 +104,7 @@ def bbbc021(cache_dir: str | Path | None = None) -> AnnData:
             Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Returns:
-        632 wells by 473 features at well resolution, with ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Compound``, ``Metadata_Concentration``, ``Metadata_MOA``, ``Metadata_Perturbation`` (compound at concentration), ``Metadata_Control``, and ``Metadata_CellCount`` over the ``Metadata_SiteCount`` of the four fields that held cells.
+        632 wells by 473 features at well resolution, with ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Compound``, ``Metadata_Concentration``, ``Metadata_MOA``, ``Metadata_Perturbation`` (compound at concentration), ``Metadata_Control``, and ``Metadata_CellCount`` over the ``Metadata_SiteCount`` fields, of four imaged, that contributed cells.
 
     References:
         :cite:t:`Caie_2010`, the image set.
@@ -159,7 +159,7 @@ def bbbc021(cache_dir: str | Path | None = None) -> AnnData:
 
 
 def _bbbc021_counts(paths: Sequence[Path]) -> pd.DataFrame:
-    """Cells, and fields that held one, per well, from the per-field ``Image.csv`` of the run the ljosa_2013 profiles aggregate."""
+    """Cells, and the fields that contributed them, per well, from the per-field ``Image.csv`` of the run the ljosa_2013 profiles aggregate."""
     rows = []
     for path in paths:
         cells = pd.read_csv(path, usecols=["Count_Cells"])["Count_Cells"]
@@ -324,10 +324,12 @@ def luad(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
 
 
 def agnp(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
-    """Silver nanoparticles, 180 wells at four sizes and three doses.
+    """Silver nanoparticles in Huh7 cells, 180 wells at two sizes and three timepoints.
 
     ``cpg0040-garcia-fossa-AgNP``, the smallest dataset here at 300 kB.
-    ``Metadata_NPSize_nm`` holds the particle size and ``Metadata_Concentration_mgml`` the dose.
+    Each size is given at one dose: 40 nm at 0.00012 mg/ml and 100 nm at 0.00036 mg/ml, in ``Metadata_NPSize_nm`` and ``Metadata_Concentration_mgml``.
+    The 60 untreated wells, size and dose 0, are the ``negcon`` of ``Metadata_control_type``.
+    ``Metadata_Time`` is 1, 15 or 30, with 20 wells of each condition at each.
 
     Args:
         cache_dir: Where to keep the download.

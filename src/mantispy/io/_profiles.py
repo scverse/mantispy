@@ -34,7 +34,7 @@ DEFAULT_OBJECTS: tuple[str, ...] = ("Cells", "Cytoplasm", "Nuclei")
 
 #: pycytominer's per-well counts and the names mantispy reads them under, the first one present winning.
 #: ``Metadata_Object_Count``, the cells it aggregated, equals ``Metadata_Count_Cells`` wherever both are published.
-#: ``Metadata_Site_Count`` counts the fields of view that held a cell, as :func:`mantispy.tl.aggregate` does, not those imaged.
+#: ``Metadata_Site_Count`` counts the fields of view that contributed cells, as :func:`mantispy.tl.aggregate` does, which need not be all those imaged.
 _UPSTREAM_COUNTS = {
     "Metadata_Count_Cells": "Metadata_CellCount",
     "Metadata_Object_Count": "Metadata_CellCount",
