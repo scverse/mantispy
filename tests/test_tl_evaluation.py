@@ -184,6 +184,17 @@ def test_pearson_similarity_matches_numpy(profiles):
     np.testing.assert_allclose(np.asarray(profiles.obsp["similarity"]), np.corrcoef(profiles.X), rtol=1e-4, atol=1e-5)
 
 
+@pytest.mark.parametrize("infinity", [np.inf, -np.inf])
+def test_an_infinite_value_is_compared_as_missing(infinity):
+    """Regression test for #65: filled as the largest float, one infinity made its profile orthogonal to every other."""
+    from mantispy.tl._similarity import similarity_matrix
+
+    values = np.array([[1.0, 2.0, 3.0], [1.0, 2.0, 3.1], [1.0, infinity, 3.0]])
+    matrix = similarity_matrix(values)
+    np.testing.assert_array_equal(matrix, similarity_matrix(np.where(np.isinf(values), np.nan, values)))
+    assert matrix[2, :2].min() > 0.8
+
+
 def test_percent_replicating_finds_strong_perturbations(profiles):
     mt.tl.percent_replicating(profiles, null_size=200)
     table = profiles.uns["mantispy"]["percent_replicating"].set_index("group")

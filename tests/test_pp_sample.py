@@ -79,7 +79,7 @@ def test_chatterjee_rejects_a_constant_feature_it_cannot_measure(plate):
 
     mt.pp.feature_select_chatterjee(plate)
     scores = plate.var["chatterjee_xi"].to_numpy()
-    assert scores[1] < 0.1 and scores[2] < 0.1, "a constant feature carries no information"
+    assert np.isnan(scores[1]) and np.isnan(scores[2]), "a constant feature has no xi"
     assert scores[3] > 0.5, "and the dose-response feature still scores high"
     assert not plate.var["selected_chatterjee"].to_numpy()[[1, 2]].any()
 
@@ -141,3 +141,37 @@ def test_chatterjee_scores_a_gapped_column_the_same_as_scoring_it_alone():
     np.testing.assert_array_equal(together, apart)
     assert np.isfinite(together[:5]).all()
     assert np.isnan(together[5]), "ten finite values leave too few pairs to score"
+
+
+def test_chatterjee_handles_ties_in_y_as_chatterjee_does():
+    """Regression test for #71: breaking y's ties at random made the score depend on the seed,
+    and scored a step function of x at 0.51."""
+    from scipy.stats import rankdata
+
+    from mantispy.pp._chatterjee import chatterjee_xi
+
+    generator = np.random.default_rng(0)
+    n = 300
+    x = generator.normal(size=n)
+    values = np.column_stack([np.round(x + generator.normal(0.0, 1.0, n)), (x > 0).astype(float)])
+
+    scores = chatterjee_xi(x, values)
+    for seed in range(1, 4):
+        np.testing.assert_array_equal(chatterjee_xi(x, values, seed=seed), scores)
+    assert scores[1] > 0.98, "a step function of x is a function of x"
+
+    # Chatterjee's equation 1.1, which the m=1 form matches up to a term of order 1/n.
+    ranks = rankdata(values[np.argsort(x), 0], method="max")
+    at_or_above = n + 1 - rankdata(values[:, 0], method="min")
+    expected = 1 - n * np.abs(np.diff(ranks)).sum() / (2 * (at_or_above * (n - at_or_above)).sum())
+    assert scores[0] == pytest.approx(expected, abs=3 / n)
+
+
+def test_chatterjee_sums_the_ranks_of_float32_input_exactly():
+    """X is float32, whose sums of ranks are inexact above 2**24: a pki feature, constant but for one well, scored 0.2 at m=5."""
+    from mantispy.pp._chatterjee import chatterjee_xi
+
+    n = 3072
+    y = np.zeros(n, dtype=np.float32)
+    y[n // 2] = 1.0
+    assert abs(chatterjee_xi(np.arange(n, dtype=float), y, m=5)[0]) < 0.01

@@ -141,7 +141,7 @@ def regress_out(
         ValueError: If a categorical covariate has missing values.
 
     Notes:
-        Missing values stay missing, and a feature with gaps is fitted on the rows where it was measured.
+        Missing and infinite values stay as they are, and a feature holding one is fitted on its finite rows.
         A group with no more rows than design columns is left uncorrected and logged.
 
         A numeric covariate with a missing value does not vary within that group, so it is dropped from the group's design and nothing is regressed out for it there, with a warning.
@@ -219,7 +219,7 @@ def regress_out(
 
         for feature in np.flatnonzero(gaps):
             values = block[:, feature]
-            observed = ~np.isnan(values)
+            observed = np.isfinite(values)
             if observed.sum() <= design.shape[1]:
                 continue  # too few observations to fit; leave the feature alone
             coefficients, *_ = np.linalg.lstsq(design[observed], values[observed], rcond=None)

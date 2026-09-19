@@ -1,5 +1,6 @@
 """Feature-family signatures: the contrast, the collapse, and the plot."""
 
+import anndata as ad
 import matplotlib
 import numpy as np
 import pandas as pd
@@ -125,3 +126,10 @@ def test_an_annotation_holding_the_separator_does_not_break_the_split(annotated)
     assert "Texture|Gabor" in set(signature.var["feature_group"])
     assert set(signature.var["channel"]) <= {"DNA", "Tub", "none"}
     assert int(signature.var["n_features"].sum()) == adata.n_vars
+
+
+def test_the_heatmap_clusters_a_signature_holding_an_infinity():
+    """Regression test for #65: filled as the largest float, one infinity overflowed the clustering distances and raised."""
+    values = np.random.default_rng(0).normal(size=(6, 5))
+    values[0, 0] = np.inf
+    mt.pl.feature_signature(ad.AnnData(values))

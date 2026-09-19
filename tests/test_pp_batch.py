@@ -191,11 +191,12 @@ def test_the_polish_kernel_matches_a_plain_median_polish(gaps):
 
 
 def test_one_infinity_does_not_spread_across_features(gradient_cells):
-    """A single inf affects only its own feature on its own plate.
+    """A single inf affects only its own value.
 
     ``np.linalg.lstsq`` with several right-hand sides returns NaN coefficients for all of
     them when any one column holds an infinity, which would turn the whole plate into NaN.
-    Three JUMP plates carry one inf each.
+    Three JUMP plates carry one inf each. Regression test for #66: the feature holding it
+    was then fitted with the inf and lost on its plate.
     """
     adata = gradient_cells.copy()
     adata.obs["Metadata_CellCount"] = np.arange(adata.n_obs) % 37 + 10
@@ -211,7 +212,12 @@ def test_one_infinity_does_not_spread_across_features(gradient_cells):
     spoiled = plates == plates[0]
     others = np.delete(np.arange(adata.n_vars), 2)
 
-    assert np.isnan(corrected[spoiled, 2]).all(), "the infinite feature cannot be fitted"
+    gapped = adata.copy()
+    gapped.X[0, 2] = np.nan
+    mt.pp.regress_out(gapped, keys=("Metadata_CellCount",), key_added="regressed")
+    assert np.isinf(corrected[0, 2]), "the infinity stays where it was"
+    # and its feature is fitted without it
+    np.testing.assert_array_equal(corrected[1:, 2], gapped.layers["regressed"][1:, 2])
     assert np.isfinite(corrected[np.ix_(spoiled, others)]).all(), "and takes no neighbour with it"
     assert np.isfinite(corrected[~spoiled]).all(), "nor any other plate"
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import numpy as np
 from anndata import AnnData
+from scipy.stats import rankdata
 
 from mantispy._core._corr import CHUNK_BYTES
 from mantispy._core._reduce import get_matrix, group_codes
@@ -33,24 +34,27 @@ def _complete_columns(values: np.ndarray) -> np.ndarray:
 
 
 def _xi(x: np.ndarray, values: np.ndarray, m: int, seed: int) -> np.ndarray:
-    """Chatterjee's xi between ``x`` and every column of ``values``, all of which must be finite."""
+    """Chatterjee's xi between ``x`` and every column of ``values``, all of which must be finite.
+
+    The statistic of :cite:t:`Lin_2022`, centred on its exact mean under independence and scaled by the ``sum(l * (n - l))`` of :cite:t:`Chatterjee_2020`, which is how Chatterjee handles ties in ``y``.
+    Without ties in ``y`` it is Lin and Han's statistic exactly.
+    """
     n = x.size
-    generator = np.random.default_rng(seed)
-    shuffled = generator.permutation(n)
+    shuffled = np.random.default_rng(seed).permutation(n)
     order = shuffled[np.argsort(x[shuffled], kind="stable")]
 
-    # Ranks of y, read in the order x puts the rows in. Ties in y are broken at random too:
-    # a stable sort breaks them by position in x-order, which reads the x ordering back out of
-    # a tied column and scores a constant feature as a perfect function of x.
-    jumble = generator.permutation(n)
-    jumbled = np.argsort(np.argsort(values[order][jumble], axis=0, kind="stable"), axis=0) + 1
-    ranks = np.empty_like(jumbled)
-    ranks[jumble] = jumbled
-
+    # How many values of y are at or below each one, read in the order x puts the rows in; tied values share it.
+    # As integers: rankdata keeps float32 input float32, whose sums of ranks are inexact above 2**24.
+    ranks = rankdata(values[order], method="max", axis=0).astype(np.int64)
     total = np.zeros(values.shape[1])
     for step in range(1, m + 1):
         total += np.minimum(ranks[: n - step], ranks[step:]).sum(axis=0) + ranks[n - step :].sum(axis=0)
-    return -2.0 + 6.0 * total / ((n + 1) * (n * m + m * (m + 1) / 4))
+    # How many are strictly below; the scale is zero only for a constant column, which has no xi.
+    below = rankdata(values, method="min", axis=0).astype(np.float64) - 1
+    scale = (below * (n - below)).sum(axis=0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        centred = n * (n - 1) * (total - m * ranks.sum(axis=0)) / scale
+    return (centred + n * m - m * (m + 1) / 2) / (n * m + m * (m + 1) / 4)
 
 
 def chatterjee_xi(x: np.ndarray, y: np.ndarray, m: int = 1, seed: int = 0, min_finite: int = 40) -> np.ndarray:
@@ -60,19 +64,21 @@ def chatterjee_xi(x: np.ndarray, y: np.ndarray, m: int = 1, seed: int = 0, min_f
         x: The variable the others are tested against, such as a group code, a dose or a covariate.
         y: One column, or a matrix of them. Every column is scored against ``x`` in one pass.
         m: Right nearest neighbors, as in :cite:t:`Lin_2022`. Larger ``m`` has the same limit under dependence and a lower noise floor under independence, so a fixed threshold is more reliable.
-        seed: Seed for the tie-breaking.
+        seed: Seed for breaking ties in ``x``.
         min_finite: Fewest finite pairs a column may be scored on, raised to ``m + 2`` when it is below that. Under independence xi has standard deviation ``sqrt(2 / (5 * n))``, which at 40 pairs equals the 0.1 threshold :func:`feature_select_chatterjee` selects on, so a column measured fewer times than this cannot be told from noise.
 
     Returns:
-        One xi per column of ``y``, NaN for a column with fewer than ``min_finite`` finite pairs.
+        One xi per column of ``y``, NaN for a constant column or one with fewer than ``min_finite`` finite pairs.
 
     Raises:
         ValueError: If ``m`` is below 1.
 
     Notes:
-        Ties in both ``x`` and ``y`` are broken at random, as the coefficient requires.
+        Ties in ``x`` are broken at random, as the coefficient requires, so ``seed`` matters only when ``x`` has ties.
         A group label is almost all ties, and breaking them by row order would score the row order as structure.
-        Ties in ``y`` matter just as much: breaking them in ``x``-order scores an all-zero column at 0.996 instead of 0.007, which is what a zero-inflated Zernike, Granularity or RadialDistribution column looks like.
+        Ties in ``y`` are handled as :cite:t:`Chatterjee_2020` handles them, without randomness: tied values share a rank.
+        A zero-inflated Zernike, Granularity or RadialDistribution column is mostly ties, and breaking them at random scores one that is a step function of ``x`` at 0.51 instead of 0.99.
+        A constant column carries no information and scores NaN.
 
         xi is defined on complete pairs, so each column is scored on the rows where both it and ``x`` are finite, and two columns missing different rows are scored on different subsets.
         Ranking a column that still holds NaN sorts the missing rows last, which turns a feature that is merely unmeasured in one group into a step function of the group and scores it as dependence.
@@ -118,13 +124,13 @@ def feature_select_chatterjee(
         groupby: ``obs`` column the features are tested against.
         threshold: Keep features scoring above this. xi is near zero under independence and approaches one when the feature is a deterministic function of the group, so the threshold is comparable across datasets in a way a correlation cutoff is not.
         m: Right nearest neighbors :cite:p:`Lin_2022`. ``m=1`` is the coefficient of :cite:t:`Chatterjee_2020` up to a term of order ``1/n``; larger values lower the noise floor without changing what the statistic converges to.
-        seed: Seed for the random tie-breaking.
+        seed: Seed for breaking ties between rows of the same group.
         min_finite: Fewest finite values a feature may be scored on. A feature measured fewer times than this scores NaN, which is above no threshold and so is never selected.
         key_added: Name of the boolean ``var`` column written.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes ``var[key_added]`` and the statistic itself to ``var["chatterjee_xi"]``, which is NaN for a feature too sparsely measured to score.
+        ``None``, or the modified copy. Writes ``var[key_added]`` and the statistic itself to ``var["chatterjee_xi"]``, which is NaN for a feature that is constant or too sparsely measured to score.
 
     Raises:
         ValueError: If ``groupby`` has a single group, so that no feature can depend on it.
@@ -136,13 +142,13 @@ def feature_select_chatterjee(
         A feature is scored on the rows where it was measured, so one that is missing in a whole group is scored against the groups that do have it rather than against the pattern of what is missing.
 
         xi reaches one only for a noiseless function of the group, so real values are much lower.
-        Over pki's 852 selected features and 38 treatments the largest was 0.32, and the default threshold of 0.1 kept about half of them.
+        Over pki's 899 selected features and 38 treatments the largest was 0.32, and the default threshold of 0.1 kept about half of them.
         Check the distribution in ``var["chatterjee_xi"]`` before relying on a fixed cutoff.
 
-        With shuffled group labels on the same data, the largest xi is 0.035 at ``m=1`` and 0.018 at ``m=5``, while the largest real value barely changes (0.322 and 0.321).
+        With shuffled group labels on the same data, the largest xi is 0.039 at ``m=1`` and 0.027 at ``m=5``, while the largest real value barely changes (0.322 and 0.321).
         ``m=1`` is the default because the threshold was calibrated there.
         scmorph uses ``m=5``, and on input free of ties the two implementations agree to 1e-9.
-        Tied input cannot agree that closely, because each breaks its ties from its own draws, so what is pinned there is that neither reads structure out of the ties (``tests/test_equivalence_scmorph.py``).
+        scmorph breaks ties in ``y`` at random, so on tied input the two differ.
     """
     codes, keys = group_codes(adata, groupby)
     if len(keys) < 2:
@@ -150,11 +156,11 @@ def feature_select_chatterjee(
 
     scores = chatterjee_xi(codes.astype(float), get_matrix(adata), m=m, seed=seed, min_finite=min_finite)
     adata.var["chatterjee_xi"] = scores
-    # NaN is above no threshold, so a feature too sparsely measured to score drops out here.
+    # NaN is above no threshold, so a feature that cannot be scored drops out here.
     selected = scores > threshold
     adata.var[key_added] = selected
     get_logger().info(
-        "chatterjee kept %d of %d features, %d too sparsely measured to score",
+        "chatterjee kept %d of %d features, %d constant or too sparsely measured to score",
         int(selected.sum()),
         adata.n_vars,
         int(np.isnan(scores).sum()),

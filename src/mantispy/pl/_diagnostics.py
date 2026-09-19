@@ -129,7 +129,7 @@ def control_drift(
     if is_control.sum() < n_components + 1:
         raise ValueError(f"need more than {n_components} control rows, found {int(is_control.sum())}")
 
-    controls = np.nan_to_num(get_matrix(adata)[is_control], nan=0.0)
+    controls = np.nan_to_num(get_matrix(adata)[is_control], nan=0.0, posinf=0.0, neginf=0.0)
     embedding = PCA(n_components=n_components).fit_transform(controls)
     labels = adata.obs[groupby].astype(str).to_numpy()[is_control]
 
