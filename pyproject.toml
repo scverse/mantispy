@@ -110,6 +110,7 @@ typecheck = [
 ]
 
 [tool.hatch]
+build.targets.sdist.exclude = [ "/docs", "/tests" ]
 envs.default.installer = "uv"
 envs.default.dependency-groups = [ "dev" ]
 # The docs build renders the notebook outputs committed with them, so it downloads and executes nothing.
