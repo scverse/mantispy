@@ -7,7 +7,7 @@ import math
 import numpy as np
 from anndata import AnnData
 
-from mantispy._core._ecod import ecod_scores
+from mantispy._core._ecod import AGGREGATIONS, ecod_scores
 from mantispy._core._reduce import get_matrix, group_codes, group_offsets
 from mantispy._core._stats import robust_zscore
 from mantispy._core.logging import get_logger
@@ -17,10 +17,10 @@ from mantispy._core.mutation import inplace_or_copy
 METHODS = ("ecod", "isolation_forest", "mad")
 
 
-def _scores(X: np.ndarray, method: str, seed: int) -> np.ndarray:
+def _scores(X: np.ndarray, method: str, seed: int, ecod_aggregation: str) -> np.ndarray:
     """Outlier score per row, higher meaning more outlying."""
     if method == "ecod":
-        return ecod_scores(X)
+        return ecod_scores(X, ecod_aggregation)
     if method == "isolation_forest":
         from sklearn.ensemble import IsolationForest
 
@@ -40,6 +40,7 @@ def outliers(
     key: str | None = "selected",
     by: str | None = None,
     seed: int = 0,
+    ecod_aggregation: str = "pyod",
     key_added: str = "qc_outlier",
     copy: bool = False,
 ) -> AnnData | None:
@@ -49,12 +50,13 @@ def outliers(
 
     Args:
         adata: Object to flag.
-        method: ``"ecod"`` :cite:p:`Li_2023`, scored as pyod scores it, is parameter-free and interpretable per feature, ``"isolation_forest"`` catches outliers defined by feature interactions, and ``"mad"`` takes the largest robust z-score across features, which is easy to explain but sees each feature alone.
+        method: ``"ecod"`` :cite:p:`Li_2023` needs no tuning and is interpretable per feature, ``"isolation_forest"`` catches outliers defined by feature interactions, and ``"mad"`` takes the largest robust z-score across features, which is easy to explain but sees each feature alone.
         contamination: Fraction of cells to flag, rounded up to a whole cell within each ``by`` group, so a non-empty group always flags its most outlying cell and the flagged fraction is higher than asked for in a group smaller than ``1 / contamination``. Ignored when ``score_cutoff`` is given.
         score_cutoff: Threshold the score absolutely instead of by quantile. With ``method="mad"`` the score is a robust z-score, so ``score_cutoff=5`` gives the usual rule.
         key: Restrict to features flagged by this boolean ``var`` column, usually ``"selected"``. Falls back to every feature when the column is absent.
         by: Threshold within each group of this ``obs`` column, e.g. per plate, rather than globally.
         seed: Seed for ``isolation_forest``.
+        ecod_aggregation: How ``"ecod"`` combines features. ``"pyod"`` sums each feature's larger tail, or both tails where its skewness is zero or undefined, as pyod and scmorph do, so no score depends on which way round a feature is measured. ``"paper"`` is Algorithm 1 of :cite:t:`Li_2023`, the largest of the left-tail, right-tail and skew-directed sums.
         key_added: Prefix for the outputs: ``obs[key_added]`` and ``obs[key_added + "_score"]``.
         copy: Return a modified copy instead of mutating in place.
 
@@ -62,12 +64,14 @@ def outliers(
         ``None``, or the modified copy. Writes the boolean ``obs[key_added]`` and the score itself to ``obs[key_added + "_score"]``.
 
     Raises:
-        ValueError: If ``method`` is unknown, or ``contamination`` is outside ``(0, 1)`` and no ``score_cutoff`` is given.
+        ValueError: If ``method`` or ``ecod_aggregation`` is unknown, or ``contamination`` is outside ``(0, 1)`` and no ``score_cutoff`` is given.
     """
     if method not in METHODS:
         raise ValueError(f"method must be one of {METHODS}, got {method!r}")
     if not 0.0 < contamination < 1.0 and score_cutoff is None:
         raise ValueError(f"contamination must be between 0 and 1, got {contamination}")
+    if ecod_aggregation not in AGGREGATIONS:
+        raise ValueError(f"ecod_aggregation must be one of {AGGREGATIONS}, got {ecod_aggregation!r}")
 
     selected = feature_mask(adata, key)
     X = get_matrix(adata)[:, selected]
@@ -80,7 +84,8 @@ def outliers(
         rows = order[offsets[group] : offsets[group + 1]]
         if not rows.size:
             continue
-        block = _scores(X[rows], method, seed)
+        # One group is the whole matrix, so it is scored in place rather than copied.
+        block = _scores(X if len(keys) == 1 else X[rows], method, seed, ecod_aggregation)
         scores[rows] = block
         if score_cutoff is not None:
             flagged[rows] = block > score_cutoff

@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 import mantispy as mt
+from mantispy._core._ecod import ecod_scores
 from mantispy.ds import synthetic_plate
 
 
@@ -62,6 +63,8 @@ def test_rejects_a_bad_method_or_contamination(adata):
         mt.pp.outliers(adata, method="nonsense")
     with pytest.raises(ValueError, match="contamination"):
         mt.pp.outliers(adata, contamination=1.5)
+    with pytest.raises(ValueError, match="ecod_aggregation must be"):
+        mt.pp.outliers(adata, ecod_aggregation="nonsense")
 
 
 def test_an_infinite_feature_value_is_flagged_not_hidden(adata):
@@ -93,3 +96,47 @@ def test_contamination_still_flags_within_groups_too_small_to_express_it(adata):
 
     mt.pp.outliers(adata, method="ecod", contamination=0.10, by="Metadata_Well")
     assert int(adata.obs["qc_outlier"].sum()) > len(injected), "contamination still scales"
+
+
+def test_ecod_does_not_depend_on_which_way_round_a_feature_is_measured(adata):
+    """#72: CellProfiler's feature directions are arbitrary, so the default aggregation must not
+    care about them. ecod_aggregation="paper" does, and fails this."""
+    flipped = adata.copy()
+    flipped.X[:, ::2] *= -1
+    mt.pp.outliers(adata)
+    mt.pp.outliers(flipped)
+    np.testing.assert_allclose(flipped.obs["qc_outlier_score"], adata.obs["qc_outlier_score"], rtol=1e-12)
+
+
+def test_ecod_aggregation_paper_is_algorithm_1(adata):
+    """The largest of the left-tail, right-tail and skew-directed sums, as :cite:t:`Li_2023` write it."""
+    from scipy.stats import rankdata, skew
+
+    adata.X[:, 0] = np.tile([1.0, 2.0, 3.0, 2.0], adata.n_obs // 4)  # zero skewness takes the right tail
+    mt.pp.outliers(adata, ecod_aggregation="paper")
+    X = np.asarray(adata.X, dtype=np.float64)
+    left = -np.log(rankdata(X, method="max", axis=0) / len(X))
+    right = -np.log(rankdata(-X, method="max", axis=0) / len(X))
+    directed = np.where(skew(X, axis=0) < 0, left, right)
+    expected = np.max([left.sum(axis=1), right.sum(axis=1), directed.sum(axis=1)], axis=0)
+    np.testing.assert_allclose(adata.obs["qc_outlier_score"], expected, rtol=1e-9)
+
+
+def test_ecod_fills_a_gap_beside_an_infinite_value_with_the_finite_mean():
+    """The two gaps score like the cell at the finite mean, 1.0, rather than tying the infinite one."""
+    scores = ecod_scores(np.array([[0.0], [1.0], [2.0], [-np.inf], [np.inf], [np.nan], [np.nan]]))
+    assert scores[5] == scores[6] == scores[1]
+
+
+def test_ecod_does_not_depend_on_the_thread_count():
+    """Ties at the contamination cutoff are broken by score, so the scores have to be bit-identical."""
+    from numba import get_num_threads, set_num_threads
+
+    X = np.random.default_rng(5).standard_normal((500, 40)).astype(np.float32)
+    threads = get_num_threads()
+    set_num_threads(1)
+    try:
+        serial = ecod_scores(X)
+    finally:
+        set_num_threads(threads)
+    np.testing.assert_array_equal(ecod_scores(X), serial)

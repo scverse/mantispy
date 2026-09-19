@@ -107,8 +107,28 @@ jobs:
           with:
             jobs: ${{ toJSON(needs) }}
 
+  ensure-data-is-cached:
+    runs-on: ubuntu-latest
+    steps:
+      - *clone
+      - *setup-uv
+      - &restore-data
+        name: Restore data cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/mantispy # IMPORTANT: this will fail if mantispy.settings.cache_dir default changes
+          key: data-${{ hashFiles('**/download_data.py') }}
+          restore-keys: |
+            data-
+          enableCrossOsArchive: true
+      - name: Download datasets
+        # Always run to ensure any missing files are downloaded
+        # (restore-keys may provide partial cache)
+        run: uvx hatch run data:download
+
   tutorials:
     name: Tutorials run
+    needs: ensure-data-is-cached
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -120,10 +140,6 @@ jobs:
         with:
           path: docs/_build/.jupyter_cache
           key: jupyter-cache-${{ hashFiles('docs/tutorials/*.ipynb', 'src/mantispy/**/*.py') }}
-      - name: Restore the dataset downloads
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/mantispy
-          key: mantispy-datasets-${{ hashFiles('src/mantispy/ds/registry.yaml') }}
+      - *restore-data
       - name: Execute every notebook
         run: uvx hatch run tutorials:run
