@@ -156,6 +156,7 @@ def test_evaluate_correction_takes_every_option_by_keyword():
         "reps",
         "label_key",
         "batch_key",
+        "covariates",
         "map_key",
         "perplexity",
     }
@@ -466,3 +467,30 @@ def test_known_relationships_takes_a_pair_list_once_it_is_reshaped():
 
     with pytest.raises(ValueError, match="net needs"):
         mt.metrics.known_relationships(adata, pairs)
+
+
+def test_evaluate_correction_reports_a_covariate_nothing_else_would_catch(corrected):
+    """A representation can be dominated by something that is neither the batch nor the label.
+    On the learned embeddings of `ds.jump_lite` the cell count explains several times more of the
+    variance than the source does, and no other row of this table would say so."""
+    generator = np.random.default_rng(0)
+    embedding = np.asarray(corrected.obsm["X_pca"]).copy()
+    # A covariate written straight into the first component, and one that is pure noise.
+    corrected.obs["Metadata_CellCount"] = embedding[:, 0] * 10 + generator.normal(scale=0.01, size=corrected.n_obs)
+    corrected.obs["Metadata_Unrelated"] = generator.normal(size=corrected.n_obs)
+
+    frame = mt.metrics.evaluate_correction(
+        corrected, reps=("X_pca",), covariates=("Metadata_CellCount", "Metadata_Unrelated"), perplexity=10
+    )
+
+    assert frame["metric"].is_unique  # a second row called "pc_regression" would collide
+    dominant = _value(frame, "pc_regression:Metadata_CellCount")
+    unrelated = _value(frame, "pc_regression:Metadata_Unrelated")
+    batch = _value(frame, "pc_regression")
+    assert dominant > batch and dominant > 0.5
+    assert unrelated < 0.2
+
+    # Whether a small share is better depends on what the covariate is, so no direction is claimed.
+    covariate_rows = frame[frame["metric"].str.startswith("pc_regression:")]
+    assert covariate_rows["better"].isna().all()
+    assert not frame[~frame["metric"].str.startswith("pc_regression:")]["better"].isna().any()
