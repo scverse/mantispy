@@ -93,7 +93,7 @@ def test_tvn_matches_the_reference_implementation():
         adata.obs["Metadata_Batch"].to_numpy(),
     )
 
-    mt.pp.tvn(adata)
+    mt.pp.tvn(adata, use_rep=None)
     assert np.allclose(adata.obsm["X_tvn"], expected, atol=1e-5)
 
 
@@ -108,7 +108,7 @@ def test_tvn_aligns_the_batches_and_leaves_x_alone():
     sc.pp.pca(adata, n_comps=5)
     batch_variance = mt.metrics.pc_regression(adata, key="Metadata_Batch", use_rep="X_pca")["value"].iloc[0]
 
-    mt.pp.tvn(adata)
+    mt.pp.tvn(adata, use_rep=None)
     aligned = mt.metrics.pc_regression(adata, key="Metadata_Batch", use_rep="X_tvn")["value"].iloc[0]
 
     assert aligned < batch_variance
@@ -119,7 +119,7 @@ def test_tvn_keeps_one_component_per_control_when_the_controls_are_few():
     """The rotation is fitted on the controls, so a control-poor screen comes back narrower
     than it went in. That is why this writes obsm: var would no longer describe the columns."""
     adata = _batched(n_batches=2, per_batch=12, n_features=20)
-    mt.pp.tvn(adata)
+    mt.pp.tvn(adata, use_rep=None)
     assert adata.obsm["X_tvn"].shape == (adata.n_obs, int(adata.obs["Metadata_Control"].sum()))
 
 
@@ -130,7 +130,24 @@ def test_tvn_refuses_a_batch_it_cannot_estimate_a_covariance_for():
     adata.obs["Metadata_Control"] = control
 
     with pytest.raises(ValueError, match="at least 2"):
-        mt.pp.tvn(adata)
+        mt.pp.tvn(adata, use_rep=None)
     adata.obs["Metadata_Nothing"] = np.zeros(adata.n_obs, dtype=bool)
     with pytest.raises(ValueError, match="no reference rows"):
-        mt.pp.tvn(adata, reference="Metadata_Nothing")
+        mt.pp.tvn(adata, use_rep=None, reference="Metadata_Nothing")
+
+
+def test_tvn_says_when_a_batch_cannot_scale_a_dimension():
+    """A batch whose controls are constant in one dimension scales it by 1 and says so. The
+    per-batch pass is where this bites: it is fitted on that batch's controls alone."""
+    adata = _batched(n_batches=2, per_batch=20)
+    values = np.asarray(adata.X).copy()
+    control = adata.obs["Metadata_Control"].to_numpy(dtype=bool)
+    batch = adata.obs["Metadata_Batch"].to_numpy() == "B1"
+    # Identical control wells, so every component is constant among them however the rotation
+    # falls. One constant feature would not survive the PCA as a constant component.
+    values[batch & control] = values[np.flatnonzero(batch & control)[0]]
+    adata.X = values
+
+    with pytest.warns(UserWarning, match=r"no spread among the .* of batch 'B1'"):
+        mt.pp.tvn(adata, use_rep=None)
+    assert np.isfinite(adata.obsm["X_tvn"]).all()

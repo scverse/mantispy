@@ -108,6 +108,7 @@ pip install 'mantispy[spatial]'
 | `pp.correct_plate_position` | `X` or `layers[key_added]`, `uns["mantispy"]["plate_position"]` |
 | `pp.regress_out` | `X`, or `layers[key_added]` |
 | `pp.harmony` | `obsm[key_added]`; needs `mantispy[harmony]` |
+| `pp.tvn` | `obsm[key_added]` |
 | `pp.rank_int` | `X`, or `layers[key_added]` |
 | `pp.downsample` | returns a new object holding the sampled rows |
 | `pp.feature_select_chatterjee` | `var[key_added]`, `var["chatterjee_xi"]` |

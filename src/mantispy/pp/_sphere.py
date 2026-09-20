@@ -11,6 +11,7 @@ import warnings
 import numpy as np
 from anndata import AnnData
 
+from mantispy._core._numba import group_offsets
 from mantispy._core._reduce import get_matrix, group_codes, representation
 from mantispy._core.masks import reference_mask
 from mantispy._core.mutation import inplace_or_copy
@@ -148,20 +149,31 @@ def sphere(
     return None
 
 
-def _centre_scale(values: np.ndarray, reference: np.ndarray) -> np.ndarray:
+def _centre_scale(values: np.ndarray, reference: np.ndarray, where: str = "") -> np.ndarray:
     """Centre and scale every row by the mean and spread of the reference rows.
 
-    The spread is the population standard deviation, as sklearn's ``StandardScaler`` computes it, and a feature with no spread among the reference rows is left on its own scale rather than divided by zero.
+    The spread is the population standard deviation, as sklearn's ``StandardScaler`` computes it. A dimension with no spread among the reference rows is left on its own scale rather than divided by zero, and warns, as :func:`~mantispy.pp.normalize` does for the same condition — it cannot flag ``var``, because the columns being scaled are an embedding that ``var`` does not describe.
 
     Args:
         values: Rows to transform.
         reference: Boolean mask over ``values``, selecting the rows the mean and spread are taken from.
+        where: Names the batch in the warning, when the reference rows are one batch's.
 
     Returns:
         The transformed rows.
     """
-    centre = values[reference].mean(axis=0)
-    scale = values[reference].std(axis=0, ddof=0)
+    block = values[reference]
+    centre = block.mean(axis=0)
+    scale = block.std(axis=0, ddof=0)
+    if (no_spread := int((scale == 0).sum())) > 0:
+        warnings.warn(
+            f"{no_spread} of {scale.size} dimension(s) have no spread among the {int(reference.sum())} "
+            f"reference row(s){where}. Their scale is clamped to 1, so they pass through centred but "
+            "unscaled and are not comparable with the rest. Reduce to fewer components, or use more "
+            "controls.",
+            UserWarning,
+            stacklevel=3,
+        )
     return (values - centre) / np.where(scale == 0, 1.0, scale)
 
 
@@ -199,7 +211,7 @@ def tvn(
     adata: AnnData,
     batch_key: str = "Metadata_Batch",
     reference: str | None = "negcon",
-    use_rep: str | None = None,
+    use_rep: str | None = "X_pca",
     key_added: str = "X_tvn",
     epsilon: float = 0.5,
     copy: bool = False,
@@ -213,7 +225,7 @@ def tvn(
         adata: Object holding the profiles, usually one row per well.
         batch_key: ``obs`` column naming the batches to align. Each needs at least two reference rows.
         reference: Rows the transform is fitted on: ``"negcon"`` for the controls, ``None`` for everything, or the name of a boolean ``obs`` column.
-        use_rep: Transform ``obsm[use_rep]`` instead of ``X``. Fitting the rotation on the controls of a wide feature matrix is expensive, so an embedding is the usual input.
+        use_rep: Embedding to align, as :func:`~mantispy.pp.harmony` takes one, or ``None`` to align ``X`` itself. Fitting the rotation on the controls of a wide feature matrix is expensive, so the default expects a reduction first, normally ``sc.pp.pca``.
         key_added: ``obsm`` key for the result.
         epsilon: Added to the diagonal of every covariance before it is inverted. The profiles are on the controls' own scale by then, so their variances are near one and the reference value of 0.5 is a substantial shrink toward isotropy.
         copy: Return a modified copy instead of writing in place.
@@ -236,7 +248,7 @@ def tvn(
     """
     from sklearn.decomposition import PCA
 
-    values = representation(adata, use_rep).astype(np.float64)
+    values = representation(adata, use_rep)
     controls = reference_mask(adata, reference)
     if not controls.any():
         raise ValueError(f"no reference rows selected by reference={reference!r}")
@@ -247,21 +259,25 @@ def tvn(
     values = PCA().fit(values[controls]).transform(values)
 
     codes, keys = group_codes(adata, batch_key)
-    for group, key in enumerate(keys):
-        rows = codes == group
-        if int((rows & controls).sum()) < 2:
+    # One stable ordering serves both passes, where `codes == group` would scan every row once
+    # per batch. The two passes cannot be merged: the target below is taken from every control
+    # row, after the first pass has rewritten them all.
+    order, offsets = group_offsets(codes, len(keys))
+    batches = [order[offsets[group] : offsets[group + 1]] for group in range(len(keys))]
+
+    for key, rows in zip(keys, batches, strict=True):
+        reference_rows = rows[controls[rows]]
+        if reference_rows.size < 2:
             raise ValueError(
-                f"batch {key!r} has {int((rows & controls).sum())} row(s) selected by reference={reference!r}, "
+                f"batch {key!r} has {reference_rows.size} row(s) selected by reference={reference!r}, "
                 "and aligning a batch needs at least 2 to estimate its covariance. Drop that batch, or "
                 "check that the platemap labels its controls."
             )
-        values[rows] = _centre_scale(values[rows], controls[rows])
+        values[rows] = _centre_scale(values[rows], controls[rows], where=f" of batch {key!r}")
 
-    # Taken once, from every control row, and before the loop writes into values.
     target = _symmetric_power(_regularized_covariance(values[controls], epsilon), 0.5)
-    for group in range(len(keys)):
-        rows = codes == group
-        source = _regularized_covariance(values[rows & controls], epsilon)
+    for rows in batches:
+        source = _regularized_covariance(values[rows[controls[rows]]], epsilon)
         values[rows] = values[rows] @ _symmetric_power(source, -0.5) @ target
 
     adata.obsm[key_added] = values.astype(np.float32)
