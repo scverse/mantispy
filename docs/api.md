@@ -27,6 +27,7 @@ The Stores column in the tables below lists the keys each function writes.
     io.read_jump
     io.read
     io.write
+    io.stamp
     io.validate
 ```
 
@@ -46,6 +47,7 @@ pip install 'mantispy[spatial]'
 | `io.read_plate` | returns `SpatialData`: fields of view as Images, segmentations as Labels, wells as Shapes; the `cells` and `wells` Tables of a gallery source follow the contract below |
 | `io.read_jump` | as `io.read_profiles`, plus `obs`: `Metadata_JCP2022`, `Metadata_Perturbation`, `Metadata_InChIKey`, `Metadata_Control` |
 | `io.write` | validates first, then writes h5ad (or zarr for a `.zarr` suffix) |
+| `io.stamp` | `uns["mantispy"]`: `schema_version`, `resolution`. Refuses an object whose `obs` lacks a column that resolution requires |
 
 `io.validate` returns a report rather than raising, unless `raise_on_error=True`:
 

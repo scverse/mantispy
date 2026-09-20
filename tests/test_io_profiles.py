@@ -384,3 +384,67 @@ def test_index_columns_name_the_observations(tmp_path):
         mt.io.read_profiles(path, index_columns=("Metadata_Plate",))
     with pytest.raises(KeyError, match="index columns not in metadata"):
         mt.io.read_profiles(path, index_columns=("Metadata_Nope",))
+
+
+@pytest.mark.parametrize("resolution", ["cell", "well", "perturbation"])
+def test_stamp_puts_a_hand_built_object_on_the_api_surface(resolution):
+    """An object from another pipeline, or a matrix of learned embeddings, arrives without the
+    stamp every reader here writes, and nothing public used to establish it."""
+    import anndata as ad
+
+    columns = {
+        "cell": {"Metadata_Plate": "P1", "Metadata_Well": "A01"},
+        "well": {"Metadata_Plate": "P1", "Metadata_Well": "A01"},
+        "perturbation": {"Metadata_Perturbation": "cmpd"},
+    }[resolution]
+    obs = pd.DataFrame({name: [value] * 4 for name, value in columns.items()}, index=list("abcd"))
+    adata = ad.AnnData(np.arange(20, dtype=np.float32).reshape(4, 5), obs=obs)
+
+    assert mt.io.stamp(adata, resolution=resolution) is None
+    assert adata.uns["mantispy"]["resolution"] == resolution
+    assert mt.io.validate(adata).ok
+
+
+def test_stamp_refuses_what_the_resolution_needs_and_obs_lacks():
+    """Stamping regardless would push the failure into whichever tool ran next."""
+    import anndata as ad
+
+    adata = ad.AnnData(np.zeros((3, 2), dtype=np.float32), obs=pd.DataFrame(index=list("abc")))
+    with pytest.raises(ValueError, match=r"Metadata_Plate.*Metadata_Well"):
+        mt.io.stamp(adata)
+    with pytest.raises(ValueError, match="resolution must be one of"):
+        mt.io.stamp(adata, resolution="plate")
+    assert "mantispy" not in adata.uns
+
+
+def test_stamp_can_leave_the_original_alone():
+    import anndata as ad
+
+    obs = pd.DataFrame({"Metadata_Perturbation": ["a", "b"]}, index=["x", "y"])
+    adata = ad.AnnData(np.zeros((2, 3), dtype=np.float32), obs=obs)
+
+    stamped = mt.io.stamp(adata, resolution="perturbation", copy=True)
+    assert stamped.uns["mantispy"]["resolution"] == "perturbation"
+    assert "mantispy" not in adata.uns
+
+
+def test_stamp_lets_a_learned_embedding_be_written(tmp_path):
+    """An embedding has no CellProfiler feature names, so its var carries none of the annotation
+    the schema requires, and `io.write` validates before writing. Without the annotation columns
+    a stamped embedding failed on ten missing var columns and could not be written at all."""
+    import anndata as ad
+
+    obs = pd.DataFrame(
+        {"Metadata_Plate": ["P1"] * 4, "Metadata_Well": ["A01", "A02", "A03", "A04"]},
+        index=list("abcd"),
+    )
+    adata = ad.AnnData(np.arange(24, dtype=np.float32).reshape(4, 6), obs=obs)
+    adata.var_names = [f"emb_{index}" for index in range(6)]
+
+    mt.io.stamp(adata, resolution="well")
+    assert mt.io.validate(adata).ok, str(mt.io.validate(adata))
+    assert adata.var["object"].isna().all()  # nothing was invented for it
+
+    path = tmp_path / "embedding.h5ad"
+    mt.io.write(adata, path)
+    assert mt.io.read(path).shape == (4, 6)

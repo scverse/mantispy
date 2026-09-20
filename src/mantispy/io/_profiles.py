@@ -19,7 +19,16 @@ from mantispy._core.frames import as_frame, categorize_metadata
 from mantispy._core.logging import get_logger, report_drop
 from mantispy._core.plate import normalize_well
 from mantispy._core.provenance import record_params
-from mantispy._core.schema import SCHEMA_VERSION, SUPPORTED_VERSIONS, migrate, stamp, validate
+from mantispy._core.schema import (
+    REQUIRED_OBS,
+    REQUIRED_VAR,
+    RESOLUTIONS,
+    SCHEMA_VERSION,
+    SUPPORTED_VERSIONS,
+    migrate,
+    validate,
+)
+from mantispy._core.schema import stamp as _record
 from mantispy.io._cellprofiler import export_prefix, read_export
 
 #: Column-name prefixes that mark metadata. Real accessions use all four.
@@ -211,7 +220,7 @@ def from_dataframe(
     obs.index = pd.Index([str(i) for i in range(len(obs))])
 
     adata = ad.AnnData(X=X, obs=obs, var=parsed.loc[feature_names])
-    stamp(adata, resolution=resolution)
+    _record(adata, resolution=resolution)
     # Recorded whether given or inferred, so the parse can be reproduced from the object.
     if vocabulary:
         adata.uns["mantispy"]["channels"] = list(vocabulary)
@@ -463,9 +472,63 @@ def write(adata: ad.AnnData, path: str | Path) -> None:
         ValueError: The object does not satisfy the schema, with every failure :func:`~mantispy.io.validate` found in the message.
     """
     path = Path(path)
-    stamp(adata)
+    _record(adata)
     validate(adata, raise_on_error=True)
     if path.suffix == ".zarr":
         adata.write_zarr(path)
     else:
         adata.write_h5ad(path)
+
+
+def stamp(adata: ad.AnnData, resolution: str = "well", copy: bool = False) -> ad.AnnData | None:
+    """Mark an :class:`~anndata.AnnData` built elsewhere as a mantispy object.
+
+    Every reader here, and every tool that returns a new object, records this already. This is the entry point for an object that did not come from one of them: a published ``h5ad``, another pipeline's output, a subset assembled in a notebook, or a matrix of learned embeddings with its metadata alongside.
+
+    Args:
+        adata: The object to stamp.
+        resolution: What one row is, one of :data:`~mantispy._core.schema.RESOLUTIONS`. ``obs`` has to carry the columns that resolution requires.
+        copy: Return a stamped copy instead of stamping in place.
+
+    Returns:
+        ``None``, or the stamped copy.
+        Writes the schema version and the resolution to ``uns["mantispy"]``.
+
+    Raises:
+        ValueError: ``resolution`` is not one of the three, or ``obs`` lacks a column that resolution requires.
+
+    Notes:
+        Only the ``obs`` columns the resolution requires are checked, because that is what the rest of the package dispatches on. :func:`validate` gives the full report, including what it warns about rather than blocks.
+
+        Any of the feature-annotation columns the schema requires that ``var`` does not already have are filled by parsing the feature names, and a name that is not a CellProfiler feature name parses as empty. That is what a learned embedding is, so its annotation comes out null throughout and the object still satisfies the schema, which :func:`write` insists on. Columns already present are left as they are.
+
+    Examples:
+        Bringing in a matrix of learned embeddings, one row per well:
+
+        >>> import anndata as ad
+        >>> import mantispy as mt
+        >>> adata = ad.AnnData(embeddings, obs=metadata)  # doctest: +SKIP
+        >>> mt.io.stamp(adata, resolution="well")  # doctest: +SKIP
+    """
+    if resolution not in RESOLUTIONS:
+        raise ValueError(f"resolution must be one of {RESOLUTIONS}, got {resolution!r}")
+
+    target = adata.copy() if copy else adata
+    missing = [column for column in REQUIRED_OBS[resolution] if column not in target.obs]
+    if missing:
+        raise ValueError(
+            f"obs is missing {missing}, which every {resolution}-resolution object needs. Add the "
+            "column(s), or stamp at a resolution whose requirements obs meets."
+        )
+
+    absent = [column for column in REQUIRED_VAR if column not in target.var]
+    if absent:
+        # The parsed columns are categorical, which is what survives an h5ad round trip when a
+        # column is entirely missing; an object array of NaN does not.
+        parsed = parse_feature_names(list(target.var_names))
+        parsed.index = target.var.index
+        for column in absent:
+            target.var[column] = parsed[column]
+
+    _record(target, resolution=resolution)
+    return target if copy else None
