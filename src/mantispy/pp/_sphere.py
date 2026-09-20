@@ -1,7 +1,7 @@
-"""Whitening (sphering) fitted on control profiles.
+"""Whitening fitted on control profiles, in two forms.
 
-This is typical variation normalization.
-Whitening by the covariance of the negative controls removes the variation they share, leaving the effects of the perturbations.
+:func:`sphere` whitens by the covariance of the negative controls, which removes the variation they share and leaves the effects of the perturbations.
+:func:`tvn` is typical variation normalization as :cite:t:`Celik_2024` defines it: the same idea followed by a per-batch alignment, so batches that disagree about what typical variation looks like are brought onto one another.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import warnings
 import numpy as np
 from anndata import AnnData
 
-from mantispy._core._reduce import get_matrix, group_codes
+from mantispy._core._reduce import get_matrix, group_codes, representation
 from mantispy._core.masks import reference_mask
 from mantispy._core.mutation import inplace_or_copy
 
@@ -145,4 +145,124 @@ def sphere(
         adata.X = result
     else:
         adata.layers[key_added] = result
+    return None
+
+
+def _centre_scale(values: np.ndarray, reference: np.ndarray) -> np.ndarray:
+    """Centre and scale every row by the mean and spread of the reference rows.
+
+    The spread is the population standard deviation, as sklearn's ``StandardScaler`` computes it, and a feature with no spread among the reference rows is left on its own scale rather than divided by zero.
+
+    Args:
+        values: Rows to transform.
+        reference: Boolean mask over ``values``, selecting the rows the mean and spread are taken from.
+
+    Returns:
+        The transformed rows.
+    """
+    centre = values[reference].mean(axis=0)
+    scale = values[reference].std(axis=0, ddof=0)
+    return (values - centre) / np.where(scale == 0, 1.0, scale)
+
+
+def _regularized_covariance(values: np.ndarray, epsilon: float) -> np.ndarray:
+    """The covariance of ``values``, with ``epsilon`` added to its diagonal so it can be inverted."""
+    return np.cov(values, rowvar=False, ddof=1) + epsilon * np.eye(values.shape[1])
+
+
+def _symmetric_power(matrix: np.ndarray, power: float) -> np.ndarray:
+    """Raise a symmetric positive definite matrix to a real power through its eigendecomposition.
+
+    ``scipy.linalg.fractional_matrix_power`` handles any matrix, by a Schur decomposition that returns a complex result whose imaginary part is numerical noise. A regularized covariance is symmetric, so this is exact, real and cheaper, and it agrees with the general routine to floating-point noise.
+
+    Args:
+        matrix: A symmetric, positive definite matrix.
+        power: The power to raise it to.
+
+    Returns:
+        The matrix raised to that power.
+
+    Raises:
+        ValueError: The matrix is singular or indefinite, which leaves the power undefined.
+    """
+    eigenvalues, vectors = np.linalg.eigh(matrix)
+    if eigenvalues.min() <= 0:
+        raise ValueError(
+            f"a control covariance has a non-positive eigenvalue ({eigenvalues.min():.3g}), so it cannot be "
+            "inverted. Raise epsilon, which is added to every covariance diagonal."
+        )
+    return (vectors * eigenvalues**power) @ vectors.T
+
+
+@inplace_or_copy(expects=("well", "perturbation"))
+def tvn(
+    adata: AnnData,
+    batch_key: str = "Metadata_Batch",
+    reference: str | None = "negcon",
+    use_rep: str | None = None,
+    key_added: str = "X_tvn",
+    epsilon: float = 0.5,
+    copy: bool = False,
+) -> AnnData | None:
+    """Typical variation normalization, then align each batch's controls onto the pooled controls :cite:p:`Celik_2024`.
+
+    The controls define what an untreated well looks like, so they are what the transform is fitted on: the profiles are centred and scaled on them, rotated onto the principal components of the controls alone, and centred and scaled on them again within each batch.
+    The last step is CORAL — each batch is whitened by the covariance of its own controls and recoloured with the covariance of all of them, so a batch whose typical variation points in an unusual direction is brought onto the others rather than merely recentred.
+
+    Args:
+        adata: Object holding the profiles, usually one row per well.
+        batch_key: ``obs`` column naming the batches to align. Each needs at least two reference rows.
+        reference: Rows the transform is fitted on: ``"negcon"`` for the controls, ``None`` for everything, or the name of a boolean ``obs`` column.
+        use_rep: Transform ``obsm[use_rep]`` instead of ``X``. Fitting the rotation on the controls of a wide feature matrix is expensive, so an embedding is the usual input.
+        key_added: ``obsm`` key for the result.
+        epsilon: Added to the diagonal of every covariance before it is inverted. The profiles are on the controls' own scale by then, so their variances are near one and the reference value of 0.5 is a substantial shrink toward isotropy.
+        copy: Return a modified copy instead of writing in place.
+
+    Returns:
+        ``None``, or the modified copy. Writes ``obsm[key_added]``.
+
+    Raises:
+        KeyError: ``obs`` has no column ``batch_key`` or no column named by ``reference``, or ``obsm`` holds nothing under ``use_rep``.
+        ValueError: ``reference`` selects no rows, or fewer than two in some batch, which leaves that batch's covariance undefined.
+
+    Notes:
+        The rotation is fitted on the controls, so it keeps ``min(n_controls, n_features)`` components. With fewer controls than features the result is narrower than the input, which is why this writes ``obsm`` and never ``X``: ``var`` would no longer describe the columns.
+
+        Batch correction methods disagree with each other often enough that one metric is not evidence. Compare this with :func:`~mantispy.pp.harmony` on the same object using :func:`~mantispy.metrics.evaluate_correction`, and on a screen with annotated perturbations also :func:`~mantispy.metrics.known_relationships`, which is the measure :cite:t:`Celik_2024` selects it by.
+
+        Measured that way on both screens this package ships, on control-normalized CellProfiler features, this did not beat plain principal components: mechanism retrieval on BBBC021 and replicate retrieval across the eleven JUMP sources both fell, and the share of variance the batch explains rose. The published gains are on learned embeddings, whose batches differ far more in what their controls' covariance looks like. Per-plate normalization has already removed most of that difference from CellProfiler features, so there is little left to align and whitening by a thin control covariance mostly amplifies noise.
+
+        So reach for this on embeddings, or when the controls of one batch genuinely have a different covariance and not merely a different mean, and prefer :func:`~mantispy.pp.harmony` otherwise. Measure either way.
+    """
+    from sklearn.decomposition import PCA
+
+    values = representation(adata, use_rep).astype(np.float64)
+    controls = reference_mask(adata, reference)
+    if not controls.any():
+        raise ValueError(f"no reference rows selected by reference={reference!r}")
+
+    values = _centre_scale(values, controls)
+    # Fitted on the controls, so the components describe typical variation rather than the
+    # perturbations, and the transform recentres everything on the control mean again.
+    values = PCA().fit(values[controls]).transform(values)
+
+    codes, keys = group_codes(adata, batch_key)
+    for group, key in enumerate(keys):
+        rows = codes == group
+        if int((rows & controls).sum()) < 2:
+            raise ValueError(
+                f"batch {key!r} has {int((rows & controls).sum())} row(s) selected by reference={reference!r}, "
+                "and aligning a batch needs at least 2 to estimate its covariance. Drop that batch, or "
+                "check that the platemap labels its controls."
+            )
+        values[rows] = _centre_scale(values[rows], controls[rows])
+
+    # Taken once, from every control row, and before the loop writes into values.
+    target = _symmetric_power(_regularized_covariance(values[controls], epsilon), 0.5)
+    for group in range(len(keys)):
+        rows = codes == group
+        source = _regularized_covariance(values[rows & controls], epsilon)
+        values[rows] = values[rows] @ _symmetric_power(source, -0.5) @ target
+
+    adata.obsm[key_added] = values.astype(np.float32)
     return None

@@ -80,6 +80,7 @@ pip install 'mantispy[spatial]'
     pp.well_qc
     pp.standardize_feature_names
     pp.sphere
+    pp.tvn
     pp.correct_plate_position
     pp.regress_out
     pp.harmony
