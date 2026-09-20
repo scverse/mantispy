@@ -121,12 +121,12 @@ def control_drift(
 
     Raises:
         KeyError: ``obs`` has no ``Metadata_Control`` column to select the controls with, or no ``groupby`` column.
-        ValueError: ``n_components`` is below the two that are drawn, or there are ``n_components`` control rows or fewer, too few to fit that many components.
+        ValueError: ``n_components`` is below the two that are drawn, or there are that many control rows or fewer, too few to fit them.
     """
     from sklearn.decomposition import PCA
 
     if n_components < 2:
-        raise ValueError(f"n_components must be at least 2, the two this draws, got {n_components}")
+        raise ValueError(f"n_components must be at least 2, got {n_components}")
 
     is_control = reference_mask(adata, "negcon")
     if is_control.sum() < n_components + 1:

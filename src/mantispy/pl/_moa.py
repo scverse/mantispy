@@ -209,10 +209,7 @@ def pathway_coherence(adata: AnnData, key: str = "pathway_coherence", top: int =
     """
     import matplotlib.pyplot as plt
 
-    table = _table(adata, key, "mt.tl.pathway_coherence")
-    if table.empty:
-        raise ValueError(f"uns['mantispy'][{key!r}] is empty; no set had enough of its genes in the screen")
-
+    table = _table(adata, key, "mt.tl.pathway_coherence", "no set had enough of its genes in the screen")
     best = table.nlargest(min(top, len(table)), "coherence")[::-1]
     significant = best["qvalue"].to_numpy(dtype=float) < 0.05
     ax = _axes(ax, (6, 0.3 * len(best) + 1.5))

@@ -126,10 +126,7 @@ def subpopulation_hits(adata: AnnData, key: str = "subpopulation_hits", top: int
         KeyError: ``uns["mantispy"]`` holds no table under ``key``.
         ValueError: That table is empty, which is what happens when no cluster held both controls and another group.
     """
-    table = _table(adata, key, "mt.tl.subpopulation_hits")
-    if table.empty:
-        raise ValueError(f"uns['mantispy'][{key!r}] is empty; no cluster held both controls and another group")
-
+    table = _table(adata, key, "mt.tl.subpopulation_hits", "no cluster held both controls and another group")
     table = table.assign(significance=-np.log10(np.clip(table["qvalue"].to_numpy(dtype=float), 1e-12, None)))
     grid = table.pivot_table(index="cluster", columns="group", values="significance", aggfunc="max")
     keep = grid.max(axis=0).nlargest(min(top, grid.shape[1])).index
