@@ -150,3 +150,14 @@ def test_an_inhibitory_curve_is_drawn_the_way_the_data_runs(inhibitor_adata):
     line = next(line for line in ax.get_lines() if line.get_label().startswith("EC50"))
     drawn = line.get_ydata()
     assert drawn[0] > drawn[-1], "the curve runs uphill while the data runs downhill"
+
+
+def test_one_stray_well_does_not_flatten_the_rest_onto_the_baseline(inhibitor_adata):
+    """A distance from the controls has a long right tail, so a linear axis hides the response."""
+    assert mt.pl.dose_response(inhibitor_adata, compound="cpd").get_yscale() == "log"
+
+    # A response that reaches zero has no log scale to be drawn on.
+    response = inhibitor_adata.obs["hits_row_distance"].to_numpy(dtype=float).copy()
+    response[0] = 0.0
+    inhibitor_adata.obs["hits_row_distance"] = response
+    assert mt.pl.dose_response(inhibitor_adata, compound="cpd").get_yscale() == "linear"

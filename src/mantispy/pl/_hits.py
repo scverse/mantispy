@@ -225,6 +225,10 @@ def dose_response(
     ax = _axes(ax, (5, 4))
     ax.scatter(doses[usable], values[usable], s=18, label="wells")
     ax.set_xscale("log")
+    # A distance from the controls has a long right tail, and one stray well is enough to flatten every
+    # other point onto the baseline. A response that reaches zero or below is drawn on a linear scale.
+    if usable.any() and values[usable].min() > 0:
+        ax.set_yscale("log")
 
     fitted = row.iloc[0]
     if bool(fitted["fit_ok"]):
