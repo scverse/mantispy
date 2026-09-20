@@ -231,3 +231,225 @@ def test_a_curve_that_plateaus_is_read_by_the_logistic_and_one_still_rising_by_t
 
     assert _one_compound(conc, plateauing, 0.2)["hitcall_model"] == "logistic"
     assert _one_compound(conc, still_rising, 0.2)["hitcall_model"] == "linear"
+
+
+def _sigmoid(log_dose, height, ec50, hill=2.0):
+    from scipy.special import expit
+
+    return height * expit(hill * (log_dose - np.log10(ec50)))
+
+
+@pytest.fixture
+def phenotypes():
+    """A plate where one compound grows along one direction and another turns into a different phenotype.
+
+    `grows` moves three features together over its whole range. `turns` moves two features at low concentration
+    and drops them again while two others take over, so its top profile points somewhere else entirely. `quiet`
+    moves nothing. Every feature carries unit noise, so a response in the matrix reads directly in MADs.
+    """
+    rng = np.random.default_rng(0)
+    doses = np.geomspace(0.01, 100.0, 6)
+    wells_per_dose = 4
+    concentration = np.repeat(doses, wells_per_dose)
+    log_dose = np.log10(concentration)
+    n_features = 9
+
+    signals = {}
+    grows = np.zeros((concentration.size, n_features))
+    for column in (0, 1, 2):
+        grows[:, column] = _sigmoid(log_dose, 8.0, 1.0)
+    signals["grows"] = grows
+
+    turns = np.zeros((concentration.size, n_features))
+    early = _sigmoid(log_dose, 8.0, 0.05, hill=4.0) - _sigmoid(log_dose, 8.0, 5.0, hill=4.0)
+    late = _sigmoid(log_dose, 8.0, 20.0, hill=4.0)
+    turns[:, 3] = turns[:, 4] = early
+    turns[:, 5] = turns[:, 6] = late
+    signals["turns"] = turns
+    signals["quiet"] = np.zeros((concentration.size, n_features))
+
+    n_controls = 24
+    blocks, records = [], []
+    for compound, signal in signals.items():
+        blocks.append(signal + rng.normal(0.0, 1.0, signal.shape))
+        records.append(pd.DataFrame({"Metadata_Compound": compound, "Metadata_Concentration": concentration}))
+    blocks.append(rng.normal(0.0, 1.0, (n_controls, n_features)))
+    records.append(pd.DataFrame({"Metadata_Compound": "DMSO", "Metadata_Concentration": np.zeros(n_controls)}))
+
+    values = np.vstack(blocks)
+    # A feature the controls measure without any spread has no scale to read a response against.
+    values[:, 8] = 1.0
+    frame = pd.concat(records, ignore_index=True)
+    total = len(frame)
+    frame["Metadata_Plate"] = np.where(np.arange(total) % 2 == 0, "P1", "P2")
+    frame["Metadata_Well"] = [f"{chr(65 + index // 24)}{index % 24 + 1:02d}" for index in range(total)]
+    frame["Metadata_Control"] = frame["Metadata_Compound"] == "DMSO"
+    for column in range(n_features):
+        frame[f"Cells_AreaShape_f{column}"] = values[:, column]
+    return from_dataframe(frame, resolution="well")
+
+
+def test_dose_features_names_the_features_that_move_and_leaves_the_rest_NaN(phenotypes):
+    mt.tl.dose_features(phenotypes)
+    table = phenotypes.uns["mantispy"]["dose_features"]
+    grows = table[table["compound"] == "grows"].set_index("feature")
+
+    assert grows.loc[["Cells_AreaShape_f0", "Cells_AreaShape_f1", "Cells_AreaShape_f2"], "bmd"].notna().all()
+    assert grows.loc["Cells_AreaShape_f7", "bmd"] != grows.loc["Cells_AreaShape_f7", "bmd"], "a flat feature has no bmd"
+    assert table[table["compound"] == "quiet"]["bmd"].isna().all()
+
+
+def test_the_benchmark_dose_brackets_the_concentration_the_response_crosses_the_cutoff_at(phenotypes):
+    """f0 rises to 8 MADs with an EC50 of 1, so it passes 3 MADs between the third and fourth concentration."""
+    mt.tl.dose_features(phenotypes)
+    table = phenotypes.uns["mantispy"]["dose_features"].set_index(["compound", "feature"])
+    row = table.loc[("grows", "Cells_AreaShape_f0")]
+
+    assert 0.398 <= row["bmd"] <= 2.52
+    assert 6.0 <= row["max_z"] <= 11.0
+    assert row["direction"] == 1.0
+    assert row["spearman"] > 0.8
+    assert row["qvalue"] < 0.01
+    assert table.loc[("grows", "Cells_AreaShape_f7"), "qvalue"] > 0.05
+
+
+def test_a_feature_with_no_spread_among_the_controls_is_left_out(phenotypes):
+    mt.tl.dose_features(phenotypes)
+    table = phenotypes.uns["mantispy"]["dose_features"]
+    assert "Cells_AreaShape_f8" not in set(table["feature"])
+    assert len(set(table["feature"])) == phenotypes.n_vars - 1
+
+
+def test_dose_features_says_what_to_run_when_the_controls_are_unmarked(phenotypes):
+    del phenotypes.obs["Metadata_Control"]
+    with pytest.raises(KeyError, match="annotate_controls"):
+        mt.tl.dose_features(phenotypes)
+
+
+def test_dose_features_needs_more_than_one_control_row_to_set_a_scale(phenotypes):
+    """One control well gives a baseline but no spread, so every response would be infinitely many MADs."""
+    control = phenotypes.obs["Metadata_Control"].to_numpy(dtype=bool)
+    phenotypes.obs["Metadata_Control"] = control & (np.cumsum(control) == 1)
+    with pytest.raises(ValueError, match="at least two control rows"):
+        mt.tl.dose_features(phenotypes)
+
+
+def test_dose_direction_reads_a_growing_phenotype_as_one_direction(phenotypes):
+    mt.tl.dose_direction(phenotypes)
+    table = phenotypes.uns["mantispy"]["dose_direction"]
+    grows = table[table["compound"] == "grows"].sort_values("dose")
+
+    top = grows.tail(2)
+    assert (top["split_half_cosine"] > 0.5).all(), "the direction reproduces across plates"
+    assert (top["cosine_to_top"] > 0.8).all(), "and it is the direction the top concentration points in"
+    assert grows["amplitude"].iloc[-1] > 3 * grows["amplitude_null"].iloc[-1]
+
+
+def test_dose_direction_separates_a_turning_phenotype_from_noise(phenotypes):
+    """The point of the table: a reproducible direction that disagrees with the top concentration's."""
+    mt.tl.dose_direction(phenotypes)
+    table = phenotypes.uns["mantispy"]["dose_direction"]
+
+    def rotated(compound):
+        block = table[table["compound"] == compound]
+        return block[(block["split_half_cosine"] > 0.5) & (block["cosine_to_top"] < 0.4)]
+
+    assert len(rotated("turns")) >= 1, "the low-dose phenotype is real and points elsewhere"
+    assert len(rotated("grows")) == 0, "every reproducible concentration agrees with the top one"
+    quiet = table[table["compound"] == "quiet"]
+    assert (quiet["split_half_cosine"] < 0.5).all(), "noise has no direction to reproduce"
+
+
+def test_doses_written_to_different_precision_are_one_dose(dosed):
+    """Regression: batches spell the same nominal concentration differently, and the ladder read as twice as long."""
+    from mantispy.tl._dose import _bin_doses
+
+    spellings = np.array([0.000762, 0.001, 0.00229, 0.002, 15.0, 15.0])
+    assert len(np.unique(_bin_doses(spellings, 0.15))) == 3
+    assert len(np.unique(_bin_doses(spellings, 0.0))) == 5, "a tolerance of zero reads them as spelled"
+
+    ladder = 0.1 * 2.0 ** np.arange(11)
+    assert len(np.unique(_bin_doses(ladder, 0.15))) == 11, "a two-fold ladder is left alone"
+
+
+def test_dose_response_counts_the_doses_that_were_dosed(dosed):
+    doses = dosed.obs["Metadata_Concentration"].to_numpy(dtype=float)
+    # Half of each compound's wells carry the same five concentrations rounded as a second batch would round them.
+    respelled = (np.arange(dosed.n_obs) // 2) % 2 == 0
+    dosed.obs["Metadata_Concentration"] = np.where(respelled, doses, np.round(doses * 1.05, 3))
+    mt.tl.dose_response(dosed, min_doses=4)
+    assert (dosed.uns["mantispy"]["dose_response"]["n_doses"] == 5).all()
+
+    mt.tl.dose_response(dosed, min_doses=4, dose_tolerance=0.0, key_added="exact")
+    assert (dosed.uns["mantispy"]["exact"]["n_doses"] > 5).all()
+
+
+def test_the_vectorized_spearman_matches_scipy():
+    from scipy.stats import spearmanr
+
+    from mantispy.tl._dose import _spearman_against
+
+    rng = np.random.default_rng(1)
+    dose = np.repeat(np.log10(np.geomspace(0.1, 100, 5)), 4)
+    block = rng.normal(size=(dose.size, 6))
+    block[:, 0] += dose
+    rho, pvalue = _spearman_against(dose, block)
+    for column in range(block.shape[1]):
+        expected = spearmanr(dose, block[:, column])
+        assert rho[column] == pytest.approx(expected.statistic)
+        assert pvalue[column] == pytest.approx(expected.pvalue)
+
+
+def test_the_new_tables_survive_a_round_trip(phenotypes, tmp_path):
+    mt.tl.dose_features(phenotypes)
+    mt.tl.dose_direction(phenotypes)
+    path = tmp_path / "phenotypes.h5ad"
+    phenotypes.write_h5ad(path)
+
+    import anndata as ad
+
+    reloaded = ad.read_h5ad(path)
+    for key in ("dose_features", "dose_direction"):
+        pd.testing.assert_frame_equal(reloaded.uns["mantispy"][key], phenotypes.uns["mantispy"][key])
+
+
+def test_a_compound_with_one_concentration_is_left_out_of_the_direction_table(phenotypes):
+    """One concentration says nothing about how a response changes with concentration."""
+    single = phenotypes.obs["Metadata_Compound"] == "quiet"
+    phenotypes.obs.loc[single, "Metadata_Concentration"] = 1.0
+    mt.tl.dose_direction(phenotypes)
+    table = phenotypes.uns["mantispy"]["dose_direction"]
+    assert "quiet" not in set(table["compound"])
+    assert {"grows", "turns"} <= set(table["compound"])
+
+
+def test_the_amplitude_floor_follows_the_plates_the_concentration_sits_on():
+    """Controls drawn without regard to the layout give a floor that does not apply to the concentration.
+
+    Here each plate's controls sit to one side, as per-plate normalization leaves them. A concentration with a
+    well on each plate has those offsets cancel; one with both wells on a single plate does not, and its floor is
+    the offset. A floor taken from any group of the right size would report the same number for both.
+    """
+    rng = np.random.default_rng(0)
+    rows = []
+    for plate, offset in (("P1", 2.0), ("P2", -2.0)):
+        for _ in range(8):
+            rows.append({"plate": plate, "compound": "DMSO", "dose": 0.0, "offset": offset})
+        for dose in np.geomspace(0.1, 100.0, 4):
+            # "spread" doses one well per plate; "stacked" puts both of its wells on P1.
+            rows.append({"plate": plate, "compound": "spread", "dose": dose, "offset": 0.0})
+            rows.append({"plate": "P1", "compound": "stacked", "dose": dose, "offset": 0.0})
+    frame = pd.DataFrame(rows)
+    frame["Metadata_Plate"] = frame["plate"]
+    frame["Metadata_Compound"] = frame["compound"]
+    frame["Metadata_Concentration"] = frame["dose"]
+    frame["Metadata_Control"] = frame["compound"] == "DMSO"
+    frame["Metadata_Well"] = [f"{chr(65 + i // 24)}{i % 24 + 1:02d}" for i in range(len(frame))]
+    for feature in range(4):
+        noise = rng.normal(0.0, 0.1, len(frame))
+        frame[f"Cells_AreaShape_f{feature}"] = noise + (frame["offset"] if feature == 0 else 0.0)
+    adata = from_dataframe(frame.drop(columns=["plate", "compound", "dose", "offset"]), resolution="well")
+
+    mt.tl.dose_direction(adata)
+    table = adata.uns["mantispy"]["dose_direction"].set_index("compound")
+    assert table.loc["spread", "amplitude_null"].max() < table.loc["stacked", "amplitude_null"].min()

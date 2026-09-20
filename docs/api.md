@@ -139,6 +139,8 @@ Writing to a layer suffixes the column, so `key_added="sphered"` flags `var["deg
     tl.edistance
     tl.transport
     tl.dose_response
+    tl.dose_features
+    tl.dose_direction
     tl.nn_moa_classify
     tl.moa_enrichment
     tl.feature_sets
@@ -170,6 +172,8 @@ Writing to a layer suffixes the column, so `key_added="sphered"` flags `var["deg
 | `tl.edistance` | `uns["mantispy"][key_added]`, or `..._pairwise` when `reference=None` |
 | `tl.transport` | `uns["mantispy"][key_added]` and `..._units`, `obs[key_added + "_agreement"]` |
 | `tl.dose_response` | `uns["mantispy"][key_added]` |
+| `tl.dose_features` | `uns["mantispy"][key_added]`, one row per compound and feature |
+| `tl.dose_direction` | `uns["mantispy"][key_added]`, one row per compound and concentration |
 | `tl.nn_moa_classify` | `obs[key_added + "_predicted"]`, `uns["mantispy"][key_added]` and `..._confusion` |
 | `tl.moa_enrichment` | `uns["mantispy"][key_added]` |
 | `tl.feature_sets` | returns a decoupler network; stores nothing |
