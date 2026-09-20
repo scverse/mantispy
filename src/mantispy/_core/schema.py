@@ -47,8 +47,9 @@ RESERVED_OBS: tuple[str, ...] = (
     "Metadata_Perturbation",
     "Metadata_Compound",
     "Metadata_Concentration",
-    # The dose a well was meant to get, where a plate map records the same one to several precisions.
-    "Metadata_ConcentrationNominal",
+    # What the plate map wrote, where it records one dose to several precisions and Metadata_Concentration
+    # holds the one the well was meant to get.
+    "Metadata_ConcentrationRecorded",
     "Metadata_MOA",
     "Metadata_CellLine",
     "Metadata_Control",

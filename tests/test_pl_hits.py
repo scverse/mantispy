@@ -152,6 +152,27 @@ def test_an_inhibitory_curve_is_drawn_the_way_the_data_runs(inhibitor_adata):
     assert drawn[0] > drawn[-1], "the curve runs uphill while the data runs downhill"
 
 
+def test_the_direction_plot_bands_the_ladder_by_phase(phenotypes):
+    mt.tl.dose_direction(phenotypes)
+    ax = mt.pl.dose_direction(phenotypes, compound="grows")
+    table = phenotypes.uns["mantispy"]["dose_direction"]
+    drawn_compound = table[table["compound"] == "grows"]
+
+    # One band per concentration of the compound drawn, plus the two lines it reads against.
+    assert len(ax.patches) == len(drawn_compound)
+    colours = {patch.get_facecolor() for patch in ax.patches}
+    assert len(colours) == drawn_compound["phase"].nunique(), "each phase present gets its own colour"
+    assert len(ax.lines) == 4, "two curves and the two floors"
+    plt.close(ax.figure)
+
+
+def test_the_direction_plot_says_which_compounds_it_has(phenotypes):
+    mt.tl.dose_direction(phenotypes)
+    with pytest.raises(KeyError, match="grows"):
+        mt.pl.dose_direction(phenotypes, compound="not_dosed")
+    plt.close("all")
+
+
 def test_one_stray_well_does_not_flatten_the_rest_onto_the_baseline(inhibitor_adata):
     """A distance from the controls has a long right tail, so a linear axis hides the response."""
     assert mt.pl.dose_response(inhibitor_adata, compound="cpd").get_yscale() == "log"

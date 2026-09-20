@@ -28,7 +28,7 @@ def _mwu_small_samples(treated: np.ndarray, control: np.ndarray) -> np.ndarray:
     ``scipy.stats.mannwhitneyu`` chooses once per call.
     It uses the exact null only when the smaller sample has eight or fewer observations and no column has ties, so one tied feature sends every other feature to the normal approximation.
     With three treated wells against 330 controls, an untied feature reaches 3.3e-07 under the exact null and 2.9e-03 under the approximation.
-    Splitting the columns by ties takes 9.3 ms against 8.3 ms for 344 columns.
+    Splitting the columns by ties costs one more call than letting scipy choose once.
     """
     from scipy.stats import mannwhitneyu
 
@@ -170,7 +170,7 @@ def effect_size(
     codes, keys = group_codes(adata, groupby)
     estimate = _cohens_d if method == "cohens_d" else _robust_z
 
-    # Sorted once and searched by every group; scipy re-ranks the whole reference per group, which costs about three minutes on JUMP.
+    # Sorted once and searched by every group; scipy re-ranks the whole reference for every group it is handed.
     ranked = sorted_control(control) if pvalues else None
     # Counted as sorted_control and scipy's nan_policy="omit" count, everything measured and infinities included, so that the branch chosen below is the branch scipy would choose.
     control_smallest = int((~np.isnan(control)).sum(axis=0).min()) if pvalues else 0
