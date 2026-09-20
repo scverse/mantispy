@@ -142,7 +142,7 @@ class _Fit:
         return float(self.parameters[index]) * scale
 
     def with_top_at(self, log_dose: np.ndarray, target: float) -> np.ndarray:
-        """The same curve re-parameterized to reach exactly ``target``, as tcplfit2's ``toplikelihood`` does."""
+        """The same curve re-parameterized to reach exactly ``target``, the starting point of the profile fit."""
         index, scale = self._top_axis(log_dose)
         moved = self.parameters.copy()
         if scale > 0:
@@ -166,6 +166,29 @@ def _fit_maximum_likelihood(name: str, log_dose: np.ndarray, response: np.ndarra
     if not fitted.success or not np.isfinite(fitted.x).all():
         return None
     return _Fit(name, fitted.x, -float(fitted.fun))
+
+
+def _profile_at_top(fit: _Fit, log_dose: np.ndarray, response: np.ndarray, target: float) -> float | None:
+    """Largest log-likelihood the model reaches with its top held at ``target``, tcplfit2's ``toplikelihood``.
+
+    Every other parameter, the error scale included, is fitted again around the pinned top. Leaving them where the
+    unconstrained fit put them would understate this likelihood, and so overstate the confidence read from the drop.
+    """
+    from scipy.optimize import minimize
+
+    index, _ = fit._top_axis(log_dose)
+    pinned = fit.with_top_at(log_dose, target)
+
+    def negative(free: np.ndarray) -> float:
+        candidate = _Fit(fit.name, np.insert(free, index, pinned[index]), 0.0)
+        value = -_log_likelihood(response - candidate.predict(log_dose), candidate.log_scale)
+        return float(value) if np.isfinite(value) else 1e18
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        start = np.delete(pinned, index)
+        fitted = minimize(negative, start, method="Nelder-Mead", options={"maxiter": 4000, "xatol": 1e-6})
+    return -float(fitted.fun) if np.isfinite(fitted.fun) else None
 
 
 def _winning_model(log_dose: np.ndarray, response: np.ndarray) -> _Fit | None:
@@ -219,11 +242,11 @@ def _hitcall(fit: _Fit, log_dose: np.ndarray, response: np.ndarray, cutoff: floa
     below = t.sf(standardized, _ERROR_DF) if top >= 0 else t.cdf(standardized, _ERROR_DF)
     p2 = 1.0 - float(np.prod(below))
 
-    # P3: a likelihood profile on the asymptote. The curve is re-parameterized to put its top exactly on the
-    # cutoff, which for an asymptote is the assignment itself, and the drop in log-likelihood is read as a
-    # chi-square on one degree of freedom.
-    at_cutoff = _Fit(fit.name, fit.with_top_at(log_dose, float(np.sign(top) * cutoff)), 0.0)
-    profile = _log_likelihood(response - at_cutoff.predict(log_dose), log_scale)
+    # P3: a likelihood profile on the asymptote. The top is pinned to the cutoff and the rest of the curve is
+    # fitted again around it, and the drop in log-likelihood is read as a chi-square on one degree of freedom.
+    profile = _profile_at_top(fit, log_dose, response, float(np.sign(top) * cutoff))
+    if profile is None:
+        return float("nan")
     tail = float(chi2.cdf(2.0 * (fit.log_likelihood - profile), 1))
     p3 = (1.0 + tail) / 2.0 if abs(top) >= abs(cutoff) else (1.0 - tail) / 2.0
 

@@ -202,6 +202,23 @@ def test_the_hit_call_grades_the_same_curve_against_the_cutoff_it_is_given():
     assert out_of_reach < 0.05, "a cutoff above anything the curve reaches is not a hit"
 
 
+def test_the_profile_refits_the_curve_around_the_pinned_top():
+    """The third weight reads a drop in log-likelihood, so that likelihood has to be the largest one reachable
+    with the top on the cutoff, as tcplfit2's ``toplikelihood`` fits it. Holding the other parameters where the
+    unconstrained fit left them understates it and the hit call then reads a drop that is not there."""
+    from mantispy.tl._dose import _Fit, _log_likelihood, _profile_at_top, _winning_model
+
+    conc = np.array([0.03, 0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0])
+    resp = np.array([0.0, 0.2, 0.1, 0.4, 0.7, 0.9, 0.6, 1.2])
+    log_dose = np.log10(conc)
+    fit = _winning_model(log_dose, resp)
+
+    frozen = _Fit(fit.name, fit.with_top_at(log_dose, 1.0), 0.0)
+    profile = _profile_at_top(fit, log_dose, resp, 1.0)
+    assert profile > _log_likelihood(resp - frozen.predict(log_dose), fit.log_scale), "the rest has to be refitted"
+    assert profile <= fit.log_likelihood, "and pinning the top cannot beat fitting it"
+
+
 def test_a_curve_that_plateaus_is_read_by_the_logistic_and_one_still_rising_by_the_line():
     """tcplfit2 carries ten models so that a curve without a plateau still gets called.
 
