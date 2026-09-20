@@ -17,4 +17,5 @@ reading_plates
 09_scaling_and_sites
 10_differential_features
 11_dose_response
+12_learned_embeddings
 ```
