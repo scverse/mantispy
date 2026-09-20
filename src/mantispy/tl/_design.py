@@ -9,11 +9,41 @@ import pandas as pd
 from anndata import AnnData
 
 from mantispy._core._numba import MEDIAN, grouped_stat
-from mantispy._core._reduce import group_codes, group_offsets, representation
+from mantispy._core._reduce import group_codes, group_offsets, group_rows, representation
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy._core.masks import held_out_reference, reference_mask
 from mantispy._core.mutation import inplace_or_copy
+
+
+def viability(
+    obs: pd.DataFrame,
+    count_key: str,
+    site_key: str | None,
+    is_control: np.ndarray,
+    levels: np.ndarray | None = None,
+) -> np.ndarray:
+    """Each row's cell count against the controls', per field of view where the fields are known.
+
+    ``levels`` names a grouping each row is scored inside, normally the plate. Plates are seeded and imaged
+    separately, and on the OASIS pilot their control counts differ by half, so a sparse plate otherwise reads as
+    one whose treated wells are dying. ``None`` pools every control row.
+
+    A level whose controls carry no usable count gets NaN rather than an error, so the caller decides whether
+    that is fatal.
+    """
+    counts = obs[count_key].to_numpy(dtype=float)
+    if site_key is not None and site_key in obs:
+        counts = counts / np.maximum(obs[site_key].to_numpy(dtype=float), 1)
+
+    scored = np.full(counts.shape, np.nan)
+    for level in pd.unique(np.zeros(len(obs)) if levels is None else levels):
+        inside = np.ones(len(obs), dtype=bool) if levels is None else levels == level
+        referenced = inside & is_control
+        centre = float(np.nanmedian(counts[referenced])) if referenced.any() else np.nan
+        if np.isfinite(centre) and centre > 0:
+            scored[inside] = counts[inside] / centre
+    return scored
 
 
 def signature_stability(
@@ -142,8 +172,7 @@ def replicate_saturation(
         deepest = max(pivot - 1 if metric == "convergence" else pivot // 2, 1)
 
     # Group the rows once; `codes == group` inside the loop is an O(n_obs) scan per group, repeated n_draws * deepest times.
-    order, offsets = group_offsets(codes, len(keys))
-    members: list[np.ndarray] = [order[offsets[group] : offsets[group + 1]] for group in range(len(keys))]
+    members = group_rows(codes, len(keys))
 
     records = []
     for depth in range(1, deepest + 1):
@@ -236,13 +265,11 @@ def cytotoxicity(
         )
 
     is_control = reference_mask(adata, reference)
-    counts = obs[count_key].to_numpy(dtype=float)
-    if site_key in obs:
-        counts = counts / np.maximum(obs[site_key].to_numpy(dtype=float), 1)
+    # Pooled: cytotoxicity reads one screen-wide control level, where dose_direction reads one per plate.
+    scored = viability(obs, count_key, site_key, is_control)
     distances = obs[distance_key].to_numpy(dtype=float)
-    control_count = float(np.nanmedian(counts[is_control]))
     control_distance = float(np.nanmedian(distances[held_out_reference(adata, is_control, distance_key)]))
-    if not np.isfinite(control_count) or control_count <= 0:
+    if not np.isfinite(scored).any():
         raise ValueError(f"the reference rows have no usable {count_key!r} to normalize viability against")
 
     codes, keys = group_codes(adata, groupby)
@@ -250,15 +277,15 @@ def cytotoxicity(
     records = []
     for index, key in enumerate(keys):
         rows = order[offsets[index] : offsets[index + 1]]
-        viability = float(np.nanmedian(counts[rows])) / control_count
+        fraction = float(np.nanmedian(scored[rows]))
         distance = float(np.nanmedian(distances[rows]))
         records.append(
             {
                 "group": str(key),
                 "n_obs": int(rows.size),
-                "viability": viability,
+                "viability": fraction,
                 "distance": distance,
-                "suspect": bool(viability < min_viability and distance > control_distance),
+                "suspect": bool(fraction < min_viability and distance > control_distance),
             }
         )
 

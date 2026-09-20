@@ -38,11 +38,18 @@ __all__ = [
     "get_matrix",
     "group_codes",
     "group_offsets",
+    "group_rows",
     "iter_groups",
     "reduce_grouped",
     "representation",
     "transform_grouped",
 ]
+
+
+def group_rows(codes: np.ndarray, n_groups: int) -> list[np.ndarray]:
+    """Row indices of each group, taken from one stable ordering rather than by scanning the codes per group."""
+    order, offsets = group_offsets(codes, n_groups)
+    return [order[offsets[group] : offsets[group + 1]] for group in range(n_groups)]
 
 
 def get_matrix(adata: AnnData, layer: str | None = None, rows: np.ndarray | None = None) -> np.ndarray:

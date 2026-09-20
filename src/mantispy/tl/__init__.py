@@ -5,7 +5,7 @@ from mantispy.tl._consensus import consensus
 from mantispy.tl._design import cytotoxicity, replicate_saturation
 from mantispy.tl._differential import differential_features
 from mantispy.tl._distance import edistance
-from mantispy.tl._dose import dose_response
+from mantispy.tl._dose import dose_direction, dose_features, dose_response, dose_trajectory
 from mantispy.tl._effect import effect_size, wasserstein_features
 from mantispy.tl._enrich import enrich, feature_sets, rank_features, rank_sets
 from mantispy.tl._heterogeneity import (
@@ -28,7 +28,10 @@ __all__ = [
     "cluster_composition",
     "consensus",
     "cytotoxicity",
+    "dose_direction",
+    "dose_features",
     "dose_response",
+    "dose_trajectory",
     "differential_features",
     "edistance",
     "effect_size",

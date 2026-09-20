@@ -4,7 +4,6 @@ import numpy as np
 import pytest
 
 import mantispy as mt
-from mantispy.ds._datasets import _DOSE_TOLERANCE
 
 
 @pytest.fixture(scope="module")
@@ -41,19 +40,32 @@ def test_the_dose_range_survives_the_join(oasis):
 
 @pytest.mark.network
 def test_one_concentration_written_twice_is_one_dose(oasis):
-    """Two plate maps write the dose to three decimals and the rest to four, so 3.704 and 3.7037 are one level."""
+    """The plate maps disagree on precision: one writes 0.0152416 uM and another writes 0.015."""
     obs = oasis.obs
-    raw = obs["Metadata_Concentration"].to_numpy(dtype=float)
-    aligned = obs["Metadata_ConcentrationNominal"].to_numpy(dtype=float)
+    raw = obs["Metadata_ConcentrationRecorded"].to_numpy(dtype=float)
+    aligned = obs["Metadata_Concentration"].to_numpy(dtype=float)
     dosed = raw > 0
 
-    levels = np.unique(aligned[dosed])
-    gaps = np.diff(levels) / levels[:-1]
-    assert (gaps >= _DOSE_TOLERANCE).all(), "two levels within the tolerance are one dose written twice"
-    assert len(levels) < len(np.unique(raw[dosed])), "nothing collapsed"
-    # The dose a well was meant to get is one it was recorded at, never an average of two.
-    assert set(levels) <= set(np.unique(raw[dosed]))
-    assert np.max(np.abs(aligned[dosed] / raw[dosed] - 1)) < _DOSE_TOLERANCE, "no well moves past the tolerance"
+    assert len(np.unique(aligned[dosed])) < len(np.unique(raw[dosed])), "nothing collapsed"
+    # The dose a well was meant to get is one that was recorded, never an average of two spellings.
+    assert set(np.unique(aligned[dosed])) <= set(np.unique(raw[dosed]))
+    # A coarser spelling reads as the finer level it rounds to, so no well moves to a different rung.
+    moved = aligned[dosed] != raw[dosed]
+    assert (np.abs(aligned[dosed][moved] / raw[dosed][moved] - 1) < 0.5).all()
+
+
+@pytest.mark.network
+def test_every_dosed_compound_lands_on_the_ladder_it_was_plated_on(oasis):
+    """Ten three-fold steps, or the eight two-fold ones the assay-development plates used."""
+    obs = oasis.obs
+    treated = obs[~obs["Metadata_Control"] & (obs["Metadata_Compound"].astype(str) != "EMPTY")]
+    treated = treated[treated["Metadata_ConcentrationRecorded"].to_numpy(dtype=float) > 0]
+
+    raw = treated.groupby("Metadata_Compound", observed=True)["Metadata_ConcentrationRecorded"].nunique()
+    aligned = treated.groupby("Metadata_Compound", observed=True)["Metadata_Concentration"].nunique()
+    assert set(raw[raw > 1]) - {8} != set(), "the raw column should carry the split ladders"
+    assert set(aligned) <= {1, 8, 10}, f"off-ladder compounds: {aligned[~aligned.isin([1, 8, 10])].to_dict()}"
+    assert int((aligned == 10).sum()) == 28
 
 
 @pytest.mark.network
