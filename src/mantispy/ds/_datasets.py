@@ -423,8 +423,7 @@ _OASIS_PLATEMAP_COLUMNS = {
 
 def _decimals(value: float) -> int:
     """How many decimal places a level was written with, from its shortest exact repr."""
-    text = np.format_float_positional(value, trim="-")
-    return len(text.split(".")[1]) if "." in text else 0
+    return len(np.format_float_positional(value, trim="-").partition(".")[2])
 
 
 def _aligned_doses(doses: pd.Series, compounds: pd.Series) -> pd.Series:
@@ -439,20 +438,28 @@ def _aligned_doses(doses: pd.Series, compounds: pd.Series) -> pd.Series:
     Across the whole plate map they can: berberine's 25 uM and the main ladder's 33.3 uM are a third apart and
     genuinely different doses, closer together than ``0.000762`` and ``0.001`` are, which are one dose.
 
-    Rounding every level to a fixed precision cannot do this, and neither can a relative tolerance.
+    Rounding every level to a fixed precision cannot do this, and neither can a relative tolerance. The one case
+    it would get wrong is a ladder with two rungs inside a rounding step of each other, which a series coarser
+    than two-fold never has.
     """
-    aligned = doses.copy()
-    for _, index in doses.groupby(compounds, observed=True).groups.items():
-        levels = np.sort(doses[index].dropna().unique())
+
+    def align(block: pd.Series) -> pd.Series:
+        levels = np.sort(block.dropna().unique())
         levels = levels[levels > 0]
+        places = [_decimals(level) for level in levels]
         lookup = {}
-        for level in levels:
-            places = _decimals(level)
-            finer = [other for other in levels if _decimals(other) > places and round(other, places) == level]
+        for level, digits in zip(levels, places, strict=True):
+            finer = [
+                other
+                for other, deeper in zip(levels, places, strict=True)
+                if deeper > digits and round(other, digits) == level
+            ]
             # The nearest one: rounding 0.006 up to 0.01 must not claim a level that was written as 0.01.
-            lookup[level] = min(finer, key=lambda other: abs(other - level)) if finer else level
-        aligned[index] = doses[index].replace(lookup)
-    return aligned
+            lookup[level] = min(finer, key=lambda other: abs(other - level), default=level)
+        return block.replace(lookup)
+
+    # dropna=False, so a well whose compound is blank keeps the dose it was recorded with.
+    return doses.groupby(compounds, observed=True, dropna=False).transform(align)
 
 
 def _oasis_platemaps(cache_dir: str | Path | None) -> pd.DataFrame:
@@ -480,10 +487,9 @@ def _oasis_platemaps(cache_dir: str | Path | None) -> pd.DataFrame:
             kept["Metadata_Compound"] = kept["Metadata_Compound"].fillna(frame["BROAD_ID"])
         frames.append(kept)
     platemap = pd.concat(frames, ignore_index=True)
-    platemap["Metadata_Concentration"] = pd.to_numeric(platemap["Metadata_Concentration"], errors="coerce")
-    platemap["Metadata_ConcentrationNominal"] = _aligned_doses(
-        platemap["Metadata_Concentration"], platemap["Metadata_Compound"]
-    )
+    recorded = pd.to_numeric(platemap["Metadata_Concentration"], errors="coerce")
+    platemap["Metadata_ConcentrationRecorded"] = recorded
+    platemap["Metadata_Concentration"] = _aligned_doses(recorded, platemap["Metadata_Compound"])
     # One batch writes the line as HepRG and the others as HepaRG; two spellings would split every per-line grouping.
     platemap["Metadata_CellLine"] = platemap["Metadata_CellLine"].replace({"HepRG": "HepaRG"})
     return platemap
@@ -516,10 +522,11 @@ def oasis_pilot(annotate: bool = True, cache_dir: str | Path | None = None, **kw
         ``Metadata_Control`` marks the compound, not the dose.
 
         The plate maps disagree on precision: one batch writes the concentration the dilution produced,
-        ``0.0152416`` uM, and another writes it rounded, ``0.015``. ``Metadata_Concentration`` keeps what was
-        recorded; ``Metadata_ConcentrationNominal`` reads a coarser spelling as the finer level it rounds to,
-        within each compound, and names the replicate groups. On the raw column every dosed compound here
-        carries eighteen levels where ten were plated, and a treatment's wells split across two spellings.
+        ``0.0152416`` uM, and another writes it rounded, ``0.015``. ``Metadata_Concentration`` is the dose the
+        well was meant to get, reading a coarser spelling as the finer level it rounds to within each compound,
+        and it names the replicate groups. ``Metadata_ConcentrationRecorded`` keeps what the plate map wrote:
+        read against that column, every dosed compound here carries eighteen levels where ten were plated, and a
+        treatment's wells split across two spellings.
     """
     adata = _profiles("oasis_pilot", cache_dir, select=lambda name: name.endswith(".csv.gz"), **kwargs)
     if not annotate:
@@ -532,7 +539,7 @@ def oasis_pilot(annotate: bool = True, cache_dir: str | Path | None = None, **kw
         get_logger().warning("oasis_pilot: %d of %d wells have no plate-map row", unmatched, len(merged))
     adata.obs["Metadata_Compound"] = merged["Metadata_Compound"].to_numpy()
     adata.obs["Metadata_Concentration"] = merged["Metadata_Concentration"].to_numpy(dtype=float)
-    adata.obs["Metadata_ConcentrationNominal"] = merged["Metadata_ConcentrationNominal"].to_numpy(dtype=float)
+    adata.obs["Metadata_ConcentrationRecorded"] = merged["Metadata_ConcentrationRecorded"].to_numpy(dtype=float)
     adata.obs["Metadata_CellLine"] = merged["Metadata_CellLine"].to_numpy()
     adata.obs["Metadata_Control"] = merged["Metadata_Compound"].astype(str).str.upper().eq("DMSO").to_numpy()
     # Replicates share a compound at a concentration, which is what the mode= shorthands of mt.tl.map compare.
@@ -541,7 +548,7 @@ def oasis_pilot(annotate: bool = True, cache_dir: str | Path | None = None, **kw
         np.where(
             is_control,
             "DMSO",
-            merged["Metadata_Compound"].astype(str) + "@" + merged["Metadata_ConcentrationNominal"].astype(str),
+            merged["Metadata_Compound"].astype(str) + "@" + merged["Metadata_Concentration"].astype(str),
         )
     )
     get_logger().info(
@@ -549,7 +556,7 @@ def oasis_pilot(annotate: bool = True, cache_dir: str | Path | None = None, **kw
         adata.n_obs,
         adata.n_vars,
         int(merged.loc[~is_control, "Metadata_Compound"].nunique()),
-        int(merged["Metadata_ConcentrationNominal"].nunique()),
+        int(merged["Metadata_Concentration"].nunique()),
         int(is_control.sum()),
     )
     return adata

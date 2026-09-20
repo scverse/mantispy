@@ -12,8 +12,7 @@ import numpy as np
 import pandas as pd
 from anndata import AnnData
 
-from mantispy._core._numba import group_offsets
-from mantispy._core._reduce import get_matrix
+from mantispy._core._reduce import get_matrix, group_rows
 from mantispy._core._stats import MAD_TO_SIGMA, benjamini_hochberg
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger, report_drop
@@ -21,6 +20,7 @@ from mantispy._core.masks import held_out_reference, reference_mask
 from mantispy._core.mutation import inplace_or_copy
 from mantispy._core.provenance import record_params
 from mantispy._core.schema import stamp
+from mantispy.tl._design import viability
 
 #: Column order of the output table, so an empty result still carries its columns.
 _COLUMNS = (
@@ -362,8 +362,9 @@ def dose_response(
         Compounds with fewer than two usable doses are left out of the table.
 
         ``dose_key`` is read as given. A plate map that records one concentration to several precisions splits
-        a ladder, which is a property of how the dataset was written rather than of the fit; the loader resolves
-        it, as :func:`~mantispy.ds.oasis_pilot` does with ``Metadata_ConcentrationNominal``.
+        a ladder, which is a property of how the dataset was written rather than of the fit, so the loader
+        resolves it: :func:`~mantispy.ds.oasis_pilot` writes the dose each well was meant to get to
+        ``Metadata_Concentration`` and keeps the recorded one under ``Metadata_ConcentrationRecorded``.
 
         :func:`dose_features` asks the same question of every feature rather than of one response column, and
         :func:`dose_direction` asks whether the phenotype stays the same one as the concentration rises.
@@ -460,17 +461,39 @@ _DIRECTION_COLUMNS = (
     "phase",
 )
 
-#: What a concentration is doing, in the order they normally appear along a ladder.
+#: What a concentration is doing, in the order they normally appear along a ladder. Not exported, as
+#: tl._heterogeneity.PHASES is not: the categories travel with obs[key_added + "_phase"].
 DOSE_PHASES = ("silent", "responding", "saturated", "cytotoxic")
 
 
-def _control_scale(adata: AnnData, reference: str | None) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """The controls' centre and spread per feature, which features have one, and which rows the controls are.
+@dataclass(frozen=True)
+class _Scale:
+    """The controls' centre and spread per feature, the features they give a scale for, and the control rows.
 
-    The centre and the spread are the ToxCast pipeline's ``bmed`` and ``bmad``. A feature whose controls show no
-    spread has no scale to read a response against and is left out, so the two arrays come back already narrowed
-    to ``keep``.
+    The centre and the spread are the ToxCast pipeline's ``bmed`` and ``bmad``, already narrowed to ``keep``.
     """
+
+    baseline: np.ndarray
+    spread: np.ndarray
+    keep: np.ndarray
+    control: np.ndarray
+
+    def z(self, adata: AnnData, rows: np.ndarray) -> np.ndarray:
+        """Those rows' response in MADs of the controls, over the features the controls give a scale for."""
+        with np.errstate(invalid="ignore"):
+            return (get_matrix(adata, rows=rows)[:, self.keep].astype(np.float64) - self.baseline) / self.spread
+
+    def values(self, adata: AnnData, rows: np.ndarray) -> np.ndarray:
+        """Those rows unscaled, over the same features, for a caller that has to fit its own scale."""
+        return get_matrix(adata, rows=rows)[:, self.keep].astype(np.float64)
+
+    def features(self, adata: AnnData) -> np.ndarray:
+        """The features the scale covers, in matrix order."""
+        return np.asarray(adata.var_names)[self.keep]
+
+
+def _control_scale(adata: AnnData, reference: str | None) -> _Scale:
+    """Read the scale off the control rows. A feature whose controls show no spread is left out."""
     rows = reference_mask(adata, reference)
     if int(rows.sum()) < 2:
         raise ValueError(
@@ -480,7 +503,7 @@ def _control_scale(adata: AnnData, reference: str | None) -> tuple[np.ndarray, n
         )
     control = get_matrix(adata, rows=np.flatnonzero(rows)).astype(np.float64)
     baseline = np.nanmedian(control, axis=0)
-    # In place: two more copies of the control block would be the largest allocation in the function.
+    # In place: two more copies of the control block would be the largest allocation here.
     control -= baseline
     np.abs(control, out=control)
     spread = MAD_TO_SIGMA * np.nanmedian(control, axis=0)
@@ -491,20 +514,14 @@ def _control_scale(adata: AnnData, reference: str | None) -> tuple[np.ndarray, n
         adata.n_vars,
         remedy="run mt.pp.normalize and drop the features flagged by var['degenerate_scale']",
     )
-    return baseline[keep], spread[keep], keep, rows
-
-
-def _z_rows(adata: AnnData, rows: np.ndarray, baseline: np.ndarray, spread: np.ndarray, keep: np.ndarray) -> np.ndarray:
-    """Those rows' response in MADs of the controls, over the features the controls give a scale for."""
-    with np.errstate(invalid="ignore"):
-        return (get_matrix(adata, rows=rows)[:, keep].astype(np.float64) - baseline) / spread
+    return _Scale(baseline[keep], spread[keep], keep, rows)
 
 
 def _spearman_against(values: np.ndarray, block: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Spearman of ``values`` against every column of ``block``, with the two-sided p-value scipy reports.
 
-    ``scipy.stats.spearmanr`` builds the whole square of correlations between the features to return one row of it,
-    which on a full feature set is thousands of times the work and the memory this needs.
+    ``scipy.stats.spearmanr`` builds the whole square of correlations between the features to return one row of
+    it, which on a full feature set is far more work and memory than this needs.
     """
     from scipy.stats import t
 
@@ -524,28 +541,26 @@ def _nanmedian(block: np.ndarray) -> np.ndarray:
     """Median down the rows, skipping missing values, for the short and wide blocks this module works on.
 
     ``np.nanmedian`` routes anything under 600 rows through a masked array and ``np.ma.median``, which is pure
-    Python; a dose group is four to eight rows, so every median here takes that path and spends about ninety-nine
-    percent of its time on the wrapper. Sorting puts the missing values last, so the median is the middle of
-    however many were measured.
+    Python; a dose group is four to eight rows, so every median here would take that path, where the wrapper
+    costs far more than the median. Sorting puts the missing values last, so the median is the middle of however
+    many were measured.
+
+    ``_core._numba``'s grouped kernels are not the cheaper answer at these shapes either: one group gives
+    ``prange`` nothing to parallelize, and their dispatch costs more than the median they would replace.
     """
     ordered = np.sort(block, axis=0)
     measured = block.shape[0] - np.isnan(block).sum(axis=0)
     columns = np.arange(block.shape[1])
+    # Only the lower index needs clamping, for the all-NaN column whose count is zero.
     low = ordered[np.maximum((measured - 1) // 2, 0), columns]
-    high = ordered[np.maximum(measured // 2, 0), columns]
+    high = ordered[measured // 2, columns]
     return np.where(measured > 0, 0.5 * (low + high), np.nan)
-
-
-def _groups(codes: np.ndarray, n_groups: int) -> list[np.ndarray]:
-    """Row indices of each group, taken once rather than by scanning the codes per group."""
-    order, offsets = group_offsets(np.ascontiguousarray(codes, dtype=np.int32), n_groups)
-    return [order[offsets[index] : offsets[index + 1]] for index in range(n_groups)]
 
 
 def _dose_medians(block: np.ndarray, doses: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """The sorted doses, and each one's median profile over its replicate rows."""
     order, codes = np.unique(doses, return_inverse=True)
-    return order, np.stack([_nanmedian(block[rows]) for rows in _groups(codes, order.size)])
+    return order, np.stack([_nanmedian(block[rows]) for rows in group_rows(codes, order.size)])
 
 
 def _benchmark_dose(doses: np.ndarray, z: np.ndarray, cutoff: float) -> np.ndarray:
@@ -576,7 +591,7 @@ def _usable_doses(
     selected = np.flatnonzero(usable)
     codes, keys = pd.factorize(obs[compound_key].to_numpy()[usable], sort=True)
     blocks = {}
-    for key, within in zip(keys, _groups(codes, len(keys)), strict=True):
+    for key, within in zip(keys, group_rows(codes, len(keys)), strict=True):
         rows = selected[within]
         blocks[key] = (rows, doses[rows])
     return blocks
@@ -644,16 +659,16 @@ def dose_features(
     """
     obs = as_frame(adata.obs)
     _require_columns(obs, compound_key, dose_key)
-    baseline, spread, keep, control = _control_scale(adata, reference)
-    names = np.asarray(adata.var_names)[keep]
+    scale = _control_scale(adata, reference)
+    names = scale.features(adata)
 
     frames = []
-    for compound, (rows, doses) in _usable_doses(obs, compound_key, dose_key, control).items():
+    for compound, (rows, doses) in _usable_doses(obs, compound_key, dose_key, scale.control).items():
         n_doses = len(np.unique(doses))
         if n_doses < min_doses:
             get_logger().debug("dose_features skipped %s: %d usable dose(s)", compound, n_doses)
             continue
-        block = _z_rows(adata, rows, baseline, spread, keep)
+        block = scale.z(adata, rows)
         order, z = _dose_medians(block, doses)
         rho, pvalue = _spearman_against(np.log10(doses), block)
         # The concentration each feature reached furthest at, and which way it went.
@@ -706,60 +721,87 @@ def _split_half_cosine(block: np.ndarray, labels: np.ndarray) -> float:
     question. A column with one level falls back to splitting by position, and one well at a concentration has no
     halves to compare, so it comes back NaN.
     """
+    if labels.size < 2:
+        return np.nan
     left = np.isin(labels, pd.unique(labels)[::2])
-    if left.all():
+    if left.all():  # one level of the split: halve by position instead
         left = np.arange(labels.size) % 2 == 0
-    if left.all() or not left.any():
+    if not left.any():  # a level that matches nothing against itself, such as NaN
         return np.nan
     return _cosine(_nanmedian(block[left]), _nanmedian(block[~left]))
 
 
-#: Control groups drawn per layout to estimate the amplitude floor. The median of this many is stable to about 5%.
+#: Control groups drawn per layout to estimate the amplitude floor.
 _NULL_DRAWS = 25
 
 
-def _null_amplitude(control: np.ndarray, levels: np.ndarray, wanted: dict[object, int]) -> float:
+@dataclass(frozen=True)
+class _Floor:
+    """The scale the amplitude floor is read in, and the control rows a draw may come from.
+
+    The drawn wells have to be held out of the scale they are then measured in, as a treated well is. Scored
+    against a baseline they helped define, control groups sit closer to it than any treated group can, so the
+    floor reads low, and the fewer the controls the further out it is.
+
+    One split serves the whole run. Refitting the scale around every draw gives the same statistic, but it
+    repeats for each distinct plate layout, and the number of those is combinatorial in the plates rather than
+    bounded by the compounds.
+    """
+
+    baseline: np.ndarray
+    spread: np.ndarray
+    rows: np.ndarray
+    levels: np.ndarray
+
+
+def _floor_scale(control: np.ndarray, levels: np.ndarray) -> _Floor | None:
+    """Fit the floor's scale on half the controls, leaving the other half to draw from.
+
+    Halved within each level, not across all the controls at once. A blind half can take most of its rows from
+    one plate, and the scale it then fits is that plate's, which is the bias the layout matching exists to
+    avoid.
+    """
+    generator = np.random.default_rng(0)
+    halves = []
+    for level in pd.unique(levels):
+        rows = np.flatnonzero(levels == level)
+        generator.shuffle(rows)
+        halves.append((rows[: rows.size // 2], rows[rows.size // 2 :]))
+    fitted = np.concatenate([half for half, _ in halves])
+    drawn = np.concatenate([half for _, half in halves])
+    if fitted.size < 2 or drawn.size < 1:
+        return None
+    baseline = _nanmedian(control[fitted])
+    spread = MAD_TO_SIGMA * _nanmedian(np.abs(control[fitted] - baseline))
+    return _Floor(baseline, np.where(spread > 0, spread, np.nan), drawn, levels[drawn])
+
+
+def _null_amplitude(control: np.ndarray, floor: _Floor | None, wanted: dict[object, int]) -> float:
     """Amplitude reached by control wells laid out the way ``wanted`` counts them, level by level.
 
-    Two things have to match, or the floor is not the floor the concentration is read against.
-
-    The layout, because per-plate normalization puts each plate's control median at zero: a group drawn from one
-    plate starts out at the centre while a group spread over eight of them does not, and a group as large as a
-    plate's control set reads a floor of zero.
-
-    And the drawn wells have to be held out of the scale they are then measured in, as a treated well is. Scored
-    against a baseline they helped define, control groups sit closer to it than any treated group can: with
-    sixteen control wells that reads the floor 64% low, with thirty-two 30% low, and with the OASIS pilot's 256
-    about 4% low.
+    The layout has to match, because per-plate normalization puts each plate's control median at zero: a group
+    drawn from one plate starts out at the centre while a group spread over eight of them does not, and a group
+    as large as a plate's control set would read a floor of zero.
     """
-    pools = {level: np.flatnonzero(levels == level) for level in wanted}
+    if floor is None:
+        return np.nan
+    pools = {level: floor.rows[floor.levels == level] for level in wanted}
     if any(pools[level].size < count for level, count in wanted.items()):
         return np.nan
+
     generator = np.random.default_rng(0)
-
-    def draw() -> float:
+    drawn = []
+    for _ in range(_NULL_DRAWS):
         rows = np.concatenate([generator.choice(pools[level], count, replace=False) for level, count in wanted.items()])
-        held_out = np.ones(control.shape[0], dtype=bool)
-        held_out[rows] = False
-        if held_out.sum() < 2:
-            return np.nan
-        baseline = _nanmedian(control[held_out])
-        spread = MAD_TO_SIGMA * _nanmedian(np.abs(control[held_out] - baseline))
         with np.errstate(invalid="ignore"):
-            return _amplitude((_nanmedian(control[rows]) - baseline) / np.where(spread > 0, spread, np.nan))
-
-    return float(np.median([draw() for _ in range(_NULL_DRAWS)]))
+            drawn.append(_amplitude((_nanmedian(control[rows]) - floor.baseline) / floor.spread))
+    return float(np.median(drawn))
 
 
 def _viability(
     adata: AnnData, count_key: str, site_key: str | None, control: np.ndarray, levels: np.ndarray
 ) -> np.ndarray:
-    """Each row's cell count against its own plate's controls, per field of view where the fields are known.
-
-    Against the whole screen's controls it would not be a viability at all. Plates are seeded and imaged
-    separately and their control counts differ by a factor of two on the OASIS pilot, so a plate that happens to
-    be dense reads as a plate whose treated wells are dying.
-    """
+    """Each row's cell count against its own plate's controls, rather than against the whole screen's."""
     obs = as_frame(adata.obs)
     if count_key not in obs:
         get_logger().info(
@@ -769,26 +811,15 @@ def _viability(
         )
         return np.full(adata.n_obs, np.nan)
 
-    counts = obs[count_key].to_numpy(dtype=float)
-    if site_key is not None and site_key in obs:
-        counts = counts / np.maximum(obs[site_key].to_numpy(dtype=float), 1)
-
-    viability = np.full(adata.n_obs, np.nan)
-    unreferenced = 0
-    for level in pd.unique(levels):
-        on = levels == level
-        reference = float(np.nanmedian(counts[on & control])) if (on & control).any() else np.nan
-        if np.isfinite(reference) and reference > 0:
-            viability[on] = counts[on] / reference
-        else:
-            unreferenced += 1
+    scored = viability(obs, count_key, site_key, control, levels)
+    unreferenced = [level for level in pd.unique(levels) if not np.isfinite(scored[levels == level]).any()]
     report_drop(
         "level(s) of the split with no control count to read viability against",
-        unreferenced,
+        len(unreferenced),
         len(pd.unique(levels)),
         remedy=f"check that every {count_key!r} is filled and that each level carries controls",
     )
-    return viability
+    return scored
 
 
 def _label_phases(ladder: list[dict], min_viability: float, reproducible: float | None) -> list[str]:
@@ -901,39 +932,38 @@ def dose_direction(
     """
     obs = as_frame(adata.obs)
     _require_columns(obs, compound_key, dose_key, *([split_by] if split_by is not None else []))
-    baseline, spread, keep, control = _control_scale(adata, reference)
-    # Raw, not scaled: the floor holds each drawn group out of the scale it is measured in.
-    control_values = get_matrix(adata, rows=np.flatnonzero(control))[:, keep].astype(np.float64)
-
+    scale = _control_scale(adata, reference)
     all_levels = obs[split_by].to_numpy() if split_by is not None else np.zeros(adata.n_obs)
-    control_levels = all_levels[control]
-    viable = _viability(adata, count_key, site_key, control, all_levels)
+    # Raw, not scaled: the floor is read in a scale fitted on the controls a draw may not use.
+    control_values = scale.values(adata, np.flatnonzero(scale.control))
+    floor = _floor_scale(control_values, all_levels[scale.control])
+    viable = _viability(adata, count_key, site_key, scale.control, all_levels)
     phases = np.full(adata.n_obs, "", dtype=object)
     nulls: dict[tuple, float] = {}
     records: list[dict] = []
-    for compound, (rows, doses) in _usable_doses(obs, compound_key, dose_key, control).items():
+    for compound, (rows, doses) in _usable_doses(obs, compound_key, dose_key, scale.control).items():
         n_doses = len(np.unique(doses))
         if n_doses < min_doses:
             get_logger().debug("dose_direction skipped %s: %d usable dose(s)", compound, n_doses)
             continue
-        block = _z_rows(adata, rows, baseline, spread, keep)
+        block = scale.z(adata, rows)
         order, medians = _dose_medians(block, doses)
         levels, well_viability = all_levels[rows], viable[rows]
 
-        ladder, covering = [], []
+        ladder = []
         for index, dose in enumerate(order):
             at = doses == dose
             # The floor is drawn with this concentration's own spread over plates, not from any group of that
-            # size. setdefault would evaluate the draw whether or not the layout has been seen before.
+            # size. np.unique sorts, so the layout is its own memo key; setdefault would evaluate the draw
+            # whether or not the layout had been seen before.
             layout = dict(zip(*np.unique(levels[at], return_counts=True), strict=True))
-            key = tuple(sorted(layout.items(), key=lambda item: str(item[0])))
+            key = tuple(layout.items())
             if key not in nulls:
-                nulls[key] = _null_amplitude(control_values, control_levels, layout)
+                nulls[key] = _null_amplitude(control_values, floor, layout)
             # The step from the concentration below is what "still changing" means. The first one steps from the
             # controls, so its step is how far it has already come.
             amplitude = _amplitude(medians[index])
             here = well_viability[at]
-            covering.append(rows[at])
             ladder.append(
                 {
                     "compound": str(compound),
@@ -948,11 +978,11 @@ def dose_direction(
                 }
             )
 
-        for row, phase, covered in zip(
-            ladder, _label_phases(ladder, min_viability, reproducible), covering, strict=True
-        ):
+        labels = _label_phases(ladder, min_viability, reproducible)
+        for row, phase in zip(ladder, labels, strict=True):
             row["phase"] = phase
-            phases[covered] = phase
+        # Every well of a concentration carries that concentration's phase; `order` is sorted, so this is its rung.
+        phases[rows] = np.asarray(labels, dtype=object)[np.searchsorted(order, doses)]
         records.extend(ladder)
 
     table = pd.DataFrame(records, columns=list(_DIRECTION_COLUMNS))
@@ -1022,7 +1052,7 @@ def dose_trajectory(
         raise ValueError(f"n_positions must be at least two, got {n_positions}")
     obs = as_frame(adata.obs)
     _require_columns(obs, compound_key, dose_key)
-    baseline, spread, keep, control = _control_scale(adata, reference)
+    scale = _control_scale(adata, reference)
 
     in_window = np.ones(adata.n_obs, dtype=bool)
     if phase_key in obs:
@@ -1036,12 +1066,12 @@ def dose_trajectory(
 
     grid = np.linspace(0.0, 1.0, n_positions)
     paths, records = [], []
-    for compound, (rows, doses) in _usable_doses(obs, compound_key, dose_key, control).items():
+    for compound, (rows, doses) in _usable_doses(obs, compound_key, dose_key, scale.control).items():
         inside = in_window[rows]
         if not inside.any():
             continue
         rows, doses = rows[inside], doses[inside]
-        order, z = _dose_medians(_z_rows(adata, rows, baseline, spread, keep), doses)
+        order, z = _dose_medians(scale.z(adata, rows), doses)
         if len(order) < 2:
             continue
         # Relative position through the window in log concentration, so the ends are 0 and 1 for every compound.
@@ -1061,11 +1091,12 @@ def dose_trajectory(
             }
         )
 
-    names = np.asarray(adata.var_names)[keep]
+    names = scale.features(adata)
+    # Position-major, to mirror the ravel of each compound's (n_positions, n_features) path above.
     var = pd.DataFrame({"feature": np.tile(names, n_positions), "position": np.repeat(grid, names.size)})
     var.index = var["feature"] + "@" + var["position"].map("{:.2f}".format)
     result = ad.AnnData(
-        X=np.array(paths, dtype=np.float32).reshape(len(paths), var.shape[0]),
+        X=np.array(paths, dtype=np.float32) if paths else np.empty((0, var.shape[0]), dtype=np.float32),
         obs=pd.DataFrame(records, columns=[compound_key, "n_doses", "window_low", "window_high"]).set_axis(
             pd.RangeIndex(len(records)).astype(str)
         ),

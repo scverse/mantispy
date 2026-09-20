@@ -42,8 +42,8 @@ def test_the_dose_range_survives_the_join(oasis):
 def test_one_concentration_written_twice_is_one_dose(oasis):
     """The plate maps disagree on precision: one writes 0.0152416 uM and another writes 0.015."""
     obs = oasis.obs
-    raw = obs["Metadata_Concentration"].to_numpy(dtype=float)
-    aligned = obs["Metadata_ConcentrationNominal"].to_numpy(dtype=float)
+    raw = obs["Metadata_ConcentrationRecorded"].to_numpy(dtype=float)
+    aligned = obs["Metadata_Concentration"].to_numpy(dtype=float)
     dosed = raw > 0
 
     assert len(np.unique(aligned[dosed])) < len(np.unique(raw[dosed])), "nothing collapsed"
@@ -59,10 +59,10 @@ def test_every_dosed_compound_lands_on_the_ladder_it_was_plated_on(oasis):
     """Ten three-fold steps, or the eight two-fold ones the assay-development plates used."""
     obs = oasis.obs
     treated = obs[~obs["Metadata_Control"] & (obs["Metadata_Compound"].astype(str) != "EMPTY")]
-    treated = treated[treated["Metadata_Concentration"].to_numpy(dtype=float) > 0]
+    treated = treated[treated["Metadata_ConcentrationRecorded"].to_numpy(dtype=float) > 0]
 
-    raw = treated.groupby("Metadata_Compound", observed=True)["Metadata_Concentration"].nunique()
-    aligned = treated.groupby("Metadata_Compound", observed=True)["Metadata_ConcentrationNominal"].nunique()
+    raw = treated.groupby("Metadata_Compound", observed=True)["Metadata_ConcentrationRecorded"].nunique()
+    aligned = treated.groupby("Metadata_Compound", observed=True)["Metadata_Concentration"].nunique()
     assert set(raw[raw > 1]) - {8} != set(), "the raw column should carry the split ladders"
     assert set(aligned) <= {1, 8, 10}, f"off-ladder compounds: {aligned[~aligned.isin([1, 8, 10])].to_dict()}"
     assert int((aligned == 10).sum()) == 28

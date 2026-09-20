@@ -152,54 +152,24 @@ def test_an_inhibitory_curve_is_drawn_the_way_the_data_runs(inhibitor_adata):
     assert drawn[0] > drawn[-1], "the curve runs uphill while the data runs downhill"
 
 
-def _laddered():
-    """Wells over a ladder where one compound wakes up halfway up it."""
-    from scipy.special import expit
+def test_the_direction_plot_bands_the_ladder_by_phase(phenotypes):
+    mt.tl.dose_direction(phenotypes)
+    ax = mt.pl.dose_direction(phenotypes, compound="grows")
+    table = phenotypes.uns["mantispy"]["dose_direction"]
+    drawn_compound = table[table["compound"] == "grows"]
 
-    rng = np.random.default_rng(0)
-    doses = np.geomspace(0.01, 100.0, 6)
-    concentration = np.repeat(doses, 4)
-    signal = 8.0 * expit(4.0 * (np.log10(concentration) - np.log10(3.0)))
-    values = rng.normal(0.0, 1.0, (concentration.size + 16, 5))
-    values[: concentration.size, 0] += signal
-    values[: concentration.size, 1] += signal
-
-    total = concentration.size + 16
-    frame = pd.DataFrame(
-        {
-            "Metadata_Compound": ["cpd"] * concentration.size + ["DMSO"] * 16,
-            "Metadata_Concentration": np.concatenate([concentration, np.zeros(16)]),
-            "Metadata_Plate": np.where(np.arange(total) % 2 == 0, "P1", "P2"),
-            "Metadata_Well": [f"{chr(65 + i // 24)}{i % 24 + 1:02d}" for i in range(total)],
-            "Metadata_Control": [False] * concentration.size + [True] * 16,
-            "Metadata_CellCount": 100.0,
-        }
-    )
-    for column in range(values.shape[1]):
-        frame[f"Cells_AreaShape_f{column}"] = values[:, column]
-    adata = from_dataframe(frame, resolution="well")
-    mt.tl.dose_direction(adata)
-    return adata
-
-
-def test_the_direction_plot_bands_the_ladder_by_phase():
-    adata = _laddered()
-    ax = mt.pl.dose_direction(adata, compound="cpd")
-    table = adata.uns["mantispy"]["dose_direction"]
-
-    # One band per concentration, plus the two lines it reads against.
-    assert len(ax.patches) == len(table)
-    drawn = {patch.get_facecolor() for patch in ax.patches}
-    expected = {mt.pl.DOSE_PHASE_COLOURS[phase] for phase in table["phase"]}
-    assert len(drawn) == len(expected), "each phase present gets its own colour"
+    # One band per concentration of the compound drawn, plus the two lines it reads against.
+    assert len(ax.patches) == len(drawn_compound)
+    colours = {patch.get_facecolor() for patch in ax.patches}
+    assert len(colours) == drawn_compound["phase"].nunique(), "each phase present gets its own colour"
     assert len(ax.lines) == 4, "two curves and the two floors"
     plt.close(ax.figure)
 
 
-def test_the_direction_plot_says_what_to_run_first_and_which_compounds_it_has():
-    adata = _laddered()
-    with pytest.raises(KeyError, match="cpd"):
-        mt.pl.dose_direction(adata, compound="not_dosed")
+def test_the_direction_plot_says_which_compounds_it_has(phenotypes):
+    mt.tl.dose_direction(phenotypes)
+    with pytest.raises(KeyError, match="grows"):
+        mt.pl.dose_direction(phenotypes, compound="not_dosed")
     plt.close("all")
 
 

@@ -260,63 +260,6 @@ def test_a_curve_that_plateaus_is_read_by_the_logistic_and_one_still_rising_by_t
     assert _one_compound(conc, still_rising, 0.2)["hitcall_model"] == "linear"
 
 
-def _sigmoid(log_dose, height, ec50, hill=2.0):
-    from scipy.special import expit
-
-    return height * expit(hill * (log_dose - np.log10(ec50)))
-
-
-@pytest.fixture
-def phenotypes():
-    """A plate where one compound grows along one direction and another turns into a different phenotype.
-
-    `grows` moves three features together over its whole range. `turns` moves two features at low concentration
-    and drops them again while two others take over, so its top profile points somewhere else entirely. `quiet`
-    moves nothing. Every feature carries unit noise, so a response in the matrix reads directly in MADs.
-    """
-    rng = np.random.default_rng(0)
-    doses = np.geomspace(0.01, 100.0, 6)
-    wells_per_dose = 4
-    concentration = np.repeat(doses, wells_per_dose)
-    log_dose = np.log10(concentration)
-    n_features = 9
-
-    signals = {}
-    grows = np.zeros((concentration.size, n_features))
-    for column in (0, 1, 2):
-        grows[:, column] = _sigmoid(log_dose, 8.0, 1.0)
-    signals["grows"] = grows
-
-    turns = np.zeros((concentration.size, n_features))
-    early = _sigmoid(log_dose, 8.0, 0.05, hill=4.0) - _sigmoid(log_dose, 8.0, 5.0, hill=4.0)
-    late = _sigmoid(log_dose, 8.0, 20.0, hill=4.0)
-    turns[:, 3] = turns[:, 4] = early
-    turns[:, 5] = turns[:, 6] = late
-    signals["turns"] = turns
-    signals["quiet"] = np.zeros((concentration.size, n_features))
-
-    n_controls = 24
-    blocks, records = [], []
-    for compound, signal in signals.items():
-        blocks.append(signal + rng.normal(0.0, 1.0, signal.shape))
-        records.append(pd.DataFrame({"Metadata_Compound": compound, "Metadata_Concentration": concentration}))
-    blocks.append(rng.normal(0.0, 1.0, (n_controls, n_features)))
-    records.append(pd.DataFrame({"Metadata_Compound": "DMSO", "Metadata_Concentration": np.zeros(n_controls)}))
-
-    values = np.vstack(blocks)
-    # A feature the controls measure without any spread has no scale to read a response against.
-    values[:, 8] = 1.0
-    frame = pd.concat(records, ignore_index=True)
-    total = len(frame)
-    frame["Metadata_Plate"] = np.where(np.arange(total) % 2 == 0, "P1", "P2")
-    frame["Metadata_Well"] = [f"{chr(65 + index // 24)}{index % 24 + 1:02d}" for index in range(total)]
-    frame["Metadata_Control"] = frame["Metadata_Compound"] == "DMSO"
-    frame["Metadata_CellCount"] = 100.0
-    for column in range(n_features):
-        frame[f"Cells_AreaShape_f{column}"] = values[:, column]
-    return from_dataframe(frame, resolution="well")
-
-
 def test_dose_features_names_the_features_that_move_and_leaves_the_rest_NaN(phenotypes):
     mt.tl.dose_features(phenotypes)
     table = phenotypes.uns["mantispy"]["dose_features"]
@@ -430,9 +373,10 @@ def test_a_compound_with_one_concentration_is_left_out_of_the_direction_table(ph
 def test_the_amplitude_floor_follows_the_plates_the_concentration_sits_on():
     """Controls drawn without regard to the layout give a floor that does not apply to the concentration.
 
-    Here each plate's controls sit to one side, as per-plate normalization leaves them. A concentration with a
-    well on each plate has those offsets cancel; one with both wells on a single plate does not, and its floor is
-    the offset. A floor taken from any group of the right size would report the same number for both.
+    Here each plate's controls sit to one side of every feature, which is what a plate effect looks like. A
+    concentration with a well on each plate has those offsets cancel; one with both wells on a single plate does
+    not, and its floor is the offset. A floor taken from any group of the right size would report the same
+    number for both.
     """
     rng = np.random.default_rng(0)
     rows = []
@@ -450,8 +394,7 @@ def test_the_amplitude_floor_follows_the_plates_the_concentration_sits_on():
     frame["Metadata_Control"] = frame["compound"] == "DMSO"
     frame["Metadata_Well"] = [f"{chr(65 + i // 24)}{i % 24 + 1:02d}" for i in range(len(frame))]
     for feature in range(4):
-        noise = rng.normal(0.0, 0.1, len(frame))
-        frame[f"Cells_AreaShape_f{feature}"] = noise + (frame["offset"] if feature == 0 else 0.0)
+        frame[f"Cells_AreaShape_f{feature}"] = rng.normal(0.0, 0.1, len(frame)) + frame["offset"]
     adata = from_dataframe(frame.drop(columns=["plate", "compound", "dose", "offset"]), resolution="well")
 
     mt.tl.dose_direction(adata)
@@ -490,7 +433,7 @@ def test_a_concentration_that_lost_its_cells_is_cytotoxic_whatever_else_it_did(p
 def test_the_phase_reaches_obs_so_the_window_can_be_subset(phenotypes):
     mt.tl.dose_direction(phenotypes)
     phases = phenotypes.obs["dose_direction_phase"]
-    assert set(phases.cat.categories) == set(mt.tl.DOSE_PHASES)
+    assert set(phases.cat.categories) == set(mt.tl._dose.DOSE_PHASES)
     assert phases[phenotypes.obs["Metadata_Control"].to_numpy(dtype=bool)].isna().all(), "controls are in no phase"
 
     window = phenotypes[phases == "responding"]
