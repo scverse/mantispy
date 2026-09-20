@@ -24,6 +24,7 @@ BETTER = {
     "clisi": "lower",
     "pc_regression": "lower",
     "mean_average_precision": "higher",
+    "known_relationships": "higher",
 }
 
 

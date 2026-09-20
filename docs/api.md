@@ -210,6 +210,7 @@ reference implementation (0.9267 against 0.9267 over 301 JUMP compounds):
     metrics.lisi
     metrics.pc_regression
     metrics.batch_variance_explained
+    metrics.known_relationships
     metrics.evaluate_correction
     metrics.diagnose_testing
 ```

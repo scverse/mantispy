@@ -327,3 +327,136 @@ def test_the_null_rate_verdict_is_a_binomial_tail(monkeypatch, pure_noise_screen
     verdicts = report.set_index("check")
     for name in ("hit_calling null rate", "edistance null rate"):
         assert verdicts.loc[name, "verdict"] == expected, report
+
+
+def _gene_map(n_sets=4, per_set=3, n_background=24, n_features=16, noise=0.1, seed=0):
+    """One profile per gene, where the genes of a set share a direction and the rest are noise."""
+    import anndata as ad
+
+    generator = np.random.default_rng(seed)
+    names, rows, edges = [], [], []
+    for index in range(n_sets):
+        direction = generator.normal(size=n_features)
+        for member in range(per_set):
+            names.append(f"SET{index}G{member}")
+            rows.append(direction + noise * generator.normal(size=n_features))
+            edges.append({"source": f"complex{index}", "target": names[-1]})
+    for index in range(n_background):
+        names.append(f"BG{index}")
+        rows.append(generator.normal(size=n_features))
+
+    obs = pd.DataFrame({"Metadata_Perturbation": names}, index=pd.Index(names, name="gene"))
+    return ad.AnnData(np.asarray(rows, dtype=np.float32), obs=obs), pd.DataFrame(edges)
+
+
+def _recall_by_hand(adata, net, percentile=5.0):
+    """The same quantity from the definition, pair by pair, as an independent check.
+
+    This is `EFAAR_benchmarking` at 2935f21: the comparison distribution is the strict upper
+    triangle, a query value counts when its rank fraction among the null is at or below the
+    lower threshold or at or above the upper one, and the ranks come from searchsorted rather
+    than from an interpolated quantile.
+    """
+    values = np.asarray(adata.X, dtype=np.float64)
+    unit = values / np.linalg.norm(values, axis=1, keepdims=True)
+    genes = list(adata.obs["Metadata_Perturbation"])
+    position = {gene: index for index, gene in enumerate(genes)}
+
+    background = np.sort([unit[i] @ unit[j] for i in range(len(genes)) for j in range(i + 1, len(genes))])
+
+    related = set()
+    for _, block in net.groupby("source"):
+        members = sorted({gene for gene in block["target"] if gene in position})
+        related |= {
+            (position[members[a]], position[members[b]])
+            for a in range(len(members))
+            for b in range(a + 1, len(members))
+        }
+    scores = np.array([unit[i] @ unit[j] for i, j in sorted(related)])
+    below = np.searchsorted(background, scores, side="right") / len(background)
+    above = np.searchsorted(background, scores, side="left") / len(background)
+    return float(np.mean((below <= percentile / 100) | (above >= 1 - percentile / 100)))
+
+
+def test_known_relationships_separates_a_structured_map_from_a_shuffled_annotation():
+    """Recall is near 1 when the annotated genes share a direction, and near the 2 x percentile
+    baseline when the same number of pairs is drawn at random."""
+    adata, net = _gene_map()
+    recall = _value(mt.metrics.known_relationships(adata, net), "known_relationships")
+
+    shuffled = net.copy()
+    shuffled["target"] = np.random.default_rng(1).permutation(adata.obs["Metadata_Perturbation"].to_numpy())[: len(net)]
+    baseline = _value(mt.metrics.known_relationships(adata, shuffled), "known_relationships")
+
+    assert recall > 0.9
+    assert baseline < 0.4, baseline
+
+
+def test_known_relationships_counts_the_lower_tail():
+    """Two perturbations with opposite effects are related, so the recall is two-sided.
+
+    A one-sided implementation scores this pair 0: its cosine is -1, the least similar pair
+    in the map.
+    """
+    import anndata as ad
+
+    generator = np.random.default_rng(2)
+    direction = generator.normal(size=16)
+    values = np.vstack([generator.normal(size=(30, 16)), direction, -direction]).astype(np.float32)
+    names = [f"BG{index}" for index in range(30)] + ["OPP0", "OPP1"]
+    adata = ad.AnnData(values, obs=pd.DataFrame({"Metadata_Perturbation": names}, index=pd.Index(names, name="gene")))
+
+    net = pd.DataFrame([{"source": "opposing", "target": "OPP0"}, {"source": "opposing", "target": "OPP1"}])
+    assert _value(mt.metrics.known_relationships(adata, net), "known_relationships") == 1.0
+
+
+def test_known_relationships_matches_the_definition():
+    adata, net = _gene_map(seed=3)
+    measured = _value(mt.metrics.known_relationships(adata, net), "known_relationships")
+    assert measured == pytest.approx(_recall_by_hand(adata, net), abs=1e-12)
+
+
+def test_known_relationships_refuses_input_it_cannot_score():
+    adata, net = _gene_map(seed=4)
+    with pytest.raises(ValueError, match="aggregate first"):
+        mt.metrics.known_relationships(adata[[0, 0, 1]].copy(), net)
+    with pytest.raises(ValueError, match="relates no two"):
+        mt.metrics.known_relationships(adata, net.assign(target="ABSENT" + net["target"]))
+    with pytest.raises(KeyError, match="Metadata_Missing"):
+        mt.metrics.known_relationships(adata, net, label_key="Metadata_Missing")
+
+
+@pytest.mark.parametrize(("percentile", "expected"), [(10.0, 0.0), (20.0, 1.0)])
+def test_known_relationships_ranks_ties_as_the_reference_does(percentile, expected):
+    """The pinned vector from `EFAAR_benchmarking` at 2935f21, tests/test_benchmarking.py.
+
+    The two query values are the smallest and largest of a five-value null, so an implementation
+    that read interpolated quantiles would call both of them extreme at any threshold. Ranking
+    them by position instead puts each at a fifth of the distribution, which the 10% tails do
+    not reach and the 20% tails do.
+    """
+    from mantispy.metrics._relationships import _recall
+
+    assert _recall(np.array([1.0, 2.0, 3.0, 4.0, 5.0]), np.array([1.0, 5.0]), percentile / 100) == expected
+
+
+def test_known_relationships_reads_pairs_and_sets_alike():
+    """The reference relationship sets ship as pairs, and mt.tl.gene_sets returns sets."""
+    adata, net = _gene_map(seed=5)
+    genes = adata.obs["Metadata_Perturbation"].to_numpy()
+    pairs = pd.DataFrame(
+        # Reversed, so the direction a pair is written in cannot change the answer.
+        [{"entity1": genes[3 * index + 1], "entity2": genes[3 * index]} for index in range(4)]
+        + [{"entity1": genes[3 * index], "entity2": genes[3 * index + 1]} for index in range(4)]
+    )
+    sets = pd.DataFrame(
+        [{"source": f"complex{index}", "target": genes[3 * index + member]} for index in range(4) for member in (0, 1)]
+    )
+
+    from_pairs = mt.metrics.known_relationships(adata, pairs)
+    assert _value(from_pairs, "known_relationships") == _value(
+        mt.metrics.known_relationships(adata, sets), "known_relationships"
+    )
+
+    with pytest.raises(ValueError, match="net needs either"):
+        mt.metrics.known_relationships(adata, net.rename(columns={"target": "gene"}))
