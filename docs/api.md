@@ -166,7 +166,7 @@ Writing to a layer suffixes the column, so `key_added="sphered"` flags `var["deg
 | `tl.consensus` | returns a new object at `"perturbation"` resolution; `obs["Metadata_ReplicateCount"]`, `uns["mantispy"]["consensus_weights"]` |
 | `tl.effect_size` | `varm[key_added]`, `uns["mantispy"][key_added]` and `..._groups` |
 | `tl.wasserstein_features` | `varm[key_added]`, `uns["mantispy"][key_added]` and `..._groups` |
-| `tl.hit_calling` | `uns["mantispy"][key_added]`, `obs[key_added + "_distance"]`, `obs[key_added + "_row_distance"]`, `obs[key_added + "_qvalue"]` |
+| `tl.hit_calling` | `uns["mantispy"][key_added]`, `obs[key_added + "_distance"]`, `obs[key_added + "_row_distance"]`, `obs[key_added + "_qvalue"]`, `obs[key_added + "_reference_held_out"]` |
 | `tl.edistance` | `uns["mantispy"][key_added]`, or `..._pairwise` when `reference=None` |
 | `tl.transport` | `uns["mantispy"][key_added]` and `..._units`, `obs[key_added + "_agreement"]` |
 | `tl.dose_response` | `uns["mantispy"][key_added]` |

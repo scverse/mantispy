@@ -181,6 +181,31 @@ def _dosed_wells(conc, resp, controls=()):
     return adata
 
 
+def test_the_cutoff_comes_from_the_controls_that_did_not_fit_the_transform():
+    """Regression for #83.
+
+    The controls that fitted the centroid and covariance sit closer to the centroid they placed,
+    so their spread is narrower than the held-out half's. Pooling them shrinks the MAD, which is
+    the whole cutoff, and every curve then clears a bar that is too low.
+    """
+    conc = np.array([0.03, 0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0])
+    resp = np.array([0.0, 0.2, 0.1, 0.4, 0.7, 0.9, 0.6, 1.2])
+    # Two halves of one control population, one measured against a centroid it helped place.
+    fitted, held_out = np.linspace(-0.1, 0.1, 12), np.linspace(-1.0, 1.0, 12)
+
+    adata = _dosed_wells(conc, resp, controls=np.concatenate([fitted, held_out]))
+    adata.obs["hits_reference_held_out"] = np.arange(adata.n_obs) >= adata.n_obs - len(held_out)
+
+    mt.tl.dose_response(adata, min_doses=4)
+    honest = float(adata.uns["mantispy"]["dose_response"].set_index("compound").loc["c", "hitcall"])
+
+    del adata.obs["hits_reference_held_out"]
+    mt.tl.dose_response(adata, min_doses=4)
+    pooled = float(adata.uns["mantispy"]["dose_response"].set_index("compound").loc["c", "hitcall"])
+
+    assert honest < 0.5 < pooled, "the narrow half of the controls must not set the bar the curve clears"
+
+
 def _one_compound(conc, resp, cutoff):
     adata = _dosed_wells(conc, resp)
     mt.tl.dose_response(adata, min_doses=4, reference=None, cutoff=cutoff)

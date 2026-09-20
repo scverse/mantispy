@@ -13,7 +13,7 @@ from anndata import AnnData
 from mantispy._core._stats import MAD_TO_SIGMA, benjamini_hochberg
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
-from mantispy._core.masks import reference_mask
+from mantispy._core.masks import held_out_reference, reference_mask
 from mantispy._core.mutation import inplace_or_copy
 
 #: Column order of the output table, so an empty result still carries its columns.
@@ -278,7 +278,7 @@ def _baseline_and_cutoff(
     # and the trend need no controls, so only the hit call is left out.
     if reference is not None and not (reference == "negcon" and "Metadata_Control" not in adata.obs):
         values = as_frame(adata.obs)[response].to_numpy(dtype=float)
-        control = values[reference_mask(adata, reference)]
+        control = values[held_out_reference(adata, reference_mask(adata, reference), response)]
         control = control[np.isfinite(control)]
 
     if control.size < 2:
@@ -341,7 +341,7 @@ def dose_response(
         min_doses: Distinct doses below which the curve is skipped and only the trend is reported.
         min_r_squared: Coefficient of determination a fit needs before it is marked ok.
         reference: Rows that set the baseline the response is read against and the spread the cutoff comes from. ``None`` leaves the hit call out unless ``cutoff`` is given.
-        cutoff: Response a curve has to clear to count as active. The default takes three times the controls' MAD, the ToxCast pipeline's ``3 * bmad``.
+        cutoff: Response a curve has to clear to count as active. The default takes three times the controls' MAD, the ToxCast pipeline's ``3 * bmad``, over the controls :func:`~mantispy.tl.hit_calling` held out of its own fit rather than over all of them.
         key_added: Name for the output table.
         copy: Return a modified copy instead of mutating in place.
 
