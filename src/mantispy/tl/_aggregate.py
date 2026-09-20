@@ -59,7 +59,7 @@ def aggregate(
         ValueError: ``func`` is not one of ``FUNCTIONS``.
 
     Notes:
-        This uses mantispy's own NaN-skipping kernel rather than :func:`scanpy.get.aggregate`, which propagates NaN and is measurably slower on both mean and median.
+        This uses mantispy's own NaN-skipping kernel rather than :func:`scanpy.get.aggregate`, which propagates NaN and is slower on both mean and median.
     """
     if func not in FUNCTIONS:
         raise ValueError(f"func must be one of {tuple(FUNCTIONS)}, got {func!r}")
@@ -120,7 +120,7 @@ def aggregate(
 
 def _site_counts(frame: pd.DataFrame, codes: np.ndarray, n_groups: int) -> np.ndarray:
     """Distinct fields of view among each group's cells, where site 1 of one well and of the next are different fields."""
-    # One integer per field, built from per-column codes rather than a MultiIndex of tuples, which is 7x slower.
+    # One integer per field, built from per-column codes rather than a MultiIndex, which would build a tuple per cell.
     field = np.zeros(len(frame), dtype=np.int64)
     for column in ("Metadata_Plate", "Metadata_Well", "Metadata_Site"):
         if column in frame:

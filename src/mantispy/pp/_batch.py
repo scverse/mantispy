@@ -32,7 +32,7 @@ def _median_polish_stack(grids: np.ndarray, max_iter: int, tol: float) -> tuple[
     """Median polish every feature of a ``(rows, columns, features)`` stack.
 
     Each feature's grid is independent, so the stack goes to one numba kernel that polishes a plane per thread.
-    A per-feature Python loop took 20 minutes on 132 JUMP plates, almost all of it interpreter and pandas overhead.
+    A per-feature Python loop spends almost all of its time in the interpreter and in pandas instead.
 
     Returns the fitted ``(row_effects, column_effects)``, both ``(positions, features)``.
     The grand level is not included, so subtracting the effects keeps each feature's level, as :func:`regress_out` does.
