@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import warnings
+from dataclasses import dataclass
+from math import lgamma, log, pi
 
 import numpy as np
 import pandas as pd
 from anndata import AnnData
 
-from mantispy._core._stats import benjamini_hochberg
+from mantispy._core._stats import MAD_TO_SIGMA, benjamini_hochberg
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
+from mantispy._core.masks import reference_mask
 from mantispy._core.mutation import inplace_or_copy
 
 #: Column order of the output table, so an empty result still carries its columns.
@@ -45,10 +48,11 @@ def four_parameter_logistic(
     Returns:
         The response at each dose, the same shape as ``log_dose``.
     """
-    # The exponent overflows while an optimizer explores steep slopes far from the data. At 1e300 the term is
-    # already infinite next to the numerator, so clipping changes the value by nothing and drops the warning.
-    exponent = np.clip((log_ec50 - log_dose) * hill, -300.0, 300.0)
-    return bottom + (top - bottom) / (1.0 + 10.0**exponent)
+    from scipy.special import expit
+
+    # The same sigmoid written through expit, which is overflow-safe: an optimizer exploring steep slopes far from
+    # the data drives 10**((log_ec50 - log_dose) * hill) past the float range, and the naive form warns there.
+    return bottom + (top - bottom) * expit(log(10.0) * (log_dose - log_ec50) * hill)
 
 
 def _fit_curve(
@@ -89,65 +93,70 @@ _ERROR_DF = 4
 _CUTOFF_MADS = 3.0
 
 
+#: Normalizing constant of the Student-t log-density at ``_ERROR_DF``. It does not depend on the data, and
+#: ``scipy.stats.t.logpdf`` spends ten times the arithmetic re-deriving it on every one of the thousand objective
+#: evaluations a single curve costs.
+_T_LOG_CONSTANT = lgamma((_ERROR_DF + 1) / 2) - lgamma(_ERROR_DF / 2) - 0.5 * log(_ERROR_DF * pi)
+
+
 def _log_likelihood(residuals: np.ndarray, log_scale: float) -> float:
     """Student-t log-likelihood of the residuals at scale ``exp(log_scale)``, tcplfit2's ``tcplObj``."""
-    from scipy.stats import t
-
-    return float(np.sum(t.logpdf(residuals / np.exp(log_scale), _ERROR_DF) - log_scale))
-
-
-def _linear_in_log_dose(log_dose: np.ndarray, slope: float) -> np.ndarray:
-    """A line through the baseline at the lowest dose tested, for curves still climbing at the top dose.
-
-    tcplfit2's ``poly1`` runs through the origin of baseline-corrected response, so its top is a rescaling of the
-    one slope. Anchoring at the lowest tested dose is the same shape in log space, and keeps the re-parameterization
-    in :func:`_with_top_at` to that one number.
-    """
-    return slope * (log_dose - log_dose.min())
+    scaled = residuals * np.exp(-log_scale)
+    density = _T_LOG_CONSTANT - 0.5 * (_ERROR_DF + 1) * np.log1p(scaled * scaled / _ERROR_DF)
+    return float(np.sum(density) - log_scale * residuals.size)
 
 
-#: Free parameters of each model, before the error scale.
-_MODEL_PARAMETERS = {"logistic": 4, "linear": 1}
+@dataclass(frozen=True)
+class _Fit:
+    """One fitted model: its name, its parameters with the error scale last, and its maximised log-likelihood."""
+
+    name: str
+    parameters: np.ndarray
+    log_likelihood: float
+
+    @property
+    def log_scale(self) -> float:
+        """The error scale, which every model carries as its last parameter."""
+        return float(self.parameters[-1])
+
+    @property
+    def aic(self) -> float:
+        return 2.0 * len(self.parameters) - 2.0 * self.log_likelihood
+
+    def predict(self, log_dose: np.ndarray) -> np.ndarray:
+        if self.name == "logistic":
+            return four_parameter_logistic(log_dose, *self.parameters[:-1])
+        # tcplfit2's poly1 runs through the origin of baseline-corrected response, so its top is a rescaling of
+        # the one slope. Anchoring at the lowest tested dose is the same shape in log space.
+        return self.parameters[0] * (log_dose - log_dose.min())
+
+    def _top_axis(self, log_dose: np.ndarray) -> tuple[int, float]:
+        """Which parameter carries the top, and what it is multiplied by to give it."""
+        if self.name == "logistic":
+            return 1, 1.0
+        return 0, float(log_dose.max() - log_dose.min())
+
+    def top(self, log_dose: np.ndarray) -> float:
+        """The response the model reaches: the fitted asymptote, or the value at the highest dose tested."""
+        index, scale = self._top_axis(log_dose)
+        return float(self.parameters[index]) * scale
+
+    def with_top_at(self, log_dose: np.ndarray, target: float) -> np.ndarray:
+        """The same curve re-parameterized to reach exactly ``target``, as tcplfit2's ``toplikelihood`` does."""
+        index, scale = self._top_axis(log_dose)
+        moved = self.parameters.copy()
+        if scale > 0:
+            moved[index] = target / scale
+        return moved
 
 
-def _predict(name: str, log_dose: np.ndarray, parameters: np.ndarray) -> np.ndarray:
-    if name == "logistic":
-        return four_parameter_logistic(log_dose, *parameters[:4])
-    return _linear_in_log_dose(log_dose, float(parameters[0]))
-
-
-def _span(log_dose: np.ndarray) -> float:
-    return float(log_dose.max() - log_dose.min())
-
-
-def _top_of(name: str, log_dose: np.ndarray, parameters: np.ndarray) -> float:
-    """The response the model reaches: the fitted asymptote, or the value at the highest dose tested."""
-    if name == "logistic":
-        return float(parameters[1])
-    return float(parameters[0]) * _span(log_dose)
-
-
-def _with_top_at(name: str, log_dose: np.ndarray, parameters: np.ndarray, target: float) -> np.ndarray:
-    """The same curve re-parameterized to reach exactly ``target``, as tcplfit2's ``toplikelihood`` does."""
-    moved = parameters.copy()
-    if name == "logistic":
-        moved[1] = target
-    else:
-        span = _span(log_dose)
-        moved[0] = target / span if span > 0 else moved[0]
-    return moved
-
-
-def _fit_maximum_likelihood(
-    name: str, log_dose: np.ndarray, response: np.ndarray, start: np.ndarray
-) -> tuple[np.ndarray, float] | None:
+def _fit_maximum_likelihood(name: str, log_dose: np.ndarray, response: np.ndarray, start: np.ndarray) -> _Fit | None:
     """Fit a model and the error scale together by maximum likelihood under the t error model."""
     from scipy.optimize import minimize
 
-    n_parameters = _MODEL_PARAMETERS[name]
-
     def negative(parameters: np.ndarray) -> float:
-        value = -_log_likelihood(response - _predict(name, log_dose, parameters), parameters[n_parameters])
+        candidate = _Fit(name, parameters, 0.0)
+        value = -_log_likelihood(response - candidate.predict(log_dose), candidate.log_scale)
         return float(value) if np.isfinite(value) else 1e18
 
     guess = np.append(start, np.log(max(float(np.std(response)), 1e-8)))
@@ -156,30 +165,30 @@ def _fit_maximum_likelihood(
         fitted = minimize(negative, guess, method="Nelder-Mead", options={"maxiter": 4000, "xatol": 1e-6})
     if not fitted.success or not np.isfinite(fitted.x).all():
         return None
-    return fitted.x, -float(fitted.fun)
+    return _Fit(name, fitted.x, -float(fitted.fun))
 
 
-def _winning_model(log_dose: np.ndarray, response: np.ndarray, start: np.ndarray) -> tuple[str, np.ndarray, float]:
-    """Fit both models and keep the one with the lower AIC, as tcplfit2 keeps the best of its ten."""
+def _winning_model(log_dose: np.ndarray, response: np.ndarray) -> _Fit | None:
+    """Fit both models and keep the one with the lower AIC, as tcplfit2 keeps the best of its ten.
+
+    Each model starts from its own heuristic rather than from the least-squares fit in the table. Seeding the
+    logistic from that fit tied the two together: where it failed to converge the start was NaN, the logistic was
+    skipped, and the model set silently collapsed to the line because a different estimator had given up.
+    """
     slope = float(np.polyfit(log_dose, response, 1)[0]) if len(np.unique(log_dose)) > 1 else 0.0
-    starts = {"logistic": start, "linear": np.array([slope])}
-    best: tuple[str, np.ndarray, float] | None = None
-    for name, guess in starts.items():
-        if name == "logistic" and not np.isfinite(guess).all():
-            continue
-        fitted = _fit_maximum_likelihood(name, log_dose, response, guess)
-        if fitted is None:
-            continue
-        n_parameters = _MODEL_PARAMETERS[name] + 1
-        aic = 2.0 * n_parameters - 2.0 * fitted[1]
-        if best is None or aic < best[2]:
-            best = (name, fitted[0], aic)
-    return best if best is not None else ("none", np.array([]), np.inf)
+    starts = {
+        "logistic": np.array([float(response.min()), float(response.max()), float(np.median(log_dose)), 1.0]),
+        "linear": np.array([slope]),
+    }
+    fits = [
+        fitted
+        for name, guess in starts.items()
+        if np.isfinite(guess).all() and (fitted := _fit_maximum_likelihood(name, log_dose, response, guess))
+    ]
+    return min(fits, key=lambda fit: fit.aic) if fits else None
 
 
-def _hitcall(
-    name: str, log_dose: np.ndarray, response: np.ndarray, parameters: np.ndarray, aic: float, cutoff: float
-) -> float:
+def _hitcall(fit: _Fit, log_dose: np.ndarray, response: np.ndarray, cutoff: float) -> float:
     """Continuous hit call: the three weights of Feshuk et al. 2023, multiplied.
 
     The weights are the confidence that the curve beats a constant fit, that at least one concentration's median
@@ -192,15 +201,15 @@ def _hitcall(
     from scipy.special import expit
     from scipy.stats import chi2, t
 
-    top = _top_of(name, log_dose, parameters)
-    log_scale = float(parameters[_MODEL_PARAMETERS[name]])
+    top = fit.top(log_dose)
+    log_scale = fit.log_scale
 
     # P1: the Akaike weight of the winning curve against the constant model, which fits the error scale only.
     constant = _fit_maximum_likelihood_constant(response)
     if constant is None:
         return float("nan")
     aic_constant = 2.0 * 1.0 - 2.0 * constant
-    p1 = 1.0 - float(expit((aic - aic_constant) / 2.0))
+    p1 = 1.0 - float(expit((fit.aic - aic_constant) / 2.0))
 
     # P2: one minus the odds of every concentration's median response falling short of the cutoff.
     # Each factor is the chance that a response this far out still came from a truth below the cutoff, which for a
@@ -213,10 +222,9 @@ def _hitcall(
     # P3: a likelihood profile on the asymptote. The curve is re-parameterized to put its top exactly on the
     # cutoff, which for an asymptote is the assignment itself, and the drop in log-likelihood is read as a
     # chi-square on one degree of freedom.
-    at_cutoff = _with_top_at(name, log_dose, parameters, float(np.sign(top) * cutoff))
-    profile = _log_likelihood(response - _predict(name, log_dose, at_cutoff), log_scale)
-    mll = float(len(parameters)) - aic / 2.0
-    tail = float(chi2.cdf(2.0 * (mll - profile), 1))
+    at_cutoff = _Fit(fit.name, fit.with_top_at(log_dose, float(np.sign(top) * cutoff)), 0.0)
+    profile = _log_likelihood(response - at_cutoff.predict(log_dose), log_scale)
+    tail = float(chi2.cdf(2.0 * (fit.log_likelihood - profile), 1))
     p3 = (1.0 + tail) / 2.0 if abs(top) >= abs(cutoff) else (1.0 - tail) / 2.0
 
     return float(np.clip(p1 * p2 * p3, 0.0, 1.0))
@@ -242,23 +250,22 @@ def _baseline_and_cutoff(
     Both come from the control rows, as the ToxCast pipeline's ``bmed`` and ``3 * bmad`` do.
     Without controls there is no scale to call activity on, so the hit call is left out rather than guessed at.
     """
-    from mantispy._core._stats import MAD_TO_SIGMA
-    from mantispy._core.masks import reference_mask
+    control = np.empty(0)
+    # reference_mask raises when negcon is asked for and the column is absent. Here that is not fatal: the curve
+    # and the trend need no controls, so only the hit call is left out.
+    if reference is not None and not (reference == "negcon" and "Metadata_Control" not in adata.obs):
+        values = as_frame(adata.obs)[response].to_numpy(dtype=float)
+        control = values[reference_mask(adata, reference)]
+        control = control[np.isfinite(control)]
 
-    values = as_frame(adata.obs)[response].to_numpy(dtype=float)
-    if reference is None or (reference == "negcon" and "Metadata_Control" not in adata.obs):
-        if cutoff is None:
-            get_logger().info("dose_response: no controls to set a cutoff from, so no hit call")
-            return 0.0, np.nan
-        return 0.0, float(cutoff)
-
-    control = values[reference_mask(adata, reference)]
-    control = control[np.isfinite(control)]
     if control.size < 2:
         if cutoff is None:
-            get_logger().info("dose_response: %d control row(s), too few for a cutoff, so no hit call", control.size)
-            return 0.0, np.nan
-        return 0.0, float(cutoff)
+            get_logger().info(
+                "dose_response: %d usable control row(s), so no hit call. Mark the controls with "
+                "mt.pp.annotate_controls, or pass an explicit cutoff.",
+                control.size,
+            )
+        return 0.0, float(cutoff) if cutoff is not None else np.nan
 
     baseline = float(np.median(control))
     if cutoff is not None:
@@ -367,11 +374,8 @@ def dose_response(
             if np.isfinite(activity_cutoff):
                 # The hit call reads the response against the baseline the controls sit at, as tcpl's bmed does.
                 centred = values - baseline
-                start = np.array([bottom - baseline, top - baseline, np.log10(ec50), hill])
-                name, parameters, aic = _winning_model(log_dose, centred, start)
-                if name != "none":
-                    hitcall = _hitcall(name, log_dose, centred, parameters, aic, activity_cutoff)
-                    hitcall_model = name
+                if (fit := _winning_model(log_dose, centred)) is not None:
+                    hitcall, hitcall_model = _hitcall(fit, log_dose, centred, activity_cutoff), fit.name
 
         records.append(
             {

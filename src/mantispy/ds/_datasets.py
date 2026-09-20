@@ -82,9 +82,13 @@ def _augmented(name: str, plates: Sequence[str] | None, cache_dir: str | Path | 
     return read_profiles(_plate_files(name, plates, cache_dir), on_column_mismatch="intersect", resolution="well")
 
 
-def _profiles(name: str, cache_dir: str | Path | None, **kwargs: Any) -> AnnData:
-    """Stack every file of an accession, with the reading arguments the registry records for it."""
-    adata = read_profiles(_files(name, cache_dir), **{**_DATASETS[name].metadata.get("read", {}), **kwargs})
+def _profiles(
+    name: str, cache_dir: str | Path | None, select: Callable[[str], bool] | None = None, **kwargs: Any
+) -> AnnData:
+    """Stack the files of an accession that ``select`` keeps, with the reading arguments the registry records."""
+    adata = read_profiles(
+        _files(name, cache_dir, select=select), **{**_DATASETS[name].metadata.get("read", {}), **kwargs}
+    )
     adata.uns["mantispy"]["dataset"] = _DATASETS[name].metadata["accession"]
     return adata
 
@@ -393,12 +397,13 @@ def chroma(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
     return _profiles("chroma", cache_dir, **kwargs)
 
 
-#: Platemap columns holding the compound and the concentration, per OASIS batch. The four batches were laid out by
-#: different people and none of them agree on a name.
-_OASIS_PLATEMAP_COLUMNS = (
-    ("treatment", "Compound Name", "compound"),
-    ("concentration_uM", "assay_conc_uM", "compound_concentration"),
-)
+#: What each OASIS batch calls the columns mantispy reads. The four batches were laid out by different people and
+#: none of them agree on a name, so each output column lists the spellings seen across them.
+_OASIS_PLATEMAP_COLUMNS = {
+    "Metadata_Compound": ("treatment", "Compound Name", "compound"),
+    "Metadata_Concentration": ("concentration_uM", "assay_conc_uM", "compound_concentration"),
+    "Metadata_CellLine": ("cell_line", "cell_type"),
+}
 
 
 def _oasis_platemaps(cache_dir: str | Path | None) -> pd.DataFrame:
@@ -406,25 +411,24 @@ def _oasis_platemaps(cache_dir: str | Path | None) -> pd.DataFrame:
     frames = []
     for path in _files("oasis_pilot", cache_dir, select=lambda name: name.endswith("__platemap.txt")):
         frame = pd.read_csv(path, sep="\t", dtype=str)
-        compound = next((column for column in _OASIS_PLATEMAP_COLUMNS[0] if column in frame), None)
-        concentration = next((column for column in _OASIS_PLATEMAP_COLUMNS[1] if column in frame), None)
-        if compound is None or concentration is None:
+        found = {
+            name: next((column for column in spellings if column in frame), None)
+            for name, spellings in _OASIS_PLATEMAP_COLUMNS.items()
+        }
+        if found["Metadata_Compound"] is None or found["Metadata_Concentration"] is None:
             get_logger().warning("oasis_pilot: %s names no compound or concentration column", path.name)
             continue
-        cell_line = next((column for column in ("cell_line", "cell_type") if column in frame), None)
-        kept = frame[["plate_map_name", "well_position", compound, concentration]].rename(
-            columns={
-                "plate_map_name": "Metadata_plate_map_name",
-                "well_position": "Metadata_Well",
-                compound: "Metadata_Compound",
-                concentration: "Metadata_Concentration",
+        kept = pd.DataFrame(
+            {
+                "Metadata_plate_map_name": frame["plate_map_name"],
+                "Metadata_Well": frame["well_position"],
+                **{name: frame[column] if column else np.nan for name, column in found.items()},
             }
         )
         # The batches that name compounds in "Compound Name" leave it blank for the wells that hold no compound and
         # put DMSO or EMPTY in the identifier column instead. Without this the controls read as unannotated wells.
         if "BROAD_ID" in frame:
             kept["Metadata_Compound"] = kept["Metadata_Compound"].fillna(frame["BROAD_ID"])
-        kept["Metadata_CellLine"] = frame[cell_line] if cell_line else np.nan
         frames.append(kept)
     platemap = pd.concat(frames, ignore_index=True)
     platemap["Metadata_Concentration"] = pd.to_numeric(platemap["Metadata_Concentration"], errors="coerce")
@@ -459,11 +463,7 @@ def oasis_pilot(annotate: bool = True, cache_dir: str | Path | None = None, **kw
         The assay-development batch doses DMSO itself, so a control well there carries a concentration.
         ``Metadata_Control`` marks the compound, not the dose.
     """
-    adata = read_profiles(
-        _files("oasis_pilot", cache_dir, select=lambda name: name.endswith(".csv.gz")),
-        **{**_DATASETS["oasis_pilot"].metadata.get("read", {}), **kwargs},
-    )
-    adata.uns["mantispy"]["dataset"] = _DATASETS["oasis_pilot"].metadata["accession"]
+    adata = _profiles("oasis_pilot", cache_dir, select=lambda name: name.endswith(".csv.gz"), **kwargs)
     if not annotate:
         return adata
 
@@ -491,7 +491,7 @@ def oasis_pilot(annotate: bool = True, cache_dir: str | Path | None = None, **kw
         adata.n_vars,
         int(merged.loc[~is_control, "Metadata_Compound"].nunique()),
         int(merged["Metadata_Concentration"].nunique()),
-        int(adata.obs["Metadata_Control"].sum()),
+        int(is_control.sum()),
     )
     return adata
 

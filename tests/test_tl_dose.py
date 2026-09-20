@@ -1,12 +1,11 @@
 """Dose-response trends and curve fits."""
 
-import anndata as ad
 import numpy as np
 import pandas as pd
 import pytest
 
 import mantispy as mt
-from mantispy._core.schema import stamp
+from mantispy.io._profiles import from_dataframe
 from mantispy.tl._dose import four_parameter_logistic
 
 
@@ -142,24 +141,8 @@ def test_pure_noise_does_not_reach_the_hit_call_threshold():
     rng = np.random.default_rng(0)
     doses = np.repeat([0.01, 0.1, 1.0, 10.0, 100.0, 1000.0], 3)
     called = 0
-    for trial in range(40):
-        obs = pd.DataFrame(
-            {
-                "Metadata_Plate": "P1",
-                "Metadata_Well": [f"W{index:03d}" for index in range(len(doses) + 12)],
-                "Metadata_Compound": ["c"] * len(doses) + ["DMSO"] * 12,
-                "Metadata_Concentration": np.concatenate([doses, np.zeros(12)]),
-                "Metadata_Control": [False] * len(doses) + [True] * 12,
-                "hits_row_distance": rng.normal(0, 1.0, len(doses) + 12),
-            },
-            index=[str(index) for index in range(len(doses) + 12)],
-        )
-        adata = ad.AnnData(
-            X=rng.normal(size=(len(obs), 3)).astype(np.float32),
-            obs=obs,
-            var=pd.DataFrame(index=[f"Cells_AreaShape_f{index}" for index in range(3)]),
-        )
-        stamp(adata, resolution="well")
+    for _ in range(40):
+        adata = _dosed_wells(doses, rng.normal(0, 1.0, len(doses)), controls=rng.normal(0, 1.0, 12))
         mt.tl.dose_response(adata, min_doses=4)
         table = adata.uns["mantispy"]["dose_response"].set_index("compound")
         if "c" in table.index and float(table.loc["c", "hitcall"]) >= 0.9:
@@ -178,25 +161,28 @@ def test_without_controls_the_hit_call_is_left_out_rather_than_guessed(dosed):
     assert table.loc["active", "hitcall"] >= 0.9, "an explicit cutoff is enough to call one"
 
 
-def _one_compound(conc, resp, cutoff):
-    n = len(conc)
-    obs = pd.DataFrame(
+def _dosed_wells(conc, resp, controls=()):
+    """One compound over `conc`, plus optional control wells, as a well-level mantispy object."""
+    n, m = len(conc), len(controls)
+    frame = pd.DataFrame(
         {
             "Metadata_Plate": "P1",
-            "Metadata_Well": [f"W{index}" for index in range(n)],
-            "Metadata_Compound": "c",
-            "Metadata_Concentration": conc,
-            "Metadata_Control": [False] * n,
-            "hits_row_distance": resp,
-        },
-        index=[str(index) for index in range(n)],
+            "Metadata_Well": [f"{chr(65 + index // 24)}{index % 24 + 1:02d}" for index in range(n + m)],
+            "Metadata_Compound": ["c"] * n + ["DMSO"] * m,
+            "Metadata_Concentration": np.concatenate([np.asarray(conc, dtype=float), np.zeros(m)]),
+            "Metadata_Control": [False] * n + [True] * m,
+            "Cells_AreaShape_a": np.zeros(n + m),
+            "Cells_AreaShape_b": np.zeros(n + m),
+        }
     )
-    adata = ad.AnnData(
-        X=np.zeros((n, 2), dtype=np.float32),
-        obs=obs,
-        var=pd.DataFrame(index=["Cells_AreaShape_a", "Cells_AreaShape_b"]),
-    )
-    stamp(adata, resolution="well")
+    adata = from_dataframe(frame, resolution="well")
+    # The response is an obs column, not a measurement; from_dataframe would read the name as a feature.
+    adata.obs["hits_row_distance"] = np.concatenate([np.asarray(resp, dtype=float), np.asarray(controls, dtype=float)])
+    return adata
+
+
+def _one_compound(conc, resp, cutoff):
+    adata = _dosed_wells(conc, resp)
     mt.tl.dose_response(adata, min_doses=4, reference=None, cutoff=cutoff)
     return adata.uns["mantispy"]["dose_response"].iloc[0]
 
