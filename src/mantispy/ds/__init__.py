@@ -2,16 +2,16 @@
 
 from mantispy.ds._blobs import blobs
 from mantispy.ds._datasets import (
+    JUMP_LITE_MODELS,
     agnp,
     amish,
     bbbc021,
     chroma,
     jump_cells,
-    JUMP_LITE_MODELS,
     jump_crispr,
+    jump_export,
     jump_lite,
     jump_lite_targets,
-    jump_export,
     jump_plate,
     jump_target2,
     luad,

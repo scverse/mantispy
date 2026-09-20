@@ -133,3 +133,11 @@ def test_selecting_without_the_annotation_is_refused() -> None:
     """The mask is computed against the negative controls, which only the annotation names."""
     with pytest.raises(KeyError, match="needs annotate"):
         mt.ds.jump_cells(annotate=False, selected=True)
+
+
+def test_jump_lite_names_its_feature_sets():
+    """The six feature sets cover the same wells, so a typo has to fail loudly rather than
+    silently fall back to one of them."""
+    with pytest.raises(ValueError, match="model must be one of"):
+        mt.ds.jump_lite(model="openphenome")
+    assert "cp_measure" in mt.ds.JUMP_LITE_MODELS
