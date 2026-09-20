@@ -80,7 +80,7 @@ def evaluate_correction(
         reps: Representations to compare, e.g. ``("X_pca", "X_pca_harmony")``.
         label_key: ``obs`` column with the biological grouping.
         batch_key: ``obs`` column with the nuisance grouping.
-        covariates: Further ``obs`` columns to measure each representation against, numeric or categorical, one row each. A representation can be dominated by something that is neither the batch nor the label — on a learned embedding the cell count routinely explains several times more of the variance than the batch does — and nothing else here would report it.
+        covariates: Further ``obs`` columns to measure each representation against, numeric or categorical, one row each. A representation can be dominated by something that is neither the batch nor the label, such as the cell count, and nothing else here would report it.
         map_key: Name of a table written by :func:`~mantispy.tl.map`, to add its mean mAP as one more row. That table is read rather than recomputed, so the row appears once, under the representation that run scored, and not once per entry of ``reps``.
         perplexity: Perplexity for both :func:`~mantispy.metrics.lisi` rows. The default needs more than 90 rows, and on a smaller object those two rows are NaN unless a smaller value is passed.
 
@@ -90,7 +90,7 @@ def evaluate_correction(
         A metric that is undefined for this object, such as a LISI whose perplexity the row count cannot support or a silhouette over one row per label, is NaN in that frame rather than an error, so one undefined metric still leaves the others readable.
 
     Raises:
-        KeyError: ``obsm`` holds nothing under one of ``reps``.
+        KeyError: ``obsm`` holds nothing under one of ``reps``, or ``obs`` no column under one of ``covariates``.
         KeyError: ``map_key`` names no table, or nothing recorded the representation behind it.
     """
     frames = []

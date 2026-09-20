@@ -161,8 +161,15 @@ def metrics(table: pd.DataFrame, ax: Axes | None = None) -> Axes:
     pivot.plot.bar(ax=ax)
 
     if "better" in table.columns:
+        # A covariate row carries no direction, because whether its share of the variance should be
+        # small depends on what the covariate is. Its tick is the bare metric name rather than a
+        # promise nobody can keep.
         direction = table.drop_duplicates("metric").set_index("metric")["better"]
-        ax.set_xticklabels([f"{name}\n({direction.get(name, '?')} is better)" for name in pivot.index], fontsize=7)
+        labels = [
+            f"{name}\n({direction[name]} is better)" if isinstance(direction.get(name), str) else name
+            for name in pivot.index
+        ]
+        ax.set_xticklabels(labels, fontsize=7)
     ax.set_ylabel("value")
     ax.set_xlabel("")
     ax.legend(fontsize=7)

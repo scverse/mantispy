@@ -425,6 +425,50 @@ def test_known_relationships_refuses_input_it_cannot_score():
         mt.metrics.known_relationships(adata, net.assign(target="ABSENT" + net["target"]))
     with pytest.raises(KeyError, match="Metadata_Missing"):
         mt.metrics.known_relationships(adata, net, label_key="Metadata_Missing")
+    with pytest.raises(ValueError, match=r"must be in \(0, 50\)"):
+        mt.metrics.known_relationships(adata, net, percentile=150)
+
+
+def test_known_relationships_names_each_annotation_source():
+    """Every source is scored on its own, so stacking two unnamed rows gave a table that
+    pl.metrics could not pivot: 'Index contains duplicate entries'."""
+    adata, net = _gene_map(seed=7)
+    rows = pd.concat(
+        [
+            mt.metrics.known_relationships(adata, net, name="corum"),
+            mt.metrics.known_relationships(adata, net, name="reactome"),
+        ]
+    )
+
+    assert list(rows["metric"]) == ["known_relationships:corum", "known_relationships:reactome"]
+    mt.pl.metrics(rows)
+
+
+def test_known_relationships_caps_what_one_set_expands_into(monkeypatch):
+    """A set of n members is n(n-1)/2 pairs, so one set naming every gene in a genome would both
+    dominate the recall and exhaust memory. The message has to name the way out."""
+    adata, _ = _gene_map(seed=6)
+    genes = adata.obs["Metadata_Perturbation"].to_numpy()
+    everything = pd.DataFrame({"source": "all", "target": genes})
+
+    monkeypatch.setattr(mt.metrics._relationships, "MAX_PAIRS", 5)
+    with pytest.raises(ValueError, match="drop the largest ones"):
+        mt.metrics.known_relationships(adata, everything)
+
+
+def test_known_relationships_scores_a_map_that_says_nothing_at_zero():
+    """Every profile identical makes every pair tie at a cosine of 1, so no pair ranks in a tail.
+    Reading the tails off interpolated quantiles instead would call all of them extreme."""
+    import anndata as ad
+
+    genes = [f"GENE{index}" for index in range(8)]
+    adata = ad.AnnData(
+        np.ones((8, 4), dtype=np.float32),
+        obs=pd.DataFrame({"Metadata_Perturbation": genes}, index=genes),
+    )
+    net = pd.DataFrame({"source": "complex", "target": genes[:3]})
+
+    assert _value(mt.metrics.known_relationships(adata, net), "known_relationships") == 0.0
 
 
 @pytest.mark.parametrize(("percentile", "expected"), [(10.0, 0.0), (20.0, 1.0)])
