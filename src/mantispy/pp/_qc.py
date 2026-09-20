@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
 from collections.abc import Sequence
 
 import numpy as np
@@ -11,7 +10,7 @@ from anndata import AnnData
 from mantispy._core._corr import CHUNK_BYTES
 from mantispy._core._numba import MAD, grouped_median_spread
 from mantispy._core._reduce import get_matrix, group_codes
-from mantispy._core._stats import MAD_TO_SIGMA
+from mantispy._core._stats import MAD_TO_SIGMA, nanvar
 from mantispy._core.features import blocklist_hits
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger, report_drop
@@ -19,16 +18,6 @@ from mantispy._core.mutation import inplace_or_copy
 
 #: Robust z above which a cell's area is called an outlier.
 AREA_Z_CUTOFF = 5.0
-
-
-def _nanvar(X: np.ndarray) -> np.ndarray:
-    """Per-feature variance, ignoring NaN.
-
-    An all-NaN column yields NaN without a warning.
-    """
-    with warnings.catch_warnings(), np.errstate(invalid="ignore"):
-        warnings.simplefilter("ignore", RuntimeWarning)
-        return np.nanvar(X, axis=0)
 
 
 def _n_unique(X: np.ndarray, missing: np.ndarray) -> np.ndarray:
@@ -93,7 +82,7 @@ def calculate_qc_metrics(
     adata.obs["qc_n_nan_features"] = missing.sum(axis=1).astype(np.int32)
     adata.obs["qc_nan_fraction"] = nan_fraction
     adata.var["qc_n_nan"] = missing.sum(axis=0).astype(np.int32)
-    adata.var["qc_variance"] = _nanvar(X)
+    adata.var["qc_variance"] = nanvar(X)
     adata.var["qc_n_unique"] = _n_unique(X, missing)
 
     adata.obs["qc_is_border"] = border
@@ -213,7 +202,7 @@ def filter_features(
         keep &= ~np.isnan(X).all(axis=0)
     if min_variance > 0:
         # `>` matches pp.feature_select's variance_threshold and sklearn's VarianceThreshold.
-        keep &= np.nan_to_num(_nanvar(X), nan=0.0, posinf=0.0) > min_variance
+        keep &= np.nan_to_num(nanvar(X), nan=0.0, posinf=0.0) > min_variance
     if blocklist is not None:
         # Also check var["original_name"], because pp.standardize_feature_names rewrites names
         # into a grammar no blocklist entry matches.
