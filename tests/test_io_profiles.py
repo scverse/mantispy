@@ -439,12 +439,29 @@ def test_stamp_lets_a_learned_embedding_be_written(tmp_path):
         index=list("abcd"),
     )
     adata = ad.AnnData(np.arange(24, dtype=np.float32).reshape(4, 6), obs=obs)
-    adata.var_names = [f"emb_{index}" for index in range(6)]
+    # The names JUMP-Lite ships. Parsing them reads 'openphenom' as the object and 'nahualX' as
+    # the feature group, so an embedding stamped by the parser grew feature families named after
+    # the model's own tensors.
+    adata.var_names = [f"openphenom_nahualX_{index}" for index in range(6)]
 
     mt.io.stamp(adata, resolution="well")
-    assert mt.io.validate(adata).ok, str(mt.io.validate(adata))
-    assert adata.var["object"].isna().all()  # nothing was invented for it
+    report = mt.io.validate(adata)
+    assert report.ok, str(report)
+    for column in ("object", "feature_group", "feature", "channel", "params"):
+        assert adata.var[column].isna().all(), column
+    assert adata.var["is_feature"].all()
 
     path = tmp_path / "embedding.h5ad"
     mt.io.write(adata, path)
     assert mt.io.read(path).shape == (4, 6)
+
+
+def test_stamp_keeps_an_annotation_that_is_already_there():
+    """A profile object read by read_profiles carries the parsed annotation, and stamping it
+    again must not blank it."""
+    frame = _frame()
+    adata = from_dataframe(frame)
+    parsed = adata.var["feature_group"].copy()
+
+    mt.io.stamp(adata, resolution="well")
+    pd.testing.assert_series_equal(adata.var["feature_group"], parsed)

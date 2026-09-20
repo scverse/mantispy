@@ -227,6 +227,28 @@ def parse_feature_names(names: Sequence[str], channels: Sequence[str] | None = N
     return parsed
 
 
+def empty_annotation(names: Sequence[str] | pd.Index) -> pd.DataFrame:
+    """The annotation table for features whose names carry no CellProfiler structure.
+
+    Learned embeddings, cluster compositions and feature-family signatures all have columns that are features but are not measurements of a compartment in a channel. The schema still asks for the annotation columns, so they are supplied empty rather than guessed at: :func:`parse_feature_names` reads ``openphenom_nahualX_17`` as the ``nahualX`` group of the ``openphenom`` object, which would give such an object feature families named after the model's own tensors.
+
+    Args:
+        names: The feature names, which are used only as the index.
+
+    Returns:
+        A frame indexed by ``names`` with the columns of :data:`COLUMNS`, every annotation column null and ``is_feature`` true.
+        Text columns are ``category`` dtype, as :func:`parse_feature_names` returns them, so an entirely missing column survives an h5ad round trip.
+    """
+    index = pd.Index(names)
+    empty = pd.DataFrame(index=index, columns=COLUMNS, dtype=object)
+    for column in _TEXT_COLUMNS:
+        empty[column] = pd.Categorical([None] * len(index))
+    for column in _FLOAT_COLUMNS:
+        empty[column] = np.full(len(index), np.nan)
+    empty["is_feature"] = True
+    return empty
+
+
 def load_blocklist(name: str = "default") -> list[str]:
     """Return the feature names blocked by default (the pycytominer blocklist)."""
     if name != "default":

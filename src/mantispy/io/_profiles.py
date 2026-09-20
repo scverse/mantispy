@@ -14,7 +14,7 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
-from mantispy._core.features import _infer_channels, parse_feature_names
+from mantispy._core.features import _infer_channels, empty_annotation, parse_feature_names
 from mantispy._core.frames import as_frame, categorize_metadata
 from mantispy._core.logging import get_logger, report_drop
 from mantispy._core.plate import normalize_well
@@ -500,7 +500,7 @@ def stamp(adata: ad.AnnData, resolution: str = "well", copy: bool = False) -> ad
     Notes:
         Only the ``obs`` columns the resolution requires are checked, because that is what the rest of the package dispatches on. :func:`validate` gives the full report, including what it warns about rather than blocks.
 
-        Any of the feature-annotation columns the schema requires that ``var`` does not already have are filled by parsing the feature names, and a name that is not a CellProfiler feature name parses as empty. That is what a learned embedding is, so its annotation comes out null throughout and the object still satisfies the schema, which :func:`write` insists on. Columns already present are left as they are.
+        Any of the feature-annotation columns the schema requires that ``var`` does not already have are added empty, and columns already present are left as they are. They are not filled by parsing the feature names: the parser finds structure in names that have none — it reads ``openphenom_nahualX_17`` as the ``nahualX`` group of an ``openphenom`` object — and an embedding would then carry feature families named after the model's own tensors. An object read by :func:`read_profiles` already has the parsed annotation and keeps it.
 
     Examples:
         Bringing in a matrix of learned embeddings, one row per well:
@@ -514,21 +514,18 @@ def stamp(adata: ad.AnnData, resolution: str = "well", copy: bool = False) -> ad
         raise ValueError(f"resolution must be one of {RESOLUTIONS}, got {resolution!r}")
 
     target = adata.copy() if copy else adata
-    missing = [column for column in REQUIRED_OBS[resolution] if column not in target.obs]
-    if missing:
+    missing_obs = [column for column in REQUIRED_OBS[resolution] if column not in target.obs]
+    if missing_obs:
         raise ValueError(
-            f"obs is missing {missing}, which every {resolution}-resolution object needs. Add the "
+            f"obs is missing {missing_obs}, which every {resolution}-resolution object needs. Add the "
             "column(s), or stamp at a resolution whose requirements obs meets."
         )
 
     absent = [column for column in REQUIRED_VAR if column not in target.var]
     if absent:
-        # The parsed columns are categorical, which is what survives an h5ad round trip when a
-        # column is entirely missing; an object array of NaN does not.
-        parsed = parse_feature_names(list(target.var_names))
-        parsed.index = target.var.index
+        empty = empty_annotation(target.var.index)
         for column in absent:
-            target.var[column] = parsed[column]
+            target.var[column] = empty[column]
 
     _record(target, resolution=resolution)
     return target if copy else None
