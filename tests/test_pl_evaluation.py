@@ -72,6 +72,18 @@ def test_metrics_plot_marks_which_direction_is_better(evaluated):
     assert any("better" in label.get_text() for label in ax.get_xticklabels())
 
 
+def test_metrics_plot_claims_no_direction_for_a_covariate(evaluated):
+    """A covariate row has no direction, because whether its share of the variance should be small
+    depends on what the covariate is. Reading the column back without checking it labelled the
+    bar '(nan is better)'."""
+    evaluated.obs["Metadata_CellCount"] = np.arange(evaluated.n_obs, dtype=float)
+    table = mt.metrics.evaluate_correction(evaluated, reps=("X_pca",), covariates=("Metadata_CellCount",))
+
+    labels = {label.get_text() for label in mt.pl.metrics(table).get_xticklabels()}
+    assert "pc_regression:Metadata_CellCount" in labels
+    assert not any("nan" in label for label in labels)
+
+
 def test_similarity_subsamples_a_large_object(evaluated):
     ax = mt.pl.similarity(evaluated, max_obs=50)
     assert ax.images[0].get_array().shape == (50, 50)

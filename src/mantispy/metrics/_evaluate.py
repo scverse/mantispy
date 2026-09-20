@@ -67,6 +67,7 @@ def evaluate_correction(
     reps: Sequence[str] = ("X_pca",),
     label_key: str = "Metadata_Perturbation",
     batch_key: str = "Metadata_Batch",
+    covariates: Sequence[str] = (),
     map_key: str | None = None,
     perplexity: float = 30,
 ) -> pd.DataFrame:
@@ -79,15 +80,17 @@ def evaluate_correction(
         reps: Representations to compare, e.g. ``("X_pca", "X_pca_harmony")``.
         label_key: ``obs`` column with the biological grouping.
         batch_key: ``obs`` column with the nuisance grouping.
+        covariates: Further ``obs`` columns to measure each representation against, numeric or categorical, one row each. A representation can be dominated by something that is neither the batch nor the label, such as the cell count, and nothing else here would report it.
         map_key: Name of a table written by :func:`~mantispy.tl.map`, to add its mean mAP as one more row. That table is read rather than recomputed, so the row appears once, under the representation that run scored, and not once per entry of ``reps``.
         perplexity: Perplexity for both :func:`~mantispy.metrics.lisi` rows. The default needs more than 90 rows, and on a smaller object those two rows are NaN unless a smaller value is passed.
 
     Returns:
         A tidy frame with ``metric``, ``representation``, ``key``, ``value`` and ``better``, the last saying which direction is an improvement for that metric.
+        A covariate's row has no ``better``: whether its share of the variance should be small depends on what the covariate is. A cell count is a nuisance in a genetic screen, where the layout was not randomized, and partly a treatment effect in a compound screen, where a compound that kills cells is supposed to lower it.
         A metric that is undefined for this object, such as a LISI whose perplexity the row count cannot support or a silhouette over one row per label, is NaN in that frame rather than an error, so one undefined metric still leaves the others readable.
 
     Raises:
-        KeyError: ``obsm`` holds nothing under one of ``reps``.
+        KeyError: ``obsm`` holds nothing under one of ``reps``, or ``obs`` no column under one of ``covariates``.
         KeyError: ``map_key`` names no table, or nothing recorded the representation behind it.
     """
     frames = []
@@ -101,6 +104,11 @@ def evaluate_correction(
             lisi(adata, key=label_key, use_rep=rep, perplexity=perplexity, kind="label"),
             pc_regression(adata, key=batch_key, use_rep=rep),
         ]
+        # Named per covariate, because two rows called "pc_regression" would collide when the
+        # table is pivoted on the metric.
+        for covariate in covariates:
+            measured = pc_regression(adata, key=covariate, use_rep=rep)
+            frames.append(measured.assign(metric=f"pc_regression:{covariate}"))
     if map_key is not None:
         frames.append(_map_row(adata, map_key, label_key))
 
