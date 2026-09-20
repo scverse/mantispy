@@ -16,4 +16,5 @@ reading_plates
 08_trustworthy_features_and_design
 09_scaling_and_sites
 10_differential_features
+11_dose_response
 ```

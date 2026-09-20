@@ -30,6 +30,12 @@ def _threshold(adata: AnnData, function: str, default: float = 0.05) -> float:
     return float(recorded.get("threshold", default))
 
 
+def _recorded_response(adata: AnnData, function: str, default: str) -> str:
+    """The response column the run read, so the plot draws what the table was built from."""
+    recorded = adata.uns.get("mantispy", {}).get("params", {}).get(function, {})
+    return str(recorded.get("response", default))
+
+
 def hits(adata: AnnData, key: str = "hits", label_top: int = 10, ax: Axes | None = None) -> Axes:
     """Distance from the controls against significance, with the most distant groups labeled.
 
@@ -180,7 +186,7 @@ def dose_response(
     key: str = "dose_response",
     compound_key: str = "Metadata_Compound",
     dose_key: str = "Metadata_Concentration",
-    response: str = "hits_distance",
+    response: str | None = None,
     ax: Axes | None = None,
 ) -> Axes:
     """One compound's response against dose, with the fitted curve when there is one.
@@ -191,7 +197,7 @@ def dose_response(
         key: Name of that table in ``uns["mantispy"]``.
         compound_key: ``obs`` column naming the compound of each well.
         dose_key: ``obs`` column holding the dose of each well.
-        response: ``obs`` column drawn against the dose.
+        response: ``obs`` column drawn against the dose. ``None`` reads the column :func:`~mantispy.tl.dose_response` was given, so a plot cannot silently draw a different one than the table was fitted from.
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
@@ -206,6 +212,9 @@ def dose_response(
     row = table[table["compound"].astype(str) == str(compound)]
     if row.empty:
         raise KeyError(f"no compound {compound!r} in uns['mantispy'][{key!r}]")
+
+    if response is None:
+        response = _recorded_response(adata, "dose_response", "hits_row_distance")
 
     obs = as_frame(adata.obs)
     selected = obs[obs[compound_key].astype(str) == str(compound)]

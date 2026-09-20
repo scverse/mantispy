@@ -23,6 +23,7 @@ def main(args: argparse.Namespace) -> None:
         "jump_target2": lambda: mt.ds.jump_target2(plates=None),
         "jump_cells": mt.ds.jump_cells,
         "jump_plate": mt.ds.jump_plate,
+        "oasis_pilot": mt.ds.oasis_pilot,
     }
     if args.dry_run:
         print(f"Cache: {mt.settings.cache_dir}\nWould download: {', '.join(loaders)}")

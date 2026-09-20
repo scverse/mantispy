@@ -140,7 +140,7 @@ def inhibitor_adata():
         }
     )
     adata = from_dataframe(frame)
-    adata.obs["hits_distance"] = four_parameter_logistic(np.log10(doses), 10.0, 2.0, 0.0, 1.0)
+    adata.obs["hits_row_distance"] = four_parameter_logistic(np.log10(doses), 10.0, 2.0, 0.0, 1.0)
     mt.tl.dose_response(adata)
     return adata
 

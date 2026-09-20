@@ -82,9 +82,13 @@ def _augmented(name: str, plates: Sequence[str] | None, cache_dir: str | Path | 
     return read_profiles(_plate_files(name, plates, cache_dir), on_column_mismatch="intersect", resolution="well")
 
 
-def _profiles(name: str, cache_dir: str | Path | None, **kwargs: Any) -> AnnData:
-    """Stack every file of an accession, with the reading arguments the registry records for it."""
-    adata = read_profiles(_files(name, cache_dir), **{**_DATASETS[name].metadata.get("read", {}), **kwargs})
+def _profiles(
+    name: str, cache_dir: str | Path | None, select: Callable[[str], bool] | None = None, **kwargs: Any
+) -> AnnData:
+    """Stack the files of an accession that ``select`` keeps, with the reading arguments the registry records."""
+    adata = read_profiles(
+        _files(name, cache_dir, select=select), **{**_DATASETS[name].metadata.get("read", {}), **kwargs}
+    )
     adata.uns["mantispy"]["dataset"] = _DATASETS[name].metadata["accession"]
     return adata
 
@@ -393,20 +397,103 @@ def chroma(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
     return _profiles("chroma", cache_dir, **kwargs)
 
 
-def oasis_pilot(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
-    """OASIS pilot, 4,604 wells in U2OS and HepaRG.
+#: What each OASIS batch calls the columns mantispy reads. The four batches were laid out by different people and
+#: none of them agree on a name, so each output column lists the spellings seen across them.
+_OASIS_PLATEMAP_COLUMNS = {
+    "Metadata_Compound": ("treatment", "Compound Name", "compound"),
+    "Metadata_Concentration": ("concentration_uM", "assay_conc_uM", "compound_concentration"),
+    "Metadata_CellLine": ("cell_line", "cell_type"),
+}
 
-    ``cpg0033-oasis-pilot``, twelve plates read down to the features they share.
+
+def _oasis_platemaps(cache_dir: str | Path | None) -> pd.DataFrame:
+    """The plate maps of every OASIS batch, read down to plate, well, compound and concentration."""
+    frames = []
+    for path in _files("oasis_pilot", cache_dir, select=lambda name: name.endswith("__platemap.txt")):
+        frame = pd.read_csv(path, sep="\t", dtype=str)
+        found = {
+            name: next((column for column in spellings if column in frame), None)
+            for name, spellings in _OASIS_PLATEMAP_COLUMNS.items()
+        }
+        if found["Metadata_Compound"] is None or found["Metadata_Concentration"] is None:
+            get_logger().warning("oasis_pilot: %s names no compound or concentration column", path.name)
+            continue
+        kept = pd.DataFrame(
+            {
+                "Metadata_plate_map_name": frame["plate_map_name"],
+                "Metadata_Well": frame["well_position"],
+                **{name: frame[column] if column else np.nan for name, column in found.items()},
+            }
+        )
+        # The batches that name compounds in "Compound Name" leave it blank for the wells that hold no compound and
+        # put DMSO or EMPTY in the identifier column instead. Without this the controls read as unannotated wells.
+        if "BROAD_ID" in frame:
+            kept["Metadata_Compound"] = kept["Metadata_Compound"].fillna(frame["BROAD_ID"])
+        frames.append(kept)
+    platemap = pd.concat(frames, ignore_index=True)
+    platemap["Metadata_Concentration"] = pd.to_numeric(platemap["Metadata_Concentration"], errors="coerce")
+    # One batch writes the line as HepRG and the others as HepaRG; two spellings would split every per-line grouping.
+    platemap["Metadata_CellLine"] = platemap["Metadata_CellLine"].replace({"HepRG": "HepaRG"})
+    return platemap
+
+
+def oasis_pilot(annotate: bool = True, cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
+    """OASIS pilot, 4,604 wells in U2OS and HepaRG, most compounds over a ten-point dose range.
+
+    ``cpg0033-oasis-pilot``, twelve plates read down to the features they share, over four batches: two of assay
+    development and two that dose 36 compounds in each cell line. It is the dose-response dataset of the package:
+    28 of those compounds carry six or more concentrations in both U2OS and HepaRG.
 
     Args:
+        annotate: Join the plate maps, which supply ``Metadata_Compound``, ``Metadata_Concentration``,
+            ``Metadata_CellLine``, ``Metadata_Control`` (the DMSO wells) and ``Metadata_Perturbation``.
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
         kwargs: Passed to :func:`mantispy.io.read_profiles`.
 
     Returns:
-        Wells by features, indexed by plate and well, with ``Metadata_CellCount`` and ``Metadata_SiteCount``.
+        Wells by features, indexed by plate and well, with ``Metadata_CellCount`` and ``Metadata_SiteCount``, and
+        the annotation columns above when ``annotate``.
+
+    Notes:
+        The four batches name their plate-map columns differently, so the join reads whichever of
+        ``treatment``/``Compound Name``/``compound`` and ``concentration_uM``/``assay_conc_uM``/``compound_concentration``
+        each one carries. Concentrations are micromolar.
+
+        The assay-development batch doses DMSO itself, so a control well there carries a concentration.
+        ``Metadata_Control`` marks the compound, not the dose.
     """
-    return _profiles("oasis_pilot", cache_dir, **kwargs)
+    adata = _profiles("oasis_pilot", cache_dir, select=lambda name: name.endswith(".csv.gz"), **kwargs)
+    if not annotate:
+        return adata
+
+    obs = as_frame(adata.obs)
+    merged = obs.merge(_oasis_platemaps(cache_dir), on=["Metadata_plate_map_name", "Metadata_Well"], how="left")
+    merged.index = obs.index
+    if unmatched := int(merged["Metadata_Compound"].isna().sum()):
+        get_logger().warning("oasis_pilot: %d of %d wells have no plate-map row", unmatched, len(merged))
+    adata.obs["Metadata_Compound"] = merged["Metadata_Compound"].to_numpy()
+    adata.obs["Metadata_Concentration"] = merged["Metadata_Concentration"].to_numpy(dtype=float)
+    adata.obs["Metadata_CellLine"] = merged["Metadata_CellLine"].to_numpy()
+    adata.obs["Metadata_Control"] = merged["Metadata_Compound"].astype(str).str.upper().eq("DMSO").to_numpy()
+    # Replicates share a compound at a concentration, which is what the mode= shorthands of mt.tl.map compare.
+    is_control = np.asarray(adata.obs["Metadata_Control"], dtype=bool)
+    adata.obs["Metadata_Perturbation"] = pd.Categorical(
+        np.where(
+            is_control,
+            "DMSO",
+            merged["Metadata_Compound"].astype(str) + "@" + merged["Metadata_Concentration"].astype(str),
+        )
+    )
+    get_logger().info(
+        "OASIS pilot: %d wells x %d features, %d compounds over %d concentrations, %d control wells",
+        adata.n_obs,
+        adata.n_vars,
+        int(merged.loc[~is_control, "Metadata_Compound"].nunique()),
+        int(merged["Metadata_Concentration"].nunique()),
+        int(is_control.sum()),
+    )
+    return adata
 
 
 def miami(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
