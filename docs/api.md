@@ -169,7 +169,7 @@ Writing to a layer suffixes the column, so `key_added="sphered"` flags `var["deg
 | `tl.consensus` | returns a new object at `"perturbation"` resolution; `obs["Metadata_ReplicateCount"]`, `uns["mantispy"]["consensus_weights"]` |
 | `tl.effect_size` | `varm[key_added]`, `uns["mantispy"][key_added]` and `..._groups` |
 | `tl.wasserstein_features` | `varm[key_added]`, `uns["mantispy"][key_added]` and `..._groups` |
-| `tl.hit_calling` | `uns["mantispy"][key_added]`, `obs[key_added + "_distance"]`, `obs[key_added + "_row_distance"]`, `obs[key_added + "_qvalue"]` |
+| `tl.hit_calling` | `uns["mantispy"][key_added]`, `obs[key_added + "_distance"]`, `obs[key_added + "_row_distance"]`, `obs[key_added + "_qvalue"]`, `obs[key_added + "_reference_held_out"]` |
 | `tl.edistance` | `uns["mantispy"][key_added]`, or `..._pairwise` when `reference=None` |
 | `tl.transport` | `uns["mantispy"][key_added]` and `..._units`, `obs[key_added + "_agreement"]` |
 | `tl.dose_response` | `uns["mantispy"][key_added]` |
@@ -355,7 +355,7 @@ change it). Four of them carry the annotations the analysis functions need:
 | `bbbc021` | ~10 MB | 39 compounds | MOA labels, the classic retrieval benchmark |
 | `rohban` | ~27 MB | 194 overexpressed genes | cell counts, ~10 replicates per gene |
 | `pki` | ~71 MB | 15 kinase inhibitors x 7 doses | cell counts, MOA labels, 32-64 replicates |
-| `jump_target2` | ~40 MB | 302 compounds, one shared plate map | the same plate run at two sites, so any difference between them is technical |
+| `jump_target2` | ~0.7 GB | 302 compounds, one shared plate map | the same plate run at eleven sites, so any difference between them is technical |
 | `jump_cells` | ~1.5 GB | 12 compounds and DMSO | single cells, 24 wells x 4 fields of view of `BR00121438` |
 
 The other nine are further gallery accessions, normalized and feature-selected by their authors and read with the

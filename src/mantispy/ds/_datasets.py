@@ -32,8 +32,21 @@ _BASE_URL, _DATASETS = parse_registry(Path(__file__).parent / "registry.yaml")
 # scverse-misc registers loaders by type name across all packages in the process, so ours uses the package name.
 _TYPE = "mantispy"
 
-#: One plate from each of two sources, enough to see a source effect with a small download.
-TARGET2_DEFAULT = ("BR00121438", "JCPQC051")
+#: One plate from each of the eleven sources that ran Target-2. Pinned rather than derived, so the default set
+#: cannot move when a plate is added to the registry or the rows are reordered.
+TARGET2_DEFAULT = (
+    "1053600674",  # source_2
+    "JCPQC051",  # source_3
+    "BR00121438",  # source_4
+    "ACPJUM012",  # source_5
+    "110000294936",  # source_6
+    "CP1-SC1-25",  # source_7
+    "A1170384",  # source_8
+    "GR00003394",  # source_9, the 1536-well plates
+    "Dest210726-160150",  # source_10
+    "LM37-70_1",  # source_11
+    "CP-CC9-R1-29",  # source_13
+)
 
 #: Bumped whenever the assembled jump_cells object changes, so an older cached assembly is not reused.
 _ASSEMBLY_VERSION = 2
@@ -59,10 +72,11 @@ def _plate(file_name: str) -> str:
 
 
 def _plate_files(name: str, plates: Sequence[str] | None, cache_dir: str | Path | None) -> list[Path]:
-    known = [_plate(file.name) for file in _DATASETS[name].files]
-    if plates is not None and (unknown := sorted(set(plates) - set(known))):
+    # A set, because a plate contributes several files and listing it once per file printed all 141 twice.
+    known = {_plate(file.name) for file in _DATASETS[name].files}
+    if plates is not None and (unknown := sorted(set(plates) - known)):
         raise KeyError(f"{name} has no plate(s) {unknown}; available: {sorted(known)}")
-    wanted = set(known if plates is None else plates)
+    wanted = known if plates is None else set(plates)
     return _files(name, cache_dir, select=lambda file_name: _plate(file_name) in wanted)
 
 
@@ -257,25 +271,26 @@ def pki(plates: Sequence[str] | None = None, cache_dir: str | Path | None = None
 def jump_target2(
     plates: Sequence[str] | None = TARGET2_DEFAULT, annotate: bool = True, cache_dir: str | Path | None = None
 ) -> AnnData:
-    """JUMP-Target-2, one 384-well plate map run at many sites.
+    """JUMP-Target-2, one plate map run at many sites.
 
     The JUMP consortium :cite:p:`Chandrasekaran_2023` ran the same plate map in every participating laboratory, so differences between plates from different sources are technical.
     This makes it suited to studying batch and source effects.
-    Twelve of the 141 plates in ``cpg0016-jump`` are pinned here (three sources, two batches each, two plates per batch), which lets :func:`~mantispy.tl.transport` separate a laboratory effect from a plate effect.
+    All 141 of its plates in ``cpg0016-jump`` are pinned here, from eleven sources and 107 batches, which lets :func:`~mantispy.tl.transport` separate a laboratory effect from a batch and a plate effect.
+    source_9 ran it on 1536-well plates, the others on 384-well plates.
 
     Args:
         plates: Plate barcodes to load.
-            The default takes one plate from each of two sources, about 117 MB, most of it the per-well table each plate's cell counts are published in; ``None`` loads all twelve.
+            The default takes one plate from each source, about 0.7 GB, most of it the per-well table each plate's cell counts are published in; ``None`` loads all 141, 9.4 GB.
         annotate: Join the JUMP annotation, which supplies ``Metadata_Perturbation`` and ``Metadata_Control``.
             Downloads another 14 MB.
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Returns:
-        384 wells per plate at well resolution, carrying ``Metadata_Source``, ``Metadata_Batch``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_CellCount``, ``Metadata_SiteCount`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_InChIKey`` and ``Metadata_Control`` (JUMP's 64 DMSO wells per plate).
+        One row per well at well resolution, carrying ``Metadata_Source``, ``Metadata_Batch``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_CellCount``, ``Metadata_SiteCount`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_InChIKey`` and ``Metadata_Control`` (the DMSO wells, 64 per 384-well plate and 256 on source_9's).
 
     Raises:
-        KeyError: A plate is not one of the twelve.
+        KeyError: A plate is not one of the 141.
     """
     paths = _plate_files("jump_target2", plates, cache_dir)
     # The profiles carry no count; each plate's backend table does, among 7,600 other columns.
@@ -406,6 +421,40 @@ _OASIS_PLATEMAP_COLUMNS = {
 }
 
 
+def _decimals(value: float) -> int:
+    """How many decimal places a level was written with, from its shortest exact repr."""
+    text = np.format_float_positional(value, trim="-")
+    return len(text.split(".")[1]) if "." in text else 0
+
+
+def _aligned_doses(doses: pd.Series, compounds: pd.Series) -> pd.Series:
+    """The dose each well was meant to get, where plate maps record one concentration to several precisions.
+
+    The OASIS plate maps disagree on precision rather than on value: one batch writes the concentration the
+    dilution actually produced, ``0.0152416`` uM, and another writes it rounded, ``0.015``. A level written to
+    fewer decimals is therefore the same dose as the finer level that rounds to it, which is a statement about
+    how the number was recorded rather than a tolerance fitted to the data.
+
+    Matching runs within a compound, because a compound's levels are one dilution series and cannot collide.
+    Across the whole plate map they can: berberine's 25 uM and the main ladder's 33.3 uM are a third apart and
+    genuinely different doses, closer together than ``0.000762`` and ``0.001`` are, which are one dose.
+
+    Rounding every level to a fixed precision cannot do this, and neither can a relative tolerance.
+    """
+    aligned = doses.copy()
+    for _, index in doses.groupby(compounds, observed=True).groups.items():
+        levels = np.sort(doses[index].dropna().unique())
+        levels = levels[levels > 0]
+        lookup = {}
+        for level in levels:
+            places = _decimals(level)
+            finer = [other for other in levels if _decimals(other) > places and round(other, places) == level]
+            # The nearest one: rounding 0.006 up to 0.01 must not claim a level that was written as 0.01.
+            lookup[level] = min(finer, key=lambda other: abs(other - level)) if finer else level
+        aligned[index] = doses[index].replace(lookup)
+    return aligned
+
+
 def _oasis_platemaps(cache_dir: str | Path | None) -> pd.DataFrame:
     """The plate maps of every OASIS batch, read down to plate, well, compound and concentration."""
     frames = []
@@ -432,6 +481,9 @@ def _oasis_platemaps(cache_dir: str | Path | None) -> pd.DataFrame:
         frames.append(kept)
     platemap = pd.concat(frames, ignore_index=True)
     platemap["Metadata_Concentration"] = pd.to_numeric(platemap["Metadata_Concentration"], errors="coerce")
+    platemap["Metadata_ConcentrationNominal"] = _aligned_doses(
+        platemap["Metadata_Concentration"], platemap["Metadata_Compound"]
+    )
     # One batch writes the line as HepRG and the others as HepaRG; two spellings would split every per-line grouping.
     platemap["Metadata_CellLine"] = platemap["Metadata_CellLine"].replace({"HepRG": "HepaRG"})
     return platemap
@@ -462,6 +514,12 @@ def oasis_pilot(annotate: bool = True, cache_dir: str | Path | None = None, **kw
 
         The assay-development batch doses DMSO itself, so a control well there carries a concentration.
         ``Metadata_Control`` marks the compound, not the dose.
+
+        The plate maps disagree on precision: one batch writes the concentration the dilution produced,
+        ``0.0152416`` uM, and another writes it rounded, ``0.015``. ``Metadata_Concentration`` keeps what was
+        recorded; ``Metadata_ConcentrationNominal`` reads a coarser spelling as the finer level it rounds to,
+        within each compound, and names the replicate groups. On the raw column every dosed compound here
+        carries eighteen levels where ten were plated, and a treatment's wells split across two spellings.
     """
     adata = _profiles("oasis_pilot", cache_dir, select=lambda name: name.endswith(".csv.gz"), **kwargs)
     if not annotate:
@@ -474,6 +532,7 @@ def oasis_pilot(annotate: bool = True, cache_dir: str | Path | None = None, **kw
         get_logger().warning("oasis_pilot: %d of %d wells have no plate-map row", unmatched, len(merged))
     adata.obs["Metadata_Compound"] = merged["Metadata_Compound"].to_numpy()
     adata.obs["Metadata_Concentration"] = merged["Metadata_Concentration"].to_numpy(dtype=float)
+    adata.obs["Metadata_ConcentrationNominal"] = merged["Metadata_ConcentrationNominal"].to_numpy(dtype=float)
     adata.obs["Metadata_CellLine"] = merged["Metadata_CellLine"].to_numpy()
     adata.obs["Metadata_Control"] = merged["Metadata_Compound"].astype(str).str.upper().eq("DMSO").to_numpy()
     # Replicates share a compound at a concentration, which is what the mode= shorthands of mt.tl.map compare.
@@ -482,7 +541,7 @@ def oasis_pilot(annotate: bool = True, cache_dir: str | Path | None = None, **kw
         np.where(
             is_control,
             "DMSO",
-            merged["Metadata_Compound"].astype(str) + "@" + merged["Metadata_Concentration"].astype(str),
+            merged["Metadata_Compound"].astype(str) + "@" + merged["Metadata_ConcentrationNominal"].astype(str),
         )
     )
     get_logger().info(
@@ -490,7 +549,7 @@ def oasis_pilot(annotate: bool = True, cache_dir: str | Path | None = None, **kw
         adata.n_obs,
         adata.n_vars,
         int(merged.loc[~is_control, "Metadata_Compound"].nunique()),
-        int(merged["Metadata_Concentration"].nunique()),
+        int(merged["Metadata_ConcentrationNominal"].nunique()),
         int(is_control.sum()),
     )
     return adata

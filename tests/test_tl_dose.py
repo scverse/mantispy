@@ -183,6 +183,31 @@ def _dosed_wells(conc, resp, controls=()):
     return adata
 
 
+def test_the_cutoff_comes_from_the_controls_that_did_not_fit_the_transform():
+    """Regression for #83.
+
+    The controls that fitted the centroid and covariance sit closer to the centroid they placed,
+    so their spread is narrower than the held-out half's. Pooling them shrinks the MAD, which is
+    the whole cutoff, and every curve then clears a bar that is too low.
+    """
+    conc = np.array([0.03, 0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0])
+    resp = np.array([0.0, 0.2, 0.1, 0.4, 0.7, 0.9, 0.6, 1.2])
+    # Two halves of one control population, one measured against a centroid it helped place.
+    fitted, held_out = np.linspace(-0.1, 0.1, 12), np.linspace(-1.0, 1.0, 12)
+
+    adata = _dosed_wells(conc, resp, controls=np.concatenate([fitted, held_out]))
+    adata.obs["hits_reference_held_out"] = np.arange(adata.n_obs) >= adata.n_obs - len(held_out)
+
+    mt.tl.dose_response(adata, min_doses=4)
+    honest = float(adata.uns["mantispy"]["dose_response"].set_index("compound").loc["c", "hitcall"])
+
+    del adata.obs["hits_reference_held_out"]
+    mt.tl.dose_response(adata, min_doses=4)
+    pooled = float(adata.uns["mantispy"]["dose_response"].set_index("compound").loc["c", "hitcall"])
+
+    assert honest < 0.5 < pooled, "the narrow half of the controls must not set the bar the curve clears"
+
+
 def _one_compound(conc, resp, cutoff):
     adata = _dosed_wells(conc, resp)
     mt.tl.dose_response(adata, min_doses=4, reference=None, cutoff=cutoff)
@@ -363,30 +388,6 @@ def test_dose_direction_separates_a_turning_phenotype_from_noise(phenotypes):
     assert (quiet["split_half_cosine"] < 0.5).all(), "noise has no direction to reproduce"
 
 
-def test_doses_written_to_different_precision_are_one_dose(dosed):
-    """Regression: batches spell the same nominal concentration differently, and the ladder read as twice as long."""
-    from mantispy.tl._dose import _bin_doses
-
-    spellings = np.array([0.000762, 0.001, 0.00229, 0.002, 15.0, 15.0])
-    assert len(np.unique(_bin_doses(spellings, 0.15))) == 3
-    assert len(np.unique(_bin_doses(spellings, 0.0))) == 5, "a tolerance of zero reads them as spelled"
-
-    ladder = 0.1 * 2.0 ** np.arange(11)
-    assert len(np.unique(_bin_doses(ladder, 0.15))) == 11, "a two-fold ladder is left alone"
-
-
-def test_dose_response_counts_the_doses_that_were_dosed(dosed):
-    doses = dosed.obs["Metadata_Concentration"].to_numpy(dtype=float)
-    # Half of each compound's wells carry the same five concentrations rounded as a second batch would round them.
-    respelled = (np.arange(dosed.n_obs) // 2) % 2 == 0
-    dosed.obs["Metadata_Concentration"] = np.where(respelled, doses, np.round(doses * 1.05, 3))
-    mt.tl.dose_response(dosed, min_doses=4)
-    assert (dosed.uns["mantispy"]["dose_response"]["n_doses"] == 5).all()
-
-    mt.tl.dose_response(dosed, min_doses=4, dose_tolerance=0.0, key_added="exact")
-    assert (dosed.uns["mantispy"]["exact"]["n_doses"] > 5).all()
-
-
 def test_the_vectorized_spearman_matches_scipy():
     from scipy.stats import spearmanr
 
@@ -547,16 +548,3 @@ def test_viability_is_read_against_each_plate_not_the_whole_screen(phenotypes):
 
     assert (table["phase"] != "cytotoxic").all(), "a ten-fold difference between plates is not cell loss"
     assert table["viability"].between(0.8, 1.2).all()
-
-
-def test_the_binned_dose_reaches_obs_so_wells_group_the_way_the_table_does(phenotypes):
-    """Grouping wells by the raw concentration splits a ladder two batches spell differently."""
-    raw = phenotypes.obs["Metadata_Concentration"].to_numpy(dtype=float)
-    respelled = (np.arange(phenotypes.n_obs) // 2) % 2 == 0
-    phenotypes.obs["Metadata_Concentration"] = np.where(respelled, raw, np.round(raw * 1.05, 4))
-    mt.tl.dose_direction(phenotypes)
-
-    treated = phenotypes.obs["dose_direction_dose"].notna()
-    assert phenotypes.obs.loc[treated, "Metadata_Concentration"].nunique() > 6, "the raw ladder is split"
-    assert phenotypes.obs.loc[treated, "dose_direction_dose"].nunique() == 6, "the binned one is not"
-    assert phenotypes.obs.loc[~treated, "dose_direction_dose"].isna().all(), "controls have no dose"

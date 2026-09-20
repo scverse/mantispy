@@ -23,7 +23,7 @@ from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy._core.masks import reference_mask
 from mantispy._core.mutation import inplace_or_copy
-from mantispy._core.plate import well_col, well_row
+from mantispy._core.plate import plate_grid, well_col, well_row
 
 METHODS = ("median_polish",)
 
@@ -79,9 +79,9 @@ def correct_plate_position(
         raise ValueError(f"method must be one of {METHODS}, got {method!r}")
 
     X = get_matrix(adata)
-    rows = np.array([well_row(well) for well in adata.obs["Metadata_Well"]])
-    columns = np.array([well_col(well) for well in adata.obs["Metadata_Well"]])
-    n_rows, n_columns = rows.max() + 1, columns.max() + 1
+    wells = adata.obs["Metadata_Well"].to_numpy()
+    rows = np.array([well_row(well) for well in wells])
+    columns = np.array([well_col(well) for well in wells])
 
     fit_mask = reference_mask(adata, reference)
     codes, keys = group_codes(adata, by)
@@ -95,6 +95,10 @@ def correct_plate_position(
         fit_rows = selected[fit_mask[selected]]
         if fit_rows.size == 0:
             raise ValueError(f"no reference rows in group {key!r}")
+
+        # Each plate is polished on its own format's grid; one grid for the object would drop a 384-well plate
+        # into a corner of a 1536-well one and fit the row and column effects on three quarters of nothing.
+        n_rows, n_columns = plate_grid(wells[selected])
 
         # One value per well, so several cells in a well cannot overwrite each other.
         well_index = rows[fit_rows] * n_columns + columns[fit_rows]

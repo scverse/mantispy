@@ -85,7 +85,7 @@ def hit_calling(
     :func:`mantispy.tl.map` with ``mode="activity"`` ranks replicate pairs instead and is the usual
     readout on screens with little replication. JUMP-Target-2 read as a single plate gives every
     compound one well and is the common way to land in that regime, while the same plate map read
-    across its twelve plates gives twelve.
+    across several of them gives one well per plate.
 
     Distance from the controls also rises when a treatment kills cells. Read the calls beside a cell
     count, or beside :func:`mantispy.tl.cytotoxicity`, before taking them for morphology.
@@ -109,6 +109,7 @@ def hit_calling(
         Also writes ``obs[key_added + "_row_distance"]``, each row's own distance from the control centroid rather than its group's.
         That is the column a dose-response fit wants: the group statistic is one number repeated over the group's rows, so the controls show no spread and nothing downstream can read a scale off them.
         Rows that fitted the centroid sit a little closer to it than the held-out controls do, by the same split the Notes describe.
+        Which rows those are is written to ``obs[key_added + "_reference_held_out"]``, true for the controls that did not fit, so that a scale taken from the controls can be taken from the honest half.
 
     Raises:
         ValueError: ``method`` is not one of ``METHODS``, or ``reference`` selects fewer than four rows.
@@ -247,5 +248,6 @@ def hit_calling(
     # that reads a response per row, a dose-response fit above all, has no spread to work with. The row's own
     # distance is already computed here.
     adata.obs[f"{key_added}_row_distance"] = to_control
+    adata.obs[f"{key_added}_reference_held_out"] = held_out
     get_logger().info("hit_calling(%s) called %d of %d groups", method, int(table["is_hit"].sum()), len(table))
     return None

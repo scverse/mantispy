@@ -201,3 +201,12 @@ def test_the_direction_plot_says_what_to_run_first_and_which_compounds_it_has():
     with pytest.raises(KeyError, match="cpd"):
         mt.pl.dose_direction(adata, compound="not_dosed")
     plt.close("all")
+
+
+def test_one_stray_well_does_not_flatten_the_rest_onto_the_baseline(inhibitor_adata):
+    """A distance from the controls has a long right tail, so a linear axis hides the response."""
+    assert mt.pl.dose_response(inhibitor_adata, compound="cpd").get_yscale() == "log"
+
+    # A response that reaches zero has no log scale to be drawn on.
+    inhibitor_adata.obs.loc[inhibitor_adata.obs.index[0], "hits_row_distance"] = 0.0
+    assert mt.pl.dose_response(inhibitor_adata, compound="cpd").get_yscale() == "linear"

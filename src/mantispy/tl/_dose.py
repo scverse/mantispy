@@ -17,7 +17,7 @@ from mantispy._core._reduce import get_matrix
 from mantispy._core._stats import MAD_TO_SIGMA, benjamini_hochberg
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger, report_drop
-from mantispy._core.masks import reference_mask
+from mantispy._core.masks import held_out_reference, reference_mask
 from mantispy._core.mutation import inplace_or_copy
 from mantispy._core.provenance import record_params
 from mantispy._core.schema import stamp
@@ -97,10 +97,6 @@ _ERROR_DF = 4
 
 #: Multiple of the baseline MAD that sets the cutoff when one is not given, as in the ToxCast pipeline's ``3 * bmad``.
 _CUTOFF_MADS = 3.0
-
-#: Doses whose base-10 logs differ by less than this are one dose. 0.15 is a factor of 1.4, half a two-fold step.
-_DOSE_TOLERANCE = 0.15
-
 
 #: Normalizing constant of the Student-t log-density at ``_ERROR_DF``. It does not depend on the data, and
 #: ``scipy.stats.t.logpdf`` spends ten times the arithmetic re-deriving it on every one of the thousand objective
@@ -287,7 +283,7 @@ def _baseline_and_cutoff(
     # and the trend need no controls, so only the hit call is left out.
     if reference is not None and not (reference == "negcon" and "Metadata_Control" not in adata.obs):
         values = as_frame(adata.obs)[response].to_numpy(dtype=float)
-        control = values[reference_mask(adata, reference)]
+        control = values[held_out_reference(adata, reference_mask(adata, reference), response)]
         control = control[np.isfinite(control)]
 
     if control.size < 2:
@@ -316,7 +312,6 @@ def dose_response(
     min_r_squared: float = 0.8,
     reference: str | None = "negcon",
     cutoff: float | None = None,
-    dose_tolerance: float = _DOSE_TOLERANCE,
     key_added: str = "dose_response",
     copy: bool = False,
 ) -> AnnData | None:
@@ -351,8 +346,7 @@ def dose_response(
         min_doses: Distinct doses below which the curve is skipped and only the trend is reported.
         min_r_squared: Coefficient of determination a fit needs before it is marked ok.
         reference: Rows that set the baseline the response is read against and the spread the cutoff comes from. ``None`` leaves the hit call out unless ``cutoff`` is given.
-        cutoff: Response a curve has to clear to count as active. The default takes three times the controls' MAD, the ToxCast pipeline's ``3 * bmad``.
-        dose_tolerance: Doses whose base-10 logs differ by less than this are treated as one dose, and named by their median. The default of 0.15 is a factor of 1.4, half a two-fold step, and leaves any ladder coarser than two-fold alone. ``0`` reads the doses exactly as the plate map spells them.
+        cutoff: Response a curve has to clear to count as active. The default takes three times the controls' MAD, the ToxCast pipeline's ``3 * bmad``, over the controls :func:`~mantispy.tl.hit_calling` held out of its own fit rather than over all of them.
         key_added: Name for the output table.
         copy: Return a modified copy instead of mutating in place.
 
@@ -367,10 +361,9 @@ def dose_response(
     Notes:
         Compounds with fewer than two usable doses are left out of the table.
 
-        Doses within ``dose_tolerance`` of each other are merged first. Batches laid out by different people write
-        the same nominal concentration to different precision, and without this a ten-point ladder read as an
-        eighteen-point one: ``n_doses`` was wrong, and the hit call's second term took its product over twice as
-        many, half as deep groups, which pushed it up.
+        ``dose_key`` is read as given. A plate map that records one concentration to several precisions splits
+        a ladder, which is a property of how the dataset was written rather than of the fit; the loader resolves
+        it, as :func:`~mantispy.ds.oasis_pilot` does with ``Metadata_ConcentrationNominal``.
 
         :func:`dose_features` asks the same question of every feature rather than of one response column, and
         :func:`dose_direction` asks whether the phenotype stays the same one as the concentration rises.
@@ -395,7 +388,7 @@ def dose_response(
         doses = block[dose_key].to_numpy(dtype=float)
         values = block[response].to_numpy(dtype=float)
         usable = np.isfinite(doses) & np.isfinite(values) & (doses > 0)
-        doses, values = _bin_doses(doses[usable], dose_tolerance), values[usable]
+        doses, values = doses[usable], values[usable]
         n_doses = len(np.unique(doses))
 
         if n_doses < 2:
@@ -507,31 +500,6 @@ def _z_rows(adata: AnnData, rows: np.ndarray, baseline: np.ndarray, spread: np.n
         return (get_matrix(adata, rows=rows)[:, keep].astype(np.float64) - baseline) / spread
 
 
-def _bin_doses(doses: np.ndarray, tolerance: float) -> np.ndarray:
-    """Merge doses that a plate map only spells differently, naming each group by its median.
-
-    The four OASIS batches write the same nominal concentration to different precision, 0.000762 uM in one and
-    0.001 in another, which splits every step of the ladder in two: the table then reports eighteen doses where
-    ten were dosed, and the hit call takes its per-concentration product over twice as many, half as deep groups.
-
-    Doses are merged while the group spans less than ``tolerance`` in log10, so a ladder coarser than two-fold is
-    left alone. A ladder finer than that needs a smaller tolerance.
-    """
-    unique = np.unique(doses)
-    if tolerance <= 0 or unique.size == 0:
-        return doses
-    group = np.empty(unique.size, dtype=np.int64)
-    current, start = 0, np.log10(unique[0])
-    for index, value in enumerate(np.log10(unique)):
-        if value - start >= tolerance:
-            current, start = current + 1, value
-        group[index] = current
-    # A pandas groupby here costs more than the whole rest of the function, on twenty elements.
-    starts = np.flatnonzero(np.diff(group, prepend=-1))
-    centre = np.repeat([np.median(run) for run in np.split(unique, starts[1:])], np.diff(np.append(starts, group.size)))
-    return centre[np.searchsorted(unique, doses)]
-
-
 def _spearman_against(values: np.ndarray, block: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Spearman of ``values`` against every column of ``block``, with the two-sided p-value scipy reports.
 
@@ -600,9 +568,9 @@ def _benchmark_dose(doses: np.ndarray, z: np.ndarray, cutoff: float) -> np.ndarr
 
 
 def _usable_doses(
-    obs: pd.DataFrame, compound_key: str, dose_key: str, control: np.ndarray, tolerance: float
+    obs: pd.DataFrame, compound_key: str, dose_key: str, control: np.ndarray
 ) -> dict[str, tuple[np.ndarray, np.ndarray]]:
-    """Each compound's treated rows and their binned doses, leaving out the controls and the zero doses."""
+    """Each compound's treated rows and their doses, leaving out the controls and the zero doses."""
     doses = obs[dose_key].to_numpy(dtype=float)
     usable = np.isfinite(doses) & (doses > 0) & ~control
     selected = np.flatnonzero(usable)
@@ -610,7 +578,7 @@ def _usable_doses(
     blocks = {}
     for key, within in zip(keys, _groups(codes, len(keys)), strict=True):
         rows = selected[within]
-        blocks[key] = (rows, _bin_doses(doses[rows], tolerance))
+        blocks[key] = (rows, doses[rows])
     return blocks
 
 
@@ -628,7 +596,6 @@ def dose_features(
     reference: str | None = "negcon",
     cutoff_mads: float = _CUTOFF_MADS,
     min_doses: int = 4,
-    dose_tolerance: float = _DOSE_TOLERANCE,
     key_added: str = "dose_features",
     copy: bool = False,
 ) -> AnnData | None:
@@ -649,7 +616,6 @@ def dose_features(
         reference: Rows that set each feature's baseline and spread. ``"negcon"`` reads ``Metadata_Control``.
         cutoff_mads: Multiples of the controls' MAD a feature has to reach to get a benchmark dose. The ToxCast pipeline uses three.
         min_doses: Distinct doses below which a compound is left out of the table.
-        dose_tolerance: Doses whose base-10 logs differ by less than this are treated as one dose. See :func:`dose_response`.
         key_added: Name for the output table.
         copy: Return a modified copy instead of mutating in place.
 
@@ -682,7 +648,7 @@ def dose_features(
     names = np.asarray(adata.var_names)[keep]
 
     frames = []
-    for compound, (rows, doses) in _usable_doses(obs, compound_key, dose_key, control, dose_tolerance).items():
+    for compound, (rows, doses) in _usable_doses(obs, compound_key, dose_key, control).items():
         n_doses = len(np.unique(doses))
         if n_doses < min_doses:
             get_logger().debug("dose_features skipped %s: %d usable dose(s)", compound, n_doses)
@@ -755,9 +721,16 @@ _NULL_DRAWS = 25
 def _null_amplitude(control: np.ndarray, levels: np.ndarray, wanted: dict[object, int]) -> float:
     """Amplitude reached by control wells laid out the way ``wanted`` counts them, level by level.
 
-    The layout has to match, or the floor flatters the concentration it is read against. Per-plate normalization
-    puts each plate's control median at zero, so a group drawn from one plate starts out at the centre while a
-    group spread over eight of them does not, and a group as large as a plate's control set reads a floor of zero.
+    Two things have to match, or the floor is not the floor the concentration is read against.
+
+    The layout, because per-plate normalization puts each plate's control median at zero: a group drawn from one
+    plate starts out at the centre while a group spread over eight of them does not, and a group as large as a
+    plate's control set reads a floor of zero.
+
+    And the drawn wells have to be held out of the scale they are then measured in, as a treated well is. Scored
+    against a baseline they helped define, control groups sit closer to it than any treated group can: with
+    sixteen control wells that reads the floor 64% low, with thirty-two 30% low, and with the OASIS pilot's 256
+    about 4% low.
     """
     pools = {level: np.flatnonzero(levels == level) for level in wanted}
     if any(pools[level].size < count for level, count in wanted.items()):
@@ -766,7 +739,14 @@ def _null_amplitude(control: np.ndarray, levels: np.ndarray, wanted: dict[object
 
     def draw() -> float:
         rows = np.concatenate([generator.choice(pools[level], count, replace=False) for level, count in wanted.items()])
-        return _amplitude(_nanmedian(control[rows]))
+        held_out = np.ones(control.shape[0], dtype=bool)
+        held_out[rows] = False
+        if held_out.sum() < 2:
+            return np.nan
+        baseline = _nanmedian(control[held_out])
+        spread = MAD_TO_SIGMA * _nanmedian(np.abs(control[held_out] - baseline))
+        with np.errstate(invalid="ignore"):
+            return _amplitude((_nanmedian(control[rows]) - baseline) / np.where(spread > 0, spread, np.nan))
 
     return float(np.median([draw() for _ in range(_NULL_DRAWS)]))
 
@@ -855,7 +835,6 @@ def dose_direction(
     site_key: str | None = "Metadata_SiteCount",
     min_viability: float = 0.5,
     reproducible: float | None = 0.5,
-    dose_tolerance: float = _DOSE_TOLERANCE,
     key_added: str = "dose_direction",
     copy: bool = False,
 ) -> AnnData | None:
@@ -889,7 +868,6 @@ def dose_direction(
         site_key: ``obs`` column holding the number of fields that count covers, so a well missing a field does not read as cell loss. ``None`` compares the counts as they are.
         min_viability: Fraction of its own plate's control cell count below which a concentration is ``cytotoxic``. The US EPA's phenotypic pipeline drops a concentration that has lost more than half its cells before fitting anything.
         reproducible: ``split_half_cosine`` a concentration needs before it can be anything but ``silent``. ``None`` drops the requirement, which is what a screen with one well per concentration has to do, at the cost of calling noise a phenotype.
-        dose_tolerance: Doses whose base-10 logs differ by less than this are treated as one dose. See :func:`dose_response`.
         key_added: Name for the output table.
         copy: Return a modified copy instead of mutating in place.
 
@@ -898,8 +876,7 @@ def dose_direction(
         Writes ``uns["mantispy"][key_added]``, one row per compound and concentration, with ``compound``, ``dose``,
         ``n_wells``, ``amplitude``, ``amplitude_null``, ``step_amplitude``, ``split_half_cosine``,
         ``cosine_to_top``, ``viability`` and ``phase``. The phase is broadcast to ``obs[key_added + "_phase"]``
-        so the window can be subset like any other annotation, and the dose each row was binned to is broadcast
-        to ``obs[key_added + "_dose"]`` so wells can be grouped by the same concentration the table reports.
+        so the window can be subset like any other annotation.
         ``amplitude`` is the root-mean-square response over the features, in MADs of the controls, and
         ``amplitude_null`` is what control wells spread over the same plates in the same numbers reach, so the two
         are read against each other. ``step_amplitude`` is the same measure applied to the change from the
@@ -925,16 +902,16 @@ def dose_direction(
     obs = as_frame(adata.obs)
     _require_columns(obs, compound_key, dose_key, *([split_by] if split_by is not None else []))
     baseline, spread, keep, control = _control_scale(adata, reference)
-    control_z = _z_rows(adata, np.flatnonzero(control), baseline, spread, keep)
+    # Raw, not scaled: the floor holds each drawn group out of the scale it is measured in.
+    control_values = get_matrix(adata, rows=np.flatnonzero(control))[:, keep].astype(np.float64)
 
     all_levels = obs[split_by].to_numpy() if split_by is not None else np.zeros(adata.n_obs)
     control_levels = all_levels[control]
     viable = _viability(adata, count_key, site_key, control, all_levels)
     phases = np.full(adata.n_obs, "", dtype=object)
-    binned = np.full(adata.n_obs, np.nan)
     nulls: dict[tuple, float] = {}
     records: list[dict] = []
-    for compound, (rows, doses) in _usable_doses(obs, compound_key, dose_key, control, dose_tolerance).items():
+    for compound, (rows, doses) in _usable_doses(obs, compound_key, dose_key, control).items():
         n_doses = len(np.unique(doses))
         if n_doses < min_doses:
             get_logger().debug("dose_direction skipped %s: %d usable dose(s)", compound, n_doses)
@@ -942,7 +919,6 @@ def dose_direction(
         block = _z_rows(adata, rows, baseline, spread, keep)
         order, medians = _dose_medians(block, doses)
         levels, well_viability = all_levels[rows], viable[rows]
-        binned[rows] = doses
 
         ladder, covering = [], []
         for index, dose in enumerate(order):
@@ -952,7 +928,7 @@ def dose_direction(
             layout = dict(zip(*np.unique(levels[at], return_counts=True), strict=True))
             key = tuple(sorted(layout.items(), key=lambda item: str(item[0])))
             if key not in nulls:
-                nulls[key] = _null_amplitude(control_z, control_levels, layout)
+                nulls[key] = _null_amplitude(control_values, control_levels, layout)
             # The step from the concentration below is what "still changing" means. The first one steps from the
             # controls, so its step is how far it has already come.
             amplitude = _amplitude(medians[index])
@@ -984,7 +960,6 @@ def dose_direction(
     # A row that no concentration covers, a control or an unannotated well, is in no phase at all.
     phases[phases == ""] = None
     adata.obs[f"{key_added}_phase"] = pd.Categorical(phases, categories=list(DOSE_PHASES), ordered=False)
-    adata.obs[f"{key_added}_dose"] = binned
     get_logger().info(
         "dose_direction: %d compound(s) over %d concentration(s); %s",
         table["compound"].nunique(),
@@ -1002,7 +977,6 @@ def dose_trajectory(
     phase_key: str | None = "dose_direction_phase",
     phases: Sequence[str] = ("responding",),
     n_positions: int = 3,
-    dose_tolerance: float = _DOSE_TOLERANCE,
 ) -> AnnData:
     """Each compound's whole path through its own responding window, on one comparable axis.
 
@@ -1024,7 +998,6 @@ def dose_trajectory(
         phase_key: ``obs`` column holding the phase, so the path is read over the window rather than the whole ladder. ``None``, or a column that is absent, uses every concentration the compound was dosed at.
         phases: Which phases count as the window.
         n_positions: Points the window is resampled to. Two is its ends; more describes the path between them, and cannot add detail a short window does not have.
-        dose_tolerance: Doses whose base-10 logs differ by less than this are treated as one dose.
 
     Returns:
         A new object of compounds by features-and-positions, at ``"perturbation"`` resolution.
@@ -1063,7 +1036,7 @@ def dose_trajectory(
 
     grid = np.linspace(0.0, 1.0, n_positions)
     paths, records = [], []
-    for compound, (rows, doses) in _usable_doses(obs, compound_key, dose_key, control, dose_tolerance).items():
+    for compound, (rows, doses) in _usable_doses(obs, compound_key, dose_key, control).items():
         inside = in_window[rows]
         if not inside.any():
             continue
@@ -1109,7 +1082,6 @@ def dose_trajectory(
             "phase_key": phase_key,
             "phases": list(phases),
             "n_positions": n_positions,
-            "dose_tolerance": dose_tolerance,
         },
     )
     get_logger().info(

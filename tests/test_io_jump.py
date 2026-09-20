@@ -90,12 +90,12 @@ def test_a_duplicated_annotation_row_is_refused(profiles, fake_metadata, monkeyp
 
 
 @pytest.mark.network
-def test_jump_target2_loads_two_sources():
+def test_jump_target2_loads_a_plate_from_every_source():
+    # The shape and the per-well counts are asserted against the registry in test_ds.py.
     adata = mt.ds.jump_target2()
-    assert adata.n_obs == 768
-    assert adata.obs["Metadata_Source"].nunique() == 2
-    assert int(adata.obs["Metadata_Control"].sum()) == 128  # 64 DMSO wells per plate
+    assert adata.obs["Metadata_Source"].nunique() == 11
     assert adata.obs["Metadata_Perturbation"].nunique() == 302
+    assert int(adata.obs["Metadata_Control"].sum()) == 898  # 256 of them on source_9's 1536-well plate
     assert mt.io.validate(adata).ok, mt.io.validate(adata).errors
     well = adata.obs[(adata.obs["Metadata_Plate"] == "JCPQC051") & (adata.obs["Metadata_Well"] == "A01")]
     assert well[["Metadata_CellCount", "Metadata_SiteCount"]].values.tolist() == [[1853.0, 9.0]]

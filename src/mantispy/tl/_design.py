@@ -12,7 +12,7 @@ from mantispy._core._numba import MEDIAN, grouped_stat
 from mantispy._core._reduce import group_codes, group_offsets, representation
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
-from mantispy._core.masks import reference_mask
+from mantispy._core.masks import held_out_reference, reference_mask
 from mantispy._core.mutation import inplace_or_copy
 
 
@@ -177,7 +177,7 @@ def cytotoxicity(
     reference: str | None = "negcon",
     count_key: str = "Metadata_CellCount",
     site_key: str | None = "Metadata_SiteCount",
-    distance_key: str = "hits_distance",
+    distance_key: str = "hits_row_distance",
     min_viability: float = 0.7,
     key_added: str = "cytotoxicity",
     copy: bool = False,
@@ -191,7 +191,7 @@ def cytotoxicity(
         count_key: ``obs`` column holding the cell count.
         site_key: ``obs`` column holding the number of fields of view that count covers.
             Where present, viability compares cells per field, so a well missing a field does not read as cell loss. ``None`` compares the counts as they are.
-        distance_key: ``obs`` column holding the distance from the controls, as written by :func:`~mantispy.tl.hit_calling`.
+        distance_key: ``obs`` column holding the per-row distance from the controls, as written by :func:`~mantispy.tl.hit_calling`. Its group-level sibling ``hits_distance`` is one number repeated over each group's rows, so the median below would return the value it was handed.
         min_viability: Fraction of the control cell count below which a group counts as having lost cells.
         key_added: Name for the outputs.
         copy: Return a modified copy instead of mutating in place.
@@ -232,7 +232,7 @@ def cytotoxicity(
     if distance_key not in obs:
         raise KeyError(
             f"obs has no column {distance_key!r}; run mt.tl.hit_calling first, which writes "
-            "obs['hits_distance'], or name another column"
+            "obs['hits_row_distance'], or name another column"
         )
 
     is_control = reference_mask(adata, reference)
@@ -241,7 +241,7 @@ def cytotoxicity(
         counts = counts / np.maximum(obs[site_key].to_numpy(dtype=float), 1)
     distances = obs[distance_key].to_numpy(dtype=float)
     control_count = float(np.nanmedian(counts[is_control]))
-    control_distance = float(np.nanmedian(distances[is_control]))
+    control_distance = float(np.nanmedian(distances[held_out_reference(adata, is_control, distance_key)]))
     if not np.isfinite(control_count) or control_count <= 0:
         raise ValueError(f"the reference rows have no usable {count_key!r} to normalize viability against")
 

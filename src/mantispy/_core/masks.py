@@ -89,3 +89,17 @@ def reference_mask(adata: AnnData, reference: str | None) -> np.ndarray:
         "a control row",
         " Fill them, or check that the platemap covers every well.",
     )
+
+
+def held_out_reference(adata: AnnData, is_control: np.ndarray, distance_key: str) -> np.ndarray:
+    """Narrow a control mask to the rows that did not fit the transform ``distance_key`` is measured in.
+
+    A row that fitted the centroid and the covariance sits closer to the centroid than one that did not, so a scale read off every control comes out low.
+    :func:`~mantispy.tl.hit_calling` records the half it held out under the ``key_added`` the distance column already carries.
+    A missing column is not an error, on the same terms :func:`feature_mask` applies: the distance came from somewhere else, and every control is kept.
+    """
+    column = f"{distance_key.removesuffix('_row_distance')}_reference_held_out"
+    if column not in adata.obs:
+        get_logger().debug("obs has no column %r; reading the control scale off every control row", column)
+        return is_control
+    return is_control & reference_mask(adata, column)
