@@ -9,7 +9,7 @@ import pandas as pd
 
 from mantispy._core._reduce import get_matrix
 from mantispy._core.frames import as_frame
-from mantispy._core.plate import PLATE_FORMATS, detect_plate_format, row_label, well_col, well_row
+from mantispy._core.plate import plate_grid, row_label, well_col, well_row
 
 if TYPE_CHECKING:
     from anndata import AnnData
@@ -73,8 +73,7 @@ def plate(
     for axis, name in zip(axes, plates, strict=True):
         mask = (adata.obs["Metadata_Plate"] == name).to_numpy()
         wells = adata.obs["Metadata_Well"][mask]
-        # Each plate's own format: one object can hold 384- and 1536-well plates.
-        n_rows, n_cols = PLATE_FORMATS[detect_plate_format(wells.unique())]
+        n_rows, n_cols = plate_grid(wells.unique())
         frame = pd.DataFrame(
             {
                 "row": [well_row(well) for well in wells],

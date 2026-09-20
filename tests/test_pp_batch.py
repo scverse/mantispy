@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 import mantispy as mt
-from mantispy._core.plate import well_col, well_row
+from mantispy._core.plate import well_col, well_name, well_row
 from mantispy.ds import synthetic_plate
 from mantispy.pp._batch import _median_polish_stack
 
@@ -50,6 +50,28 @@ def test_polish_records_effects_and_honours_key_added(gradient_cells):
     np.testing.assert_array_equal(wells.X, before)
     assert wells.layers["positioned"].shape == wells.shape
     assert set(wells.uns["mantispy"]["plate_position"]) == set(wells.obs["Metadata_Plate"].astype(str))
+
+
+def test_a_plate_is_polished_on_its_own_format_not_the_objects_largest(gradient_cells):
+    """jump_target2 holds source_9's 1536-well plate beside ten 384-well ones.
+
+    Sizing one grid for the whole object put the smaller plates in a corner of the larger
+    one, so their row and column effects were fitted on a grid three quarters empty and the
+    correction depended on which other plates happened to be loaded.
+    """
+    wells = mt.tl.aggregate(gradient_cells, min_cells=0)
+    alone = wells[wells.obs["Metadata_Plate"] == "Plate01"].copy()
+    mt.pp.correct_plate_position(alone)
+
+    # Move the second plate's wells into the far quadrant, which makes it a larger format.
+    names = wells.obs["Metadata_Well"].astype(str).to_numpy()
+    larger = (wells.obs["Metadata_Plate"] == "Plate02").to_numpy()
+    names[larger] = [well_name(well_row(name) + 16, well_col(name) + 24) for name in names[larger]]
+    wells.obs["Metadata_Well"] = names
+    mt.pp.correct_plate_position(wells)
+
+    beside = wells[wells.obs["Metadata_Plate"] == "Plate01"].X
+    np.testing.assert_allclose(beside, alone.X, rtol=1e-6)
 
 
 def test_regress_out_removes_cell_count_dependence():

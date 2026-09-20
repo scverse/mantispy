@@ -78,12 +78,14 @@ def test_plate_grid_matches_the_detected_format(plotted):
 
 
 def test_each_plate_is_drawn_on_its_own_grid(plotted):
-    """The grid was sized from every plate's wells, so a 384-well plate beside a 1536-well one was drawn three quarters empty."""
+    """The grid was sized from every plate's wells at once, so the smaller plate was drawn three quarters empty.
+
+    jump_target2 is the real case: source_9 runs the map on 1536-well plates and the other ten on 384-well ones.
+    """
     wells = plotted.obs["Metadata_Well"].astype(str).to_numpy()
     larger = (plotted.obs["Metadata_Plate"] == "Plate02").to_numpy()
-    wells[larger] = [
-        f"{chr(ord(well[0]) + 8)}{int(well[1:]) + 12:02d}" for well in wells[larger]
-    ]  # into P24's quadrant
+    # One well in the far corner is enough; the format is the smallest one that holds every well.
+    wells[np.flatnonzero(larger)[0]] = "P24"
     plotted.obs["Metadata_Well"] = wells
 
     axes = mt.pl.plate(plotted, color=plotted.var_names[0])

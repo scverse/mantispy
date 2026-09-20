@@ -32,19 +32,20 @@ _BASE_URL, _DATASETS = parse_registry(Path(__file__).parent / "registry.yaml")
 # scverse-misc registers loaders by type name across all packages in the process, so ours uses the package name.
 _TYPE = "mantispy"
 
-#: One plate from each of the eleven sources that ran Target-2.
+#: One plate from each of the eleven sources that ran Target-2. Pinned rather than derived, so the default set
+#: cannot move when a plate is added to the registry or the rows are reordered.
 TARGET2_DEFAULT = (
-    "1053600674",
-    "JCPQC051",
-    "BR00121438",
-    "ACPJUM012",
-    "110000294936",
-    "CP1-SC1-25",
-    "A1170384",
-    "GR00003394",
-    "Dest210726-160150",
-    "LM37-70_1",
-    "CP-CC9-R1-29",
+    "1053600674",  # source_2
+    "JCPQC051",  # source_3
+    "BR00121438",  # source_4
+    "ACPJUM012",  # source_5
+    "110000294936",  # source_6
+    "CP1-SC1-25",  # source_7
+    "A1170384",  # source_8
+    "GR00003394",  # source_9, the 1536-well plates
+    "Dest210726-160150",  # source_10
+    "LM37-70_1",  # source_11
+    "CP-CC9-R1-29",  # source_13
 )
 
 #: Bumped whenever the assembled jump_cells object changes, so an older cached assembly is not reused.
@@ -71,10 +72,11 @@ def _plate(file_name: str) -> str:
 
 
 def _plate_files(name: str, plates: Sequence[str] | None, cache_dir: str | Path | None) -> list[Path]:
-    known = [_plate(file.name) for file in _DATASETS[name].files]
-    if plates is not None and (unknown := sorted(set(plates) - set(known))):
+    # A set, because a plate contributes several files and listing it once per file printed all 141 twice.
+    known = {_plate(file.name) for file in _DATASETS[name].files}
+    if plates is not None and (unknown := sorted(set(plates) - known)):
         raise KeyError(f"{name} has no plate(s) {unknown}; available: {sorted(known)}")
-    wanted = set(known if plates is None else plates)
+    wanted = known if plates is None else set(plates)
     return _files(name, cache_dir, select=lambda file_name: _plate(file_name) in wanted)
 
 
@@ -285,7 +287,7 @@ def jump_target2(
             Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Returns:
-        One row per well at well resolution, carrying ``Metadata_Source``, ``Metadata_Batch``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_CellCount``, ``Metadata_SiteCount`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_InChIKey`` and ``Metadata_Control`` (the DMSO wells, 64 on most 384-well plates and 256 on a 1536-well plate).
+        One row per well at well resolution, carrying ``Metadata_Source``, ``Metadata_Batch``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_CellCount``, ``Metadata_SiteCount`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_InChIKey`` and ``Metadata_Control`` (the DMSO wells, 64 per 384-well plate and 256 on source_9's).
 
     Raises:
         KeyError: A plate is not one of the 141.
