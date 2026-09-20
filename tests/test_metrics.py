@@ -440,23 +440,29 @@ def test_known_relationships_ranks_ties_as_the_reference_does(percentile, expect
     assert _recall(np.array([1.0, 2.0, 3.0, 4.0, 5.0]), np.array([1.0, 5.0]), percentile / 100) == expected
 
 
-def test_known_relationships_reads_pairs_and_sets_alike():
-    """The reference relationship sets ship as pairs, and mt.tl.gene_sets returns sets."""
-    adata, net = _gene_map(seed=5)
+def test_known_relationships_takes_a_pair_list_once_it_is_reshaped():
+    """The reference relationship sets ship one pair per row. There is one annotation shape, so
+    the conversion is the caller's, and it has to give the same answer as the sets do."""
+    adata, _ = _gene_map(seed=5)
     genes = adata.obs["Metadata_Perturbation"].to_numpy()
+    # Written both ways round, so the direction a pair appears in cannot change the answer.
     pairs = pd.DataFrame(
-        # Reversed, so the direction a pair is written in cannot change the answer.
-        [{"entity1": genes[3 * index + 1], "entity2": genes[3 * index]} for index in range(4)]
-        + [{"entity1": genes[3 * index], "entity2": genes[3 * index + 1]} for index in range(4)]
+        [
+            {"entity1": genes[3 * index + a], "entity2": genes[3 * index + b]}
+            for index in range(4)
+            for a, b in ((0, 1), (1, 0))
+        ]
     )
+    reshaped = pairs.assign(source=pairs.index.astype(str)).melt(id_vars="source", value_name="target")[
+        ["source", "target"]
+    ]
     sets = pd.DataFrame(
         [{"source": f"complex{index}", "target": genes[3 * index + member]} for index in range(4) for member in (0, 1)]
     )
 
-    from_pairs = mt.metrics.known_relationships(adata, pairs)
-    assert _value(from_pairs, "known_relationships") == _value(
+    assert _value(mt.metrics.known_relationships(adata, reshaped), "known_relationships") == _value(
         mt.metrics.known_relationships(adata, sets), "known_relationships"
     )
 
-    with pytest.raises(ValueError, match="net needs either"):
-        mt.metrics.known_relationships(adata, net.rename(columns={"target": "gene"}))
+    with pytest.raises(ValueError, match="net needs"):
+        mt.metrics.known_relationships(adata, pairs)

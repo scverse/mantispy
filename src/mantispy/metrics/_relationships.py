@@ -16,16 +16,14 @@ from mantispy._core._reduce import representation
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy.metrics._common import tidy
-from mantispy.tl._similarity import similarity_matrix
+from mantispy.tl._similarity import _non_replicate_pool, similarity_matrix
 
 if TYPE_CHECKING:
     from anndata import AnnData
 
-#: Columns of a frame of sets, where two perturbations are related when they share a set.
+#: Columns of the annotation, where two perturbations are related when they share a set.
+#: This is what :func:`~mantispy.tl.gene_sets` returns and what :func:`~mantispy.tl.pathway_coherence` reads.
 SET_COLUMNS = ("source", "target")
-
-#: Columns of a frame of pairs, which is how the reference relationship sets ship.
-PAIR_COLUMNS = ("entity1", "entity2")
 
 #: Largest number of annotated pairs a frame of sets is expanded into. A set of n members
 #: contributes n(n-1)/2 pairs, so one very large set can dominate the recall as well as the memory.
@@ -38,44 +36,42 @@ def _recall(null: np.ndarray, query: np.ndarray, tail: float) -> float:
     The rank of a query value is its position in the sorted null rather than a value read off an interpolated quantile, which is what the reference implementation does and what makes ties fall on the conservative side: a value tied with much of the null is credited to neither tail.
 
     Args:
-        null: The comparison distribution, in any order.
+        null: The comparison distribution, which is sorted in place.
         query: The values to rank against it.
         tail: Size of each tail, as a fraction.
 
     Returns:
         The share of ``query`` at or below the lower tail, or at or above the upper one.
     """
-    ordered = np.sort(null)
-    at_or_below = np.searchsorted(ordered, query, side="right") / ordered.size
-    strictly_below = np.searchsorted(ordered, query, side="left") / ordered.size
+    # Sorted in place: the caller builds this pool for this call and it is the largest array the
+    # benchmark holds, so a sorted copy of it would be the function's peak.
+    null.sort()
+    at_or_below = np.searchsorted(null, query, side="right") / null.size
+    strictly_below = np.searchsorted(null, query, side="left") / null.size
     return float(np.mean((at_or_below <= tail) | (strictly_below >= 1.0 - tail)))
 
 
-def _pairs_from_sets(net: pd.DataFrame, codes: dict[str, int], n_labels: int) -> np.ndarray:
-    """Pair codes for every two profiled labels that share a set."""
+def _pairs_from_sets(net: pd.DataFrame, codes: dict[str, int]) -> np.ndarray:
+    """Row positions of every two profiled labels that share a set, as ``(n, 2)`` with ``i < j``.
+
+    Raises:
+        ValueError: The sets expand into more than :data:`MAX_PAIRS` pairs.
+    """
     blocks, total = [], 0
-    for _, block in net.groupby(SET_COLUMNS[0], observed=True):
-        members = np.unique([codes[name] for name in set(block[SET_COLUMNS[1]].astype(str)) if name in codes])
+    for _, block in net.groupby("source", observed=True):
+        # codes is injective, so deduplicating the positions deduplicates the names too.
+        members = np.unique([codes[name] for name in block["target"].astype(str) if name in codes])
+        if members.size < 2:
+            continue
         total += members.size * (members.size - 1) // 2
         if total > MAX_PAIRS:
             raise ValueError(
                 f"the sets in net expand into more than {MAX_PAIRS} pairs; drop the largest ones, e.g. "
                 "net = net.groupby('source').filter(lambda block: len(block) <= 500)"
             )
-        if members.size >= 2:
-            rows, columns = np.triu_indices(members.size, 1)
-            blocks.append(members[rows].astype(np.int64) * n_labels + members[columns])
-    return np.concatenate(blocks) if blocks else np.empty(0, dtype=np.int64)
-
-
-def _pairs_from_edges(net: pd.DataFrame, codes: dict[str, int], n_labels: int) -> np.ndarray:
-    """Pair codes for every row naming two profiled labels."""
-    left = net[PAIR_COLUMNS[0]].astype(str).map(codes).to_numpy(dtype=float)
-    right = net[PAIR_COLUMNS[1]].astype(str).map(codes).to_numpy(dtype=float)
-    both = np.isfinite(left) & np.isfinite(right)
-    first = np.minimum(left[both], right[both]).astype(np.int64)
-    second = np.maximum(left[both], right[both]).astype(np.int64)
-    return (first * n_labels + second)[first != second]
+        rows, columns = np.triu_indices(members.size, 1)
+        blocks.append(np.column_stack([members[rows], members[columns]]))
+    return np.concatenate(blocks) if blocks else np.empty((0, 2), dtype=np.int64)
 
 
 def _pair_keys(net: pd.DataFrame, codes: dict[str, int], n_labels: int) -> np.ndarray:
@@ -84,7 +80,7 @@ def _pair_keys(net: pd.DataFrame, codes: dict[str, int], n_labels: int) -> np.nd
     A pair of row positions ``i < j`` is held as ``i * n_labels + j``, so deduplicating across sets, and collapsing a pair given in both directions, is one :func:`numpy.unique`, and the pairs of a large screen stay integers rather than tuples.
 
     Args:
-        net: Either sets with :data:`SET_COLUMNS`, or pairs with :data:`PAIR_COLUMNS`.
+        net: The annotation, with :data:`SET_COLUMNS`.
         codes: Perturbation label to row position, for the labels that were profiled.
         n_labels: Number of profiled labels, which is the base of the encoding.
 
@@ -92,19 +88,12 @@ def _pair_keys(net: pd.DataFrame, codes: dict[str, int], n_labels: int) -> np.nd
         The sorted, deduplicated pair codes, without self-pairs.
 
     Raises:
-        ValueError: ``net`` has neither pair of columns, or the sets expand past :data:`MAX_PAIRS`.
+        ValueError: ``net`` lacks :data:`SET_COLUMNS`, or the sets expand past :data:`MAX_PAIRS`.
     """
-    columns = set(net.columns)
-    if set(PAIR_COLUMNS) <= columns:
-        keys = _pairs_from_edges(net, codes, n_labels)
-    elif set(SET_COLUMNS) <= columns:
-        keys = _pairs_from_sets(net, codes, n_labels)
-    else:
-        raise ValueError(
-            f"net needs either {SET_COLUMNS} naming a set and one of its members, or {PAIR_COLUMNS} naming "
-            f"two related perturbations, and has {sorted(columns)}"
-        )
-    return np.unique(keys)
+    if not set(SET_COLUMNS) <= set(net.columns):
+        raise ValueError(f"net needs {SET_COLUMNS}, naming a set and one of its members, and has {sorted(net.columns)}")
+    pairs = _pairs_from_sets(net, codes)
+    return np.unique(pairs[:, 0] * n_labels + pairs[:, 1])
 
 
 def known_relationships(
@@ -119,7 +108,7 @@ def known_relationships(
 
     Args:
         adata: One profile per perturbation, normally the output of :func:`~mantispy.tl.consensus`.
-        net: The annotation, in either of two shapes. A frame with :data:`SET_COLUMNS`, as :func:`~mantispy.tl.gene_sets` returns, relates two perturbations that share a set, which also expresses a mechanism of action shared by several compounds. A frame with :data:`PAIR_COLUMNS` relates the two of each row, which is how the reference gene sets — CORUM, hu.MAP, Reactome, SIGNOR, StringDB — are distributed. Either way a pair is counted once, in either direction, and nothing is paired with itself.
+        net: The annotation, with :data:`SET_COLUMNS`, as :func:`~mantispy.tl.gene_sets` returns it: two perturbations are related when they share a set, which also expresses a mechanism of action shared by several compounds. A pair is counted once whichever way round it appears, and nothing is paired with itself. The reference gene sets — CORUM, hu.MAP, Reactome, SIGNOR, StringDB — are distributed as one pair per row, which becomes this shape with ``pairs.assign(source=pairs.index.astype(str)).melt(id_vars="source", value_name="target")[["source", "target"]]``; :func:`~mantispy.ds.jump_lite_targets` is an example of a loader that does the conversion for you.
         label_key: ``obs`` column holding the perturbation label, normally a gene symbol. Labels are matched to the annotation exactly, as the reference implementation matches them, so a screen that writes its symbols in another case recalls nothing.
         metric: Similarity between profiles, ``"cosine"`` or ``"pearson"``.
         use_rep: Measure in ``obsm[use_rep]`` instead of ``X``.
@@ -132,7 +121,7 @@ def known_relationships(
     Raises:
         KeyError: ``obs`` has no column ``label_key``.
         ValueError: ``label_key`` repeats a label, so a pair of labels would not be a pair of profiles. Aggregate first with ``adata = mt.tl.consensus(adata)``.
-        ValueError: ``net`` has neither shape of columns, or relates no two perturbations that were both profiled.
+        ValueError: ``net`` lacks :data:`SET_COLUMNS`, or relates no two perturbations that were both profiled.
         ValueError: The sets expand into more than :data:`MAX_PAIRS` pairs.
 
     Notes:
@@ -147,7 +136,8 @@ def known_relationships(
         raise KeyError(f"obs has no column {label_key!r} holding the perturbation label")
 
     labels = obs[label_key].astype(str).to_numpy()
-    repeated = pd.Index(labels)[pd.Index(labels).duplicated()].unique()
+    index = pd.Index(labels)
+    repeated = index[index.duplicated()].unique()
     if len(repeated):
         raise ValueError(
             f"{label_key!r} repeats {len(repeated)} label(s), such as {sorted(repeated)[:3]}; this expects one "
@@ -159,17 +149,15 @@ def known_relationships(
     if not keys.size:
         raise ValueError(
             f"net relates no two of the {len(labels)} perturbations in obs[{label_key!r}]; check that the "
-            f"labels match, e.g. {sorted(labels)[:3]} against "
-            f"{sorted(set(net[net.columns[-1]].astype(str)))[:3]}"
+            f"labels match, e.g. {sorted(labels)[:3]} against {sorted(set(net['target'].astype(str)))[:3]}"
         )
 
     matrix = similarity_matrix(representation(adata, use_rep), metric)
     similarities = matrix[keys // len(labels), keys % len(labels)]
-    # Every off-diagonal entry is the comparison distribution. Both triangles are kept because
-    # duplicating a symmetric matrix leaves every rank fraction unchanged, and dropping one of
-    # them costs a pair of index arrays larger than the matrix itself.
-    np.fill_diagonal(matrix, np.nan)
-    null = np.sort(matrix, axis=None)[: matrix.size - matrix.shape[0]]
+    # Every pair of distinct profiles is the comparison distribution. Giving each row its own
+    # group makes every pair a non-replicate pair, so this is the strict upper triangle, read a
+    # row block at a time rather than materialized as index arrays larger than the matrix.
+    null = _non_replicate_pool(matrix, np.arange(len(labels)))
 
     recall = _recall(null, similarities, percentile / 100.0)
     get_logger().info(
