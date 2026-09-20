@@ -384,3 +384,121 @@ def test_index_columns_name_the_observations(tmp_path):
         mt.io.read_profiles(path, index_columns=("Metadata_Plate",))
     with pytest.raises(KeyError, match="index columns not in metadata"):
         mt.io.read_profiles(path, index_columns=("Metadata_Nope",))
+
+
+@pytest.mark.parametrize("resolution", ["cell", "well", "perturbation"])
+def test_stamp_puts_a_hand_built_object_on_the_api_surface(resolution):
+    """An object from another pipeline, or a matrix of learned embeddings, arrives without the
+    stamp every reader here writes, and nothing public used to establish it."""
+    import anndata as ad
+
+    columns = {
+        "cell": {"Metadata_Plate": "P1", "Metadata_Well": "A01"},
+        "well": {"Metadata_Plate": "P1", "Metadata_Well": "A01"},
+        "perturbation": {"Metadata_Perturbation": "cmpd"},
+    }[resolution]
+    obs = pd.DataFrame({name: [value] * 4 for name, value in columns.items()}, index=list("abcd"))
+    adata = ad.AnnData(np.arange(20, dtype=np.float32).reshape(4, 5), obs=obs)
+
+    assert mt.io.stamp(adata, resolution=resolution) is None
+    assert adata.uns["mantispy"]["resolution"] == resolution
+    assert mt.io.validate(adata).ok
+
+
+def test_stamp_refuses_what_the_resolution_needs_and_obs_lacks():
+    """Stamping regardless would push the failure into whichever tool ran next."""
+    import anndata as ad
+
+    adata = ad.AnnData(np.zeros((3, 2), dtype=np.float32), obs=pd.DataFrame(index=list("abc")))
+    with pytest.raises(ValueError, match=r"Metadata_Plate.*Metadata_Well"):
+        mt.io.stamp(adata)
+    with pytest.raises(ValueError, match="resolution must be one of"):
+        mt.io.stamp(adata, resolution="plate")
+    assert "mantispy" not in adata.uns
+
+
+def test_stamp_can_leave_the_original_alone():
+    import anndata as ad
+
+    obs = pd.DataFrame({"Metadata_Perturbation": ["a", "b"]}, index=["x", "y"])
+    adata = ad.AnnData(np.zeros((2, 3), dtype=np.float32), obs=obs)
+
+    stamped = mt.io.stamp(adata, resolution="perturbation", copy=True)
+    assert stamped.uns["mantispy"]["resolution"] == "perturbation"
+    assert "mantispy" not in adata.uns
+    assert list(adata.var.columns) == []
+
+
+def test_stamp_keeps_the_resolution_the_object_already_records():
+    """A subset of a cell-resolution object is still cell-resolution, and the well default would
+    have demoted it silently: tl.aggregate then takes the non-cell branch and fills
+    Metadata_CellCount with NaN, which disables its min_cells filter."""
+    import anndata as ad
+
+    obs = pd.DataFrame({"Metadata_Plate": ["P1"] * 3, "Metadata_Well": ["A01"] * 3}, index=list("abc"))
+    adata = ad.AnnData(np.zeros((3, 2), dtype=np.float32), obs=obs)
+    mt.io.stamp(adata, resolution="cell")
+
+    mt.io.stamp(adata[:2].copy())
+    mt.io.stamp(adata)
+    assert adata.uns["mantispy"]["resolution"] == "cell"
+    assert mt.io.stamp(adata, resolution="well") is None
+    assert adata.uns["mantispy"]["resolution"] == "well"
+
+
+def test_stamp_lets_a_learned_embedding_be_written(tmp_path):
+    """An embedding has no CellProfiler feature names, so its var carries none of the annotation
+    the schema requires, and `io.write` validates before writing. Without the annotation columns
+    a stamped embedding failed on ten missing var columns and could not be written at all."""
+    import anndata as ad
+
+    obs = pd.DataFrame(
+        {"Metadata_Plate": ["P1"] * 4, "Metadata_Well": ["A01", "A02", "A03", "A04"]},
+        index=list("abcd"),
+    )
+    adata = ad.AnnData(np.arange(24, dtype=np.float32).reshape(4, 6), obs=obs)
+    # The names JUMP-Lite ships. Parsing them reads 'openphenom' as the object and 'nahualX' as
+    # the feature group, so an embedding stamped by the parser grew feature families named after
+    # the model's own tensors.
+    adata.var_names = [f"openphenom_nahualX_{index}" for index in range(6)]
+
+    mt.io.stamp(adata, resolution="well")
+    report = mt.io.validate(adata)
+    assert report.ok, str(report)
+    for column in ("object", "feature_group", "feature", "channel", "params"):
+        assert adata.var[column].isna().all(), column
+    assert adata.var["is_feature"].all()
+
+    path = tmp_path / "embedding.h5ad"
+    mt.io.write(adata, path)
+    assert mt.io.read(path).shape == (4, 6)
+
+
+def test_stamp_keeps_an_annotation_that_is_already_there():
+    """A profile object read by read_profiles carries the parsed annotation, and stamping it
+    again must not blank it."""
+    frame = _frame()
+    adata = from_dataframe(frame)
+    parsed = adata.var["feature_group"].copy()
+
+    mt.io.stamp(adata, resolution="well")
+    pd.testing.assert_series_equal(adata.var["feature_group"], parsed)
+
+
+def test_stamp_fills_only_the_annotation_columns_that_are_missing():
+    """An object hand-built with part of the annotation is the case where the merge can go wrong:
+    the columns that are there have to survive, and the ones added have to be categorical, because
+    an object array of NaN cannot be written to h5ad."""
+    import anndata as ad
+
+    obs = pd.DataFrame({"Metadata_Plate": ["P1"] * 2, "Metadata_Well": ["A01", "A02"]}, index=list("ab"))
+    adata = ad.AnnData(np.zeros((2, 3), dtype=np.float32), obs=obs)
+    adata.var["object"] = pd.Categorical(["Cells", "Nuclei", "Cells"])
+    adata.var["is_feature"] = [True, True, False]
+
+    mt.io.stamp(adata)
+    assert list(adata.var["object"]) == ["Cells", "Nuclei", "Cells"]
+    assert list(adata.var["is_feature"]) == [True, True, False]
+    assert adata.var["feature_group"].isna().all()
+    assert isinstance(adata.var["feature_group"].dtype, pd.CategoricalDtype)
+    assert mt.io.validate(adata).ok
