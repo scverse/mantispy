@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import warnings
+from collections.abc import Sequence
 from dataclasses import dataclass
 from math import lgamma, log, pi
 
+import anndata as ad
 import numpy as np
 import pandas as pd
 from anndata import AnnData
@@ -16,6 +18,7 @@ from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy._core.masks import reference_mask
 from mantispy._core.mutation import inplace_or_copy
+from mantispy._core.schema import stamp
 
 #: Column order of the output table, so an empty result still carries its columns.
 _COLUMNS = (
@@ -457,9 +460,15 @@ _DIRECTION_COLUMNS = (
     "n_wells",
     "amplitude",
     "amplitude_null",
+    "step_amplitude",
     "split_half_cosine",
     "cosine_to_top",
+    "viability",
+    "phase",
 )
+
+#: What a concentration is doing, in the order they normally appear along a ladder.
+PHASES = ("silent", "responding", "saturated", "cytotoxic")
 
 
 def _feature_baseline_and_spread(adata: AnnData, reference: str | None) -> tuple[np.ndarray, np.ndarray]:
@@ -472,7 +481,8 @@ def _feature_baseline_and_spread(adata: AnnData, reference: str | None) -> tuple
     if int(rows.sum()) < 2:
         raise ValueError(
             f"a per-feature dose analysis needs at least two control rows to set the scale, got {int(rows.sum())}. "
-            "Mark the controls with mt.pp.annotate_controls, or name another reference."
+            "Mark the controls with mt.pp.annotate_controls, or name another reference. Subsetting to a "
+            "dose_direction phase drops them, since a control is in no phase; keep them alongside the window."
         )
     control = get_matrix(adata, rows=np.flatnonzero(rows)).astype(np.float64)
     baseline = np.nanmedian(control, axis=0)
@@ -730,6 +740,65 @@ def _null_amplitude(control: np.ndarray, levels: np.ndarray, wanted: dict[object
     return float(np.median(draws))
 
 
+def _viability(adata: AnnData, count_key: str, site_key: str | None, control: np.ndarray) -> np.ndarray:
+    """Each row's cell count against the controls' median, per field of view where the fields are known."""
+    obs = as_frame(adata.obs)
+    if count_key not in obs:
+        get_logger().info(
+            "dose_direction: obs has no column %r, so no concentration is marked cytotoxic. "
+            "mt.tl.aggregate and every well-level mt.ds dataset write Metadata_CellCount.",
+            count_key,
+        )
+        return np.full(adata.n_obs, np.nan)
+    counts = obs[count_key].to_numpy(dtype=float)
+    if site_key is not None and site_key in obs:
+        counts = counts / np.maximum(obs[site_key].to_numpy(dtype=float), 1)
+    reference = float(np.nanmedian(counts[control]))
+    if not np.isfinite(reference) or reference <= 0:
+        get_logger().info("dose_direction: the controls have no usable %r, so no viability is read", count_key)
+        return np.full(adata.n_obs, np.nan)
+    return counts / reference
+
+
+def _label_phases(ladder: list[dict], min_viability: float, reproducible: float | None) -> list[str]:
+    """Label one compound's whole ladder at once, and write the labels back into its rows.
+
+    The window is a run, not a scatter. ``split_half_cosine`` over a handful of replicate wells is itself noisy,
+    and thresholding each concentration on its own lets one lucky concentration open a window several steps below
+    where the compound actually engages: on the OASIS pilot that put amperozide's onset at 3.7 uM instead of 33.
+    A response that has started does not stop, so the window is the run of concentrations reaching the highest one
+    that is not cytotoxic, and anything below the run is silent whatever its own cosine says.
+
+    Cell loss is read first and separately. A concentration that has lost its cells reports the morphology of
+    dying cells whatever else is true of it, which is why the US EPA's phenotypic pipeline drops those
+    concentrations before fitting anything.
+    """
+    cytotoxic = [bool(np.isfinite(row["viability"]) and row["viability"] < min_viability) for row in ladder]
+    phases = ["cytotoxic" if flag else "silent" for flag in cytotoxic]
+
+    def active(row: dict) -> bool:
+        if (
+            not (np.isfinite(row["amplitude"]) and np.isfinite(row["amplitude_null"]))
+            or row["amplitude"] <= row["amplitude_null"]
+        ):
+            return False
+        if reproducible is None:
+            return True
+        return bool(np.isfinite(row["split_half_cosine"]) and row["split_half_cosine"] >= reproducible)
+
+    index = max((position for position, flag in enumerate(cytotoxic) if not flag), default=-1)
+    while index >= 0 and not cytotoxic[index] and active(ladder[index]):
+        row = ladder[index]
+        # Still moving if the step from the concentration below beats the noise two independent medians carry.
+        moving = np.isfinite(row["step_amplitude"]) and row["step_amplitude"] > np.sqrt(2.0) * row["amplitude_null"]
+        phases[index] = "responding" if moving else "saturated"
+        index -= 1
+
+    for row, phase in zip(ladder, phases, strict=True):
+        row["phase"] = phase
+    return phases
+
+
 @inplace_or_copy()
 def dose_direction(
     adata: AnnData,
@@ -738,6 +807,10 @@ def dose_direction(
     reference: str | None = "negcon",
     split_by: str | None = "Metadata_Plate",
     min_doses: int = 4,
+    count_key: str = "Metadata_CellCount",
+    site_key: str | None = "Metadata_SiteCount",
+    min_viability: float = 0.5,
+    reproducible: float | None = 0.5,
     dose_tolerance: float = _DOSE_TOLERANCE,
     key_added: str = "dose_direction",
     copy: bool = False,
@@ -754,6 +827,13 @@ def dose_direction(
     only noise, however large its amplitude. One that reproduces but sits at a low ``cosine_to_top`` is a real
     phenotype, and a different one from the top concentration's.
 
+    ``phase`` turns that reading into a label, so the stretch of the ladder worth analysing can be subset out
+    rather than described. A concentration is ``silent`` while nothing reproducible is happening, ``responding``
+    while the profile is still moving from the concentration below it, ``saturated`` once it has stopped, and
+    ``cytotoxic`` once the cells are gone and the profile is the morphology of dying cells. The label is
+    broadcast to ``obs``, so ``adata[adata.obs["dose_direction_phase"] == "responding"]`` is the window, and
+    :func:`dose_features`, :func:`~mantispy.tl.differential_features` and the rest work on it unchanged.
+
     Args:
         adata: Object carrying a compound and a dose per row, at well resolution.
         compound_key: ``obs`` column holding the compound identity.
@@ -761,6 +841,10 @@ def dose_direction(
         reference: Rows that set each feature's baseline and spread. ``"negcon"`` reads ``Metadata_Control``.
         split_by: ``obs`` column whose levels split the replicates in two for ``split_half_cosine``, normally the plate. It also lays out the control groups ``amplitude_null`` is drawn from. ``None``, or a column with one level, splits the wells by position instead.
         min_doses: Distinct doses below which a compound is left out of the table. One concentration says nothing about how a response changes with concentration.
+        count_key: ``obs`` column holding the cell count, which sets ``viability``. Without it no concentration is marked cytotoxic.
+        site_key: ``obs`` column holding the number of fields that count covers, so a well missing a field does not read as cell loss. ``None`` compares the counts as they are.
+        min_viability: Fraction of the controls' cell count below which a concentration is ``cytotoxic``. The US EPA's phenotypic pipeline drops a concentration that has lost more than half its cells before fitting anything.
+        reproducible: ``split_half_cosine`` a concentration needs before it can be anything but ``silent``. ``None`` drops the requirement, which is what a screen with one well per concentration has to do, at the cost of calling noise a phenotype.
         dose_tolerance: Doses whose base-10 logs differ by less than this are treated as one dose. See :func:`dose_response`.
         key_added: Name for the output table.
         copy: Return a modified copy instead of mutating in place.
@@ -768,10 +852,14 @@ def dose_direction(
     Returns:
         ``None``, or the modified copy.
         Writes ``uns["mantispy"][key_added]``, one row per compound and concentration, with ``compound``, ``dose``,
-        ``n_wells``, ``amplitude``, ``amplitude_null``, ``split_half_cosine`` and ``cosine_to_top``.
+        ``n_wells``, ``amplitude``, ``amplitude_null``, ``step_amplitude``, ``split_half_cosine``,
+        ``cosine_to_top``, ``viability`` and ``phase``, and broadcasts the phase to
+        ``obs[key_added + "_phase"]`` so the window can be subset like any other annotation.
         ``amplitude`` is the root-mean-square response over the features, in MADs of the controls, and
         ``amplitude_null`` is what control wells spread over the same plates in the same numbers reach, so the two
-        are read against each other.
+        are read against each other. ``step_amplitude`` is the same measure applied to the change from the
+        concentration below, which is what tells a response that is still moving from one that has arrived.
+        ``phase`` is one of ``PHASES``.
 
     Raises:
         KeyError: ``obs`` has no ``compound_key``, no ``dose_key``, or no ``split_by`` column.
@@ -801,8 +889,11 @@ def dose_direction(
 
     all_levels = obs[split_by].to_numpy() if split_by is not None else np.zeros(adata.n_obs)
     control_levels = all_levels[control]
+    viable = _viability(adata, count_key, site_key, control)
+    phases = np.full(adata.n_obs, "", dtype=object)
     nulls: dict[tuple, float] = {}
-    records = []
+    records: list[dict] = []
+    block_rows: list[np.ndarray] = []
     for compound, (rows, doses) in _usable_doses(obs, compound_key, dose_key, control, dose_tolerance).items():
         if len(np.unique(doses)) < min_doses:
             get_logger().debug("dose_direction skipped %s: %d usable dose(s)", compound, len(np.unique(doses)))
@@ -820,23 +911,162 @@ def dose_direction(
             # The floor is drawn with this concentration's own spread over plates, not from any group of that size.
             layout = dict(zip(*np.unique(levels[at], return_counts=True), strict=True))
             key = tuple(sorted(layout.items(), key=lambda item: str(item[0])))
+            null = nulls.setdefault(key, _null_amplitude(control_z, control_levels, layout))
+            # The step from the concentration below, which is what "still changing" means. The first one steps
+            # from the controls, so its step is how far it has already come.
+            amplitude = _amplitude(medians[index])
+            step = amplitude if index == 0 else _amplitude(medians[index] - medians[index - 1])
+            viability = float(np.nanmedian(viable[rows][at])) if np.isfinite(viable[rows][at]).any() else np.nan
+            block_rows.append(rows[at])
             records.append(
                 {
                     "compound": str(compound),
                     "dose": float(dose),
                     "n_wells": int(at.sum()),
-                    "amplitude": _amplitude(medians[index]),
-                    "amplitude_null": nulls.setdefault(key, _null_amplitude(control_z, control_levels, layout)),
+                    "amplitude": amplitude,
+                    "amplitude_null": null,
+                    "step_amplitude": step,
                     "split_half_cosine": reproduces,
                     "cosine_to_top": _cosine(medians[index], medians[-1]),
+                    "viability": viability,
+                    "phase": "",
                 }
             )
 
+        ladder = records[-len(order) :]
+        for record, covered in zip(_label_phases(ladder, min_viability, reproducible), block_rows, strict=True):
+            phases[covered] = record
+        block_rows.clear()
+
     table = pd.DataFrame(records, columns=list(_DIRECTION_COLUMNS))
     adata.uns.setdefault("mantispy", {})[key_added] = table
+    # A row that no concentration covers, a control or an unannotated well, is in no phase at all.
+    phases[phases == ""] = None
+    adata.obs[f"{key_added}_phase"] = pd.Categorical(phases, categories=list(PHASES), ordered=False)
     get_logger().info(
-        "dose_direction: %d compound(s) over %d concentration(s)",
+        "dose_direction: %d compound(s) over %d concentration(s); %s",
         table["compound"].nunique() if len(table) else 0,
         len(table),
+        table["phase"].value_counts().to_dict() if len(table) else {},
     )
     return None
+
+
+def dose_trajectory(
+    adata: AnnData,
+    compound_key: str = "Metadata_Compound",
+    dose_key: str = "Metadata_Concentration",
+    reference: str | None = "negcon",
+    phase_key: str | None = "dose_direction_phase",
+    phases: Sequence[str] = ("responding",),
+    n_positions: int = 3,
+    dose_tolerance: float = _DOSE_TOLERANCE,
+) -> AnnData:
+    """Each compound's whole path through its own responding window, on one comparable axis.
+
+    Comparing two compounds at the same concentration compares one that has engaged against one that has not.
+    Comparing them at their own strongest concentration throws away everything on the way there, which for a
+    compound whose phenotype turns along its window is most of what it did. This reads each compound's window
+    onto the same relative axis instead: position 0 is where it starts responding, position 1 is the top of its
+    window, and the profile is interpolated in log concentration in between.
+
+    The result is one row per compound and one column per feature and position, so the usual tools apply to it:
+    :func:`~mantispy.tl.similarity` gives the compound-to-compound matrix, and a PCA or a clustering groups
+    compounds by the shape of their response rather than by its size.
+
+    Args:
+        adata: Object carrying a compound, a dose and, normally, the phase column :func:`dose_direction` wrote.
+        compound_key: ``obs`` column holding the compound identity.
+        dose_key: ``obs`` column holding the concentration.
+        reference: Rows that set each feature's baseline and spread.
+        phase_key: ``obs`` column holding the phase, so the path is read over the window rather than the whole ladder. ``None``, or a column that is absent, uses every concentration the compound was dosed at.
+        phases: Which phases count as the window.
+        n_positions: Points the window is resampled to. Two is its ends; more describes the path between them, and cannot add detail a short window does not have.
+        dose_tolerance: Doses whose base-10 logs differ by less than this are treated as one dose.
+
+    Returns:
+        A new object of compounds by features-and-positions, at ``"perturbation"`` resolution.
+        ``var`` carries ``feature`` and ``position``; ``obs`` carries ``n_doses`` and the window's ends.
+        Compounds whose window holds fewer than two concentrations are left out, since a single point is not a path.
+
+    Raises:
+        KeyError: ``obs`` has no ``compound_key`` or no ``dose_key``.
+        ValueError: ``n_positions`` is below two, or fewer than two reference rows.
+
+    Notes:
+        The axis is relative, so position 0 means a different concentration for every compound. That is the
+        point, and it is also the caveat: two compounds matched here are matched on what they do in their own
+        effective range, which is a claim about mechanism rather than about potency. Read it beside the benchmark
+        doses from :func:`dose_features`, which is where the potency lives.
+
+        How much this says over comparing the top of each window alone depends on how long the windows are. On
+        the OASIS pilot, where most compounds respond over two or three of the ten concentrations, the two
+        agree closely; the pairs they disagree on are the ones with long windows.
+    """
+    if n_positions < 2:
+        raise ValueError(f"n_positions must be at least two, got {n_positions}")
+    obs = as_frame(adata.obs)
+    _require_columns(obs, compound_key, dose_key)
+    baseline, spread = _feature_baseline_and_spread(adata, reference)
+    scaled = np.flatnonzero(np.isfinite(spread))
+    control = reference_mask(adata, reference)
+
+    in_window = np.ones(adata.n_obs, dtype=bool)
+    if phase_key is not None and phase_key in obs:
+        in_window = obs[phase_key].astype(str).isin(list(phases)).to_numpy()
+    elif phase_key is not None:
+        get_logger().info(
+            "dose_trajectory: obs has no column %r, so the path is read over every concentration. "
+            "Run mt.tl.dose_direction first to read it over the responding window.",
+            phase_key,
+        )
+
+    grid = np.linspace(0.0, 1.0, n_positions)
+    rows_out, records = [], []
+    for compound, (rows, doses) in _usable_doses(obs, compound_key, dose_key, control, dose_tolerance).items():
+        keep = in_window[rows]
+        if not keep.any():
+            continue
+        rows, doses = rows[keep], doses[keep]
+        order, medians = _dose_medians(get_matrix(adata, rows=rows).astype(np.float64)[:, scaled], doses)
+        if len(order) < 2:
+            continue
+        with np.errstate(invalid="ignore"):
+            z = (medians - baseline[scaled]) / spread[scaled]
+        # Relative position through the window in log concentration, so the ends are 0 and 1 for every compound.
+        position = np.log10(order)
+        position = (position - position[0]) / (position[-1] - position[0])
+        resampled = np.stack([np.interp(grid, position, z[:, column]) for column in range(z.shape[1])], axis=1)
+        rows_out.append(resampled.ravel())
+        records.append(
+            {
+                compound_key: str(compound),
+                "n_doses": len(order),
+                "window_low": float(order[0]),
+                "window_high": float(order[-1]),
+            }
+        )
+
+    names = np.asarray(adata.var_names)[scaled]
+    var = pd.DataFrame(
+        {
+            "feature": np.tile(names, n_positions),
+            "position": np.repeat(grid, names.size),
+        },
+        index=pd.Index([f"{name}@{value:.2f}" for value in grid for name in names]),
+    )
+    result = ad.AnnData(
+        X=np.vstack(rows_out).astype(np.float32) if rows_out else np.empty((0, var.shape[0]), dtype=np.float32),
+        obs=pd.DataFrame(records, columns=[compound_key, "n_doses", "window_low", "window_high"]).set_axis(
+            pd.Index([str(index) for index in range(len(records))])
+        ),
+        var=var,
+    )
+    stamp(result, resolution="perturbation")
+    get_logger().info(
+        "dose_trajectory: %d compound(s) over %d position(s); windows of %s concentration(s)",
+        result.n_obs,
+        n_positions,
+        sorted(set(result.obs["n_doses"])) if result.n_obs else [],
+    )
+    return result

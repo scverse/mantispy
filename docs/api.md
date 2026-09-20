@@ -141,6 +141,7 @@ Writing to a layer suffixes the column, so `key_added="sphered"` flags `var["deg
     tl.dose_response
     tl.dose_features
     tl.dose_direction
+    tl.dose_trajectory
     tl.nn_moa_classify
     tl.moa_enrichment
     tl.feature_sets
@@ -173,7 +174,8 @@ Writing to a layer suffixes the column, so `key_added="sphered"` flags `var["deg
 | `tl.transport` | `uns["mantispy"][key_added]` and `..._units`, `obs[key_added + "_agreement"]` |
 | `tl.dose_response` | `uns["mantispy"][key_added]` |
 | `tl.dose_features` | `uns["mantispy"][key_added]`, one row per compound and feature |
-| `tl.dose_direction` | `uns["mantispy"][key_added]`, one row per compound and concentration |
+| `tl.dose_direction` | `uns["mantispy"][key_added]`, one row per compound and concentration, `obs[key_added + "_phase"]` |
+| `tl.dose_trajectory` | returns a new object: compounds by features-and-positions at `"perturbation"` resolution |
 | `tl.nn_moa_classify` | `obs[key_added + "_predicted"]`, `uns["mantispy"][key_added]` and `..._confusion` |
 | `tl.moa_enrichment` | `uns["mantispy"][key_added]` |
 | `tl.feature_sets` | returns a decoupler network; stores nothing |
@@ -269,6 +271,7 @@ pycytominer and similar tools expect.
     pl.effect_sizes
     pl.feature_volcano
     pl.dose_response
+    pl.dose_direction
     pl.moa_confusion
     pl.moa_enrichment
     pl.distance_heatmap

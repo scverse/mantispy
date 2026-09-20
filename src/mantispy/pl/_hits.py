@@ -243,3 +243,85 @@ def dose_response(
     ax.set_title(f"{compound}  (spearman {float(fitted['spearman']):.2f})", fontsize=9)
     ax.legend(fontsize=7)
     return ax
+
+
+#: Background colour of each phase, from ``mantispy.tl.PHASES``. Grey where nothing happens, warm where it
+#: does, and red where the cells are gone.
+PHASE_COLORS = {
+    "silent": "#f2f2f2",
+    "responding": "#fde6c4",
+    "saturated": "#dbe8d4",
+    "cytotoxic": "#f6d2d2",
+}
+
+
+def dose_direction(
+    adata: AnnData,
+    compound: str,
+    key: str = "dose_direction",
+    ax: Axes | None = None,
+) -> Axes:
+    """One compound's ladder, with the background banded by what each concentration is doing.
+
+    The solid line is how far the profile sits from the controls, and the dashed line is how far it moved from
+    the concentration below it. The second is what says where the action is: a response that is still changing
+    has a large step, one that has arrived has a small one however high the solid line sits. The two dotted
+    horizontals are the floors those lines are read against, which control wells laid out the same way reach.
+
+    Args:
+        adata: Object holding the table :func:`~mantispy.tl.dose_direction` wrote.
+        compound: Which compound of that table to draw.
+        key: Name of that table in ``uns["mantispy"]``.
+        ax: Axes to draw on, or ``None`` for a new figure.
+
+    Returns:
+        The axes drawn on.
+
+    Raises:
+        KeyError: There is no such table, or it holds no such compound.
+    """
+    table = _table(adata, key, "mt.tl.dose_direction")
+    block = table[table["compound"].astype(str) == str(compound)].sort_values("dose")
+    if block.empty:
+        known = sorted(set(table["compound"].astype(str)))
+        raise KeyError(f"no compound {compound!r} in uns['mantispy'][{key!r}]; it holds {known}")
+
+    ax = _axes(ax, (5.2, 3.6))
+    doses = block["dose"].to_numpy(dtype=float)
+    # Each concentration owns the ladder up to halfway to its neighbours, measured in log dose, and half a step
+    # past the two ends.
+    log_dose = np.log10(doses)
+    middles = (log_dose[:-1] + log_dose[1:]) / 2 if len(doses) > 1 else np.array([log_dose[0]])
+    edges = 10.0 ** np.concatenate(
+        [[2 * log_dose[0] - middles[0]], middles, [2 * log_dose[-1] - middles[-1]]]
+        if len(doses) > 1
+        else [[log_dose[0] - 0.3], [log_dose[0] + 0.3]]
+    )
+    for index, phase in enumerate(block["phase"]):
+        ax.axvspan(edges[index], edges[index + 1], color=PHASE_COLORS.get(str(phase), "#ffffff"), lw=0, zorder=0)
+
+    floor = float(np.nanmedian(block["amplitude_null"].to_numpy(dtype=float)))
+    ax.axhline(floor, ls=":", lw=1, color="0.45", zorder=1)
+    ax.axhline(floor * np.sqrt(2.0), ls=":", lw=1, color="0.65", zorder=1)
+    ax.plot(
+        doses, block["amplitude"], marker="o", ms=4, lw=1.6, color="#2a4d69", label="distance from controls", zorder=3
+    )
+    ax.plot(
+        doses,
+        block["step_amplitude"],
+        marker="s",
+        ms=3,
+        lw=1.3,
+        ls="--",
+        color="#c1611f",
+        label="moved since the last",
+        zorder=3,
+    )
+
+    ax.set_xscale("log")
+    ax.set_xlim(edges[0], edges[-1])
+    ax.set_xlabel("concentration")
+    ax.set_ylabel("MADs per feature")
+    ax.set_title(str(compound), fontsize=10)
+    ax.legend(fontsize=7, frameon=False, loc="upper left")
+    return ax

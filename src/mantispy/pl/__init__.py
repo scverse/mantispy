@@ -9,7 +9,7 @@ from mantispy.pl._diagnostics import control_drift, image_qc, outliers, plate_ef
 from mantispy.pl._evaluation import batch_variance, map, metrics, replicate_correlation, similarity
 from mantispy.pl._features import feature_correlation, feature_groups
 from mantispy.pl._heterogeneity import cell_cycle, cluster_composition, density, subpopulation_hits
-from mantispy.pl._hits import dose_response, effect_sizes, feature_volcano, hits
+from mantispy.pl._hits import PHASE_COLORS, dose_direction, dose_response, effect_sizes, feature_volcano, hits
 from mantispy.pl._moa import distance_heatmap, moa_confusion, moa_enrichment, pathway_coherence, sets_heatmap
 from mantispy.pl._plate import plate
 from mantispy.pl._qc import cell_counts, cytotoxicity, feature_distributions, nan_matrix, qc, replicate_saturation
@@ -17,6 +17,7 @@ from mantispy.pl._signature import feature_signature
 from mantispy.pl._transport import setting_agreement, transport
 
 __all__ = [
+    "PHASE_COLORS",
     "setting_agreement",
     "batch_variance",
     "cell_counts",
@@ -26,6 +27,7 @@ __all__ = [
     "cytotoxicity",
     "density",
     "distance_heatmap",
+    "dose_direction",
     "dose_response",
     "effect_sizes",
     "feature_correlation",

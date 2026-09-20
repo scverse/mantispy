@@ -284,6 +284,7 @@ def phenotypes():
     frame["Metadata_Plate"] = np.where(np.arange(total) % 2 == 0, "P1", "P2")
     frame["Metadata_Well"] = [f"{chr(65 + index // 24)}{index % 24 + 1:02d}" for index in range(total)]
     frame["Metadata_Control"] = frame["Metadata_Compound"] == "DMSO"
+    frame["Metadata_CellCount"] = 100.0
     for column in range(n_features):
         frame[f"Cells_AreaShape_f{column}"] = values[:, column]
     return from_dataframe(frame, resolution="well")
@@ -453,3 +454,68 @@ def test_the_amplitude_floor_follows_the_plates_the_concentration_sits_on():
     mt.tl.dose_direction(adata)
     table = adata.uns["mantispy"]["dose_direction"].set_index("compound")
     assert table.loc["spread", "amplitude_null"].max() < table.loc["stacked", "amplitude_null"].min()
+
+
+def test_the_window_is_a_run_not_a_scatter(phenotypes):
+    """Regression: one lucky concentration used to open the window several steps below the real onset.
+
+    `grows` is silent at the two lowest concentrations. Making its second concentration look reproducible on its
+    own must not pull the window down to it, because the concentration above is still silent.
+    """
+    mt.tl.dose_direction(phenotypes)
+    table = phenotypes.uns["mantispy"]["dose_direction"]
+    grows = table[table["compound"] == "grows"].sort_values("dose").reset_index(drop=True)
+    labels = list(grows["phase"])
+
+    quiet = [index for index, phase in enumerate(labels) if phase == "silent"]
+    working = [index for index, phase in enumerate(labels) if phase in ("responding", "saturated")]
+    assert quiet and working, labels
+    assert max(quiet) < min(working), f"the window has a hole in it: {labels}"
+    assert working[-1] == len(labels) - 1, "the window runs to the top concentration"
+
+
+def test_a_concentration_that_lost_its_cells_is_cytotoxic_whatever_else_it_did(phenotypes):
+    top = phenotypes.obs["Metadata_Concentration"] == phenotypes.obs["Metadata_Concentration"].max()
+    phenotypes.obs.loc[top, "Metadata_CellCount"] = 10.0
+    mt.tl.dose_direction(phenotypes)
+    table = phenotypes.uns["mantispy"]["dose_direction"]
+    highest = table.sort_values("dose").groupby("compound").tail(1)
+    assert (highest["phase"] == "cytotoxic").all()
+    assert (highest["viability"] < 0.2).all()
+
+
+def test_the_phase_reaches_obs_so_the_window_can_be_subset(phenotypes):
+    mt.tl.dose_direction(phenotypes)
+    phases = phenotypes.obs["dose_direction_phase"]
+    assert set(phases.cat.categories) == set(mt.tl.PHASES)
+    assert phases[phenotypes.obs["Metadata_Control"].to_numpy(dtype=bool)].isna().all(), "controls are in no phase"
+
+    window = phenotypes[phases == "responding"]
+    assert window.n_obs > 0
+    assert not window.obs["Metadata_Control"].to_numpy(dtype=bool).any()
+
+
+def test_dose_trajectory_puts_every_compound_on_one_relative_axis(phenotypes):
+    mt.tl.dose_direction(phenotypes)
+    paths = mt.tl.dose_trajectory(phenotypes, n_positions=3)
+
+    assert paths.n_vars == 3 * (phenotypes.n_vars - 1), "one column per feature and position, minus the flat one"
+    assert list(paths.var["position"].unique()) == [0.0, 0.5, 1.0]
+    assert paths.var["feature"].nunique() == phenotypes.n_vars - 1
+    assert set(paths.obs["Metadata_Compound"]) <= {"grows", "turns"}, "a compound with no window is left out"
+    assert (paths.obs["n_doses"] >= 2).all()
+    assert (paths.obs["window_low"] < paths.obs["window_high"]).all()
+
+
+def test_a_trajectory_needs_at_least_two_points(phenotypes):
+    with pytest.raises(ValueError, match="at least two"):
+        mt.tl.dose_trajectory(phenotypes, n_positions=1)
+
+
+def test_a_turning_compound_and_a_growing_one_do_not_match_on_their_paths(phenotypes):
+    """The reason to compare paths at all: `turns` and `grows` move different features in a different order."""
+    mt.tl.dose_direction(phenotypes)
+    paths = mt.tl.dose_trajectory(phenotypes, phases=("responding", "saturated"))
+    frame = pd.DataFrame(np.asarray(paths.X), index=list(paths.obs["Metadata_Compound"]))
+    assert {"grows", "turns"} <= set(frame.index)
+    assert frame.loc["grows"].corr(frame.loc["turns"]) < 0.5
