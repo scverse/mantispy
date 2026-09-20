@@ -611,6 +611,8 @@ def jump_lite(
 
         The embeddings are not normalized. They are the model's output on each well's images, so a per-plate control normalization is still the first step.
 
+        Every trained embedding here puts the cell count on its first component, where it explains several times more of the variance than the imaging site does. The untrained ``"dinov2_random"`` does not, and neither does ``"cp_measure"``, whose per-cell measurements are averaged over the well. Measure it with :func:`~mantispy.metrics.evaluate_correction` before correcting for anything else, and read :doc:`/tutorials/12_learned_embeddings` on why removing it is not obviously right.
+
     References:
         :cite:t:`Munoz_2026`, :cite:t:`Chandrasekaran_2023`, :cite:t:`Weisbart_2024`.
     """

@@ -148,6 +148,8 @@ def regress_out(
         Missing and infinite values stay as they are, and a feature holding one is fitted on its finite rows.
         A group with no more rows than design columns is left uncorrected and logged.
 
+        Whether the cell count is a confounder at all depends on the screen. In the ORF and CRISPR arms of JUMP, whose plate layouts were not randomized, it is largely technical, and the recipe regresses it out :cite:p:`Chandrasekaran_2023`. In a compound screen it is partly a treatment effect — a compound that kills cells is supposed to lower it — so regressing it out removes part of the phenotype along with the nuisance, and the recipe does not. Measure both ways before adopting either; :func:`~mantispy.metrics.evaluate_correction` takes a ``covariates`` argument for exactly this, and :func:`~mantispy.tl.cytotoxicity` asks the question directly.
+
         A numeric covariate with a missing or infinite value is dropped from that group's design and nothing is regressed out for it there, with a warning.
         A categorical covariate with a missing label is refused instead: the all-zero encoding of a missing category is also the encoding of the level ``drop_first`` removed, so those rows would be corrected as the reference level and take every other row with them.
     """
