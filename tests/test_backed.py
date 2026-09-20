@@ -12,7 +12,7 @@ import pytest
 from scipy import sparse
 
 import mantispy as mt
-from mantispy._core._reduce import MEAN, reduce_grouped
+from mantispy._core._reduce import MAD, MEAN, MEDIAN, STD, reduce_grouped, transform_grouped
 
 
 @pytest.fixture
@@ -66,24 +66,22 @@ def reads(monkeypatch):
     return asked
 
 
-def test_per_group_reads_never_ask_for_the_whole_matrix(backed, reads):
-    """A grouped reduction reads one group at a time and never the whole matrix."""
-    from mantispy._core import _reduce
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda adata: reduce_grouped(adata, "Metadata_Plate", MEDIAN),
+        lambda adata: transform_grouped(adata, "Metadata_Plate", lambda _, block: block),
+    ],
+    ids=["reduce_grouped", "transform_grouped"],
+)
+def test_per_group_reads_never_ask_for_the_whole_matrix(backed, reads, call):
+    """Both grouped paths read one group at a time.
 
-    _reduce.reduce_grouped(backed, "Metadata_Plate", _reduce.MEDIAN)
+    transform_grouped used to size its output with ``np.empty_like(get_matrix(adata, layer))``, a full read
+    on top of the per-group ones (#67).
+    """
+    call(backed)
 
-    assert reads, "nothing was read through the seam"
-    assert max(reads) < backed.n_obs, f"a read of {max(reads)} rows is the whole matrix"
-
-
-def test_a_grouped_transform_sizes_its_buffer_without_reading(backed, reads):
-    """The output buffer is shaped from the object, so no read exists only to be thrown away."""
-    from mantispy._core import _reduce
-
-    out = _reduce.transform_grouped(backed, "Metadata_Plate", lambda _, block: block)
-
-    assert out.shape == backed.shape
-    assert out.dtype == np.float32
     assert reads, "nothing was read through the seam"
     assert max(reads) < backed.n_obs, f"a read of {max(reads)} rows is the whole matrix"
 
@@ -91,8 +89,6 @@ def test_a_grouped_transform_sizes_its_buffer_without_reading(backed, reads):
 def test_streamed_and_single_pass_reductions_agree(backed, cells):
     """The backed path reduces group by group and the in-memory path in one kernel call;
     both must give the same numbers."""
-    from mantispy._core._reduce import MAD, MEDIAN, STD, reduce_grouped
-
     for stat in (MEDIAN, MAD, STD):
         streamed, keys, counts = reduce_grouped(backed, "Metadata_Plate", stat)
         single, keys_memory, counts_memory = reduce_grouped(cells, "Metadata_Plate", stat)
