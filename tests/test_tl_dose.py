@@ -1,10 +1,12 @@
 """Dose-response trends and curve fits."""
 
+import anndata as ad
 import numpy as np
 import pandas as pd
 import pytest
 
 import mantispy as mt
+from mantispy._core.schema import stamp
 from mantispy.tl._dose import four_parameter_logistic
 
 
@@ -121,3 +123,108 @@ def test_fit_ok_refuses_a_curve_that_only_the_optimiser_believes():
     assert ok
     assert r_squared > 0.99
     assert ec50 == pytest.approx(1.0, rel=0.3)
+
+
+def test_the_hit_call_separates_a_real_curve_from_a_noisy_one(dosed):
+    """fit_ok asks whether the optimiser converged on something curve-shaped.
+
+    The hit call asks whether the response is large next to the controls' own spread, which is
+    the question a screener is actually asking.
+    """
+    mt.tl.dose_response(dosed, min_doses=4)
+    table = dosed.uns["mantispy"]["dose_response"].set_index("compound")
+    assert table.loc["active", "hitcall"] >= 0.9, "a ten-fold response over a 0.05 baseline is a hit"
+    assert table.loc["flat", "hitcall"] < 0.9
+
+
+def test_pure_noise_does_not_reach_the_hit_call_threshold():
+    """On noise alone the optimiser still converges; 12 of 200 such fits passed fit_ok."""
+    rng = np.random.default_rng(0)
+    doses = np.repeat([0.01, 0.1, 1.0, 10.0, 100.0, 1000.0], 3)
+    called = 0
+    for trial in range(40):
+        obs = pd.DataFrame(
+            {
+                "Metadata_Plate": "P1",
+                "Metadata_Well": [f"W{index:03d}" for index in range(len(doses) + 12)],
+                "Metadata_Compound": ["c"] * len(doses) + ["DMSO"] * 12,
+                "Metadata_Concentration": np.concatenate([doses, np.zeros(12)]),
+                "Metadata_Control": [False] * len(doses) + [True] * 12,
+                "hits_distance": rng.normal(0, 1.0, len(doses) + 12),
+            },
+            index=[str(index) for index in range(len(doses) + 12)],
+        )
+        adata = ad.AnnData(
+            X=rng.normal(size=(len(obs), 3)).astype(np.float32),
+            obs=obs,
+            var=pd.DataFrame(index=[f"Cells_AreaShape_f{index}" for index in range(3)]),
+        )
+        stamp(adata, resolution="well")
+        mt.tl.dose_response(adata, min_doses=4)
+        table = adata.uns["mantispy"]["dose_response"].set_index("compound")
+        if "c" in table.index and float(table.loc["c", "hitcall"]) >= 0.9:
+            called += 1
+    assert called <= 2, f"{called}/40 noise-only compounds called active at hitcall >= 0.9"
+
+
+def test_without_controls_the_hit_call_is_left_out_rather_than_guessed(dosed):
+    del dosed.obs["Metadata_Control"]
+    mt.tl.dose_response(dosed, min_doses=4)
+    table = dosed.uns["mantispy"]["dose_response"]
+    assert table["hitcall"].isna().all()
+
+    mt.tl.dose_response(dosed, min_doses=4, cutoff=1.0)
+    table = dosed.uns["mantispy"]["dose_response"].set_index("compound")
+    assert table.loc["active", "hitcall"] >= 0.9, "an explicit cutoff is enough to call one"
+
+
+def _one_compound(conc, resp, cutoff):
+    n = len(conc)
+    obs = pd.DataFrame(
+        {
+            "Metadata_Plate": "P1",
+            "Metadata_Well": [f"W{index}" for index in range(n)],
+            "Metadata_Compound": "c",
+            "Metadata_Concentration": conc,
+            "Metadata_Control": [False] * n,
+            "hits_distance": resp,
+        },
+        index=[str(index) for index in range(n)],
+    )
+    adata = ad.AnnData(
+        X=np.zeros((n, 2), dtype=np.float32),
+        obs=obs,
+        var=pd.DataFrame(index=["Cells_AreaShape_a", "Cells_AreaShape_b"]),
+    )
+    stamp(adata, resolution="well")
+    mt.tl.dose_response(adata, min_doses=4, reference=None, cutoff=cutoff)
+    return adata.uns["mantispy"]["dose_response"].iloc[0]
+
+
+def test_the_hit_call_grades_the_same_curve_against_the_cutoff_it_is_given():
+    """The response tcplfit2 documents as its own example, read against three cutoffs.
+
+    A hit call is a confidence, not a verdict: the same curve is a clear hit against a low
+    cutoff, borderline when its top only just clears, and no hit when it does not.
+    """
+    conc = np.array([0.03, 0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0])
+    resp = np.array([0.0, 0.2, 0.1, 0.4, 0.7, 0.9, 0.6, 1.2])
+
+    clear, borderline, out_of_reach = (float(_one_compound(conc, resp, c)["hitcall"]) for c in (0.2, 1.0, 2.0))
+    assert clear > 0.95
+    assert 0.5 < borderline < clear, "a top that only just clears the cutoff is not a confident call"
+    assert out_of_reach < 0.05, "a cutoff above anything the curve reaches is not a hit"
+
+
+def test_a_curve_that_plateaus_is_read_by_the_logistic_and_one_still_rising_by_the_line():
+    """tcplfit2 carries ten models so that a curve without a plateau still gets called.
+
+    mantispy carries two, and picks between them by AIC.
+    """
+    conc = np.array([0.03, 0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0])
+    rng = np.random.default_rng(0)
+    plateauing = 1.0 / (1 + 10 ** ((np.log10(3.0) - np.log10(conc)) * 1.5)) + rng.normal(0, 0.03, len(conc))
+    still_rising = np.array([0.0, 0.2, 0.1, 0.4, 0.7, 0.9, 0.6, 1.2])
+
+    assert _one_compound(conc, plateauing, 0.2)["hitcall_model"] == "logistic"
+    assert _one_compound(conc, still_rising, 0.2)["hitcall_model"] == "linear"
