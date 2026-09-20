@@ -194,7 +194,9 @@ def transform_grouped(
     ``func(key, block)`` receives a group's rows as ``float32`` and returns the replacement block.
     The output is written into one preallocated ``float32`` array, so the peak cost is the input plus the output, with no full-size ``float64`` temporaries.
     """
-    out = np.empty_like(get_matrix(adata, layer))
+    # The shape and dtype of the buffer, not read off the matrix: get_matrix with no rows reads all of it,
+    # which for a backed object is a full read done only to be discarded.
+    out = np.empty((adata.n_obs, adata.n_vars), dtype=np.float32)
     for key, rows, block in iter_groups(adata, by, layer=layer):
         if rows.size:
             out[rows] = func(key, block).astype(np.float32, copy=False)

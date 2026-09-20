@@ -50,22 +50,42 @@ def test_aggregate_and_feature_select_match(backed, cells):
     np.testing.assert_array_equal(from_disk.var["selected"], in_memory.var["selected"])
 
 
-def test_per_group_reads_never_ask_for_the_whole_matrix(backed, monkeypatch):
-    """A grouped reduction reads one group at a time and never the whole matrix."""
+@pytest.fixture
+def reads(monkeypatch):
+    """Rows asked for by every read through the matrix seam, in call order."""
     from mantispy._core import _reduce
 
     original = _reduce.get_matrix
-    asked = []
+    asked: list[int] = []
 
     def recording(adata, layer=None, rows=None):
         asked.append(adata.n_obs if rows is None else len(rows))
         return original(adata, layer, rows)
 
     monkeypatch.setattr(_reduce, "get_matrix", recording)
+    return asked
+
+
+def test_per_group_reads_never_ask_for_the_whole_matrix(backed, reads):
+    """A grouped reduction reads one group at a time and never the whole matrix."""
+    from mantispy._core import _reduce
+
     _reduce.reduce_grouped(backed, "Metadata_Plate", _reduce.MEDIAN)
 
-    assert asked, "nothing was read through the seam"
-    assert max(asked) < backed.n_obs, f"a read of {max(asked)} rows is the whole matrix"
+    assert reads, "nothing was read through the seam"
+    assert max(reads) < backed.n_obs, f"a read of {max(reads)} rows is the whole matrix"
+
+
+def test_a_grouped_transform_sizes_its_buffer_without_reading(backed, reads):
+    """The output buffer is shaped from the object, so no read exists only to be thrown away."""
+    from mantispy._core import _reduce
+
+    out = _reduce.transform_grouped(backed, "Metadata_Plate", lambda _, block: block)
+
+    assert out.shape == backed.shape
+    assert out.dtype == np.float32
+    assert reads, "nothing was read through the seam"
+    assert max(reads) < backed.n_obs, f"a read of {max(reads)} rows is the whole matrix"
 
 
 def test_streamed_and_single_pass_reductions_agree(backed, cells):
