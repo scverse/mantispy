@@ -487,7 +487,7 @@ def stamp(adata: ad.AnnData, resolution: str = "well", copy: bool = False) -> ad
 
     Args:
         adata: The object to stamp.
-        resolution: What one row is, one of :data:`~mantispy._core.schema.RESOLUTIONS`. ``obs`` has to carry the columns that resolution requires.
+        resolution: What one row is: ``"cell"``, ``"well"`` or ``"perturbation"``. ``obs`` has to carry the columns that resolution requires.
         copy: Return a stamped copy instead of stamping in place.
 
     Returns:
