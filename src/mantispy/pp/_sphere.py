@@ -172,7 +172,7 @@ def _centre_scale(values: np.ndarray, reference: np.ndarray, where: str = "") ->
             "unscaled and are not comparable with the rest. Reduce to fewer components, or use more "
             "controls.",
             UserWarning,
-            stacklevel=3,
+            stacklevel=4,
         )
     return (values - centre) / np.where(scale == 0, 1.0, scale)
 
@@ -236,17 +236,22 @@ def tvn(
     Raises:
         KeyError: ``obs`` has no column ``batch_key`` or no column named by ``reference``, or ``obsm`` holds nothing under ``use_rep``.
         ValueError: ``reference`` selects no rows, or fewer than two in some batch, which leaves that batch's covariance undefined.
+        ValueError: A control covariance is singular even after ``epsilon``, so it cannot be inverted. Reachable by passing ``epsilon=0``.
 
     Notes:
         The rotation is fitted on the controls, so it keeps ``min(n_controls, n_features)`` components. With fewer controls than features the result is narrower than the input, which is why this writes ``obsm`` and never ``X``: ``var`` would no longer describe the columns.
 
         Batch correction methods disagree with each other often enough that one metric is not evidence. Compare this with :func:`~mantispy.pp.harmony` on the same object using :func:`~mantispy.metrics.evaluate_correction`, and on a screen with annotated perturbations also :func:`~mantispy.metrics.known_relationships`, which is the measure :cite:t:`Celik_2024` selects it by.
 
-        Measured that way, it trades replicate consistency for relationship recall. Over the six feature sets of :func:`~mantispy.ds.jump_lite` — five learned embeddings and one CellProfiler-equivalent, on four plates run at four laboratories — recall of the compounds sharing an annotated target rose sharply on every one of them, and retrieval of a perturbation's own replicates fell on all but one. On the same profiles :func:`~mantispy.pp.harmony` did the reverse: it left the least batch structure behind of the three, gave the best replicate retrieval, and left target recall at chance. Neither buys the other's gain, so which of the two readouts the screen is for is the question to answer before running either.
+        Measured that way, it tends to trade replicate consistency for relationship recall, where :func:`~mantispy.pp.harmony` trades the other way. Neither buys the other's gain, so which of the two readouts the screen is for is the question to answer before running either.
 
-        What it needs is controls, per batch and not in total, because the covariance it whitens each batch by is estimated from that batch's controls alone. On BBBC021, whose batches are 55 plates with six control wells each, it lowered mechanism retrieval at every width tried. Sixty-four control wells per batch was enough.
+        What it needs is controls, per batch and not in total, because the covariance it whitens each batch by is estimated from that batch's controls alone. A batch with fewer controls than the rotation has components cannot span the space, and the warning that says so is the sign to reduce to fewer components or to pool smaller batches together.
     """
     from sklearn.decomposition import PCA
+
+    # Checked before the rotation, which is the expensive part, so a mistyped column costs nothing.
+    if batch_key not in adata.obs:
+        raise KeyError(f"obs has no column {batch_key!r} naming the batches to align")
 
     values = representation(adata, use_rep)
     controls = reference_mask(adata, reference)
@@ -265,6 +270,7 @@ def tvn(
     order, offsets = group_offsets(codes, len(keys))
     batches = [order[offsets[group] : offsets[group + 1]] for group in range(len(keys))]
 
+    thin = []
     for key, rows in zip(keys, batches, strict=True):
         reference_rows = rows[controls[rows]]
         if reference_rows.size < 2:
@@ -273,7 +279,22 @@ def tvn(
                 "and aligning a batch needs at least 2 to estimate its covariance. Drop that batch, or "
                 "check that the platemap labels its controls."
             )
+        if reference_rows.size <= values.shape[1]:
+            thin.append(f"{key!r} ({reference_rows.size})")
         values[rows] = _centre_scale(values[rows], controls[rows], where=f" of batch {key!r}")
+
+    # Spread that is tiny rather than exactly zero, which is what a batch whose controls do not
+    # span the rotation produces, slips past the check inside _centre_scale and is divided by
+    # anyway. The output stays finite and plausible-looking, so nothing downstream reports it.
+    if thin:
+        warnings.warn(
+            f"{len(thin)} batch(es) have no more reference rows than the {values.shape[1]} component(s) "
+            f"they are scaled in, such as {', '.join(thin[:3])}. Their controls cannot span the space, so "
+            "the directions they leave empty are divided by near-zero spread and come out amplified. "
+            "Reduce to fewer components, or pool smaller batches together.",
+            UserWarning,
+            stacklevel=3,
+        )
 
     target = _symmetric_power(_regularized_covariance(values[controls], epsilon), 0.5)
     for rows in batches:

@@ -117,10 +117,33 @@ def test_tvn_aligns_the_batches_and_leaves_x_alone():
 
 def test_tvn_keeps_one_component_per_control_when_the_controls_are_few():
     """The rotation is fitted on the controls, so a control-poor screen comes back narrower
-    than it went in. That is why this writes obsm: var would no longer describe the columns."""
+    than it went in. That is why this writes obsm: var would no longer describe the columns.
+
+    Nine controls per batch against eighteen components is also the case the warning is for: the
+    directions a batch's controls do not span have spread that is tiny rather than zero, so the
+    check inside _centre_scale never fires and they are divided by it anyway.
+    """
     adata = _batched(n_batches=2, per_batch=12, n_features=20)
-    mt.pp.tvn(adata, use_rep=None)
+    with pytest.warns(UserWarning, match="no more reference rows than the 18 component"):
+        mt.pp.tvn(adata, use_rep=None)
     assert adata.obsm["X_tvn"].shape == (adata.n_obs, int(adata.obs["Metadata_Control"].sum()))
+    assert np.isfinite(adata.obsm["X_tvn"]).all()
+
+
+def test_tvn_reads_the_default_representation_and_can_leave_the_original_alone():
+    """Every other test passes use_rep=None, which is not the documented default: obsm['X_pca']
+    is, and a copy has to come back stamped with the result rather than writing through."""
+    import scanpy as sc
+
+    adata = _batched()
+    sc.pp.pca(adata, n_comps=5)
+
+    aligned = mt.pp.tvn(adata, key_added="X_aligned", copy=True)
+    assert aligned.obsm["X_aligned"].shape == (adata.n_obs, 5)
+    assert "X_aligned" not in adata.obsm
+
+    with pytest.raises(KeyError, match="Metadata_Nothing"):
+        mt.pp.tvn(adata, batch_key="Metadata_Nothing")
 
 
 def test_tvn_refuses_a_batch_it_cannot_estimate_a_covariance_for():

@@ -36,8 +36,8 @@ __all__ = [
     "rank_int",
     "regress_out",
     "sphere",
-    "tvn",
     "standardize_feature_names",
     "subset_features",
+    "tvn",
     "well_qc",
 ]
