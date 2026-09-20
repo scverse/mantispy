@@ -39,6 +39,28 @@ def test_the_dose_range_survives_the_join(oasis):
 
 
 @pytest.mark.network
+def test_one_concentration_written_twice_is_one_dose(oasis):
+    """Two plate maps write the dose to three decimals and the rest to four, so 3.704 and 3.7037 are one level."""
+    obs = oasis.obs
+    raw = obs["Metadata_Concentration"].to_numpy(dtype=float)
+    aligned = obs["Metadata_ConcentrationRounded"].to_numpy(dtype=float)
+    usable = np.isfinite(raw) & (raw > 0)
+
+    levels = np.unique(aligned[usable])
+    close = [(a, b) for a, b in zip(levels, levels[1:], strict=False) if b / a - 1 < 0.01]
+    assert not close, "two levels within 1% of each other are one dose written twice"
+    assert len(levels) < len(np.unique(raw[usable]))
+    # The dose a well was meant to get is one it was recorded at, never an average of two.
+    assert set(levels) <= set(np.unique(raw[usable]))
+    assert np.max(np.abs(aligned[usable] / raw[usable] - 1)) < 0.01, "no well moves more than the tolerance"
+
+    # Replicates of one treatment land in one group, which is what hit_calling and tl.map count.
+    treated = obs[~obs["Metadata_Control"]]
+    sizes = treated["Metadata_Perturbation"].astype(str).value_counts()
+    assert int((sizes < 3).sum()) < len(sizes) // 4, "most treatments keep three or more wells"
+
+
+@pytest.mark.network
 def test_annotate_false_leaves_the_profiles_alone(oasis):
     raw = mt.ds.oasis_pilot(annotate=False)
     assert raw.shape == oasis.shape
