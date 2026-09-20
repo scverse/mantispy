@@ -47,7 +47,7 @@ def test_cytotoxicity_flags_cell_loss_not_morphology(profiles):
     toxic = (profiles.obs["Metadata_Perturbation"] == "pert00").to_numpy()
     counts[toxic] = counts[toxic] // 5
     profiles.obs["Metadata_CellCount"] = counts
-    profiles.obs["hits_distance"] = np.where(toxic, 10.0, 1.0)
+    profiles.obs["hits_row_distance"] = np.where(toxic, 10.0, 1.0)
 
     mt.tl.cytotoxicity(profiles)
     table = profiles.uns["mantispy"]["cytotoxicity"].set_index("group")
@@ -63,12 +63,35 @@ def test_cell_loss_alone_is_not_suspect(profiles):
     quiet = (profiles.obs["Metadata_Perturbation"] == "pert01").to_numpy()
     counts[quiet] = counts[quiet] // 5
     profiles.obs["Metadata_CellCount"] = counts
-    profiles.obs["hits_distance"] = 1.0
+    profiles.obs["hits_row_distance"] = 1.0
 
     mt.tl.cytotoxicity(profiles)
     table = profiles.uns["mantispy"]["cytotoxicity"].set_index("group")
     assert table.loc["pert01", "viability"] < 0.5
     assert not bool(table.loc["pert01", "suspect"])
+
+
+def test_cytotoxicity_medians_the_rows_rather_than_a_group_statistic(profiles):
+    """Regression for #84.
+
+    ``hits_distance`` is one number repeated over a group's rows, so the median this function
+    documents returned the value it was handed, and no genuinely per-row response could be given.
+    """
+    toxic = (profiles.obs["Metadata_Perturbation"] == "pert00").to_numpy()
+    counts = profiles.obs["Metadata_CellCount"].to_numpy().copy()
+    counts[toxic] = counts[toxic] // 5
+    profiles.obs["Metadata_CellCount"] = counts
+    # A quiet group with one well far out, and the group statistic that would hide the difference.
+    rows = np.ones(profiles.n_obs)
+    rows[np.flatnonzero(toxic)[0]] = 100.0
+    profiles.obs["hits_row_distance"] = rows
+    profiles.obs["hits_distance"] = np.where(toxic, 100.0, 1.0)
+
+    mt.tl.cytotoxicity(profiles)
+    table = profiles.uns["mantispy"]["cytotoxicity"].set_index("group")
+    assert table.loc["pert00", "viability"] < 0.5
+    assert table.loc["pert00", "distance"] == 1.0, "one well far out does not move the group's median"
+    assert not bool(table.loc["pert00", "suspect"])
 
 
 def test_cytotoxicity_says_what_to_run_first(profiles):
@@ -78,7 +101,7 @@ def test_cytotoxicity_says_what_to_run_first(profiles):
 
 def test_a_missing_count_names_where_to_get_one(profiles):
     del profiles.obs["Metadata_CellCount"]
-    profiles.obs["hits_distance"] = 1.0
+    profiles.obs["hits_row_distance"] = 1.0
     with pytest.raises(KeyError, match="mt.tl.aggregate.*mt.ds.*count_key="):
         mt.tl.cytotoxicity(profiles)
 
@@ -88,7 +111,7 @@ def test_viability_compares_cells_per_field(profiles):
     halved = (profiles.obs["Metadata_Perturbation"] == "pert01").to_numpy()
     profiles.obs["Metadata_SiteCount"] = np.where(halved, 2.0, 4.0)
     profiles.obs["Metadata_CellCount"] = np.where(halved, 10.0, 20.0)
-    profiles.obs["hits_distance"] = 1.0
+    profiles.obs["hits_row_distance"] = 1.0
 
     mt.tl.cytotoxicity(profiles)
     assert profiles.uns["mantispy"]["cytotoxicity"].set_index("group").loc["pert01", "viability"] == 1.0
