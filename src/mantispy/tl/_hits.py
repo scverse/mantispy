@@ -85,7 +85,7 @@ def hit_calling(
     :func:`mantispy.tl.map` with ``mode="activity"`` ranks replicate pairs instead and is the usual
     readout on screens with little replication. JUMP-Target-2 read as a single plate gives every
     compound one well and is the common way to land in that regime, while the same plate map read
-    across its twelve plates gives twelve.
+    across several of them gives one well per plate.
 
     Distance from the controls also rises when a treatment kills cells. Read the calls beside a cell
     count, or beside :func:`mantispy.tl.cytotoxicity`, before taking them for morphology.

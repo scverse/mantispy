@@ -269,7 +269,7 @@ def pki(plates: Sequence[str] | None = None, cache_dir: str | Path | None = None
 def jump_target2(
     plates: Sequence[str] | None = TARGET2_DEFAULT, annotate: bool = True, cache_dir: str | Path | None = None
 ) -> AnnData:
-    """JUMP-Target-2, one 384-well plate map run at many sites.
+    """JUMP-Target-2, one plate map run at many sites.
 
     The JUMP consortium :cite:p:`Chandrasekaran_2023` ran the same plate map in every participating laboratory, so differences between plates from different sources are technical.
     This makes it suited to studying batch and source effects.
