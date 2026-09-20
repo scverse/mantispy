@@ -37,8 +37,14 @@ def transport(
 
     Raises:
         KeyError: There is no such table, or it holds no such level.
+        ValueError: That table is empty, which is what happens when no perturbation was shared by a comparable pair of settings.
     """
     table = _table(adata, key, "mt.tl.transport")
+    if table.empty:
+        raise ValueError(
+            f"uns['mantispy'][{key!r}] is empty; no perturbation was shared by a comparable pair of settings"
+        )
+
     levels = list(dict.fromkeys(table["level"]))
     chosen = level if level is not None else levels[-1]
     if chosen not in levels:

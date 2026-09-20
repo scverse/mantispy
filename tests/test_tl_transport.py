@@ -199,3 +199,13 @@ def test_the_null_is_every_mismatched_pair_not_a_sample(two_batches):
     floor = 1.0 / (n_groups * (n_groups - 1) + 1)
     assert smallest >= floor
     assert smallest <= 1.0 / n_groups, "a complete null over g groups resolves finer than 1/g"
+
+
+def test_an_empty_transport_table_says_so(two_batches):
+    """Regression test for #55: pl.transport failed on ``levels[-1]``, where its siblings name the empty table."""
+    mt.tl.transport(two_batches, by="Metadata_Plate")
+    store = two_batches.uns["mantispy"]
+    store["transport"] = store["transport"].iloc[:0]
+
+    with pytest.raises(ValueError, match="is empty"):
+        mt.pl.transport(two_batches)
