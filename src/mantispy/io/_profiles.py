@@ -480,25 +480,25 @@ def write(adata: ad.AnnData, path: str | Path) -> None:
         adata.write_h5ad(path)
 
 
-def stamp(adata: ad.AnnData, resolution: str = "well", copy: bool = False) -> ad.AnnData | None:
+def stamp(adata: ad.AnnData, resolution: str | None = None, copy: bool = False) -> ad.AnnData | None:
     """Mark an :class:`~anndata.AnnData` built elsewhere as a mantispy object.
 
     Every reader here, and every tool that returns a new object, records this already. This is the entry point for an object that did not come from one of them: a published ``h5ad``, another pipeline's output, a subset assembled in a notebook, or a matrix of learned embeddings with its metadata alongside.
 
     Args:
         adata: The object to stamp.
-        resolution: What one row is: ``"cell"``, ``"well"`` or ``"perturbation"``. ``obs`` has to carry the columns that resolution requires.
+        resolution: What one row is: ``"cell"``, ``"well"`` or ``"perturbation"``. ``obs`` has to carry the columns that resolution requires. The default keeps whatever resolution the object already records, and falls back to ``"well"`` for an object that records none, so re-stamping a subset does not quietly demote it.
         copy: Return a stamped copy instead of stamping in place.
 
     Returns:
         ``None``, or the stamped copy.
-        Writes the schema version and the resolution to ``uns["mantispy"]``.
+        Writes the schema version and the resolution to ``uns["mantispy"]``, and adds the missing feature-annotation columns to ``var``.
 
     Raises:
         ValueError: ``resolution`` is not one of the three, or ``obs`` lacks a column that resolution requires.
 
     Notes:
-        Only the ``obs`` columns the resolution requires are checked, because that is what the rest of the package dispatches on. :func:`validate` gives the full report, including what it warns about rather than blocks.
+        Only the ``obs`` columns the resolution requires are checked, because that is what the rest of the package dispatches on. :func:`validate` gives the full report, including what it warns about rather than blocks. ``X`` is one of the things it rather than this checks: the package stores features as ``float32``, and a matrix that came out of scikit-learn or :func:`numpy.load` is ``float64``, so an embedding usually wants ``adata.X = adata.X.astype("float32")`` before it is written.
 
         Any of the feature-annotation columns the schema requires that ``var`` does not already have are added empty, and columns already present are left as they are. They are not filled by parsing the feature names: the parser finds structure in names that have none — it reads ``openphenom_nahualX_17`` as the ``nahualX`` group of an ``openphenom`` object — and an embedding would then carry feature families named after the model's own tensors. An object read by :func:`read_profiles` already has the parsed annotation and keeps it.
 
@@ -510,17 +510,20 @@ def stamp(adata: ad.AnnData, resolution: str = "well", copy: bool = False) -> ad
         >>> adata = ad.AnnData(embeddings, obs=metadata)  # doctest: +SKIP
         >>> mt.io.stamp(adata, resolution="well")  # doctest: +SKIP
     """
+    if resolution is None:
+        resolution = adata.uns.get("mantispy", {}).get("resolution", "well")
     if resolution not in RESOLUTIONS:
         raise ValueError(f"resolution must be one of {RESOLUTIONS}, got {resolution!r}")
 
-    target = adata.copy() if copy else adata
-    missing_obs = [column for column in REQUIRED_OBS[resolution] if column not in target.obs]
+    # Checked before the copy, so a call that is going to be rejected does not duplicate X first.
+    missing_obs = [column for column in REQUIRED_OBS[resolution] if column not in adata.obs]
     if missing_obs:
         raise ValueError(
             f"obs is missing {missing_obs}, which every {resolution}-resolution object needs. Add the "
             "column(s), or stamp at a resolution whose requirements obs meets."
         )
 
+    target = adata.copy() if copy else adata
     absent = [column for column in REQUIRED_VAR if column not in target.var]
     if absent:
         empty = empty_annotation(target.var.index)

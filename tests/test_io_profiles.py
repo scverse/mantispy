@@ -426,6 +426,24 @@ def test_stamp_can_leave_the_original_alone():
     stamped = mt.io.stamp(adata, resolution="perturbation", copy=True)
     assert stamped.uns["mantispy"]["resolution"] == "perturbation"
     assert "mantispy" not in adata.uns
+    assert list(adata.var.columns) == []
+
+
+def test_stamp_keeps_the_resolution_the_object_already_records():
+    """A subset of a cell-resolution object is still cell-resolution, and the well default would
+    have demoted it silently: tl.aggregate then takes the non-cell branch and fills
+    Metadata_CellCount with NaN, which disables its min_cells filter."""
+    import anndata as ad
+
+    obs = pd.DataFrame({"Metadata_Plate": ["P1"] * 3, "Metadata_Well": ["A01"] * 3}, index=list("abc"))
+    adata = ad.AnnData(np.zeros((3, 2), dtype=np.float32), obs=obs)
+    mt.io.stamp(adata, resolution="cell")
+
+    mt.io.stamp(adata[:2].copy())
+    mt.io.stamp(adata)
+    assert adata.uns["mantispy"]["resolution"] == "cell"
+    assert mt.io.stamp(adata, resolution="well") is None
+    assert adata.uns["mantispy"]["resolution"] == "well"
 
 
 def test_stamp_lets_a_learned_embedding_be_written(tmp_path):
@@ -465,3 +483,22 @@ def test_stamp_keeps_an_annotation_that_is_already_there():
 
     mt.io.stamp(adata, resolution="well")
     pd.testing.assert_series_equal(adata.var["feature_group"], parsed)
+
+
+def test_stamp_fills_only_the_annotation_columns_that_are_missing():
+    """An object hand-built with part of the annotation is the case where the merge can go wrong:
+    the columns that are there have to survive, and the ones added have to be categorical, because
+    an object array of NaN cannot be written to h5ad."""
+    import anndata as ad
+
+    obs = pd.DataFrame({"Metadata_Plate": ["P1"] * 2, "Metadata_Well": ["A01", "A02"]}, index=list("ab"))
+    adata = ad.AnnData(np.zeros((2, 3), dtype=np.float32), obs=obs)
+    adata.var["object"] = pd.Categorical(["Cells", "Nuclei", "Cells"])
+    adata.var["is_feature"] = [True, True, False]
+
+    mt.io.stamp(adata)
+    assert list(adata.var["object"]) == ["Cells", "Nuclei", "Cells"]
+    assert list(adata.var["is_feature"]) == [True, True, False]
+    assert adata.var["feature_group"].isna().all()
+    assert isinstance(adata.var["feature_group"].dtype, pd.CategoricalDtype)
+    assert mt.io.validate(adata).ok
