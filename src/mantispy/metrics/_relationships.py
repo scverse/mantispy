@@ -108,7 +108,7 @@ def known_relationships(
 
     Args:
         adata: One profile per perturbation, normally the output of :func:`~mantispy.tl.consensus`.
-        net: The annotation, with :data:`SET_COLUMNS`, as :func:`~mantispy.tl.gene_sets` returns it: two perturbations are related when they share a set, which also expresses a mechanism of action shared by several compounds. A pair is counted once whichever way round it appears, and nothing is paired with itself. The reference gene sets — CORUM, hu.MAP, Reactome, SIGNOR, StringDB — are distributed as one pair per row, which becomes this shape with ``pairs.assign(source=pairs.index.astype(str)).melt(id_vars="source", value_name="target")[["source", "target"]]``; :func:`~mantispy.ds.jump_lite_targets` is an example of a loader that does the conversion for you.
+        net: The annotation, with a ``source`` column naming a set and a ``target`` column naming one of its members, as :func:`~mantispy.tl.gene_sets` returns it: two perturbations are related when they share a set, which also expresses a mechanism of action shared by several compounds. A pair is counted once whichever way round it appears, and nothing is paired with itself. The reference gene sets — CORUM, hu.MAP, Reactome, SIGNOR, StringDB — are distributed as one pair per row, which becomes this shape with ``pairs.assign(source=pairs.index.astype(str)).melt(id_vars="source", value_name="target")[["source", "target"]]``.
         label_key: ``obs`` column holding the perturbation label, normally a gene symbol. Labels are matched to the annotation exactly, as the reference implementation matches them, so a screen that writes its symbols in another case recalls nothing.
         metric: Similarity between profiles, ``"cosine"`` or ``"pearson"``.
         use_rep: Measure in ``obsm[use_rep]`` instead of ``X``.
@@ -121,8 +121,8 @@ def known_relationships(
     Raises:
         KeyError: ``obs`` has no column ``label_key``.
         ValueError: ``label_key`` repeats a label, so a pair of labels would not be a pair of profiles. Aggregate first with ``adata = mt.tl.consensus(adata)``.
-        ValueError: ``net`` lacks :data:`SET_COLUMNS`, or relates no two perturbations that were both profiled.
-        ValueError: The sets expand into more than :data:`MAX_PAIRS` pairs.
+        ValueError: ``net`` lacks ``source`` or ``target``, or relates no two perturbations that were both profiled.
+        ValueError: The sets expand into more pairs than the module's ``MAX_PAIRS`` cap allows.
 
     Notes:
         Read this against the 2 × ``percentile`` baseline, not against 100%. Annotated pairs are noisy — two genes share a complex and still do different things — so published maps recover a minority of them, and the number ranks pipelines against each other rather than standing on its own :cite:p:`Celik_2024`.
