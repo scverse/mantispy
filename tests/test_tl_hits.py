@@ -44,6 +44,17 @@ def test_hit_calling_corrects_and_joins_back(scored):
     assert np.isfinite(scored.obs["hits_distance"]).all()
 
 
+def test_the_controls_that_fitted_the_transform_are_marked(scored):
+    """Regression for #83: anything reading a scale off the controls needs to know which half is honest."""
+    mt.tl.hit_calling(scored, n_permutations=200, seed=0)
+    held_out = scored.obs["hits_reference_held_out"].to_numpy(dtype=bool)
+    is_control = scored.obs["Metadata_Control"].to_numpy(dtype=bool)
+
+    assert not held_out[~is_control].any(), "a treated row was never a candidate for the reference"
+    # The split halves the controls, and the other half is the one that placed the centroid.
+    assert 0 < held_out.sum() < is_control.sum()
+
+
 def test_hit_calling_is_reproducible(scored):
     mt.tl.hit_calling(scored, n_permutations=200, seed=3)
     first = scored.uns["mantispy"]["hits"]["pvalue"].to_numpy()
