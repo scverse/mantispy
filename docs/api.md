@@ -323,6 +323,8 @@ Plotting functions return Matplotlib axes and do not modify the object.
     ds.amish
     ds.chroma
     ds.jump_crispr
+    ds.jump_lite
+    ds.jump_lite_targets
     ds.luad
     ds.miami
     ds.neuropainting

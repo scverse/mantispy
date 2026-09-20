@@ -578,6 +578,92 @@ def miami(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
     return _profiles("miami", cache_dir, **kwargs)
 
 
+#: The feature sets JUMP-Lite publishes for one set of wells: five learned embeddings, and the
+#: CellProfiler-equivalent measurements of ``cp_measure`` for comparison on the same rows.
+JUMP_LITE_MODELS = ("openphenom", "dinov2", "dinov2_random", "subcell", "morphem", "cp_measure")
+
+
+def jump_lite(
+    model: str = "openphenom", annotate: bool = True, cache_dir: str | Path | None = None, **kwargs: Any
+) -> AnnData:
+    """JUMP-Lite Target-2: 1,536 wells, four imaging sites, one feature set at a time.
+
+    ``cpg0016-jump``, the compact benchmark of :cite:t:`Munoz_2026`. Four plates of the JUMP Target-2 plate map, one from each of ``source_3``, ``source_4``, ``source_5`` and ``source_6``, so the four batches are four different laboratories running the same 302 compounds with 64 DMSO wells each.
+
+    Every ``model`` covers the same 1,536 wells, which is what makes this a comparison rather than six datasets: the rows and the metadata are identical and only the feature block changes. Five are learned embeddings and one, ``"cp_measure"``, is the CellProfiler-equivalent measurement of the same images.
+
+    Args:
+        model: Which feature set to read, one of :data:`JUMP_LITE_MODELS`. ``"dinov2_random"`` is the same architecture with untrained weights, which is the null model the benchmark scores the others against.
+        annotate: Join the JUMP well and compound tables, which name the compound of each well.
+            Downloads about 14 MB once and caches it.
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
+        kwargs: Passed to :func:`mantispy.io.read_profiles`.
+
+    Returns:
+        Wells by features at well resolution, indexed by plate and well, with ``Metadata_Source``, ``Metadata_Batch``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_CellCount`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_InChIKey`` and ``Metadata_Control``.
+
+    Raises:
+        ValueError: ``model`` is not one of :data:`JUMP_LITE_MODELS`.
+
+    Notes:
+        A learned embedding has no feature names to parse, so ``var`` carries the schema's annotation columns with nothing in them. Anything that reads ``var["feature_group"]`` or ``var["channel"]``, such as the feature families :func:`~mantispy.pl.effect_sizes` colours by, has nothing to work with here.
+
+        The embeddings are not normalized. They are the model's output on each well's images, so a per-plate control normalization is still the first step.
+
+    References:
+        :cite:t:`Munoz_2026`, :cite:t:`Chandrasekaran_2023`, :cite:t:`Weisbart_2024`.
+    """
+    if model not in JUMP_LITE_MODELS:
+        raise ValueError(f"model must be one of {JUMP_LITE_MODELS}, got {model!r}")
+
+    adata = _profiles("jump_lite", cache_dir, select=lambda name: name == f"{model}.parquet", **kwargs)
+    (counts_path,) = _files("jump_lite", cache_dir, select=lambda name: name == "cell_count.parquet")
+    counts = pd.read_parquet(counts_path, columns=["Metadata_id", "cell_count"])
+
+    obs = as_frame(adata.obs)
+    joined = obs.merge(counts, on="Metadata_id", how="left", validate="1:1")
+    joined.index = obs.index
+    adata.obs = joined.rename(columns={"cell_count": "Metadata_CellCount"})
+
+    if annotate:
+        from mantispy.pp._annotate import annotate_jump
+
+        annotate_jump(adata)
+    get_logger().info(
+        "jump_lite(%s): %d wells x %d features over %d source(s)",
+        model,
+        adata.n_obs,
+        adata.n_vars,
+        int(as_frame(adata.obs)["Metadata_Source"].nunique()),
+    )
+    return adata
+
+
+def jump_lite_targets(cache_dir: str | Path | None = None) -> pd.DataFrame:
+    """The gene each JUMP compound is annotated to act on, as a set per target.
+
+    RefChemDB annotations distributed with :cite:t:`Munoz_2026`, in the ``source``/``target`` shape :func:`~mantispy.metrics.known_relationships` reads, so two compounds annotated to the same gene count as a related pair.
+
+    Args:
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
+
+    Returns:
+        A frame with ``source``, the gene symbol, and ``target``, the ``Metadata_JCP2022`` of a compound annotated to it. One row per annotated pairing, over every JUMP compound rather than only those of :func:`jump_lite`.
+
+    Notes:
+        The annotation is sparse against a plate map. Of the 302 compounds on the JUMP-Lite plates, 112 carry an annotation at all, and they share 402 targets that have more than one compound, which is what the recall is computed over.
+
+    References:
+        :cite:t:`Munoz_2026`.
+    """
+    (path,) = _files("jump_lite", cache_dir, select=lambda name: name == "refchem_annotations.parquet")
+    frame = pd.read_parquet(path, columns=["target", "Metadata_JCP2022"])
+    frame = frame.rename(columns={"target": "source", "Metadata_JCP2022": "target"}).astype(str)
+    return frame.drop_duplicates().reset_index(drop=True)
+
+
 def jump_crispr(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
     """The assembled JUMP CRISPR arm, 51,185 wells of knockouts.
 

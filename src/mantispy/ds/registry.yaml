@@ -2286,6 +2286,40 @@ datasets:
       s3_key: cpg0016-jump-assembled/source_all/workspace/profiles_assembled/CRISPR/v1.0a/profiles_wellpos_cc_var_mad_outlier_featselect.parquet
       sha256: 2f52c600db35d9cc23645d6d94685ceb0df986c23d48c81499bf5f76df7b43b2
 
+  jump_lite:
+    type: mantispy
+    doc_header: JUMP-Lite Target-2, the same 1,536 wells embedded by five models and measured by cp_measure.
+    accession: cpg0016-jump
+    shape: [1536, 384]
+    read:
+      objects: null
+      index_columns: [Metadata_Plate, Metadata_Well]
+    files:
+    - name: openphenom.parquet
+      s3_key: cpg0016-jump/source_all/workspace/publication_data/2026_jump_lite/target_2/v1.0/profiles/deep_learning/openphenom/jpegxl_lossy_mq/profiles.parquet
+      sha256: 7cb8f7fa169a851b9e42ab2e412ea2eb9ea235fe820c383ad08ba4286ce546a0
+    - name: dinov2.parquet
+      s3_key: cpg0016-jump/source_all/workspace/publication_data/2026_jump_lite/target_2/v1.0/profiles/deep_learning/dinov2/jpegxl_lossy_mq/profiles.parquet
+      sha256: 3f9ba51e96bb0db4c43f7f773be21ee4b186573bc4ea4e2da9ae2bdbf0d103cd
+    - name: dinov2_random.parquet
+      s3_key: cpg0016-jump/source_all/workspace/publication_data/2026_jump_lite/target_2/v1.0/profiles/deep_learning/dinov2_random/jpegxl_lossy_mq/profiles.parquet
+      sha256: 9846dceb04fe978e04f0ad6805609c7fea8d3f089f2692cfe19524f52db5cd65
+    - name: subcell.parquet
+      s3_key: cpg0016-jump/source_all/workspace/publication_data/2026_jump_lite/target_2/v1.0/profiles/deep_learning/subcell__clip01/jpegxl_lossy_mq/profiles.parquet
+      sha256: 80855ee6458775227746225b38a1d72993a7454749bd9f48c7c0ad09d1b81bed
+    - name: morphem.parquet
+      s3_key: cpg0016-jump/source_all/workspace/publication_data/2026_jump_lite/target_2/v1.0/profiles/deep_learning/morphem/jpegxl_lossy_mq/profiles.parquet
+      sha256: c3d9b7e4a52cdc52aed3abd4da406147c9d8dd33531dfca77fb2f52c83a8cbb7
+    - name: cp_measure.parquet
+      s3_key: cpg0016-jump/source_all/workspace/publication_data/2026_jump_lite/target_2/v1.0/profiles/cp_measure/jpegxl_lossy_mq/profiles.parquet
+      sha256: 4263a0340c19f7fbaf7612d3e2ee220d7b6b77a381db95953894881a57fde7cd
+    - name: cell_count.parquet
+      s3_key: cpg0016-jump/source_all/workspace/publication_data/2026_jump_lite/target_2/v1.0/profiles/cell_count/jpegxl_lossy_mq/cell_counts.parquet
+      sha256: 3826de923a2cc10f0db4b21b162ceb356cce13398212b87fed0388046b3efeef
+    - name: refchem_annotations.parquet
+      s3_key: cpg0016-jump/source_all/workspace/publication_data/2026_jump_lite/metadata/v1.0/jump_lite_refchem_annotations.parquet
+      sha256: 5a766a222907e1b3805f84cc2eccad0e5cd2f3eaac1add4983689853601db960
+
   jump_target2:
     type: mantispy
     doc_header: JUMP-Target-2, one plate map run at eleven sources, 141 plates.
