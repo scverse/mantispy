@@ -190,7 +190,7 @@ def test_the_direction_plot_bands_the_ladder_by_phase():
     # One band per concentration, plus the two lines it reads against.
     assert len(ax.patches) == len(table)
     drawn = {patch.get_facecolor() for patch in ax.patches}
-    expected = {mt.pl.PHASE_COLORS[phase] for phase in table["phase"]}
+    expected = {mt.pl.DOSE_PHASE_COLOURS[phase] for phase in table["phase"]}
     assert len(drawn) == len(expected), "each phase present gets its own colour"
     assert len(ax.lines) == 4, "two curves and the two floors"
     plt.close(ax.figure)

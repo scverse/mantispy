@@ -245,9 +245,9 @@ def dose_response(
     return ax
 
 
-#: Background colour of each phase, from ``mantispy.tl.PHASES``. Grey where nothing happens, warm where it
-#: does, and red where the cells are gone.
-PHASE_COLORS = {
+#: Background colour of each phase, from ``mantispy.tl.DOSE_PHASES``. Grey where nothing happens, warm
+#: where it does, and red where the cells are gone.
+DOSE_PHASE_COLOURS = {
     "silent": "#f2f2f2",
     "responding": "#fde6c4",
     "saturated": "#dbe8d4",
@@ -291,14 +291,11 @@ def dose_direction(
     # Each concentration owns the ladder up to halfway to its neighbours, measured in log dose, and half a step
     # past the two ends.
     log_dose = np.log10(doses)
-    middles = (log_dose[:-1] + log_dose[1:]) / 2 if len(doses) > 1 else np.array([log_dose[0]])
-    edges = 10.0 ** np.concatenate(
-        [[2 * log_dose[0] - middles[0]], middles, [2 * log_dose[-1] - middles[-1]]]
-        if len(doses) > 1
-        else [[log_dose[0] - 0.3], [log_dose[0] + 0.3]]
-    )
+    gaps = np.diff(log_dose) if len(doses) > 1 else np.array([0.6])
+    padded = np.concatenate([[log_dose[0] - gaps[0]], log_dose, [log_dose[-1] + gaps[-1]]])
+    edges = 10.0 ** ((padded[:-1] + padded[1:]) / 2)
     for index, phase in enumerate(block["phase"]):
-        ax.axvspan(edges[index], edges[index + 1], color=PHASE_COLORS.get(str(phase), "#ffffff"), lw=0, zorder=0)
+        ax.axvspan(edges[index], edges[index + 1], color=DOSE_PHASE_COLOURS.get(str(phase), "#ffffff"), lw=0, zorder=0)
 
     floor = float(np.nanmedian(block["amplitude_null"].to_numpy(dtype=float)))
     ax.axhline(floor, ls=":", lw=1, color="0.45", zorder=1)

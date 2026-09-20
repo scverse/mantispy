@@ -12,12 +12,14 @@ import numpy as np
 import pandas as pd
 from anndata import AnnData
 
+from mantispy._core._numba import group_offsets
 from mantispy._core._reduce import get_matrix
 from mantispy._core._stats import MAD_TO_SIGMA, benjamini_hochberg
 from mantispy._core.frames import as_frame
-from mantispy._core.logging import get_logger
+from mantispy._core.logging import get_logger, report_drop
 from mantispy._core.masks import reference_mask
 from mantispy._core.mutation import inplace_or_copy
+from mantispy._core.provenance import record_params
 from mantispy._core.schema import stamp
 
 #: Column order of the output table, so an empty result still carries its columns.
@@ -379,9 +381,7 @@ def dose_response(
     from scipy.stats import ConstantInputWarning, spearmanr
 
     obs = as_frame(adata.obs)
-    for column in (compound_key, dose_key):
-        if column not in obs:
-            raise KeyError(f"obs has no column {column!r}")
+    _require_columns(obs, compound_key, dose_key)
     if response not in obs:
         raise KeyError(
             f"obs has no column {response!r} to use as the response; run mt.tl.hit_calling first, which "
@@ -468,14 +468,15 @@ _DIRECTION_COLUMNS = (
 )
 
 #: What a concentration is doing, in the order they normally appear along a ladder.
-PHASES = ("silent", "responding", "saturated", "cytotoxic")
+DOSE_PHASES = ("silent", "responding", "saturated", "cytotoxic")
 
 
-def _feature_baseline_and_spread(adata: AnnData, reference: str | None) -> tuple[np.ndarray, np.ndarray]:
-    """Where the controls sit on each feature and how far they wobble, the ToxCast ``bmed`` and ``bmad`` per feature.
+def _control_scale(adata: AnnData, reference: str | None) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """The controls' centre and spread per feature, which features have one, and which rows the controls are.
 
-    A feature whose controls show no spread has no scale to read a response against, and comes back with a spread
-    of NaN so the caller can drop it.
+    The centre and the spread are the ToxCast pipeline's ``bmed`` and ``bmad``. A feature whose controls show no
+    spread has no scale to read a response against and is left out, so the two arrays come back already narrowed
+    to ``keep``.
     """
     rows = reference_mask(adata, reference)
     if int(rows.sum()) < 2:
@@ -486,8 +487,24 @@ def _feature_baseline_and_spread(adata: AnnData, reference: str | None) -> tuple
         )
     control = get_matrix(adata, rows=np.flatnonzero(rows)).astype(np.float64)
     baseline = np.nanmedian(control, axis=0)
-    spread = MAD_TO_SIGMA * np.nanmedian(np.abs(control - baseline), axis=0)
-    return baseline, np.where((spread > 0) & np.isfinite(spread), spread, np.nan)
+    # In place: two more copies of the control block would be the largest allocation in the function.
+    control -= baseline
+    np.abs(control, out=control)
+    spread = MAD_TO_SIGMA * np.nanmedian(control, axis=0)
+    keep = np.flatnonzero((spread > 0) & np.isfinite(spread))
+    report_drop(
+        "feature(s) with no spread among the controls",
+        adata.n_vars - keep.size,
+        adata.n_vars,
+        remedy="run mt.pp.normalize and drop the features flagged by var['degenerate_scale']",
+    )
+    return baseline[keep], spread[keep], keep, rows
+
+
+def _z_rows(adata: AnnData, rows: np.ndarray, baseline: np.ndarray, spread: np.ndarray, keep: np.ndarray) -> np.ndarray:
+    """Those rows' response in MADs of the controls, over the features the controls give a scale for."""
+    with np.errstate(invalid="ignore"):
+        return (get_matrix(adata, rows=rows)[:, keep].astype(np.float64) - baseline) / spread
 
 
 def _bin_doses(doses: np.ndarray, tolerance: float) -> np.ndarray:
@@ -503,14 +520,15 @@ def _bin_doses(doses: np.ndarray, tolerance: float) -> np.ndarray:
     unique = np.unique(doses)
     if tolerance <= 0 or unique.size == 0:
         return doses
-    log = np.log10(unique)
-    group = np.zeros(unique.size, dtype=np.int64)
-    start = log[0]
-    for index in range(1, unique.size):
-        opens = log[index] - start >= tolerance
-        group[index] = group[index - 1] + opens
-        start = log[index] if opens else start
-    centre = pd.Series(unique).groupby(group).transform("median").to_numpy()
+    group = np.empty(unique.size, dtype=np.int64)
+    current, start = 0, np.log10(unique[0])
+    for index, value in enumerate(np.log10(unique)):
+        if value - start >= tolerance:
+            current, start = current + 1, value
+        group[index] = current
+    # A pandas groupby here costs more than the whole rest of the function, on twenty elements.
+    starts = np.flatnonzero(np.diff(group, prepend=-1))
+    centre = np.repeat([np.median(run) for run in np.split(unique, starts[1:])], np.diff(np.append(starts, group.size)))
     return centre[np.searchsorted(unique, doses)]
 
 
@@ -528,23 +546,46 @@ def _spearman_against(values: np.ndarray, block: np.ndarray) -> tuple[np.ndarray
     centred = ranks - ranks.mean(axis=0)
     norms = np.sqrt(np.sum(centred**2, axis=0))
     with np.errstate(invalid="ignore", divide="ignore"):
-        rho = np.clip(np.sum(centred[:, :1] * centred, axis=0) / (norms[0] * norms), -1.0, 1.0)[1:]
+        rho = np.clip(centred.T @ centred[:, 0] / (norms[0] * norms), -1.0, 1.0)[1:]
         statistic = rho * np.sqrt((ranks.shape[0] - 2) / (1.0 - rho**2))
     pvalue = 2.0 * t.sf(np.abs(statistic), ranks.shape[0] - 2)
     return rho, np.where(np.isfinite(rho), pvalue, np.nan)
 
 
+def _nanmedian(block: np.ndarray) -> np.ndarray:
+    """Median down the rows, skipping missing values, for the short and wide blocks this module works on.
+
+    ``np.nanmedian`` routes anything under 600 rows through a masked array and ``np.ma.median``, which is pure
+    Python; a dose group is four to eight rows, so every median here takes that path and spends about ninety-nine
+    percent of its time on the wrapper. Sorting puts the missing values last, so the median is the middle of
+    however many were measured.
+    """
+    ordered = np.sort(block, axis=0)
+    measured = block.shape[0] - np.isnan(block).sum(axis=0)
+    columns = np.arange(block.shape[1])
+    low = ordered[np.maximum((measured - 1) // 2, 0), columns]
+    high = ordered[np.maximum(measured // 2, 0), columns]
+    return np.where(measured > 0, 0.5 * (low + high), np.nan)
+
+
+def _groups(codes: np.ndarray, n_groups: int) -> list[np.ndarray]:
+    """Row indices of each group, taken once rather than by scanning the codes per group."""
+    order, offsets = group_offsets(np.ascontiguousarray(codes, dtype=np.int32), n_groups)
+    return [order[offsets[index] : offsets[index + 1]] for index in range(n_groups)]
+
+
 def _dose_medians(block: np.ndarray, doses: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """The sorted doses, and each one's median profile over its replicate rows."""
-    order = np.unique(doses)
-    return order, np.stack([np.nanmedian(block[doses == dose], axis=0) for dose in order])
+    order, codes = np.unique(doses, return_inverse=True)
+    return order, np.stack([_nanmedian(block[rows]) for rows in _groups(codes, order.size)])
 
 
 def _benchmark_dose(doses: np.ndarray, z: np.ndarray, cutoff: float) -> np.ndarray:
     """Lowest dose at which each feature reaches ``cutoff``, interpolated between the doses either side of it.
 
     A feature that never reaches the cutoff has no benchmark dose and comes back NaN. One already past it at the
-    lowest dose tested gets that dose, which is a bound rather than an estimate.
+    lowest dose tested gets that dose, which is a bound rather than an estimate: clamping ``previous`` to the
+    first dose leaves it no span to interpolate across, so the crossing falls on the dose itself.
     """
     over = np.abs(z) >= cutoff
     first = np.argmax(over, axis=0)
@@ -552,10 +593,9 @@ def _benchmark_dose(doses: np.ndarray, z: np.ndarray, cutoff: float) -> np.ndarr
     columns = np.arange(z.shape[1])
     log_dose = np.log10(doses)
     low, high = np.abs(z[previous, columns]), np.abs(z[first, columns])
-    with np.errstate(invalid="ignore", divide="ignore"):
-        span = high - low
-        fraction = np.where(span > 0, (cutoff - low) / span, 0.0)
-        crossing = log_dose[previous] + fraction * (log_dose[first] - log_dose[previous])
+    span = high - low
+    fraction = np.divide(cutoff - low, span, out=np.zeros_like(span), where=span > 0)
+    crossing = log_dose[previous] + fraction * (log_dose[first] - log_dose[previous])
     return np.where(over.any(axis=0), 10.0**crossing, np.nan)
 
 
@@ -564,12 +604,13 @@ def _usable_doses(
 ) -> dict[str, tuple[np.ndarray, np.ndarray]]:
     """Each compound's treated rows and their binned doses, leaving out the controls and the zero doses."""
     doses = obs[dose_key].to_numpy(dtype=float)
-    compounds = obs[compound_key].to_numpy()
     usable = np.isfinite(doses) & (doses > 0) & ~control
+    selected = np.flatnonzero(usable)
+    codes, keys = pd.factorize(obs[compound_key].to_numpy()[usable], sort=True)
     blocks = {}
-    for compound in pd.unique(compounds[usable]):
-        rows = np.flatnonzero(usable & (compounds == compound))
-        blocks[compound] = (rows, _bin_doses(doses[rows], tolerance))
+    for key, within in zip(keys, _groups(codes, len(keys)), strict=True):
+        rows = selected[within]
+        blocks[key] = (rows, _bin_doses(doses[rows], tolerance))
     return blocks
 
 
@@ -637,37 +678,28 @@ def dose_features(
     """
     obs = as_frame(adata.obs)
     _require_columns(obs, compound_key, dose_key)
-    baseline, spread = _feature_baseline_and_spread(adata, reference)
-    scaled = np.flatnonzero(np.isfinite(spread))
-    if scaled.size < adata.n_vars:
-        get_logger().info(
-            "dose_features: %d of %d features have no spread among the controls and are left out",
-            adata.n_vars - scaled.size,
-            adata.n_vars,
-        )
+    baseline, spread, keep, control = _control_scale(adata, reference)
+    names = np.asarray(adata.var_names)[keep]
 
-    names = np.asarray(adata.var_names)[scaled]
-    control = reference_mask(adata, reference)
     frames = []
     for compound, (rows, doses) in _usable_doses(obs, compound_key, dose_key, control, dose_tolerance).items():
         n_doses = len(np.unique(doses))
         if n_doses < min_doses:
             get_logger().debug("dose_features skipped %s: %d usable dose(s)", compound, n_doses)
             continue
-        block = get_matrix(adata, rows=rows).astype(np.float64)[:, scaled]
-        order, medians = _dose_medians(block, doses)
-        with np.errstate(invalid="ignore"):
-            z = (medians - baseline[scaled]) / spread[scaled]
+        block = _z_rows(adata, rows, baseline, spread, keep)
+        order, z = _dose_medians(block, doses)
         rho, pvalue = _spearman_against(np.log10(doses), block)
-        extreme = np.nanargmax(np.abs(np.nan_to_num(z, nan=0.0)), axis=0)
+        # The concentration each feature reached furthest at, and which way it went.
+        peak = z[np.argmax(np.abs(np.nan_to_num(z, nan=0.0)), axis=0), np.arange(z.shape[1])]
         frame = pd.DataFrame(
             {
                 "compound": str(compound),
                 "feature": names,
                 "n_doses": n_doses,
                 "bmd": _benchmark_dose(order, z, cutoff_mads),
-                "max_z": np.abs(z[extreme, np.arange(z.shape[1])]),
-                "direction": np.sign(z[extreme, np.arange(z.shape[1])]),
+                "max_z": np.abs(peak),
+                "direction": np.sign(peak),
                 "spearman": rho,
                 "pvalue": pvalue,
             }
@@ -680,7 +712,7 @@ def dose_features(
     adata.uns.setdefault("mantispy", {})[key_added] = table[columns]
     get_logger().info(
         "dose_features: %d of %d compound-feature pairs reach %.1f MADs",
-        int(table["bmd"].notna().sum()) if len(table) else 0,
+        int(table["bmd"].notna().sum()),
         len(table),
         cutoff_mads,
     )
@@ -701,12 +733,19 @@ def _amplitude(profile: np.ndarray) -> float:
     return float(np.sqrt(np.mean(measured**2))) if measured.size else np.nan
 
 
-def _halves(labels: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Two masks over the rows, splitting them by alternate levels of ``labels``, or by position as a fallback."""
+def _split_half_cosine(block: np.ndarray, labels: np.ndarray) -> float:
+    """Cosine between the two halves' median profiles, split by alternate levels of ``labels``.
+
+    Halving by plate asks whether the direction survives a different plate, which is the harder and more useful
+    question. A column with one level falls back to splitting by position, and one well at a concentration has no
+    halves to compare, so it comes back NaN.
+    """
     left = np.isin(labels, pd.unique(labels)[::2])
-    if left.all() or not left.any():
+    if left.all():
         left = np.arange(labels.size) % 2 == 0
-    return left, ~left
+    if left.all() or not left.any():
+        return np.nan
+    return _cosine(_nanmedian(block[left]), _nanmedian(block[~left]))
 
 
 #: Control groups drawn per layout to estimate the amplitude floor. The median of this many is stable to about 5%.
@@ -724,24 +763,23 @@ def _null_amplitude(control: np.ndarray, levels: np.ndarray, wanted: dict[object
     if any(pools[level].size < count for level, count in wanted.items()):
         return np.nan
     generator = np.random.default_rng(0)
-    draws = [
-        _amplitude(
-            np.nanmedian(
-                control[
-                    np.concatenate(
-                        [generator.choice(pools[level], count, replace=False) for level, count in wanted.items()]
-                    )
-                ],
-                axis=0,
-            )
-        )
-        for _ in range(_NULL_DRAWS)
-    ]
-    return float(np.median(draws))
+
+    def draw() -> float:
+        rows = np.concatenate([generator.choice(pools[level], count, replace=False) for level, count in wanted.items()])
+        return _amplitude(_nanmedian(control[rows]))
+
+    return float(np.median([draw() for _ in range(_NULL_DRAWS)]))
 
 
-def _viability(adata: AnnData, count_key: str, site_key: str | None, control: np.ndarray) -> np.ndarray:
-    """Each row's cell count against the controls' median, per field of view where the fields are known."""
+def _viability(
+    adata: AnnData, count_key: str, site_key: str | None, control: np.ndarray, levels: np.ndarray
+) -> np.ndarray:
+    """Each row's cell count against its own plate's controls, per field of view where the fields are known.
+
+    Against the whole screen's controls it would not be a viability at all. Plates are seeded and imaged
+    separately and their control counts differ by a factor of two on the OASIS pilot, so a plate that happens to
+    be dense reads as a plate whose treated wells are dying.
+    """
     obs = as_frame(adata.obs)
     if count_key not in obs:
         get_logger().info(
@@ -750,18 +788,31 @@ def _viability(adata: AnnData, count_key: str, site_key: str | None, control: np
             count_key,
         )
         return np.full(adata.n_obs, np.nan)
+
     counts = obs[count_key].to_numpy(dtype=float)
     if site_key is not None and site_key in obs:
         counts = counts / np.maximum(obs[site_key].to_numpy(dtype=float), 1)
-    reference = float(np.nanmedian(counts[control]))
-    if not np.isfinite(reference) or reference <= 0:
-        get_logger().info("dose_direction: the controls have no usable %r, so no viability is read", count_key)
-        return np.full(adata.n_obs, np.nan)
-    return counts / reference
+
+    viability = np.full(adata.n_obs, np.nan)
+    unreferenced = 0
+    for level in pd.unique(levels):
+        on = levels == level
+        reference = float(np.nanmedian(counts[on & control])) if (on & control).any() else np.nan
+        if np.isfinite(reference) and reference > 0:
+            viability[on] = counts[on] / reference
+        else:
+            unreferenced += 1
+    report_drop(
+        "level(s) of the split with no control count to read viability against",
+        unreferenced,
+        len(pd.unique(levels)),
+        remedy=f"check that every {count_key!r} is filled and that each level carries controls",
+    )
+    return viability
 
 
 def _label_phases(ladder: list[dict], min_viability: float, reproducible: float | None) -> list[str]:
-    """Label one compound's whole ladder at once, and write the labels back into its rows.
+    """Label one compound's whole ladder at once.
 
     The window is a run, not a scatter. ``split_half_cosine`` over a handful of replicate wells is itself noisy,
     and thresholding each concentration on its own lets one lucky concentration open a window several steps below
@@ -773,29 +824,22 @@ def _label_phases(ladder: list[dict], min_viability: float, reproducible: float 
     dying cells whatever else is true of it, which is why the US EPA's phenotypic pipeline drops those
     concentrations before fitting anything.
     """
-    cytotoxic = [bool(np.isfinite(row["viability"]) and row["viability"] < min_viability) for row in ladder]
-    phases = ["cytotoxic" if flag else "silent" for flag in cytotoxic]
 
     def active(row: dict) -> bool:
-        if (
-            not (np.isfinite(row["amplitude"]) and np.isfinite(row["amplitude_null"]))
-            or row["amplitude"] <= row["amplitude_null"]
-        ):
-            return False
-        if reproducible is None:
-            return True
-        return bool(np.isfinite(row["split_half_cosine"]) and row["split_half_cosine"] >= reproducible)
+        # A comparison against NaN is False, so a concentration with no amplitude or no reproducible direction
+        # fails these without a guard of its own.
+        return bool(row["amplitude"] > row["amplitude_null"]) and (
+            reproducible is None or bool(row["split_half_cosine"] >= reproducible)
+        )
 
-    index = max((position for position, flag in enumerate(cytotoxic) if not flag), default=-1)
-    while index >= 0 and not cytotoxic[index] and active(ladder[index]):
-        row = ladder[index]
+    phases = ["cytotoxic" if row["viability"] < min_viability else "silent" for row in ladder]
+    highest = max((index for index, phase in enumerate(phases) if phase != "cytotoxic"), default=-1)
+    for index in range(highest, -1, -1):
+        if phases[index] == "cytotoxic" or not active(ladder[index]):
+            break
         # Still moving if the step from the concentration below beats the noise two independent medians carry.
-        moving = np.isfinite(row["step_amplitude"]) and row["step_amplitude"] > np.sqrt(2.0) * row["amplitude_null"]
+        moving = ladder[index]["step_amplitude"] > np.sqrt(2.0) * ladder[index]["amplitude_null"]
         phases[index] = "responding" if moving else "saturated"
-        index -= 1
-
-    for row, phase in zip(ladder, phases, strict=True):
-        row["phase"] = phase
     return phases
 
 
@@ -843,7 +887,7 @@ def dose_direction(
         min_doses: Distinct doses below which a compound is left out of the table. One concentration says nothing about how a response changes with concentration.
         count_key: ``obs`` column holding the cell count, which sets ``viability``. Without it no concentration is marked cytotoxic.
         site_key: ``obs`` column holding the number of fields that count covers, so a well missing a field does not read as cell loss. ``None`` compares the counts as they are.
-        min_viability: Fraction of the controls' cell count below which a concentration is ``cytotoxic``. The US EPA's phenotypic pipeline drops a concentration that has lost more than half its cells before fitting anything.
+        min_viability: Fraction of its own plate's control cell count below which a concentration is ``cytotoxic``. The US EPA's phenotypic pipeline drops a concentration that has lost more than half its cells before fitting anything.
         reproducible: ``split_half_cosine`` a concentration needs before it can be anything but ``silent``. ``None`` drops the requirement, which is what a screen with one well per concentration has to do, at the cost of calling noise a phenotype.
         dose_tolerance: Doses whose base-10 logs differ by less than this are treated as one dose. See :func:`dose_response`.
         key_added: Name for the output table.
@@ -853,13 +897,14 @@ def dose_direction(
         ``None``, or the modified copy.
         Writes ``uns["mantispy"][key_added]``, one row per compound and concentration, with ``compound``, ``dose``,
         ``n_wells``, ``amplitude``, ``amplitude_null``, ``step_amplitude``, ``split_half_cosine``,
-        ``cosine_to_top``, ``viability`` and ``phase``, and broadcasts the phase to
-        ``obs[key_added + "_phase"]`` so the window can be subset like any other annotation.
+        ``cosine_to_top``, ``viability`` and ``phase``. The phase is broadcast to ``obs[key_added + "_phase"]``
+        so the window can be subset like any other annotation, and the dose each row was binned to is broadcast
+        to ``obs[key_added + "_dose"]`` so wells can be grouped by the same concentration the table reports.
         ``amplitude`` is the root-mean-square response over the features, in MADs of the controls, and
         ``amplitude_null`` is what control wells spread over the same plates in the same numbers reach, so the two
         are read against each other. ``step_amplitude`` is the same measure applied to the change from the
         concentration below, which is what tells a response that is still moving from one that has arrived.
-        ``phase`` is one of ``PHASES``.
+        ``phase`` is one of ``DOSE_PHASES``.
 
     Raises:
         KeyError: ``obs`` has no ``compound_key``, no ``dose_key``, or no ``split_by`` column.
@@ -879,75 +924,72 @@ def dose_direction(
     """
     obs = as_frame(adata.obs)
     _require_columns(obs, compound_key, dose_key, *([split_by] if split_by is not None else []))
-    baseline, spread = _feature_baseline_and_spread(adata, reference)
-    scaled = np.flatnonzero(np.isfinite(spread))
-    control = reference_mask(adata, reference)
-    with np.errstate(invalid="ignore"):
-        control_z = (
-            get_matrix(adata, rows=np.flatnonzero(control)).astype(np.float64)[:, scaled] - baseline[scaled]
-        ) / spread[scaled]
+    baseline, spread, keep, control = _control_scale(adata, reference)
+    control_z = _z_rows(adata, np.flatnonzero(control), baseline, spread, keep)
 
     all_levels = obs[split_by].to_numpy() if split_by is not None else np.zeros(adata.n_obs)
     control_levels = all_levels[control]
-    viable = _viability(adata, count_key, site_key, control)
+    viable = _viability(adata, count_key, site_key, control, all_levels)
     phases = np.full(adata.n_obs, "", dtype=object)
+    binned = np.full(adata.n_obs, np.nan)
     nulls: dict[tuple, float] = {}
     records: list[dict] = []
-    block_rows: list[np.ndarray] = []
     for compound, (rows, doses) in _usable_doses(obs, compound_key, dose_key, control, dose_tolerance).items():
-        if len(np.unique(doses)) < min_doses:
-            get_logger().debug("dose_direction skipped %s: %d usable dose(s)", compound, len(np.unique(doses)))
+        n_doses = len(np.unique(doses))
+        if n_doses < min_doses:
+            get_logger().debug("dose_direction skipped %s: %d usable dose(s)", compound, n_doses)
             continue
-        with np.errstate(invalid="ignore"):
-            block = (get_matrix(adata, rows=rows).astype(np.float64)[:, scaled] - baseline[scaled]) / spread[scaled]
+        block = _z_rows(adata, rows, baseline, spread, keep)
         order, medians = _dose_medians(block, doses)
-        levels = all_levels[rows]
+        levels, well_viability = all_levels[rows], viable[rows]
+        binned[rows] = doses
+
+        ladder, covering = [], []
         for index, dose in enumerate(order):
             at = doses == dose
-            left, right = _halves(levels[at])
-            reproduces = np.nan
-            if left.any() and right.any():
-                reproduces = _cosine(np.nanmedian(block[at][left], axis=0), np.nanmedian(block[at][right], axis=0))
-            # The floor is drawn with this concentration's own spread over plates, not from any group of that size.
+            # The floor is drawn with this concentration's own spread over plates, not from any group of that
+            # size. setdefault would evaluate the draw whether or not the layout has been seen before.
             layout = dict(zip(*np.unique(levels[at], return_counts=True), strict=True))
             key = tuple(sorted(layout.items(), key=lambda item: str(item[0])))
-            null = nulls.setdefault(key, _null_amplitude(control_z, control_levels, layout))
-            # The step from the concentration below, which is what "still changing" means. The first one steps
-            # from the controls, so its step is how far it has already come.
+            if key not in nulls:
+                nulls[key] = _null_amplitude(control_z, control_levels, layout)
+            # The step from the concentration below is what "still changing" means. The first one steps from the
+            # controls, so its step is how far it has already come.
             amplitude = _amplitude(medians[index])
-            step = amplitude if index == 0 else _amplitude(medians[index] - medians[index - 1])
-            viability = float(np.nanmedian(viable[rows][at])) if np.isfinite(viable[rows][at]).any() else np.nan
-            block_rows.append(rows[at])
-            records.append(
+            here = well_viability[at]
+            covering.append(rows[at])
+            ladder.append(
                 {
                     "compound": str(compound),
                     "dose": float(dose),
                     "n_wells": int(at.sum()),
                     "amplitude": amplitude,
-                    "amplitude_null": null,
-                    "step_amplitude": step,
-                    "split_half_cosine": reproduces,
+                    "amplitude_null": nulls[key],
+                    "step_amplitude": amplitude if index == 0 else _amplitude(medians[index] - medians[index - 1]),
+                    "split_half_cosine": _split_half_cosine(block[at], levels[at]),
                     "cosine_to_top": _cosine(medians[index], medians[-1]),
-                    "viability": viability,
-                    "phase": "",
+                    "viability": float(np.nanmedian(here)) if np.isfinite(here).any() else np.nan,
                 }
             )
 
-        ladder = records[-len(order) :]
-        for record, covered in zip(_label_phases(ladder, min_viability, reproducible), block_rows, strict=True):
-            phases[covered] = record
-        block_rows.clear()
+        for row, phase, covered in zip(
+            ladder, _label_phases(ladder, min_viability, reproducible), covering, strict=True
+        ):
+            row["phase"] = phase
+            phases[covered] = phase
+        records.extend(ladder)
 
     table = pd.DataFrame(records, columns=list(_DIRECTION_COLUMNS))
     adata.uns.setdefault("mantispy", {})[key_added] = table
     # A row that no concentration covers, a control or an unannotated well, is in no phase at all.
     phases[phases == ""] = None
-    adata.obs[f"{key_added}_phase"] = pd.Categorical(phases, categories=list(PHASES), ordered=False)
+    adata.obs[f"{key_added}_phase"] = pd.Categorical(phases, categories=list(DOSE_PHASES), ordered=False)
+    adata.obs[f"{key_added}_dose"] = binned
     get_logger().info(
         "dose_direction: %d compound(s) over %d concentration(s); %s",
-        table["compound"].nunique() if len(table) else 0,
+        table["compound"].nunique(),
         len(table),
-        table["phase"].value_counts().to_dict() if len(table) else {},
+        table["phase"].value_counts().to_dict(),
     )
     return None
 
@@ -1007,12 +1049,10 @@ def dose_trajectory(
         raise ValueError(f"n_positions must be at least two, got {n_positions}")
     obs = as_frame(adata.obs)
     _require_columns(obs, compound_key, dose_key)
-    baseline, spread = _feature_baseline_and_spread(adata, reference)
-    scaled = np.flatnonzero(np.isfinite(spread))
-    control = reference_mask(adata, reference)
+    baseline, spread, keep, control = _control_scale(adata, reference)
 
     in_window = np.ones(adata.n_obs, dtype=bool)
-    if phase_key is not None and phase_key in obs:
+    if phase_key in obs:
         in_window = obs[phase_key].astype(str).isin(list(phases)).to_numpy()
     elif phase_key is not None:
         get_logger().info(
@@ -1022,22 +1062,23 @@ def dose_trajectory(
         )
 
     grid = np.linspace(0.0, 1.0, n_positions)
-    rows_out, records = [], []
+    paths, records = [], []
     for compound, (rows, doses) in _usable_doses(obs, compound_key, dose_key, control, dose_tolerance).items():
-        keep = in_window[rows]
-        if not keep.any():
+        inside = in_window[rows]
+        if not inside.any():
             continue
-        rows, doses = rows[keep], doses[keep]
-        order, medians = _dose_medians(get_matrix(adata, rows=rows).astype(np.float64)[:, scaled], doses)
+        rows, doses = rows[inside], doses[inside]
+        order, z = _dose_medians(_z_rows(adata, rows, baseline, spread, keep), doses)
         if len(order) < 2:
             continue
-        with np.errstate(invalid="ignore"):
-            z = (medians - baseline[scaled]) / spread[scaled]
         # Relative position through the window in log concentration, so the ends are 0 and 1 for every compound.
         position = np.log10(order)
         position = (position - position[0]) / (position[-1] - position[0])
-        resampled = np.stack([np.interp(grid, position, z[:, column]) for column in range(z.shape[1])], axis=1)
-        rows_out.append(resampled.ravel())
+        # One interval and weight per grid point serves every feature; np.interp per feature is the same
+        # arithmetic done n_vars times over.
+        below = np.clip(np.searchsorted(position, grid, side="right") - 1, 0, position.size - 2)
+        weight = ((grid - position[below]) / (position[below + 1] - position[below]))[:, None]
+        paths.append((z[below] * (1.0 - weight) + z[below + 1] * weight).ravel())
         records.append(
             {
                 compound_key: str(compound),
@@ -1047,26 +1088,34 @@ def dose_trajectory(
             }
         )
 
-    names = np.asarray(adata.var_names)[scaled]
-    var = pd.DataFrame(
-        {
-            "feature": np.tile(names, n_positions),
-            "position": np.repeat(grid, names.size),
-        },
-        index=pd.Index([f"{name}@{value:.2f}" for value in grid for name in names]),
-    )
+    names = np.asarray(adata.var_names)[keep]
+    var = pd.DataFrame({"feature": np.tile(names, n_positions), "position": np.repeat(grid, names.size)})
+    var.index = var["feature"] + "@" + var["position"].map("{:.2f}".format)
     result = ad.AnnData(
-        X=np.vstack(rows_out).astype(np.float32) if rows_out else np.empty((0, var.shape[0]), dtype=np.float32),
+        X=np.array(paths, dtype=np.float32).reshape(len(paths), var.shape[0]),
         obs=pd.DataFrame(records, columns=[compound_key, "n_doses", "window_low", "window_high"]).set_axis(
-            pd.Index([str(index) for index in range(len(records))])
+            pd.RangeIndex(len(records)).astype(str)
         ),
         var=var,
     )
     stamp(result, resolution="perturbation")
+    record_params(
+        result,
+        "dose_trajectory",
+        {
+            "compound_key": compound_key,
+            "dose_key": dose_key,
+            "reference": reference,
+            "phase_key": phase_key,
+            "phases": list(phases),
+            "n_positions": n_positions,
+            "dose_tolerance": dose_tolerance,
+        },
+    )
     get_logger().info(
         "dose_trajectory: %d compound(s) over %d position(s); windows of %s concentration(s)",
         result.n_obs,
         n_positions,
-        sorted(set(result.obs["n_doses"])) if result.n_obs else [],
+        sorted(set(result.obs["n_doses"])),
     )
     return result

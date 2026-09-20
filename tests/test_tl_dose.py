@@ -1,5 +1,7 @@
 """Dose-response trends and curve fits."""
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -487,7 +489,7 @@ def test_a_concentration_that_lost_its_cells_is_cytotoxic_whatever_else_it_did(p
 def test_the_phase_reaches_obs_so_the_window_can_be_subset(phenotypes):
     mt.tl.dose_direction(phenotypes)
     phases = phenotypes.obs["dose_direction_phase"]
-    assert set(phases.cat.categories) == set(mt.tl.PHASES)
+    assert set(phases.cat.categories) == set(mt.tl.DOSE_PHASES)
     assert phases[phenotypes.obs["Metadata_Control"].to_numpy(dtype=bool)].isna().all(), "controls are in no phase"
 
     window = phenotypes[phases == "responding"]
@@ -519,3 +521,42 @@ def test_a_turning_compound_and_a_growing_one_do_not_match_on_their_paths(phenot
     frame = pd.DataFrame(np.asarray(paths.X), index=list(paths.obs["Metadata_Compound"]))
     assert {"grows", "turns"} <= set(frame.index)
     assert frame.loc["grows"].corr(frame.loc["turns"]) < 0.5
+
+
+def test_the_fast_median_matches_numpy():
+    """It exists only to avoid numpy's masked-array path on short blocks, so it has to agree with it exactly."""
+    from mantispy.tl._dose import _nanmedian
+
+    rng = np.random.default_rng(0)
+    for rows in (1, 2, 3, 4, 8, 9):
+        block = rng.normal(size=(rows, 12))
+        block[rng.random(block.shape) < 0.3] = np.nan
+        block[:, 0] = np.nan  # a feature measured nowhere
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)  # numpy warns on the all-NaN column; this does not
+            expected = np.nanmedian(block, axis=0)
+        np.testing.assert_allclose(_nanmedian(block), expected, equal_nan=True)
+
+
+def test_viability_is_read_against_each_plate_not_the_whole_screen(phenotypes):
+    """Plates are seeded apart, so a dense plate would otherwise read as one whose treated wells are dying."""
+    dense = phenotypes.obs["Metadata_Plate"] == "P1"
+    phenotypes.obs.loc[dense, "Metadata_CellCount"] = 1000.0
+    mt.tl.dose_direction(phenotypes)
+    table = phenotypes.uns["mantispy"]["dose_direction"]
+
+    assert (table["phase"] != "cytotoxic").all(), "a ten-fold difference between plates is not cell loss"
+    assert table["viability"].between(0.8, 1.2).all()
+
+
+def test_the_binned_dose_reaches_obs_so_wells_group_the_way_the_table_does(phenotypes):
+    """Grouping wells by the raw concentration splits a ladder two batches spell differently."""
+    raw = phenotypes.obs["Metadata_Concentration"].to_numpy(dtype=float)
+    respelled = (np.arange(phenotypes.n_obs) // 2) % 2 == 0
+    phenotypes.obs["Metadata_Concentration"] = np.where(respelled, raw, np.round(raw * 1.05, 4))
+    mt.tl.dose_direction(phenotypes)
+
+    treated = phenotypes.obs["dose_direction_dose"].notna()
+    assert phenotypes.obs.loc[treated, "Metadata_Concentration"].nunique() > 6, "the raw ladder is split"
+    assert phenotypes.obs.loc[treated, "dose_direction_dose"].nunique() == 6, "the binned one is not"
+    assert phenotypes.obs.loc[~treated, "dose_direction_dose"].isna().all(), "controls have no dose"
