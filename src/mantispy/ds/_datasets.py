@@ -425,7 +425,7 @@ _OASIS_PLATEMAP_COLUMNS = {
 _DOSE_TOLERANCE = 0.01
 
 
-def _aligned_doses(doses: pd.Series) -> list[float]:
+def _aligned_doses(doses: pd.Series) -> pd.Series:
     """The dose each well was meant to get, where plate maps record one concentration to several precisions.
 
     Two of the OASIS plate maps write the dose to three decimals and the rest to four, so one concentration
@@ -438,14 +438,9 @@ def _aligned_doses(doses: pd.Series) -> list[float]:
     levels = np.sort(counts.index.to_numpy(dtype=float))
     # A relative tolerance says nothing about an undosed well, so zero is its own level and passes through.
     levels = levels[levels > 0]
-    lookup: dict[float, float] = {}
-    start = 0
-    for index in range(1, len(levels) + 1):
-        if index == len(levels) or levels[index] / levels[index - 1] - 1 >= _DOSE_TOLERANCE:
-            run = levels[start:index]
-            lookup.update(dict.fromkeys(run, max(run, key=lambda level: (counts[level], level))))
-            start = index
-    return [lookup.get(dose, dose) for dose in doses]
+    runs = np.split(levels, np.flatnonzero(levels[1:] / levels[:-1] - 1 >= _DOSE_TOLERANCE) + 1)
+    lookup = {level: max(run, key=lambda value: (counts[value], value)) for run in runs for level in run}
+    return doses.replace(lookup)
 
 
 def _oasis_platemaps(cache_dir: str | Path | None) -> pd.DataFrame:
@@ -474,7 +469,7 @@ def _oasis_platemaps(cache_dir: str | Path | None) -> pd.DataFrame:
         frames.append(kept)
     platemap = pd.concat(frames, ignore_index=True)
     platemap["Metadata_Concentration"] = pd.to_numeric(platemap["Metadata_Concentration"], errors="coerce")
-    platemap["Metadata_ConcentrationRounded"] = _aligned_doses(platemap["Metadata_Concentration"])
+    platemap["Metadata_ConcentrationNominal"] = _aligned_doses(platemap["Metadata_Concentration"])
     # One batch writes the line as HepRG and the others as HepaRG; two spellings would split every per-line grouping.
     platemap["Metadata_CellLine"] = platemap["Metadata_CellLine"].replace({"HepRG": "HepaRG"})
     return platemap
@@ -508,7 +503,7 @@ def oasis_pilot(annotate: bool = True, cache_dir: str | Path | None = None, **kw
 
         Two of the plate maps write the dose to three decimals and the rest to four, so one concentration is
         recorded as both ``3.704`` and ``3.7037``. ``Metadata_Concentration`` keeps what was recorded;
-        ``Metadata_ConcentrationRounded`` puts the levels that agree to within 1% onto the value the most wells
+        ``Metadata_ConcentrationNominal`` puts the levels that agree to within 1% onto the value the most wells
         carry, and names the replicate groups. Group by the raw column and a treatment's wells split in two.
     """
     adata = _profiles("oasis_pilot", cache_dir, select=lambda name: name.endswith(".csv.gz"), **kwargs)
@@ -522,18 +517,16 @@ def oasis_pilot(annotate: bool = True, cache_dir: str | Path | None = None, **kw
         get_logger().warning("oasis_pilot: %d of %d wells have no plate-map row", unmatched, len(merged))
     adata.obs["Metadata_Compound"] = merged["Metadata_Compound"].to_numpy()
     adata.obs["Metadata_Concentration"] = merged["Metadata_Concentration"].to_numpy(dtype=float)
-    adata.obs["Metadata_ConcentrationRounded"] = merged["Metadata_ConcentrationRounded"].to_numpy(dtype=float)
+    adata.obs["Metadata_ConcentrationNominal"] = merged["Metadata_ConcentrationNominal"].to_numpy(dtype=float)
     adata.obs["Metadata_CellLine"] = merged["Metadata_CellLine"].to_numpy()
     adata.obs["Metadata_Control"] = merged["Metadata_Compound"].astype(str).str.upper().eq("DMSO").to_numpy()
     # Replicates share a compound at a concentration, which is what the mode= shorthands of mt.tl.map compare.
-    # The aligned dose names the group: on the raw one, the wells of a single treatment split across the two
-    # precisions its plate map used, leaving most groups with too few wells to be replicates of anything.
     is_control = np.asarray(adata.obs["Metadata_Control"], dtype=bool)
     adata.obs["Metadata_Perturbation"] = pd.Categorical(
         np.where(
             is_control,
             "DMSO",
-            merged["Metadata_Compound"].astype(str) + "@" + merged["Metadata_ConcentrationRounded"].astype(str),
+            merged["Metadata_Compound"].astype(str) + "@" + merged["Metadata_ConcentrationNominal"].astype(str),
         )
     )
     get_logger().info(
@@ -541,7 +534,7 @@ def oasis_pilot(annotate: bool = True, cache_dir: str | Path | None = None, **kw
         adata.n_obs,
         adata.n_vars,
         int(merged.loc[~is_control, "Metadata_Compound"].nunique()),
-        int(merged["Metadata_Concentration"].nunique()),
+        int(merged["Metadata_ConcentrationNominal"].nunique()),
         int(is_control.sum()),
     )
     return adata

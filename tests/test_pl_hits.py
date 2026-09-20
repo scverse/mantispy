@@ -157,7 +157,5 @@ def test_one_stray_well_does_not_flatten_the_rest_onto_the_baseline(inhibitor_ad
     assert mt.pl.dose_response(inhibitor_adata, compound="cpd").get_yscale() == "log"
 
     # A response that reaches zero has no log scale to be drawn on.
-    response = inhibitor_adata.obs["hits_row_distance"].to_numpy(dtype=float).copy()
-    response[0] = 0.0
-    inhibitor_adata.obs["hits_row_distance"] = response
+    inhibitor_adata.obs.loc[inhibitor_adata.obs.index[0], "hits_row_distance"] = 0.0
     assert mt.pl.dose_response(inhibitor_adata, compound="cpd").get_yscale() == "linear"

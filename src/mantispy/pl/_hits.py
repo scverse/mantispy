@@ -201,7 +201,8 @@ def dose_response(
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
-        The axes drawn on.
+        The axes drawn on, with a log ``y`` scale where every drawn response is positive, since a distance from the controls has a long right tail and one stray well would otherwise flatten the rest onto the baseline.
+        The scale is decided per axes, so panels drawn side by side can differ; set it on the returned axes to compare them.
 
     Raises:
         KeyError: There is no such table, or it holds no such compound.

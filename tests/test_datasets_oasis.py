@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 import mantispy as mt
+from mantispy.ds._datasets import _DOSE_TOLERANCE
 
 
 @pytest.fixture(scope="module")
@@ -43,21 +44,27 @@ def test_one_concentration_written_twice_is_one_dose(oasis):
     """Two plate maps write the dose to three decimals and the rest to four, so 3.704 and 3.7037 are one level."""
     obs = oasis.obs
     raw = obs["Metadata_Concentration"].to_numpy(dtype=float)
-    aligned = obs["Metadata_ConcentrationRounded"].to_numpy(dtype=float)
-    usable = np.isfinite(raw) & (raw > 0)
+    aligned = obs["Metadata_ConcentrationNominal"].to_numpy(dtype=float)
+    dosed = raw > 0
 
-    levels = np.unique(aligned[usable])
-    close = [(a, b) for a, b in zip(levels, levels[1:], strict=False) if b / a - 1 < 0.01]
-    assert not close, "two levels within 1% of each other are one dose written twice"
-    assert len(levels) < len(np.unique(raw[usable]))
+    levels = np.unique(aligned[dosed])
+    gaps = np.diff(levels) / levels[:-1]
+    assert (gaps >= _DOSE_TOLERANCE).all(), "two levels within the tolerance are one dose written twice"
+    assert len(levels) < len(np.unique(raw[dosed])), "nothing collapsed"
     # The dose a well was meant to get is one it was recorded at, never an average of two.
-    assert set(levels) <= set(np.unique(raw[usable]))
-    assert np.max(np.abs(aligned[usable] / raw[usable] - 1)) < 0.01, "no well moves more than the tolerance"
+    assert set(levels) <= set(np.unique(raw[dosed]))
+    assert np.max(np.abs(aligned[dosed] / raw[dosed] - 1)) < _DOSE_TOLERANCE, "no well moves past the tolerance"
 
-    # Replicates of one treatment land in one group, which is what hit_calling and tl.map count.
-    treated = obs[~obs["Metadata_Control"]]
-    sizes = treated["Metadata_Perturbation"].astype(str).value_counts()
-    assert int((sizes < 3).sum()) < len(sizes) // 4, "most treatments keep three or more wells"
+
+@pytest.mark.network
+def test_replicates_of_one_treatment_land_in_one_group(oasis):
+    """Metadata_Perturbation is named by the aligned dose, so the two spellings do not halve a group."""
+    treated = oasis.obs[~oasis.obs["Metadata_Control"]]
+    sizes = treated.groupby(["Metadata_CellLine", "Metadata_Perturbation"], observed=True).size()
+    # HepaRG is eight plates, so its treatments carry eight wells each; U2OS is two and genuinely thin.
+    heparg = sizes.loc["HepaRG"]
+    assert heparg.median() >= 6, "the eight-plate line should keep its replicates together"
+    assert int((heparg < 3).sum()) < len(heparg) // 5
 
 
 @pytest.mark.network

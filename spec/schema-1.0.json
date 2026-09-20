@@ -21,7 +21,7 @@
         "Metadata_Perturbation",
         "Metadata_Compound",
         "Metadata_Concentration",
-        "Metadata_ConcentrationRounded",
+        "Metadata_ConcentrationNominal",
         "Metadata_MOA",
         "Metadata_CellLine",
         "Metadata_Control",
