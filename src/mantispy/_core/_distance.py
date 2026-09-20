@@ -44,10 +44,17 @@ def energy_distance(A: np.ndarray, B: np.ndarray) -> float:
     return 2.0 * _mean_distance(A, B) - _mean_distance(A, A, True) - _mean_distance(B, B, True)
 
 
-def mahalanobis_transform(reference: np.ndarray, regularization: float = 1e-6) -> tuple[np.ndarray, np.ndarray]:
+def mahalanobis_transform(
+    reference: np.ndarray, regularization: float = 1e-6, robust: bool = False, seed: int = 0
+) -> tuple[np.ndarray, np.ndarray]:
     """Center and whitening matrix that give the reference identity covariance.
 
     Distances measured after this transform are Mahalanobis distances under the reference's covariance, so "far from the controls" means the same in every direction.
+
+    ``robust=True`` estimates both from the minimum covariance determinant subset instead of every reference row.
+    The centre is already a median, but the scatter is not: a handful of stray control wells widen the covariance in
+    their own direction, and every real hit in that direction is then scored as ordinary. MCD needs more complete rows
+    than features, so it is meant for a reduced representation.
     """
     reference = np.asarray(reference, dtype=np.float64)
     # np.cov spreads a single NaN over the whole matrix and eigh then fails to converge, so
@@ -61,8 +68,21 @@ def mahalanobis_transform(reference: np.ndarray, regularization: float = 1e-6) -
             "values, which is too few to estimate a covariance. Drop the incomplete features "
             "first, e.g. mt.pp.feature_select(adata, na_cutoff=0.0)."
         )
-    centre = np.nanmedian(reference, axis=0)
-    covariance = np.atleast_2d(np.cov(complete - centre, rowvar=False))
+    if robust:
+        from sklearn.covariance import MinCovDet
+
+        if complete.shape[0] <= complete.shape[1]:
+            raise ValueError(
+                f"a robust covariance needs more complete reference rows than features, and there are "
+                f"{complete.shape[0]} rows for {complete.shape[1]} features. Score a reduced representation, "
+                "e.g. use_rep='X_pca', or use the empirical covariance."
+            )
+        fitted = MinCovDet(random_state=seed).fit(complete)
+        centre = fitted.location_
+        covariance = np.atleast_2d(fitted.covariance_).copy()
+    else:
+        centre = np.nanmedian(reference, axis=0)
+        covariance = np.atleast_2d(np.cov(complete - centre, rowvar=False))
     covariance.flat[:: covariance.shape[0] + 1] += regularization
 
     eigenvalues, eigenvectors = np.linalg.eigh(covariance)

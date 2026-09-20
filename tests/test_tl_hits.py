@@ -4,10 +4,12 @@ import warnings
 
 import anndata as ad
 import numpy as np
+import pandas as pd
 import pytest
 from scipy.stats import ks_2samp
 
 import mantispy as mt
+from mantispy._core.schema import stamp
 from mantispy.tl._hits import ks_statistic
 
 
@@ -401,3 +403,63 @@ def test_a_replicated_screen_does_not_warn():
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
         mt.tl.hit_calling(_plate(group_size=6), n_permutations=200)
+
+
+def test_a_robust_covariance_still_calls_a_hit_that_stray_controls_would_hide():
+    """A few wild control wells widen the empirical covariance along their own direction.
+
+    A real effect in that direction is then measured in units the outliers set and reads as
+    ordinary. The minimum covariance determinant subset ignores them, so the hit survives.
+    """
+    rng = np.random.default_rng(0)
+    n_features = 6
+    direction = np.zeros(n_features)
+    direction[0] = 1.0
+
+    controls = rng.standard_normal((60, n_features))
+    # Six control wells blown out along one feature, as a pipetting or focus artifact does.
+    controls[:6] += 12.0 * direction
+    treated = rng.standard_normal((12, n_features)) + 4.0 * direction
+
+    values = np.vstack([controls, treated]).astype(np.float32)
+    obs = pd.DataFrame(
+        {
+            "Metadata_Plate": "P1",
+            "Metadata_Well": [f"W{index:03d}" for index in range(len(values))],
+            "Metadata_Perturbation": ["DMSO"] * len(controls) + ["pert"] * len(treated),
+            "Metadata_Control": [True] * len(controls) + [False] * len(treated),
+        },
+        index=[str(index) for index in range(len(values))],
+    )
+    adata = ad.AnnData(X=values, obs=obs, var=pd.DataFrame(index=[f"Cells_AreaShape_f{i}" for i in range(n_features)]))
+    stamp(adata, resolution="well")
+
+    empirical = mt.tl.hit_calling(adata, covariance="empirical", n_permutations=500, copy=True)
+    robust = mt.tl.hit_calling(adata, covariance="robust", n_permutations=500, copy=True)
+
+    def distance_of(scored, group):
+        table = scored.uns["mantispy"]["hits"]
+        return float(table.loc[table["group"] == group, "distance"].iloc[0])
+
+    assert distance_of(robust, "pert") > distance_of(empirical, "pert"), (
+        "the outlying controls should stop inflating the scale the treatment is measured on"
+    )
+    # The control row is the reference against itself, so it is the scale every other group is read on.
+    assert distance_of(empirical, "pert") < distance_of(empirical, "DMSO"), (
+        "with the outliers in the covariance the treatment reads as no further out than the controls"
+    )
+    assert distance_of(robust, "pert") > distance_of(robust, "DMSO")
+
+    def pvalue_of(scored):
+        table = scored.uns["mantispy"]["hits"]
+        return float(table.loc[table["group"] == "pert", "pvalue"].iloc[0])
+
+    assert pvalue_of(robust) < 0.05 < pvalue_of(empirical)
+
+
+def test_a_robust_covariance_needs_more_control_rows_than_features():
+    """Well-level profiles have far fewer rows than features, which is what use_rep is for."""
+    cells = mt.ds.synthetic_plate(n_wells=48, n_cells=40, n_features=60, n_perturbations=3, effect_size=3.0, seed=0)
+    wells = mt.tl.aggregate(cells)
+    with pytest.raises(ValueError, match="more complete reference rows than features"):
+        mt.tl.hit_calling(wells, covariance="robust", n_permutations=50)
