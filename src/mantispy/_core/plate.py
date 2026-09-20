@@ -83,3 +83,13 @@ def detect_plate_format(wells: Iterable[str]) -> int:
         if n_rows <= max_rows and n_cols <= max_cols:
             return size
     raise ValueError(f"no standard plate format holds {n_rows} rows x {n_cols} columns")
+
+
+def plate_grid(wells: Iterable[str]) -> tuple[int, int]:
+    """Rows and columns of the format these wells came off.
+
+    A format belongs to a plate, not to the object holding it: JUMP-Target-2 runs the same map on 384-well plates
+    at ten sources and 1536-well plates at the eleventh. Sizing one grid for every plate at once puts the smaller
+    ones in a mostly empty corner of the larger one, so anything fitted on the grid is fitted on the wrong shape.
+    """
+    return PLATE_FORMATS[detect_plate_format(wells)]

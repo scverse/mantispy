@@ -77,6 +77,21 @@ def test_plate_grid_matches_the_detected_format(plotted):
     assert ax.images[0].get_array().shape == (8, 12)
 
 
+def test_each_plate_is_drawn_on_its_own_grid(plotted):
+    """The grid was sized from every plate's wells at once, so the smaller plate was drawn three quarters empty.
+
+    jump_target2 is the real case: source_9 runs the map on 1536-well plates and the other ten on 384-well ones.
+    """
+    wells = plotted.obs["Metadata_Well"].astype(str).to_numpy()
+    larger = (plotted.obs["Metadata_Plate"] == "Plate02").to_numpy()
+    # One well in the far corner is enough; the format is the smallest one that holds every well.
+    wells[np.flatnonzero(larger)[0]] = "P24"
+    plotted.obs["Metadata_Well"] = wells
+
+    axes = mt.pl.plate(plotted, color=plotted.var_names[0])
+    assert [axis.images[0].get_array().shape for axis in axes] == [(8, 12), (16, 24)]
+
+
 def test_plate_one_panel_per_plate_and_rejects_unknown_color(plotted):
     assert np.asarray(mt.pl.plate(plotted, color=plotted.var_names[0])).size == 2
     with pytest.raises(KeyError, match="nonexistent"):

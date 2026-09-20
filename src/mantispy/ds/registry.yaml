@@ -2288,10 +2288,40 @@ datasets:
 
   jump_target2:
     type: mantispy
-    doc_header: JUMP-Target-2, one 384-well plate map run at three sources, two batches each.
+    doc_header: JUMP-Target-2, one plate map run at eleven sources, 141 plates.
     accession: cpg0016-jump
-    shape: [768, 3634]
+    shape: [5374, 3634]
     files:
+    - name: 20210614_Batch_1__1053600674__1053600674.parquet
+      s3_key: cpg0016-jump/source_2/workspace/profiles/20210614_Batch_1/1053600674/1053600674.parquet
+      sha256: 1c5e133cc4a441548e5f1b4034b49fbb2be801f97cd9c8cabddb089fb01fa5d9
+    - name: 20210621_Batch_3__1053599503__1053599503.parquet
+      s3_key: cpg0016-jump/source_2/workspace/profiles/20210621_Batch_3/1053599503/1053599503.parquet
+      sha256: 78056790042215f21fb327be0b64e86a4907fc443a5472b851a0d7f7658c9dab
+    - name: 20210712_Batch_5__1053597936__1053597936.parquet
+      s3_key: cpg0016-jump/source_2/workspace/profiles/20210712_Batch_5/1053597936/1053597936.parquet
+      sha256: e0b2c4f0a39a9a669d545bbae6725e835ca82d3a18ed3711eb2d8fc8281d0050
+    - name: 20210719_Batch_6__1086293911__1086293911.parquet
+      s3_key: cpg0016-jump/source_2/workspace/profiles/20210719_Batch_6/1086293911/1086293911.parquet
+      sha256: f16eedd45ec67ed68493c77475997e2897a76da6acdb328bbf6b80e1514a4767
+    - name: 20210726_Batch_7__1086293492__1086293492.parquet
+      s3_key: cpg0016-jump/source_2/workspace/profiles/20210726_Batch_7/1086293492/1086293492.parquet
+      sha256: f8c382f6af69e01d5cd5c98def34b45ca50cca22c75b1a141e814173c7e49b39
+    - name: 20210802_Batch_8__1086293133__1086293133.parquet
+      s3_key: cpg0016-jump/source_2/workspace/profiles/20210802_Batch_8/1086293133/1086293133.parquet
+      sha256: 815e99de597897306b2ce997ce72e5a42aa0f83282d744089fef3d5ece31e650
+    - name: 20210808_Batch_4__1086292884__1086292884.parquet
+      s3_key: cpg0016-jump/source_2/workspace/profiles/20210808_Batch_4/1086292884/1086292884.parquet
+      sha256: de48499d88d9c03f36eb7e477cef283593a819f415b85946f7acd4f4e045a1d6
+    - name: 20210816_Batch_9__1086292389__1086292389.parquet
+      s3_key: cpg0016-jump/source_2/workspace/profiles/20210816_Batch_9/1086292389/1086292389.parquet
+      sha256: eebd9d5c40d2d43cf9d3544539d1ba38349f426a9d979b4d27c2b43fc1545191
+    - name: 20210823_Batch_10__1086292037__1086292037.parquet
+      s3_key: cpg0016-jump/source_2/workspace/profiles/20210823_Batch_10/1086292037/1086292037.parquet
+      sha256: 31127ea2b799c56208d76ab4a7ac77fccb3c5f9d9acf304e1adf79bda571190a
+    - name: 20211003_Batch_13__1086289686__1086289686.parquet
+      s3_key: cpg0016-jump/source_2/workspace/profiles/20211003_Batch_13/1086289686/1086289686.parquet
+      sha256: 437ab866742f9e20392dfca2e2d88efe066d847e355ed7991081da7d3b5773bc
     - name: CP59__JCPQC051__JCPQC051.parquet
       s3_key: cpg0016-jump/source_3/workspace/profiles/CP59/JCPQC051/JCPQC051.parquet
       sha256: 2be71c3f89c8312e32f8ee19e5ce9aa690ab11a5b4ab6d112bac9b12480ca996
@@ -2304,18 +2334,219 @@ datasets:
     - name: CP60__JCPQC054__JCPQC054.parquet
       s3_key: cpg0016-jump/source_3/workspace/profiles/CP60/JCPQC054/JCPQC054.parquet
       sha256: a65309a7e354f345eb5d5af2c5d2f0bc6e8af853372eb98a7b7f3c665d22605f
+    - name: CP_25_all_Phenix1__JCPQC016__JCPQC016.parquet
+      s3_key: cpg0016-jump/source_3/workspace/profiles/CP_25_all_Phenix1/JCPQC016/JCPQC016.parquet
+      sha256: 8b2b388fe030c61719374e19c2bd91ca9e625c6062937c48296d0abac0bce31d
+    - name: CP_25_all_Phenix1__JCPQC017__JCPQC017.parquet
+      s3_key: cpg0016-jump/source_3/workspace/profiles/CP_25_all_Phenix1/JCPQC017/JCPQC017.parquet
+      sha256: 7b12ac6984c1fee0757ddaeff6cb9ba241d97ccb88dd89e80e528da5f2850ea4
+    - name: CP_26_all_Phenix1__JCPQC018__JCPQC018.parquet
+      s3_key: cpg0016-jump/source_3/workspace/profiles/CP_26_all_Phenix1/JCPQC018/JCPQC018.parquet
+      sha256: cc9a3a893cc983a2c01f40502a2b760f437bcaffaeeb46b9adfc955ee0c892c8
+    - name: CP_26_all_Phenix1__JCPQC019__JCPQC019.parquet
+      s3_key: cpg0016-jump/source_3/workspace/profiles/CP_26_all_Phenix1/JCPQC019/JCPQC019.parquet
+      sha256: 078f763ff0f8f6d22eef563fbf16b0242c876b6f149db0c86968989e10593463
+    - name: CP_27_all_Phenix1__JCPQC020__JCPQC020.parquet
+      s3_key: cpg0016-jump/source_3/workspace/profiles/CP_27_all_Phenix1/JCPQC020/JCPQC020.parquet
+      sha256: 1f7ee14aac6afb4c48b3fd1b97f257b41a77a9be89f2c5044703523704809b49
+    - name: CP_27_all_Phenix1__JCPQC021__JCPQC021.parquet
+      s3_key: cpg0016-jump/source_3/workspace/profiles/CP_27_all_Phenix1/JCPQC021/JCPQC021.parquet
+      sha256: 3f6b54c2a496de430f3db4800aa16e3f1f98c9e2149e3989154fc59d0bd8ff87
+    - name: CP_28_all_Phenix1__JCPQC022__JCPQC022.parquet
+      s3_key: cpg0016-jump/source_3/workspace/profiles/CP_28_all_Phenix1/JCPQC022/JCPQC022.parquet
+      sha256: 85007d947374324b9c1d8c657efe2ac19fab69d3501d610e4550c12a41db45c7
+    - name: CP_28_all_Phenix1__JCPQC023__JCPQC023.parquet
+      s3_key: cpg0016-jump/source_3/workspace/profiles/CP_28_all_Phenix1/JCPQC023/JCPQC023.parquet
+      sha256: 8ba92a1f0551997ec986d8ea79f7736772ff4891df2da2f050b322dd347d180f
+    - name: CP_29_all_Phenix1__JCPQC024__JCPQC024.parquet
+      s3_key: cpg0016-jump/source_3/workspace/profiles/CP_29_all_Phenix1/JCPQC024/JCPQC024.parquet
+      sha256: a5a585f90233dc6937cf93bb3298fd23e0fbe331055557986687f7963cdbc016
+    - name: CP_29_all_Phenix1__JCPQC025__JCPQC025.parquet
+      s3_key: cpg0016-jump/source_3/workspace/profiles/CP_29_all_Phenix1/JCPQC025/JCPQC025.parquet
+      sha256: 3d97c4494baaa93c9198987155e33e52d2cfdf608de9547caeb61e922fa17cc3
+    - name: CP_31_all_Phenix1__JCPQC028__JCPQC028.parquet
+      s3_key: cpg0016-jump/source_3/workspace/profiles/CP_31_all_Phenix1/JCPQC028/JCPQC028.parquet
+      sha256: e687ce4d2e5556ee37f0597e01f36a1a63d8d997e3d15b710172f5d63a73eb56
+    - name: CP_31_all_Phenix1__JCPQC029__JCPQC029.parquet
+      s3_key: cpg0016-jump/source_3/workspace/profiles/CP_31_all_Phenix1/JCPQC029/JCPQC029.parquet
+      sha256: 21a3cc9931bcce5a69cbe155d59df0de71930135c5960890f5f679fcc179cde1
+    - name: CP_32_all_Phenix1__JCPQC030__JCPQC030.parquet
+      s3_key: cpg0016-jump/source_3/workspace/profiles/CP_32_all_Phenix1/JCPQC030/JCPQC030.parquet
+      sha256: 939b47b834b9dac2941215bc75ca1d5dcc631c0f0db6b41c5df5fd8b513c406b
+    - name: CP_32_all_Phenix1__JCPQC031__JCPQC031.parquet
+      s3_key: cpg0016-jump/source_3/workspace/profiles/CP_32_all_Phenix1/JCPQC031/JCPQC031.parquet
+      sha256: 04b84cf8471a13b44da73171b43847b24b9bb96bd2ccd433e76714d2d4eee72a
+    - name: CP_33_all_Phenix1__JCPQC032__JCPQC032.parquet
+      s3_key: cpg0016-jump/source_3/workspace/profiles/CP_33_all_Phenix1/JCPQC032/JCPQC032.parquet
+      sha256: cf400868fc7cac1d87030ab8cde69cfa4c4d866a8bc6838dc972c73d57059b5d
+    - name: CP_33_all_Phenix1__JCPQC033__JCPQC033.parquet
+      s3_key: cpg0016-jump/source_3/workspace/profiles/CP_33_all_Phenix1/JCPQC033/JCPQC033.parquet
+      sha256: 7fdf2dc8a435a9096d38fb24e058dcabda486ac99f7df1c7febbd4acd2034858
+    - name: CP_34_mix_Phenix1__JCPQC034__JCPQC034.parquet
+      s3_key: cpg0016-jump/source_3/workspace/profiles/CP_34_mix_Phenix1/JCPQC034/JCPQC034.parquet
+      sha256: feea8af3443dcd17855fc49eca751a7c0ee72ceb379fcccb867e8c1b8a5a9ea1
+    - name: CP_35_all_Phenix1__JCPQC035__JCPQC035.parquet
+      s3_key: cpg0016-jump/source_3/workspace/profiles/CP_35_all_Phenix1/JCPQC035/JCPQC035.parquet
+      sha256: 5d89ca949f145db140186549f622fe4a9391a9334e6db6622ae1f18ad8eb6892
+    - name: CP_35_all_Phenix1__JCPQC036__JCPQC036.parquet
+      s3_key: cpg0016-jump/source_3/workspace/profiles/CP_35_all_Phenix1/JCPQC036/JCPQC036.parquet
+      sha256: f454f6565a092a2ac772156209eb67da0e6f4c0e7d82ea625590e1dac6696a8b
+    - name: CP_36_all_Phenix1__JCPQC037__JCPQC037.parquet
+      s3_key: cpg0016-jump/source_3/workspace/profiles/CP_36_all_Phenix1/JCPQC037/JCPQC037.parquet
+      sha256: 10c130a49cc611890a238949b4731b233e31b1dd4197814d39ee6d89b2cfacf8
+    - name: CP_36_all_Phenix1__JCPQC038__JCPQC038.parquet
+      s3_key: cpg0016-jump/source_3/workspace/profiles/CP_36_all_Phenix1/JCPQC038/JCPQC038.parquet
+      sha256: ee0c0f0c7acd90f0eb4388d558b5d4cd4c46cd6d2368821c94d8fa61b3c1b1c2
     - name: 2021_04_26_Batch1__BR00121438__BR00121438.parquet
       s3_key: cpg0016-jump/source_4/workspace/profiles/2021_04_26_Batch1/BR00121438/BR00121438.parquet
       sha256: 4fc6a0786531f733afeb2601b53ade17087607cc5a41cfdd20dbd79d6444d565
     - name: 2021_04_26_Batch1__BR00121439__BR00121439.parquet
       s3_key: cpg0016-jump/source_4/workspace/profiles/2021_04_26_Batch1/BR00121439/BR00121439.parquet
       sha256: 3775c9eb34b3aa5db7596f894ebeac7a98f4dca462208aa31e27945ae6ed82f2
+    - name: 2021_05_10_Batch3__BR00121436__BR00121436.parquet
+      s3_key: cpg0016-jump/source_4/workspace/profiles/2021_05_10_Batch3/BR00121436/BR00121436.parquet
+      sha256: 1355f70ba5f36ea2302fa6685f621b5adab3c369a8d05a88ed6b143cbf8d297c
+    - name: 2021_05_17_Batch4__BR00121425__BR00121425.parquet
+      s3_key: cpg0016-jump/source_4/workspace/profiles/2021_05_17_Batch4/BR00121425/BR00121425.parquet
+      sha256: cc2c8159c69a6a8ddd8e3da645456e212a7278326ed2c89c5737a3b60dc9cb54
+    - name: 2021_05_31_Batch2__BR00121437__BR00121437.parquet
+      s3_key: cpg0016-jump/source_4/workspace/profiles/2021_05_31_Batch2/BR00121437/BR00121437.parquet
+      sha256: 2f7d6d09673a3209ce5472cb61b61a828e90a9eec286320cad23a11634f50c00
+    - name: 2021_06_07_Batch5__BR00121430__BR00121430.parquet
+      s3_key: cpg0016-jump/source_4/workspace/profiles/2021_06_07_Batch5/BR00121430/BR00121430.parquet
+      sha256: 9971a1756820658a817e51c3cde0f15f711f6e4436d5c7a7a166833a29454bb3
+    - name: 2021_06_14_Batch6__BR00121429__BR00121429.parquet
+      s3_key: cpg0016-jump/source_4/workspace/profiles/2021_06_14_Batch6/BR00121429/BR00121429.parquet
+      sha256: 5625c470888675f0b4b3098c6e6347150a19a04ace96c9137e714dbc86827a4f
+    - name: 2021_06_21_Batch7__BR00121424__BR00121424.parquet
+      s3_key: cpg0016-jump/source_4/workspace/profiles/2021_06_21_Batch7/BR00121424/BR00121424.parquet
+      sha256: c3c6f9647a135fd0788160bd9683002aaa646868af65bfb2a6dde695a0a16c75
+    - name: 2021_07_12_Batch8__BR00121428__BR00121428.parquet
+      s3_key: cpg0016-jump/source_4/workspace/profiles/2021_07_12_Batch8/BR00121428/BR00121428.parquet
+      sha256: 35d3e4062152988fd291f21e8f640bdb1d1a9560a02c90d2c3ec52c001096d52
+    - name: 2021_07_26_Batch9__BR00121427__BR00121427.parquet
+      s3_key: cpg0016-jump/source_4/workspace/profiles/2021_07_26_Batch9/BR00121427/BR00121427.parquet
+      sha256: f86952c046e1922b1582e9a1b68e22f7737e07a0533d18e4c77a0993bb67c7be
+    - name: 2021_08_02_Batch10__BR00121423__BR00121423.parquet
+      s3_key: cpg0016-jump/source_4/workspace/profiles/2021_08_02_Batch10/BR00121423/BR00121423.parquet
+      sha256: 7f1f6455d18ce2da630f0d5c63b49f3d0486f78ae4089cc2deabf3f87e2490e6
+    - name: 2021_08_09_Batch11__BR00121426__BR00121426.parquet
+      s3_key: cpg0016-jump/source_4/workspace/profiles/2021_08_09_Batch11/BR00121426/BR00121426.parquet
+      sha256: 1bd621c4887ff34f33663dc010476983c8b0f3de97cd230a66c4a1fc633dee4a
     - name: 2021_08_23_Batch12__BR00126113__BR00126113.parquet
       s3_key: cpg0016-jump/source_4/workspace/profiles/2021_08_23_Batch12/BR00126113/BR00126113.parquet
       sha256: 24dde1c5be35a092cd4ff518785f107c0969ad96f176a37d5eabcbcd689a976d
     - name: 2021_08_23_Batch12__BR00126114__BR00126114.parquet
       s3_key: cpg0016-jump/source_4/workspace/profiles/2021_08_23_Batch12/BR00126114/BR00126114.parquet
       sha256: a3a4f7c1d9a780f538ac42ee404f652e3951b44d44b94028a90392cd91cde3b6
+    - name: 2021_08_23_Batch12__BR00126115__BR00126115.parquet
+      s3_key: cpg0016-jump/source_4/workspace/profiles/2021_08_23_Batch12/BR00126115/BR00126115.parquet
+      sha256: 1525ce69496cf403a03e6f107dfff1a618fbbdc5dce61bda0ad5ca4b277cfd13
+    - name: 2021_08_23_Batch12__BR00126116__BR00126116.parquet
+      s3_key: cpg0016-jump/source_4/workspace/profiles/2021_08_23_Batch12/BR00126116/BR00126116.parquet
+      sha256: 88387101d21be42c2fa9c19fe73982db0f9fb346ec1675501c738a48c585e0f6
+    - name: 2021_08_23_Batch12__BR00126117__BR00126117.parquet
+      s3_key: cpg0016-jump/source_4/workspace/profiles/2021_08_23_Batch12/BR00126117/BR00126117.parquet
+      sha256: a1db75b575755253fdc057f31719c26a8ea6cdb779e3aae88128d639feb008b6
+    - name: 2021_08_30_Batch13__BR00127145__BR00127145.parquet
+      s3_key: cpg0016-jump/source_4/workspace/profiles/2021_08_30_Batch13/BR00127145/BR00127145.parquet
+      sha256: fc1b2cdac47a15d5198595587b6dfd590cce15485f8a00b667830c640c2804b2
+    - name: 2021_08_30_Batch13__BR00127146__BR00127146.parquet
+      s3_key: cpg0016-jump/source_4/workspace/profiles/2021_08_30_Batch13/BR00127146/BR00127146.parquet
+      sha256: a648aabac72fe8a120be32c7b7ac6f28e37fe1b186bcbf25e28316be78bf6f3a
+    - name: 2021_08_30_Batch13__BR00127147__BR00127147.parquet
+      s3_key: cpg0016-jump/source_4/workspace/profiles/2021_08_30_Batch13/BR00127147/BR00127147.parquet
+      sha256: 47df59803ed81dffd646c8f174b15af7523b95ffda3fbfcda3a62bc0cb3800e5
+    - name: 2021_08_30_Batch13__BR00127148__BR00127148.parquet
+      s3_key: cpg0016-jump/source_4/workspace/profiles/2021_08_30_Batch13/BR00127148/BR00127148.parquet
+      sha256: ea9155279bc229dfbebba3789adcbc0a764c5abaa516b4f08d9dea0d7dc8b73a
+    - name: 2021_08_30_Batch13__BR00127149__BR00127149.parquet
+      s3_key: cpg0016-jump/source_4/workspace/profiles/2021_08_30_Batch13/BR00127149/BR00127149.parquet
+      sha256: 359644cb7c953ff2d2b7da2871226757ff89c29d763429f77cc88e03e8b1d0fc
+    - name: JUMPCPE-20210623-Run02_20210624_225846__ACPJUM012__ACPJUM012.parquet
+      s3_key: cpg0016-jump/source_5/workspace/profiles/JUMPCPE-20210623-Run02_20210624_225846/ACPJUM012/ACPJUM012.parquet
+      sha256: 78e6270147fb20b1b9d91c6b78da559107c0d8ad0644fbdb72ba84e8e5ba6068
+    - name: JUMPCPE-20210706-Run06_20210706_235916__ACPJUM032__ACPJUM032.parquet
+      s3_key: cpg0016-jump/source_5/workspace/profiles/JUMPCPE-20210706-Run06_20210706_235916/ACPJUM032/ACPJUM032.parquet
+      sha256: ed241c3d0617e7a0ba98170ef11ba444f9d88ff02f8dc501d2ce3f5da0903cb6
+    - name: JUMPCPE-20210712-Run09_20210713_003159__ACPJUM051__ACPJUM051.parquet
+      s3_key: cpg0016-jump/source_5/workspace/profiles/JUMPCPE-20210712-Run09_20210713_003159/ACPJUM051/ACPJUM051.parquet
+      sha256: b1ea2329e3541cc8e2921f8094a04f93de275a551fa09e76655a67cb40dce754
+    - name: JUMPCPE-20210715-Run10_20210715_223420__ACPJUM052__ACPJUM052.parquet
+      s3_key: cpg0016-jump/source_5/workspace/profiles/JUMPCPE-20210715-Run10_20210715_223420/ACPJUM052/ACPJUM052.parquet
+      sha256: 6b9792d3a1fc954f29680acae4e55f6b8375305f110fb3b30ac5b5a156edea74
+    - name: JUMPCPE-20210716-Run11_20210717_192647__ACPJUM061__ACPJUM061.parquet
+      s3_key: cpg0016-jump/source_5/workspace/profiles/JUMPCPE-20210716-Run11_20210717_192647/ACPJUM061/ACPJUM061.parquet
+      sha256: c9dc4b53df7a5129b07a94145a5b57ef001200d271d13dca3b4ceb479e58cedf
+    - name: JUMPCPE-20210716-Run12_20210719_162047__ACPJUM062__ACPJUM062.parquet
+      s3_key: cpg0016-jump/source_5/workspace/profiles/JUMPCPE-20210716-Run12_20210719_162047/ACPJUM062/ACPJUM062.parquet
+      sha256: 13671ab67df2fcdd36eac062c500f87a84cb338370249ae3204f379423633040
+    - name: JUMPCPE-20210719-Run13_20210721_131445__ACPJUM071__ACPJUM071.parquet
+      s3_key: cpg0016-jump/source_5/workspace/profiles/JUMPCPE-20210719-Run13_20210721_131445/ACPJUM071/ACPJUM071.parquet
+      sha256: aeb110a2c48e48bfb2dc60100e95593dfa1fd63111b3c34c041d44bb3c9d2a66
+    - name: JUMPCPE-20210730-Run14_20210731_000211__ACPJUM072__ACPJUM072.parquet
+      s3_key: cpg0016-jump/source_5/workspace/profiles/JUMPCPE-20210730-Run14_20210731_000211/ACPJUM072/ACPJUM072.parquet
+      sha256: 011a2cca7a373d4b39863b93e0bef2888ce6bf0e15cfff1de8b844a3e94221dc
+    - name: JUMPCPE-20210730-Run15_20210801_205335__ACPJUM081__ACPJUM081.parquet
+      s3_key: cpg0016-jump/source_5/workspace/profiles/JUMPCPE-20210730-Run15_20210801_205335/ACPJUM081/ACPJUM081.parquet
+      sha256: 554beeabd5fc489685bc33206778168319c7518a6f6cbd53a1bb20b77cf25c26
+    - name: JUMPCPE-20210730-Run16_20210803_174908__ACPJUM082__ACPJUM082.parquet
+      s3_key: cpg0016-jump/source_5/workspace/profiles/JUMPCPE-20210730-Run16_20210803_174908/ACPJUM082/ACPJUM082.parquet
+      sha256: 8de7278f54185b4a72b22929517967b728cb91e4a677367c8539942eb3a7ae37
+    - name: JUMPCPE-20210806-Run17_20210807_000211__ACPJUM091__ACPJUM091.parquet
+      s3_key: cpg0016-jump/source_5/workspace/profiles/JUMPCPE-20210806-Run17_20210807_000211/ACPJUM091/ACPJUM091.parquet
+      sha256: 18d24d546c0134034420083567343415b642bde32c548f9943c4c1b2f9a56da9
+    - name: JUMPCPE-20210812-Run20_20210815_062625__ACPJUM102__ACPJUM102.parquet
+      s3_key: cpg0016-jump/source_5/workspace/profiles/JUMPCPE-20210812-Run20_20210815_062625/ACPJUM102/ACPJUM102.parquet
+      sha256: 62a5683590bc4c76b2883809224e9e8f97ff33517b8bf994fa58cea979b28512
+    - name: JUMPCPE-20210813-Run21_20210817_031500__ACPJUM111__ACPJUM111.parquet
+      s3_key: cpg0016-jump/source_5/workspace/profiles/JUMPCPE-20210813-Run21_20210817_031500/ACPJUM111/ACPJUM111.parquet
+      sha256: 56812141cf7de2fb9a56ba669ead98f7bac19b830f48a31d4ce99de32e60de6b
+    - name: JUMPCPE-20210820-Run22_20210821_180957__ACPJUM112__ACPJUM112.parquet
+      s3_key: cpg0016-jump/source_5/workspace/profiles/JUMPCPE-20210820-Run22_20210821_180957/ACPJUM112/ACPJUM112.parquet
+      sha256: 8f970466851bbefa9b140bca06562861d87069379e55bb0d9080e9f2d0a7b3be
+    - name: JUMPCPE-20210820-Run23_20210823_145853__ACPJUM121__ACPJUM121.parquet
+      s3_key: cpg0016-jump/source_5/workspace/profiles/JUMPCPE-20210820-Run23_20210823_145853/ACPJUM121/ACPJUM121.parquet
+      sha256: 8e3b28b231a125547cc5e544ead35fb3cc083dca24b4097aebff7844f09dc147
+    - name: JUMPCPE-20210902-Run26_20210903_010341__ACPJUM141__ACPJUM141.parquet
+      s3_key: cpg0016-jump/source_5/workspace/profiles/JUMPCPE-20210902-Run26_20210903_010341/ACPJUM141/ACPJUM141.parquet
+      sha256: 381a2024ab399ceaaf499a1b05fdbe10d732719e00c94037b59fd36ff6cc3930
+    - name: JUMPCPE-20210903-Run27_20210904_215148__ACPJUM142__ACPJUM142.parquet
+      s3_key: cpg0016-jump/source_5/workspace/profiles/JUMPCPE-20210903-Run27_20210904_215148/ACPJUM142/ACPJUM142.parquet
+      sha256: b7e0eeb659631653ad408effbb285a83e3e5509ec94feafd9b8be4bd37f5360d
+    - name: JUMPCPE-20210903-Run27_20210904_215148__ACPJUM151__ACPJUM151.parquet
+      s3_key: cpg0016-jump/source_5/workspace/profiles/JUMPCPE-20210903-Run27_20210904_215148/ACPJUM151/ACPJUM151.parquet
+      sha256: b6e1dcb63803c3257c650473e5c1305a48fc0b8fc64899d13c5fc6e8898967c0
+    - name: JUMPCPE-20210909-Run29_20210910_234236__ACPJUM161__ACPJUM161.parquet
+      s3_key: cpg0016-jump/source_5/workspace/profiles/JUMPCPE-20210909-Run29_20210910_234236/ACPJUM161/ACPJUM161.parquet
+      sha256: 1d4a1d2b688e7b042fdbb648821e96983126d43627891ec7b4b35aa8c6448565
+    - name: JUMPCPE-20210910-Run30_20210912_203428__ACPJUM162__ACPJUM162.parquet
+      s3_key: cpg0016-jump/source_5/workspace/profiles/JUMPCPE-20210910-Run30_20210912_203428/ACPJUM162/ACPJUM162.parquet
+      sha256: f8c0e2cf585336aa112f63b78e8237b14954e1ba2bc4a35829c420987d6a9354
+    - name: JUMPCPE-20211001-Run33_20211001_152017__ACPJUM181__ACPJUM181.parquet
+      s3_key: cpg0016-jump/source_5/workspace/profiles/JUMPCPE-20211001-Run33_20211001_152017/ACPJUM181/ACPJUM181.parquet
+      sha256: 7e22e0d7d8e57055c6b436db376bd431f94d495282fc03cd8c1507397c84ec21
+    - name: JUMPCPE-20211001-Run34_20211003_121618__ACPJUM182__ACPJUM182.parquet
+      s3_key: cpg0016-jump/source_5/workspace/profiles/JUMPCPE-20211001-Run34_20211003_121618/ACPJUM182/ACPJUM182.parquet
+      sha256: 7bbb177864bfeaf8eda9ac1750a1a77534d3c9b7884c1d9e67cd2d860c0c6728
+    - name: JUMPCPE-20211007-Run35_20211007_235529__ACPJUM191__ACPJUM191.parquet
+      s3_key: cpg0016-jump/source_5/workspace/profiles/JUMPCPE-20211007-Run35_20211007_235529/ACPJUM191/ACPJUM191.parquet
+      sha256: d382f4c8f53aacd7217a4a5662d91094db0e17c5b17eea76c00dc8e9827c8afc
+    - name: JUMPCPE-20211014-Run36_20211014_223431__ACPJUM192__ACPJUM192.parquet
+      s3_key: cpg0016-jump/source_5/workspace/profiles/JUMPCPE-20211014-Run36_20211014_223431/ACPJUM192/ACPJUM192.parquet
+      sha256: 12248ffcf625ca74db0bddf83a61da493ce0438bd7770dc8c486db861dbb831f
+    - name: p210824CPU2OS48hw384exp022JUMP__110000293081__110000293081.parquet
+      s3_key: cpg0016-jump/source_6/workspace/profiles/p210824CPU2OS48hw384exp022JUMP/110000293081/110000293081.parquet
+      sha256: 96c52de07ba168790a9a67e2988d8ce2d9967b49c3a9ee0593148ddb88e62016
+    - name: p210830CPU2OS48hw384exp023JUMP__110000293093__110000293093.parquet
+      s3_key: cpg0016-jump/source_6/workspace/profiles/p210830CPU2OS48hw384exp023JUMP/110000293093/110000293093.parquet
+      sha256: fd7bbba4d59e271dc196cfd3552e2456cc3d43cd39599a6c71ad1252119b834c
+    - name: p210831CPU2OS48hw384exp024JUMP__110000294901__110000294901.parquet
+      s3_key: cpg0016-jump/source_6/workspace/profiles/p210831CPU2OS48hw384exp024JUMP/110000294901/110000294901.parquet
+      sha256: a24c55c5b28d9be2f5ea1afa0f260d31e09a5f4c4a4e16c1985154869e0cf931
+    - name: p210906CPU2OS48hw384exp025JUMP__110000294881__110000294881.parquet
+      s3_key: cpg0016-jump/source_6/workspace/profiles/p210906CPU2OS48hw384exp025JUMP/110000294881/110000294881.parquet
+      sha256: 7d3e6a76eb820d44671af090736d0109b3cc90e7cf2de7b4523f15687bd127d8
     - name: p210914CPU2OS48hw384exp027JUMP__110000294936__110000294936.parquet
       s3_key: cpg0016-jump/source_6/workspace/profiles/p210914CPU2OS48hw384exp027JUMP/110000294936/110000294936.parquet
       sha256: 46f72dbc11e6dcb928d1b8addc8fae678e6b58effb0c4e2415f65c910bf78dac
@@ -2328,6 +2559,192 @@ datasets:
     - name: p210920CPU2OS48hw384exp028JUMP__110000296356__110000296356.parquet
       s3_key: cpg0016-jump/source_6/workspace/profiles/p210920CPU2OS48hw384exp028JUMP/110000296356/110000296356.parquet
       sha256: f9b4adbc93a15c408d32af65713e2d91bcc891d0e6f6fb3f22083c7d5baa948e
+    - name: p210927CPU2OS48hw384exp029JUMP__110000296311__110000296311.parquet
+      s3_key: cpg0016-jump/source_6/workspace/profiles/p210927CPU2OS48hw384exp029JUMP/110000296311/110000296311.parquet
+      sha256: 3f63b4084c636cc60bcecef835757ccfd904952761736f0b6e990bee71a90a2c
+    - name: p210928CPU2OS48hw384exp030JUMP__110000296361__110000296361.parquet
+      s3_key: cpg0016-jump/source_6/workspace/profiles/p210928CPU2OS48hw384exp030JUMP/110000296361/110000296361.parquet
+      sha256: e0afdcfc5c2d52a2b07f6c2bcde812a05b96f87d045abdf30d7cbe260d747f51
+    - name: p210928CPU2OS48hw384exp030JUMP__110000296387__110000296387.parquet
+      s3_key: cpg0016-jump/source_6/workspace/profiles/p210928CPU2OS48hw384exp030JUMP/110000296387/110000296387.parquet
+      sha256: caf96d993cc5c73c941d69446c56bc5cf4cf776747f483b6365402640f18fe46
+    - name: p211004CPU2OS48hw384exp031JUMP__110000295561__110000295561.parquet
+      s3_key: cpg0016-jump/source_6/workspace/profiles/p211004CPU2OS48hw384exp031JUMP/110000295561/110000295561.parquet
+      sha256: a971b0b10f1c4c85a3d1a7d1f60779ebc958ec7820bf9baf2a89dbc52ee01810
+    - name: p211004CPU2OS48hw384exp031JUMP__110000296296__110000296296.parquet
+      s3_key: cpg0016-jump/source_6/workspace/profiles/p211004CPU2OS48hw384exp031JUMP/110000296296/110000296296.parquet
+      sha256: aef3e2fcfa1521da0f97a87a2f8b75d6f2952a9fa74a89b0f27d82e0294ffb80
+    - name: p211012CPU2OS48hw384exp033JUMP__110000295601__110000295601.parquet
+      s3_key: cpg0016-jump/source_6/workspace/profiles/p211012CPU2OS48hw384exp033JUMP/110000295601/110000295601.parquet
+      sha256: ac4f39da528b8c6cd19bb880493250849196d9959a66b7e162a31018addab9b5
+    - name: p211012CPU2OS48hw384exp033JUMP__110000295627__110000295627.parquet
+      s3_key: cpg0016-jump/source_6/workspace/profiles/p211012CPU2OS48hw384exp033JUMP/110000295627/110000295627.parquet
+      sha256: e0c3af40121ed1f4f6e1c497c1175ccccab3287c78687c4ff34879c1c7472001
+    - name: p211102CPU2OS48hw384exp034JUMP__110000295511__110000295511.parquet
+      s3_key: cpg0016-jump/source_6/workspace/profiles/p211102CPU2OS48hw384exp034JUMP/110000295511/110000295511.parquet
+      sha256: 5a9ac161a439c2e30e28d0c5a8f2b56a9824b63a77b694b112c494d55eb6f36a
+    - name: p211102CPU2OS48hw384exp034JUMP__110000295541__110000295541.parquet
+      s3_key: cpg0016-jump/source_6/workspace/profiles/p211102CPU2OS48hw384exp034JUMP/110000295541/110000295541.parquet
+      sha256: 35d20fc77fd6cb88a862774dcc20a1d0ad536ec5c8df1f5a8a37fe7610869783
+    - name: p211109CPU2OS48hw384exp035JUMP__110000295514__110000295514.parquet
+      s3_key: cpg0016-jump/source_6/workspace/profiles/p211109CPU2OS48hw384exp035JUMP/110000295514/110000295514.parquet
+      sha256: bf0558dd1a1a19715f516bb1130e13839699c0808ff6666f4b4c431e9675cbdb
+    - name: p211109CPU2OS48hw384exp035JUMP__110000296161__110000296161.parquet
+      s3_key: cpg0016-jump/source_6/workspace/profiles/p211109CPU2OS48hw384exp035JUMP/110000296161/110000296161.parquet
+      sha256: c292c189c98346670f4446e88ddf9f34937a4c37748ca8a7bf6ed36226223dfc
+    - name: p211123CPU2OS48hw384exp036JUMP__110000297116__110000297116.parquet
+      s3_key: cpg0016-jump/source_6/workspace/profiles/p211123CPU2OS48hw384exp036JUMP/110000297116/110000297116.parquet
+      sha256: 86324f460d3104014d194281ae3efb045d669854516f4d49fb649d86f6509ae3
+    - name: p211123CPU2OS48hw384exp036JUMP__110000297122__110000297122.parquet
+      s3_key: cpg0016-jump/source_6/workspace/profiles/p211123CPU2OS48hw384exp036JUMP/110000297122/110000297122.parquet
+      sha256: df64c0603b904fd83cab328c63e932c408e276920a6d3da305a8262932ef1eb5
+    - name: 20210719_Run1__CP1-SC1-25__CP1-SC1-25.parquet
+      s3_key: cpg0016-jump/source_7/workspace/profiles/20210719_Run1/CP1-SC1-25/CP1-SC1-25.parquet
+      sha256: f4e1307f547a77783769c290e167f7978312144697b11307ecae8b5bd2bbdf82
+    - name: 20210723_Run2__CP2-SC1-25__CP2-SC1-25.parquet
+      s3_key: cpg0016-jump/source_7/workspace/profiles/20210723_Run2/CP2-SC1-25/CP2-SC1-25.parquet
+      sha256: 12fa0b4fc4eef1645251c1172e9427f74c3c8c70673194c1f851988591b04bf8
+    - name: 20210727_Run3__CP3-SC1-25__CP3-SC1-25.parquet
+      s3_key: cpg0016-jump/source_7/workspace/profiles/20210727_Run3/CP3-SC1-25/CP3-SC1-25.parquet
+      sha256: a450707f0ce77702224dea812f6133e90ab739932357691943ea7cbe45180dec
+    - name: 20210731_Run4__CP4-SC1-25__CP4-SC1-25.parquet
+      s3_key: cpg0016-jump/source_7/workspace/profiles/20210731_Run4/CP4-SC1-25/CP4-SC1-25.parquet
+      sha256: 98c012bbeb3c5bbdeb579cb214028e890fac38ddc629d414f197cdd4d7f1ad99
+    - name: 20210803_Run5__CP5-SC1-25__CP5-SC1-25.parquet
+      s3_key: cpg0016-jump/source_7/workspace/profiles/20210803_Run5/CP5-SC1-25/CP5-SC1-25.parquet
+      sha256: b8a5c6009137592cb23dcb322b077da5a3c818cecfeb476e0a499cd02bce3682
+    - name: 20211126_Run7__CP1-SC2-25__CP1-SC2-25.parquet
+      s3_key: cpg0016-jump/source_7/workspace/profiles/20211126_Run7/CP1-SC2-25/CP1-SC2-25.parquet
+      sha256: 1f8946272ab0206bbafc005bbca8137dbafccaa4d8e55216715d161c0f536ebe
+    - name: 20211211_Run9M__CP3-SC2-25M__CP3-SC2-25M.parquet
+      s3_key: cpg0016-jump/source_7/workspace/profiles/20211211_Run9M/CP3-SC2-25M/CP3-SC2-25M.parquet
+      sha256: 831122635f564a9455ee36e3725e54dbe883fd6e4b3789e8f2f53999dbae9542
+    - name: J1__A1170384__A1170384.parquet
+      s3_key: cpg0016-jump/source_8/workspace/profiles/J1/A1170384/A1170384.parquet
+      sha256: 3ab7fe731e8465387269aafa93e90a47d6ea462691b89c7cdd9f1a044f45dc72
+    - name: J2__A1170490__A1170490.parquet
+      s3_key: cpg0016-jump/source_8/workspace/profiles/J2/A1170490/A1170490.parquet
+      sha256: 312818caa24ef2af6399aae3114b00f02e7c87eabb1c2f6e7d112b1839edb26d
+    - name: J3__A1166127__A1166127.parquet
+      s3_key: cpg0016-jump/source_8/workspace/profiles/J3/A1166127/A1166127.parquet
+      sha256: 9ab8c45d25d5a3d5b1336a55c97bc9143fcb72bc68aa173e334c75f5299f34ca
+    - name: J4__A1166179__A1166179.parquet
+      s3_key: cpg0016-jump/source_8/workspace/profiles/J4/A1166179/A1166179.parquet
+      sha256: 5871e784df68a3b7348540b0cc21a7c1f63bbf1246800f26a2b40eb980bec649
+    - name: 20210825_Run6__GR00003394__GR00003394.parquet
+      s3_key: cpg0016-jump/source_9/workspace/profiles/20210825_Run6/GR00003394/GR00003394.parquet
+      sha256: 9c6115e09920f28d9e3da9884711ca33efcc3130b60528e91fa68bf249d6b830
+    - name: 20210831-Run7__GR00003334__GR00003334.parquet
+      s3_key: cpg0016-jump/source_9/workspace/profiles/20210831-Run7/GR00003334/GR00003334.parquet
+      sha256: 381957346fca8e0d9b8bab45c09737e4258383a24d94226a75e6243e295307ca
+    - name: 20210901_Run8__GR00003340__GR00003340.parquet
+      s3_key: cpg0016-jump/source_9/workspace/profiles/20210901_Run8/GR00003340/GR00003340.parquet
+      sha256: e7db3a964e2cde05d95dcb573047472806f6645d18dfc86ba25598ca0647d5b9
+    - name: 20210914-Run9__GR00003300__GR00003300.parquet
+      s3_key: cpg0016-jump/source_9/workspace/profiles/20210914-Run9/GR00003300/GR00003300.parquet
+      sha256: 71d42508168fe713299a22180b11e047fb70da5b0a18f53d262833b080cd3a07
+    - name: 20210915-Run10__GR00003310__GR00003310.parquet
+      s3_key: cpg0016-jump/source_9/workspace/profiles/20210915-Run10/GR00003310/GR00003310.parquet
+      sha256: 3b64327fc796105fc9c2ea9406aca93d81affa6c4c0d277eccde1962682da282
+    - name: 20210918-Run11__GR00004371__GR00004371.parquet
+      s3_key: cpg0016-jump/source_9/workspace/profiles/20210918-Run11/GR00004371/GR00004371.parquet
+      sha256: cb8f7ffda59c64a0f31328284c6077d8809cd8936c5fb1f8a4088b286cee4cb7
+    - name: 20211013-Run14__GR00003283__GR00003283.parquet
+      s3_key: cpg0016-jump/source_9/workspace/profiles/20211013-Run14/GR00003283/GR00003283.parquet
+      sha256: 4d61809e90886d9d013a3568e57857f8b64dc222879d02417ed88650e8921dd8
+    - name: 20211102-Run15__GR00004395__GR00004395.parquet
+      s3_key: cpg0016-jump/source_9/workspace/profiles/20211102-Run15/GR00004395/GR00004395.parquet
+      sha256: 2cb5d585fa45459404d923117b12c4135e2b8471c5e98d17f4ebc7a2e6dfd44d
+    - name: 20211103-Run16__GR00004409__GR00004409.parquet
+      s3_key: cpg0016-jump/source_9/workspace/profiles/20211103-Run16/GR00004409/GR00004409.parquet
+      sha256: c491ebf491f30c1ed3754fa6d00aaa8b1b0238d3acfd2ab4cc48099cd2127a03
+    - name: 2021_08_03_U2OS_48_hr_run12__Dest210726-160150__Dest210726-160150.parquet
+      s3_key: cpg0016-jump/source_10/workspace/profiles/2021_08_03_U2OS_48_hr_run12/Dest210726-160150/Dest210726-160150.parquet
+      sha256: cea941a3dc3576fa2f41117980efeac9b7725ce96b8ac65b59e87f6eaf138414
+    - name: 2021_08_09_U2OS_48_hr_run13__Dest210727-153003__Dest210727-153003.parquet
+      s3_key: cpg0016-jump/source_10/workspace/profiles/2021_08_09_U2OS_48_hr_run13/Dest210727-153003/Dest210727-153003.parquet
+      sha256: 6c41a659d2c97afe67847db5effc468f0093dcfe650c96ddb69cd419dddfd8c3
+    - name: 2021_08_12_U2OS_48_hr_run15__Dest210803-153958__Dest210803-153958.parquet
+      s3_key: cpg0016-jump/source_10/workspace/profiles/2021_08_12_U2OS_48_hr_run15/Dest210803-153958/Dest210803-153958.parquet
+      sha256: e3207d6bfd6ee53794aaadda549c288ca6d4593d57536056258c5f5f9cd98c2b
+    - name: 2021_08_17_U2OS_48_hr_run16__Dest210809-134534__Dest210809-134534.parquet
+      s3_key: cpg0016-jump/source_10/workspace/profiles/2021_08_17_U2OS_48_hr_run16/Dest210809-134534/Dest210809-134534.parquet
+      sha256: f4dbb41f8e68e2d677fef944b788d42f17ebb7d6002c76e58b80a90e86601570
+    - name: 2021_08_20_U2OS_48_hr_run17__Dest210810-173723__Dest210810-173723.parquet
+      s3_key: cpg0016-jump/source_10/workspace/profiles/2021_08_20_U2OS_48_hr_run17/Dest210810-173723/Dest210810-173723.parquet
+      sha256: 7acc62bcee6772e0bd39789a113f452470949a2deae7f4d39237715eebd0b18b
+    - name: 2021_08_23_U2OS_48_hr_run18__Dest210823-172450__Dest210823-172450.parquet
+      s3_key: cpg0016-jump/source_10/workspace/profiles/2021_08_23_U2OS_48_hr_run18/Dest210823-172450/Dest210823-172450.parquet
+      sha256: 304edd5d19d4559de8461fbbf0de7b6ddd5a8aa987a3d75da18a020465ce1ddd
+    - name: Batch2__LM37-70_1__LM37-70_1.parquet
+      s3_key: cpg0016-jump/source_11/workspace/profiles/Batch2/LM37-70_1/LM37-70_1.parquet
+      sha256: 7a1ccd599c3adf7ebd359debbd128125d49a56e540e8b602f81aacc3f138e0dc
+    - name: Batch2__LM37-70_2__LM37-70_2.parquet
+      s3_key: cpg0016-jump/source_11/workspace/profiles/Batch2/LM37-70_2/LM37-70_2.parquet
+      sha256: 17da793c5f8671434fbf5053acf0646d36dbfe89f7e74f6a9b69b3d79e0d5fc9
+    - name: Batch3__EC133-171LM1__EC133-171LM1.parquet
+      s3_key: cpg0016-jump/source_11/workspace/profiles/Batch3/EC133-171LM1/EC133-171LM1.parquet
+      sha256: 39df5f5b25e59a2023e68cf40cc14a3b3a7740137910b8d4297950d578323c10
+    - name: Batch3__EC133-171LM2__EC133-171LM2.parquet
+      s3_key: cpg0016-jump/source_11/workspace/profiles/Batch3/EC133-171LM2/EC133-171LM2.parquet
+      sha256: d67df0256cb273254445f43421f0eab3d025da4c0b985b4502e39d88487c0087
+    - name: Batch4__EC103-132LM2__EC103-132LM2.parquet
+      s3_key: cpg0016-jump/source_11/workspace/profiles/Batch4/EC103-132LM2/EC103-132LM2.parquet
+      sha256: f7390b7489af87160e2966d0d8ae29b251f5a2f9583a1930ec957b81ba908482
+    - name: Batch5__LM71-102_1__LM71-102_1.parquet
+      s3_key: cpg0016-jump/source_11/workspace/profiles/Batch5/LM71-102_1/LM71-102_1.parquet
+      sha256: 19b2cae52172696cfe2a378ff529dc6eddc67a9ab75e76b9fd61fddfec66b592
+    - name: Batch5__LM71-102_2__LM71-102_2.parquet
+      s3_key: cpg0016-jump/source_11/workspace/profiles/Batch5/LM71-102_2/LM71-102_2.parquet
+      sha256: 083ef0c6df0ddeb107875a29fb9276e025ead8a7a161504208c0671ff85c877c
+    - name: 20220914_Run1__CP-CC9-R1-29__CP-CC9-R1-29.parquet
+      s3_key: cpg0016-jump/source_13/workspace/profiles/20220914_Run1/CP-CC9-R1-29/CP-CC9-R1-29.parquet
+      sha256: 3eb31fa392799c2513b9ef7137926e09c5a5fad2af4e6a924cf8a40c283f6005
+    - name: 20221009_Run2__CP-CC9-R2-29__CP-CC9-R2-29.parquet
+      s3_key: cpg0016-jump/source_13/workspace/profiles/20221009_Run2/CP-CC9-R2-29/CP-CC9-R2-29.parquet
+      sha256: 21b255e40d65a89de0bb3aa591620d1b5c8e7e4d91cde5c8ee1d227ff505e458
+    - name: 20221017_Run3__CP-CC9-R3-29__CP-CC9-R3-29.parquet
+      s3_key: cpg0016-jump/source_13/workspace/profiles/20221017_Run3/CP-CC9-R3-29/CP-CC9-R3-29.parquet
+      sha256: ab69a386ecf8633293f4af14b21b753a60c08695ab3139753aae8b8b9ff64882
+    - name: 20221109_Run5__CP-CC9-R5-29__CP-CC9-R5-29.parquet
+      s3_key: cpg0016-jump/source_13/workspace/profiles/20221109_Run5/CP-CC9-R5-29/CP-CC9-R5-29.parquet
+      sha256: 24beca1b36a52c608f6e572dbb40a78a8e2012e5c51aae5e29834fe8cdd7adc8
+    - name: 20221120_Run6__CP-CC9-R6-29__CP-CC9-R6-29.parquet
+      s3_key: cpg0016-jump/source_13/workspace/profiles/20221120_Run6/CP-CC9-R6-29/CP-CC9-R6-29.parquet
+      sha256: a96eb782caf6c43f364d02fe6a14aa6bed74f1cb5c1117678110a984de389eec
+    - name: 20221120_Run6__CP-CC9-R7-29__CP-CC9-R7-29.parquet
+      s3_key: cpg0016-jump/source_13/workspace/profiles/20221120_Run6/CP-CC9-R7-29/CP-CC9-R7-29.parquet
+      sha256: 0cb0d562d7a74a8c13394be18e6baa19126d14d7556e32199272dddf22dd879c
+    - name: 20210614_Batch_1__1053600674__1053600674.csv
+      s3_key: cpg0016-jump/source_2/workspace/backend/20210614_Batch_1/1053600674/1053600674.csv
+      sha256: a4b6b133900c3d3306fe6d8b605532f14994cb629baf31837d39cf34e4a2f2d4
+    - name: 20210621_Batch_3__1053599503__1053599503.csv
+      s3_key: cpg0016-jump/source_2/workspace/backend/20210621_Batch_3/1053599503/1053599503.csv
+      sha256: 7986914b6f4c018b0d91f8d5e3dbc548ba97f0d3b215e6e0ec4e723fd6036086
+    - name: 20210712_Batch_5__1053597936__1053597936.csv
+      s3_key: cpg0016-jump/source_2/workspace/backend/20210712_Batch_5/1053597936/1053597936.csv
+      sha256: b59a9b82b6ce9fbe59292cdbc3b2650685caa48b30028f1a62ce6846d0bb83ab
+    - name: 20210719_Batch_6__1086293911__1086293911.csv
+      s3_key: cpg0016-jump/source_2/workspace/backend/20210719_Batch_6/1086293911/1086293911.csv
+      sha256: a4369fead504a29be49bf249fc9cfc7da9f7c26b49187fdd477b9ed863aac1d7
+    - name: 20210726_Batch_7__1086293492__1086293492.csv
+      s3_key: cpg0016-jump/source_2/workspace/backend/20210726_Batch_7/1086293492/1086293492.csv
+      sha256: 653f2b0102636a7b31bfacd310781521165ba53af05eb114ca87510d383272d4
+    - name: 20210802_Batch_8__1086293133__1086293133.csv
+      s3_key: cpg0016-jump/source_2/workspace/backend/20210802_Batch_8/1086293133/1086293133.csv
+      sha256: 54d9a6e461822e3107dc142147c954a73450e1a931991973a627ecc567b1b218
+    - name: 20210808_Batch_4__1086292884__1086292884.csv
+      s3_key: cpg0016-jump/source_2/workspace/backend/20210808_Batch_4/1086292884/1086292884.csv
+      sha256: 6f7d77ac903e6939ffd24594ac36421abe52501232da2c25b4903699e0ebcc84
+    - name: 20210816_Batch_9__1086292389__1086292389.csv
+      s3_key: cpg0016-jump/source_2/workspace/backend/20210816_Batch_9/1086292389/1086292389.csv
+      sha256: de438ea832288b7d26ffdef6ae5d0605e3d8d8f3b62b16374f272cb48e7ba9f3
+    - name: 20210823_Batch_10__1086292037__1086292037.csv
+      s3_key: cpg0016-jump/source_2/workspace/backend/20210823_Batch_10/1086292037/1086292037.csv
+      sha256: f30643225558ad20d4905f8d3d7829f39c2dfebc76ddbdf5553085ef1b5cd5b3
+    - name: 20211003_Batch_13__1086289686__1086289686.csv
+      s3_key: cpg0016-jump/source_2/workspace/backend/20211003_Batch_13/1086289686/1086289686.csv
+      sha256: 01903131aa8c6c22247d228fd9e4ea7860631d54c8e8b10c99a8c057d642608e
     - name: CP59__JCPQC051__JCPQC051.csv
       s3_key: cpg0016-jump/source_3/workspace/backend/CP59/JCPQC051/JCPQC051.csv
       sha256: ef0f039e1a0cf1be51c4ffb42791d1dcac4b9a726fbb0f96f8b1bd2076b3b496
@@ -2340,18 +2757,219 @@ datasets:
     - name: CP60__JCPQC054__JCPQC054.csv
       s3_key: cpg0016-jump/source_3/workspace/backend/CP60/JCPQC054/JCPQC054.csv
       sha256: 80bac206277eb922db7e749b1835a924d08674897585b4338efd16a3ef0a8cbf
+    - name: CP_25_all_Phenix1__JCPQC016__JCPQC016.csv
+      s3_key: cpg0016-jump/source_3/workspace/backend/CP_25_all_Phenix1/JCPQC016/JCPQC016.csv
+      sha256: 450698389efb09ed9707cc8bd8e9cbe49c2eb1ca72540cd6bb10857cc3acfd08
+    - name: CP_25_all_Phenix1__JCPQC017__JCPQC017.csv
+      s3_key: cpg0016-jump/source_3/workspace/backend/CP_25_all_Phenix1/JCPQC017/JCPQC017.csv
+      sha256: d6dc5cf6559dc059f146c9ff233c22caa2a287994034ac299643f8e9d02a189b
+    - name: CP_26_all_Phenix1__JCPQC018__JCPQC018.csv
+      s3_key: cpg0016-jump/source_3/workspace/backend/CP_26_all_Phenix1/JCPQC018/JCPQC018.csv
+      sha256: 75b07a98ba6ab841871a7192aa12ce443114898c2aaee1f8d8e6f40844309b8d
+    - name: CP_26_all_Phenix1__JCPQC019__JCPQC019.csv
+      s3_key: cpg0016-jump/source_3/workspace/backend/CP_26_all_Phenix1/JCPQC019/JCPQC019.csv
+      sha256: ef3ba7bbed79be12f43245059c28a4ad4d7ea3bd515bf67a58d08269ad1b78c2
+    - name: CP_27_all_Phenix1__JCPQC020__JCPQC020.csv
+      s3_key: cpg0016-jump/source_3/workspace/backend/CP_27_all_Phenix1/JCPQC020/JCPQC020.csv
+      sha256: 7bc8607df97210b1bf0d503b638aa5124b40229a64247ef8eaa52a0becef3bce
+    - name: CP_27_all_Phenix1__JCPQC021__JCPQC021.csv
+      s3_key: cpg0016-jump/source_3/workspace/backend/CP_27_all_Phenix1/JCPQC021/JCPQC021.csv
+      sha256: 0a7d219627a1f016472d8b22a848bd7dbd91c0aa5d45ae9621c834a009ca2f04
+    - name: CP_28_all_Phenix1__JCPQC022__JCPQC022.csv
+      s3_key: cpg0016-jump/source_3/workspace/backend/CP_28_all_Phenix1/JCPQC022/JCPQC022.csv
+      sha256: 134b07b81ddc9f20094317e9aac5063fdd5d9df2ce9287cc93f6dabeb3778b9f
+    - name: CP_28_all_Phenix1__JCPQC023__JCPQC023.csv
+      s3_key: cpg0016-jump/source_3/workspace/backend/CP_28_all_Phenix1/JCPQC023/JCPQC023.csv
+      sha256: 558a99246886476e36834367f537d6e1120f412e325486623f31f70e3099d698
+    - name: CP_29_all_Phenix1__JCPQC024__JCPQC024.csv
+      s3_key: cpg0016-jump/source_3/workspace/backend/CP_29_all_Phenix1/JCPQC024/JCPQC024.csv
+      sha256: 0e1cc76fd6da4762e84a6019d418b0a83b03584554deb9bed96a979e90211379
+    - name: CP_29_all_Phenix1__JCPQC025__JCPQC025.csv
+      s3_key: cpg0016-jump/source_3/workspace/backend/CP_29_all_Phenix1/JCPQC025/JCPQC025.csv
+      sha256: dc23796460f149785c342953c719e9e6b15ed961e5341f5da1e866fcbe4c084e
+    - name: CP_31_all_Phenix1__JCPQC028__JCPQC028.csv
+      s3_key: cpg0016-jump/source_3/workspace/backend/CP_31_all_Phenix1/JCPQC028/JCPQC028.csv
+      sha256: 2bf838e55bea4ec3bb220dc2fa2a583684509e162028d82e9aa9d3e996cb2e7a
+    - name: CP_31_all_Phenix1__JCPQC029__JCPQC029.csv
+      s3_key: cpg0016-jump/source_3/workspace/backend/CP_31_all_Phenix1/JCPQC029/JCPQC029.csv
+      sha256: 21a84c465c21ef63b78de9a238b9cd912dca4d83f8ea09fe65c67a0ec272dae0
+    - name: CP_32_all_Phenix1__JCPQC030__JCPQC030.csv
+      s3_key: cpg0016-jump/source_3/workspace/backend/CP_32_all_Phenix1/JCPQC030/JCPQC030.csv
+      sha256: 6eef0f2f5c3fcfa6da6137a13ba120e4bd9bb990c6b4b4d80b70d9ded494b0d4
+    - name: CP_32_all_Phenix1__JCPQC031__JCPQC031.csv
+      s3_key: cpg0016-jump/source_3/workspace/backend/CP_32_all_Phenix1/JCPQC031/JCPQC031.csv
+      sha256: cf1314f3e4fadd2fabc1c66b540ee4797d9a689f8a8e20ef46d28d6050bcbdec
+    - name: CP_33_all_Phenix1__JCPQC032__JCPQC032.csv
+      s3_key: cpg0016-jump/source_3/workspace/backend/CP_33_all_Phenix1/JCPQC032/JCPQC032.csv
+      sha256: cba41dc353bb29b9a611859bf40b8203f47e547ee1cd1a786c18c3a552b940de
+    - name: CP_33_all_Phenix1__JCPQC033__JCPQC033.csv
+      s3_key: cpg0016-jump/source_3/workspace/backend/CP_33_all_Phenix1/JCPQC033/JCPQC033.csv
+      sha256: 090685adf3f55e0332ac46431e836582abc3dae0ba23effdf88cdf7d1a04f0cc
+    - name: CP_34_mix_Phenix1__JCPQC034__JCPQC034.csv
+      s3_key: cpg0016-jump/source_3/workspace/backend/CP_34_mix_Phenix1/JCPQC034/JCPQC034.csv
+      sha256: 6f82128fcf6819873a336488f26c6255f44da56940c9c6bd7de0c8553c73ac10
+    - name: CP_35_all_Phenix1__JCPQC035__JCPQC035.csv
+      s3_key: cpg0016-jump/source_3/workspace/backend/CP_35_all_Phenix1/JCPQC035/JCPQC035.csv
+      sha256: 0b00a985d290b4d847acfc20392ed66cc23416b09a3749fd2bbede46632cbc78
+    - name: CP_35_all_Phenix1__JCPQC036__JCPQC036.csv
+      s3_key: cpg0016-jump/source_3/workspace/backend/CP_35_all_Phenix1/JCPQC036/JCPQC036.csv
+      sha256: 67d4cbd632a3e0353e4c99633ddca5e2f07d5b55f0f541ee7f5755315110316f
+    - name: CP_36_all_Phenix1__JCPQC037__JCPQC037.csv
+      s3_key: cpg0016-jump/source_3/workspace/backend/CP_36_all_Phenix1/JCPQC037/JCPQC037.csv
+      sha256: a7d41264d96bd7b622c5b49d0288b57ea776dc803e538b0165663152237cf228
+    - name: CP_36_all_Phenix1__JCPQC038__JCPQC038.csv
+      s3_key: cpg0016-jump/source_3/workspace/backend/CP_36_all_Phenix1/JCPQC038/JCPQC038.csv
+      sha256: 15499de1262a30cc156a561cd114f27599062878253ee060b9a2ac6560323052
     - name: 2021_04_26_Batch1__BR00121438__BR00121438.csv
       s3_key: cpg0016-jump/source_4/workspace/backend/2021_04_26_Batch1/BR00121438/BR00121438.csv
       sha256: 89706a84a7b95c46c4165494ba451b367bf8a179dcdd2ac5abc339fa2453faa8
     - name: 2021_04_26_Batch1__BR00121439__BR00121439.csv
       s3_key: cpg0016-jump/source_4/workspace/backend/2021_04_26_Batch1/BR00121439/BR00121439.csv
       sha256: 73efceceb9dc3a08f2e9c397686ef5c0bf228673113bc753c3f239b8c399e08e
+    - name: 2021_05_10_Batch3__BR00121436__BR00121436.csv
+      s3_key: cpg0016-jump/source_4/workspace/backend/2021_05_10_Batch3/BR00121436/BR00121436.csv
+      sha256: b30e7c0e010cdf6148ce3b9b794685954112ac0fed6e892cb774252b3ef0b7f0
+    - name: 2021_05_17_Batch4__BR00121425__BR00121425.csv
+      s3_key: cpg0016-jump/source_4/workspace/backend/2021_05_17_Batch4/BR00121425/BR00121425.csv
+      sha256: adaf4f55f87448ee2720501d3baea2ae1bcaa5ac2eac79a35a98eb271f000618
+    - name: 2021_05_31_Batch2__BR00121437__BR00121437.csv
+      s3_key: cpg0016-jump/source_4/workspace/backend/2021_05_31_Batch2/BR00121437/BR00121437.csv
+      sha256: 6f1852d83969c2766fcf5bf4745d8874c10ed700c69c9b9f4658823b258b2296
+    - name: 2021_06_07_Batch5__BR00121430__BR00121430.csv
+      s3_key: cpg0016-jump/source_4/workspace/backend/2021_06_07_Batch5/BR00121430/BR00121430.csv
+      sha256: 19007055d5e443650d44a63d8df282efc06a1c73363550985312dd42fbb04779
+    - name: 2021_06_14_Batch6__BR00121429__BR00121429.csv
+      s3_key: cpg0016-jump/source_4/workspace/backend/2021_06_14_Batch6/BR00121429/BR00121429.csv
+      sha256: e6066d60036a8ec52341240ce440f69c0e8776edcb107a4a9745981d3e7f8bf9
+    - name: 2021_06_21_Batch7__BR00121424__BR00121424.csv
+      s3_key: cpg0016-jump/source_4/workspace/backend/2021_06_21_Batch7/BR00121424/BR00121424.csv
+      sha256: 2d7fe1b40c1b9d7684dabf40f58d5e27bf42b14131c5543073c20169b00ae522
+    - name: 2021_07_12_Batch8__BR00121428__BR00121428.csv
+      s3_key: cpg0016-jump/source_4/workspace/backend/2021_07_12_Batch8/BR00121428/BR00121428.csv
+      sha256: 117a50d74f00eda170dddd95ccb327cd01f3116ffc339dd99e27b880735408ef
+    - name: 2021_07_26_Batch9__BR00121427__BR00121427.csv
+      s3_key: cpg0016-jump/source_4/workspace/backend/2021_07_26_Batch9/BR00121427/BR00121427.csv
+      sha256: e9e802493794b4ea3e99a3b7a4dc9728b42cdc2c5f67b519ffdd23271d4f067d
+    - name: 2021_08_02_Batch10__BR00121423__BR00121423.csv
+      s3_key: cpg0016-jump/source_4/workspace/backend/2021_08_02_Batch10/BR00121423/BR00121423.csv
+      sha256: 99807fad166b6ac4633e65c78376cadd0c25577e6e746ac2d9f7bc64e8cbd49b
+    - name: 2021_08_09_Batch11__BR00121426__BR00121426.csv
+      s3_key: cpg0016-jump/source_4/workspace/backend/2021_08_09_Batch11/BR00121426/BR00121426.csv
+      sha256: 298e766fe121d4c9b0134faddac6f4cbd5893377a6cf14c463f31ab750b4d982
     - name: 2021_08_23_Batch12__BR00126113__BR00126113.csv
       s3_key: cpg0016-jump/source_4/workspace/backend/2021_08_23_Batch12/BR00126113/BR00126113.csv
       sha256: 0ab611ce946a9bc9a77a7865babc80710af76e64a3c476dbdfcf64bccaae8853
     - name: 2021_08_23_Batch12__BR00126114__BR00126114.csv
       s3_key: cpg0016-jump/source_4/workspace/backend/2021_08_23_Batch12/BR00126114/BR00126114.csv
       sha256: 3ae405111e79fc8ce3108ae88e2cb3df2cd14b4af15cc481df6845dcfd3ccd29
+    - name: 2021_08_23_Batch12__BR00126115__BR00126115.csv
+      s3_key: cpg0016-jump/source_4/workspace/backend/2021_08_23_Batch12/BR00126115/BR00126115.csv
+      sha256: 5b98a46ed257b3e39a00998ba469f3448f2a959085fb127c63544ef0d4a85bb1
+    - name: 2021_08_23_Batch12__BR00126116__BR00126116.csv
+      s3_key: cpg0016-jump/source_4/workspace/backend/2021_08_23_Batch12/BR00126116/BR00126116.csv
+      sha256: 2f7d16a8fec9a7f0585047d3846fbbe392faef05617a27178d70106a911086a7
+    - name: 2021_08_23_Batch12__BR00126117__BR00126117.csv
+      s3_key: cpg0016-jump/source_4/workspace/backend/2021_08_23_Batch12/BR00126117/BR00126117.csv
+      sha256: 957cbe7bceaab4e9d5d074e0e4cb620a6319aa6d66b60237ebc408dbb6e86bb6
+    - name: 2021_08_30_Batch13__BR00127145__BR00127145.csv
+      s3_key: cpg0016-jump/source_4/workspace/backend/2021_08_30_Batch13/BR00127145/BR00127145.csv
+      sha256: f78d054aad8f39c26a456240f3701d2c7339d85861ca7fc07d58e1a03870c539
+    - name: 2021_08_30_Batch13__BR00127146__BR00127146.csv
+      s3_key: cpg0016-jump/source_4/workspace/backend/2021_08_30_Batch13/BR00127146/BR00127146.csv
+      sha256: 102f989636aade8806232ca9693f7975f3de3de941017f5cdf6eb6f9532ac82a
+    - name: 2021_08_30_Batch13__BR00127147__BR00127147.csv
+      s3_key: cpg0016-jump/source_4/workspace/backend/2021_08_30_Batch13/BR00127147/BR00127147.csv
+      sha256: 43b3f2feb638d230fc9cedaddf4e0df96ab4101df816a67638f64afc497a17ce
+    - name: 2021_08_30_Batch13__BR00127148__BR00127148.csv
+      s3_key: cpg0016-jump/source_4/workspace/backend/2021_08_30_Batch13/BR00127148/BR00127148.csv
+      sha256: 05ffeaae11068d869205175778661612ea9a8d0947c1abc0167825f1291dacc6
+    - name: 2021_08_30_Batch13__BR00127149__BR00127149.csv
+      s3_key: cpg0016-jump/source_4/workspace/backend/2021_08_30_Batch13/BR00127149/BR00127149.csv
+      sha256: c257a0de3270ceab92c18935329e8aad3ea998ce5a2c1cfa6802002fa5cb54bf
+    - name: JUMPCPE-20210623-Run02_20210624_225846__ACPJUM012__ACPJUM012.csv
+      s3_key: cpg0016-jump/source_5/workspace/backend/JUMPCPE-20210623-Run02_20210624_225846/ACPJUM012/ACPJUM012.csv
+      sha256: 75183d8dea7e5257da0250d273fcc8baca3ac16b39536a7b77203fc5b686940a
+    - name: JUMPCPE-20210706-Run06_20210706_235916__ACPJUM032__ACPJUM032.csv
+      s3_key: cpg0016-jump/source_5/workspace/backend/JUMPCPE-20210706-Run06_20210706_235916/ACPJUM032/ACPJUM032.csv
+      sha256: d821cfaf9e7ed62b2ff8ec50d2948ff781ffeaa63212ec3a39d37725466e8371
+    - name: JUMPCPE-20210712-Run09_20210713_003159__ACPJUM051__ACPJUM051.csv
+      s3_key: cpg0016-jump/source_5/workspace/backend/JUMPCPE-20210712-Run09_20210713_003159/ACPJUM051/ACPJUM051.csv
+      sha256: 0bc8a87c6323f6ff84cbbc2c58648ce7d9c41a52362821600e3f165aa9a360a1
+    - name: JUMPCPE-20210715-Run10_20210715_223420__ACPJUM052__ACPJUM052.csv
+      s3_key: cpg0016-jump/source_5/workspace/backend/JUMPCPE-20210715-Run10_20210715_223420/ACPJUM052/ACPJUM052.csv
+      sha256: 55d8146d1819173db270fb6c628f6c91ee16db920251c3fefbee1378b97fdd3a
+    - name: JUMPCPE-20210716-Run11_20210717_192647__ACPJUM061__ACPJUM061.csv
+      s3_key: cpg0016-jump/source_5/workspace/backend/JUMPCPE-20210716-Run11_20210717_192647/ACPJUM061/ACPJUM061.csv
+      sha256: 467138c69a8ff3d21a10bf606a22f97cdf0e9e7ec8406dee3d117696a3099281
+    - name: JUMPCPE-20210716-Run12_20210719_162047__ACPJUM062__ACPJUM062.csv
+      s3_key: cpg0016-jump/source_5/workspace/backend/JUMPCPE-20210716-Run12_20210719_162047/ACPJUM062/ACPJUM062.csv
+      sha256: 3047c374878a05060433affb06d71112d64f7ada1ed6efdd88ae41e5555a6e8c
+    - name: JUMPCPE-20210719-Run13_20210721_131445__ACPJUM071__ACPJUM071.csv
+      s3_key: cpg0016-jump/source_5/workspace/backend/JUMPCPE-20210719-Run13_20210721_131445/ACPJUM071/ACPJUM071.csv
+      sha256: 857f482874516524560081046c0fe6803c0fd9abbbfc523d0fdc7d2dafc3ce49
+    - name: JUMPCPE-20210730-Run14_20210731_000211__ACPJUM072__ACPJUM072.csv
+      s3_key: cpg0016-jump/source_5/workspace/backend/JUMPCPE-20210730-Run14_20210731_000211/ACPJUM072/ACPJUM072.csv
+      sha256: 648617ff522fcbf85e193f2467c5bca0b6709b3e0741e1c13a0741ec2c7a8799
+    - name: JUMPCPE-20210730-Run15_20210801_205335__ACPJUM081__ACPJUM081.csv
+      s3_key: cpg0016-jump/source_5/workspace/backend/JUMPCPE-20210730-Run15_20210801_205335/ACPJUM081/ACPJUM081.csv
+      sha256: d259baea51f85f47bd2fb5cc70829390b28b81a77f5181dff35cca7f4573c87d
+    - name: JUMPCPE-20210730-Run16_20210803_174908__ACPJUM082__ACPJUM082.csv
+      s3_key: cpg0016-jump/source_5/workspace/backend/JUMPCPE-20210730-Run16_20210803_174908/ACPJUM082/ACPJUM082.csv
+      sha256: 48043592fa18bdf642d18ea2d614fcabeaa5a791b9089d066db7005ac80d2e1e
+    - name: JUMPCPE-20210806-Run17_20210807_000211__ACPJUM091__ACPJUM091.csv
+      s3_key: cpg0016-jump/source_5/workspace/backend/JUMPCPE-20210806-Run17_20210807_000211/ACPJUM091/ACPJUM091.csv
+      sha256: 70bb29558c31bb00aef7d3cdadbc782d3bd7fcb589eab08503b7445f255e392c
+    - name: JUMPCPE-20210812-Run20_20210815_062625__ACPJUM102__ACPJUM102.csv
+      s3_key: cpg0016-jump/source_5/workspace/backend/JUMPCPE-20210812-Run20_20210815_062625/ACPJUM102/ACPJUM102.csv
+      sha256: cb0c6c70d22c8f9f962ff1117c17536562ef619d75f723c976a605c29cc40d8e
+    - name: JUMPCPE-20210813-Run21_20210817_031500__ACPJUM111__ACPJUM111.csv
+      s3_key: cpg0016-jump/source_5/workspace/backend/JUMPCPE-20210813-Run21_20210817_031500/ACPJUM111/ACPJUM111.csv
+      sha256: e8c8057b926deb1f509222783dd17ea3eef960828b11c23308698df397a93b42
+    - name: JUMPCPE-20210820-Run22_20210821_180957__ACPJUM112__ACPJUM112.csv
+      s3_key: cpg0016-jump/source_5/workspace/backend/JUMPCPE-20210820-Run22_20210821_180957/ACPJUM112/ACPJUM112.csv
+      sha256: 4f0d80c2fc841956577a4dbea36ce84e45f7c0f238693dae1b87e7b8b2c7812a
+    - name: JUMPCPE-20210820-Run23_20210823_145853__ACPJUM121__ACPJUM121.csv
+      s3_key: cpg0016-jump/source_5/workspace/backend/JUMPCPE-20210820-Run23_20210823_145853/ACPJUM121/ACPJUM121.csv
+      sha256: c9b565c8da1919c53c740a64721eb067f24132194bd35c92fc73b3eb8d643ec0
+    - name: JUMPCPE-20210902-Run26_20210903_010341__ACPJUM141__ACPJUM141.csv
+      s3_key: cpg0016-jump/source_5/workspace/backend/JUMPCPE-20210902-Run26_20210903_010341/ACPJUM141/ACPJUM141.csv
+      sha256: f9f221fea90648fae982400d1e79bdb9f00f02e352d14c41f3448caadb650cf4
+    - name: JUMPCPE-20210903-Run27_20210904_215148__ACPJUM142__ACPJUM142.csv
+      s3_key: cpg0016-jump/source_5/workspace/backend/JUMPCPE-20210903-Run27_20210904_215148/ACPJUM142/ACPJUM142.csv
+      sha256: ad01f35105cc86ffb52bfab7ac38732becb0ce73c28e44e4f1aa3b2c67d93535
+    - name: JUMPCPE-20210903-Run27_20210904_215148__ACPJUM151__ACPJUM151.csv
+      s3_key: cpg0016-jump/source_5/workspace/backend/JUMPCPE-20210903-Run27_20210904_215148/ACPJUM151/ACPJUM151.csv
+      sha256: cd51ce74334e3ac0d259386b9aac1f9886e0be001de6bfe3c7d52ba4d699adb4
+    - name: JUMPCPE-20210909-Run29_20210910_234236__ACPJUM161__ACPJUM161.csv
+      s3_key: cpg0016-jump/source_5/workspace/backend/JUMPCPE-20210909-Run29_20210910_234236/ACPJUM161/ACPJUM161.csv
+      sha256: 75fb0e3f50df435149a919b882f185bcf682b57c967a296f4a4d8fe225ea30b1
+    - name: JUMPCPE-20210910-Run30_20210912_203428__ACPJUM162__ACPJUM162.csv
+      s3_key: cpg0016-jump/source_5/workspace/backend/JUMPCPE-20210910-Run30_20210912_203428/ACPJUM162/ACPJUM162.csv
+      sha256: c892937d057ee224bedda4f6bf9af1b4b349b8e0cf4ecdcf683e72ef9f151138
+    - name: JUMPCPE-20211001-Run33_20211001_152017__ACPJUM181__ACPJUM181.csv
+      s3_key: cpg0016-jump/source_5/workspace/backend/JUMPCPE-20211001-Run33_20211001_152017/ACPJUM181/ACPJUM181.csv
+      sha256: 12f8353e256ffb20f47d3fd15645a22e6f63ca7b5330f6969eb9bd9b9ff79924
+    - name: JUMPCPE-20211001-Run34_20211003_121618__ACPJUM182__ACPJUM182.csv
+      s3_key: cpg0016-jump/source_5/workspace/backend/JUMPCPE-20211001-Run34_20211003_121618/ACPJUM182/ACPJUM182.csv
+      sha256: 392a16ccf65c473b62deb696e0144b2d1646a3470c0fe50b1cd5a290df2fa8c4
+    - name: JUMPCPE-20211007-Run35_20211007_235529__ACPJUM191__ACPJUM191.csv
+      s3_key: cpg0016-jump/source_5/workspace/backend/JUMPCPE-20211007-Run35_20211007_235529/ACPJUM191/ACPJUM191.csv
+      sha256: 75984e15d6245ed202f2184fc21fa78b7b2193870a91684b8e1112d26bb3218c
+    - name: JUMPCPE-20211014-Run36_20211014_223431__ACPJUM192__ACPJUM192.csv
+      s3_key: cpg0016-jump/source_5/workspace/backend/JUMPCPE-20211014-Run36_20211014_223431/ACPJUM192/ACPJUM192.csv
+      sha256: 2c44ac867acfb68d45f2800b89fc04b26360b9abc84431ea68bd4a99347e0d5f
+    - name: p210824CPU2OS48hw384exp022JUMP__110000293081__110000293081.csv
+      s3_key: cpg0016-jump/source_6/workspace/backend/p210824CPU2OS48hw384exp022JUMP/110000293081/110000293081.csv
+      sha256: 4fbe779be462751c16e6d139ea071baf9fdda8eb5ac299d8fca768ef04e3d09a
+    - name: p210830CPU2OS48hw384exp023JUMP__110000293093__110000293093.csv
+      s3_key: cpg0016-jump/source_6/workspace/backend/p210830CPU2OS48hw384exp023JUMP/110000293093/110000293093.csv
+      sha256: d50770554c63e6636007171eb74b51849a3942ccc7e35a9e7d7ba5b00afe11cb
+    - name: p210831CPU2OS48hw384exp024JUMP__110000294901__110000294901.csv
+      s3_key: cpg0016-jump/source_6/workspace/backend/p210831CPU2OS48hw384exp024JUMP/110000294901/110000294901.csv
+      sha256: fbf2dcb02c4aa3a57ca699748081accf71661ecfd0f6c20c26de63f1dd8c07ee
+    - name: p210906CPU2OS48hw384exp025JUMP__110000294881__110000294881.csv
+      s3_key: cpg0016-jump/source_6/workspace/backend/p210906CPU2OS48hw384exp025JUMP/110000294881/110000294881.csv
+      sha256: 196d83cb4d88bc4e51cebd1f6b00b172ae5cdb92e57a5577e3402dd5b02effb1
     - name: p210914CPU2OS48hw384exp027JUMP__110000294936__110000294936.csv
       s3_key: cpg0016-jump/source_6/workspace/backend/p210914CPU2OS48hw384exp027JUMP/110000294936/110000294936.csv
       sha256: 00b7ca937db11e4cdad4ff080b2e78ac722e377476173689c29cf7a0a2020ba6
@@ -2364,6 +2982,162 @@ datasets:
     - name: p210920CPU2OS48hw384exp028JUMP__110000296356__110000296356.csv
       s3_key: cpg0016-jump/source_6/workspace/backend/p210920CPU2OS48hw384exp028JUMP/110000296356/110000296356.csv
       sha256: b6646e37e606acd40f516877784a2603fb46a562f04c49ae152eb7e17f6e90f1
+    - name: p210927CPU2OS48hw384exp029JUMP__110000296311__110000296311.csv
+      s3_key: cpg0016-jump/source_6/workspace/backend/p210927CPU2OS48hw384exp029JUMP/110000296311/110000296311.csv
+      sha256: 31a1ad6058f7c74a4d13c5785c7355bae2c577ff6e7577065088df67a7973fd2
+    - name: p210928CPU2OS48hw384exp030JUMP__110000296361__110000296361.csv
+      s3_key: cpg0016-jump/source_6/workspace/backend/p210928CPU2OS48hw384exp030JUMP/110000296361/110000296361.csv
+      sha256: 222574fafd8fa5afa8c239288633dd7da89f9ec65cdf8e60b1692e54efc4f0fd
+    - name: p210928CPU2OS48hw384exp030JUMP__110000296387__110000296387.csv
+      s3_key: cpg0016-jump/source_6/workspace/backend/p210928CPU2OS48hw384exp030JUMP/110000296387/110000296387.csv
+      sha256: 5c27127627ab9dacffc02135db919124cec2f82a8894d85720054e0a0ee5b1a7
+    - name: p211004CPU2OS48hw384exp031JUMP__110000295561__110000295561.csv
+      s3_key: cpg0016-jump/source_6/workspace/backend/p211004CPU2OS48hw384exp031JUMP/110000295561/110000295561.csv
+      sha256: c00b390bfd584ffadf5d23c95dc01afe6f2e7ea42aae052be73a114c4b458961
+    - name: p211004CPU2OS48hw384exp031JUMP__110000296296__110000296296.csv
+      s3_key: cpg0016-jump/source_6/workspace/backend/p211004CPU2OS48hw384exp031JUMP/110000296296/110000296296.csv
+      sha256: 1f74e04b7550bca7882b75dd99401d5056abc59e97088e44517e93c09caeee61
+    - name: p211012CPU2OS48hw384exp033JUMP__110000295601__110000295601.csv
+      s3_key: cpg0016-jump/source_6/workspace/backend/p211012CPU2OS48hw384exp033JUMP/110000295601/110000295601.csv
+      sha256: 0eb8bfe1abd80ab3c5bf21fa3bcb3eaadfd5ff670223c625fff1092e1dfbe358
+    - name: p211012CPU2OS48hw384exp033JUMP__110000295627__110000295627.csv
+      s3_key: cpg0016-jump/source_6/workspace/backend/p211012CPU2OS48hw384exp033JUMP/110000295627/110000295627.csv
+      sha256: 18819e5f8db560f657c736b6bca6aa4d413379f1c827d0b3a3bc8e6d7c1df28a
+    - name: p211102CPU2OS48hw384exp034JUMP__110000295511__110000295511.csv
+      s3_key: cpg0016-jump/source_6/workspace/backend/p211102CPU2OS48hw384exp034JUMP/110000295511/110000295511.csv
+      sha256: a9c13403d42e3dba64ba3df73a2a7f8c9e1e79e9fa9900a956a1493855302a78
+    - name: p211102CPU2OS48hw384exp034JUMP__110000295541__110000295541.csv
+      s3_key: cpg0016-jump/source_6/workspace/backend/p211102CPU2OS48hw384exp034JUMP/110000295541/110000295541.csv
+      sha256: 20d321444b80226e4437dae2b6afa9c377b95077c29ae247ae03551bbbcedf22
+    - name: p211109CPU2OS48hw384exp035JUMP__110000295514__110000295514.csv
+      s3_key: cpg0016-jump/source_6/workspace/backend/p211109CPU2OS48hw384exp035JUMP/110000295514/110000295514.csv
+      sha256: 7c4bf1bfd816c3bfa4153c8ec94a1e3a75b951dea1667cd988f34f5815239194
+    - name: p211109CPU2OS48hw384exp035JUMP__110000296161__110000296161.csv
+      s3_key: cpg0016-jump/source_6/workspace/backend/p211109CPU2OS48hw384exp035JUMP/110000296161/110000296161.csv
+      sha256: 02c4a838930be4f9c0b22db9591daa42a6ca41336e0d8c0ff7b94770d2d924f6
+    - name: p211123CPU2OS48hw384exp036JUMP__110000297116__110000297116.csv
+      s3_key: cpg0016-jump/source_6/workspace/backend/p211123CPU2OS48hw384exp036JUMP/110000297116/110000297116.csv
+      sha256: 19ce25933c79cc9451fdda6fdf19fe4654ce1afd30b4cea1a26e77b07699cbe7
+    - name: p211123CPU2OS48hw384exp036JUMP__110000297122__110000297122.csv
+      s3_key: cpg0016-jump/source_6/workspace/backend/p211123CPU2OS48hw384exp036JUMP/110000297122/110000297122.csv
+      sha256: 6c0df5bd235a5c0c7d0b0d432918d9a674190a70005514bdc1d1391dfe2959a9
+    - name: 20210719_Run1__CP1-SC1-25__CP1-SC1-25.csv
+      s3_key: cpg0016-jump/source_7/workspace/backend/20210719_Run1/CP1-SC1-25/CP1-SC1-25.csv
+      sha256: 1675a875eb8aa7c099055770e6c71869962cf249e2fdd4a6602d3831a3a351fd
+    - name: 20210723_Run2__CP2-SC1-25__CP2-SC1-25.csv
+      s3_key: cpg0016-jump/source_7/workspace/backend/20210723_Run2/CP2-SC1-25/CP2-SC1-25.csv
+      sha256: 55d562aae7d569432b1382e72f97f7514c535bd7a03d99a38b4066e40e1277ef
+    - name: 20210727_Run3__CP3-SC1-25__CP3-SC1-25.csv
+      s3_key: cpg0016-jump/source_7/workspace/backend/20210727_Run3/CP3-SC1-25/CP3-SC1-25.csv
+      sha256: 828a7db2a32d14ae06c7409394ad091cca38c2dd7a04ef49dc42693654253380
+    - name: 20210731_Run4__CP4-SC1-25__CP4-SC1-25.csv
+      s3_key: cpg0016-jump/source_7/workspace/backend/20210731_Run4/CP4-SC1-25/CP4-SC1-25.csv
+      sha256: 6b6e8aeace61d5663d2cef382ca452d94cc338d19e60628055a4794dd79a0a03
+    - name: 20210803_Run5__CP5-SC1-25__CP5-SC1-25.csv
+      s3_key: cpg0016-jump/source_7/workspace/backend/20210803_Run5/CP5-SC1-25/CP5-SC1-25.csv
+      sha256: ae96460b38e1850cb82b7b815593f2613aedd06eab808803eb76f2b805865a62
+    - name: 20211126_Run7__CP1-SC2-25__CP1-SC2-25.csv
+      s3_key: cpg0016-jump/source_7/workspace/backend/20211126_Run7/CP1-SC2-25/CP1-SC2-25.csv
+      sha256: 435e6a64f60735c12b3c182a451bb42dce8312ff4b0dc822076604438d6b2231
+    - name: 20211211_Run9M__CP3-SC2-25M__CP3-SC2-25M.csv
+      s3_key: cpg0016-jump/source_7/workspace/backend/20211211_Run9M/CP3-SC2-25M/CP3-SC2-25M.csv
+      sha256: f40ed01dbdeb53dd139336687ee253247b334e0a428d87734377532ff8cc58f4
+    - name: J1__A1170384__A1170384.csv
+      s3_key: cpg0016-jump/source_8/workspace/backend/J1/A1170384/A1170384.csv
+      sha256: 22c3625c1a07c1504446d11cf0024c3c7ced13b9f87d92ca839ee9f80c0464b9
+    - name: J2__A1170490__A1170490.csv
+      s3_key: cpg0016-jump/source_8/workspace/backend/J2/A1170490/A1170490.csv
+      sha256: 5c0076a38882f9384ece5d5508e155fbbddaa770c5cc6fa4e4e3ef90878d2cb2
+    - name: J3__A1166127__A1166127.csv
+      s3_key: cpg0016-jump/source_8/workspace/backend/J3/A1166127/A1166127.csv
+      sha256: fc1475259ca9dedb28c78b76219ecb22f49b8930022da1df445440c74ff40e9c
+    - name: J4__A1166179__A1166179.csv
+      s3_key: cpg0016-jump/source_8/workspace/backend/J4/A1166179/A1166179.csv
+      sha256: 7a9ccfcce81d9a113be89aa0814cad63754313b439cfe36a0083a998aea42096
+    - name: 20210825_Run6__GR00003394__GR00003394.csv
+      s3_key: cpg0016-jump/source_9/workspace/backend/20210825_Run6/GR00003394/GR00003394.csv
+      sha256: 1b06b90dd74feaabfde6920ec3323c3aba0698ecb65fd448af917f6c948e23d5
+    - name: 20210831-Run7__GR00003334__GR00003334.csv
+      s3_key: cpg0016-jump/source_9/workspace/backend/20210831-Run7/GR00003334/GR00003334.csv
+      sha256: ad11202d99b15c0fca5e91468836f86c5f012ff8d86106389502e196b10bc2eb
+    - name: 20210901_Run8__GR00003340__GR00003340.csv
+      s3_key: cpg0016-jump/source_9/workspace/backend/20210901_Run8/GR00003340/GR00003340.csv
+      sha256: 4efd06d19b68c3bdcdc5012eaa9a1b1fe40ba1036cf4cc9ba9306574a10dc9dd
+    - name: 20210914-Run9__GR00003300__GR00003300.csv
+      s3_key: cpg0016-jump/source_9/workspace/backend/20210914-Run9/GR00003300/GR00003300.csv
+      sha256: 46bdb7ecb2bf8b1716f0a49376be866e2cbddd50a259d2d8943fc329f0bf52aa
+    - name: 20210915-Run10__GR00003310__GR00003310.csv
+      s3_key: cpg0016-jump/source_9/workspace/backend/20210915-Run10/GR00003310/GR00003310.csv
+      sha256: d4cc78ca120e9e394f984373b8496759c206e97d6df8e3af8300df5c1d1d0d79
+    - name: 20210918-Run11__GR00004371__GR00004371.csv
+      s3_key: cpg0016-jump/source_9/workspace/backend/20210918-Run11/GR00004371/GR00004371.csv
+      sha256: 87e899ca731d70f6594cc10fc2b04768e521da5c906fb1ee8800b98241b6aab0
+    - name: 20211013-Run14__GR00003283__GR00003283.csv
+      s3_key: cpg0016-jump/source_9/workspace/backend/20211013-Run14/GR00003283/GR00003283.csv
+      sha256: 34872155c66d27f06b28f38a57dba989ff2ee3a9bc4c51138eebba7ff22e6c65
+    - name: 20211102-Run15__GR00004395__GR00004395.csv
+      s3_key: cpg0016-jump/source_9/workspace/backend/20211102-Run15/GR00004395/GR00004395.csv
+      sha256: 6267ee05a970f63b38fb0d1d9f4361a9c002ae4671f5ceb7f43d496c338383db
+    - name: 20211103-Run16__GR00004409__GR00004409.csv
+      s3_key: cpg0016-jump/source_9/workspace/backend/20211103-Run16/GR00004409/GR00004409.csv
+      sha256: 0f1d9f6995280da0714bb96d9fbd535a85a1a42df94b70842040dddb695318e9
+    - name: 2021_08_03_U2OS_48_hr_run12__Dest210726-160150__Dest210726-160150.csv
+      s3_key: cpg0016-jump/source_10/workspace/backend/2021_08_03_U2OS_48_hr_run12/Dest210726-160150/Dest210726-160150.csv
+      sha256: 0947e7e6201a9d60f8f8ad17d405516ae76d4b59aff88617480a4152a6dc2462
+    - name: 2021_08_09_U2OS_48_hr_run13__Dest210727-153003__Dest210727-153003.csv
+      s3_key: cpg0016-jump/source_10/workspace/backend/2021_08_09_U2OS_48_hr_run13/Dest210727-153003/Dest210727-153003.csv
+      sha256: e596a8fe78b7fb451395010cc1943045b1442f937daf7757e326aad6bc9bae46
+    - name: 2021_08_12_U2OS_48_hr_run15__Dest210803-153958__Dest210803-153958.csv
+      s3_key: cpg0016-jump/source_10/workspace/backend/2021_08_12_U2OS_48_hr_run15/Dest210803-153958/Dest210803-153958.csv
+      sha256: ceba88b3b6356bf79a416a4aec5570c9a52c9287776827ae35d95a214400d6dc
+    - name: 2021_08_17_U2OS_48_hr_run16__Dest210809-134534__Dest210809-134534.csv
+      s3_key: cpg0016-jump/source_10/workspace/backend/2021_08_17_U2OS_48_hr_run16/Dest210809-134534/Dest210809-134534.csv
+      sha256: 3c783c1528bd6ef387acc9fd62d5552e3015438bd042fb5d2baa17602906921e
+    - name: 2021_08_20_U2OS_48_hr_run17__Dest210810-173723__Dest210810-173723.csv
+      s3_key: cpg0016-jump/source_10/workspace/backend/2021_08_20_U2OS_48_hr_run17/Dest210810-173723/Dest210810-173723.csv
+      sha256: 4b522b7f998e73a203f3415e04bca8762e1fcfd574e05ff2d28d0025cef280cd
+    - name: 2021_08_23_U2OS_48_hr_run18__Dest210823-172450__Dest210823-172450.csv
+      s3_key: cpg0016-jump/source_10/workspace/backend/2021_08_23_U2OS_48_hr_run18/Dest210823-172450/Dest210823-172450.csv
+      sha256: 390f55642fd0d7932882618db72fd4baafaff54e3cb10f0ce0d85b4279454251
+    - name: Batch2__LM37-70_1__LM37-70_1.csv
+      s3_key: cpg0016-jump/source_11/workspace/backend/Batch2/LM37-70_1/LM37-70_1.csv
+      sha256: 1a354f041b02196fc857837b3d429e2a2dd656de91eeb9d922ea540ff64d0ea1
+    - name: Batch2__LM37-70_2__LM37-70_2.csv
+      s3_key: cpg0016-jump/source_11/workspace/backend/Batch2/LM37-70_2/LM37-70_2.csv
+      sha256: 2ae2c1d496e154f1cb67185a426a24b746b2043ede588edb1bcc1208a3894843
+    - name: Batch3__EC133-171LM1__EC133-171LM1.csv
+      s3_key: cpg0016-jump/source_11/workspace/backend/Batch3/EC133-171LM1/EC133-171LM1.csv
+      sha256: 3903bbe4deab9c957435aec01746d2b76f6b1a3ddef84fd17fc30133ad08f7d2
+    - name: Batch3__EC133-171LM2__EC133-171LM2.csv
+      s3_key: cpg0016-jump/source_11/workspace/backend/Batch3/EC133-171LM2/EC133-171LM2.csv
+      sha256: 6831283a784e8c7471831a917c4f18e2621b9ce05222d009d19f03221f45dcb6
+    - name: Batch4__EC103-132LM2__EC103-132LM2.csv
+      s3_key: cpg0016-jump/source_11/workspace/backend/Batch4/EC103-132LM2/EC103-132LM2.csv
+      sha256: 2d6f88982a8843f8e8234a770b7c847d53f9d5ee351dad90def14bfa9ff503fc
+    - name: Batch5__LM71-102_1__LM71-102_1.csv
+      s3_key: cpg0016-jump/source_11/workspace/backend/Batch5/LM71-102_1/LM71-102_1.csv
+      sha256: 3321cd217f587f7befdb3734eee984f175709e49ccf5a712ba357a9439aa9e1a
+    - name: Batch5__LM71-102_2__LM71-102_2.csv
+      s3_key: cpg0016-jump/source_11/workspace/backend/Batch5/LM71-102_2/LM71-102_2.csv
+      sha256: a1c8ed80ba1b8eca43e78f7eb47869fef2bcbaa6a075e76e9d24d9447cf906f4
+    - name: 20220914_Run1__CP-CC9-R1-29__CP-CC9-R1-29.csv
+      s3_key: cpg0016-jump/source_13/workspace/backend/20220914_Run1/CP-CC9-R1-29/CP-CC9-R1-29.csv
+      sha256: 4f2ae196316be423a066bcf2de9635625c0fb08fd8c6f88af8af899923da1c31
+    - name: 20221009_Run2__CP-CC9-R2-29__CP-CC9-R2-29.csv
+      s3_key: cpg0016-jump/source_13/workspace/backend/20221009_Run2/CP-CC9-R2-29/CP-CC9-R2-29.csv
+      sha256: 25bef03129ca856623f22a9c54d61e0a6ec538ac61b1d2e29109efecd15e494a
+    - name: 20221017_Run3__CP-CC9-R3-29__CP-CC9-R3-29.csv
+      s3_key: cpg0016-jump/source_13/workspace/backend/20221017_Run3/CP-CC9-R3-29/CP-CC9-R3-29.csv
+      sha256: 1ea48f1a31c4bd022aacbbfb4aba593147fab53f9bee50ebe9fa49c9c860e406
+    - name: 20221109_Run5__CP-CC9-R5-29__CP-CC9-R5-29.csv
+      s3_key: cpg0016-jump/source_13/workspace/backend/20221109_Run5/CP-CC9-R5-29/CP-CC9-R5-29.csv
+      sha256: 35456f75568631c0f08f63751c8931b8583d3858e015e263527af0d95fba7fb9
+    - name: 20221120_Run6__CP-CC9-R6-29__CP-CC9-R6-29.csv
+      s3_key: cpg0016-jump/source_13/workspace/backend/20221120_Run6/CP-CC9-R6-29/CP-CC9-R6-29.csv
+      sha256: 27fdb4cb4bb8669c9c16967334d2f4bc6f9fb143f15033bb317b944e696695c6
+    - name: 20221120_Run6__CP-CC9-R7-29__CP-CC9-R7-29.csv
+      s3_key: cpg0016-jump/source_13/workspace/backend/20221120_Run6/CP-CC9-R7-29/CP-CC9-R7-29.csv
+      sha256: 89ff2d98a188afa49bfbc681975e38330e7f3e1f95e5e5b97e1f923374497f85
 
   jump_cells:
     type: mantispy

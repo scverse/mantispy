@@ -32,8 +32,21 @@ _BASE_URL, _DATASETS = parse_registry(Path(__file__).parent / "registry.yaml")
 # scverse-misc registers loaders by type name across all packages in the process, so ours uses the package name.
 _TYPE = "mantispy"
 
-#: One plate from each of two sources, enough to see a source effect with a small download.
-TARGET2_DEFAULT = ("BR00121438", "JCPQC051")
+#: One plate from each of the eleven sources that ran Target-2. Pinned rather than derived, so the default set
+#: cannot move when a plate is added to the registry or the rows are reordered.
+TARGET2_DEFAULT = (
+    "1053600674",  # source_2
+    "JCPQC051",  # source_3
+    "BR00121438",  # source_4
+    "ACPJUM012",  # source_5
+    "110000294936",  # source_6
+    "CP1-SC1-25",  # source_7
+    "A1170384",  # source_8
+    "GR00003394",  # source_9, the 1536-well plates
+    "Dest210726-160150",  # source_10
+    "LM37-70_1",  # source_11
+    "CP-CC9-R1-29",  # source_13
+)
 
 #: Bumped whenever the assembled jump_cells object changes, so an older cached assembly is not reused.
 _ASSEMBLY_VERSION = 2
@@ -59,10 +72,11 @@ def _plate(file_name: str) -> str:
 
 
 def _plate_files(name: str, plates: Sequence[str] | None, cache_dir: str | Path | None) -> list[Path]:
-    known = [_plate(file.name) for file in _DATASETS[name].files]
-    if plates is not None and (unknown := sorted(set(plates) - set(known))):
+    # A set, because a plate contributes several files and listing it once per file printed all 141 twice.
+    known = {_plate(file.name) for file in _DATASETS[name].files}
+    if plates is not None and (unknown := sorted(set(plates) - known)):
         raise KeyError(f"{name} has no plate(s) {unknown}; available: {sorted(known)}")
-    wanted = set(known if plates is None else plates)
+    wanted = known if plates is None else set(plates)
     return _files(name, cache_dir, select=lambda file_name: _plate(file_name) in wanted)
 
 
@@ -257,25 +271,26 @@ def pki(plates: Sequence[str] | None = None, cache_dir: str | Path | None = None
 def jump_target2(
     plates: Sequence[str] | None = TARGET2_DEFAULT, annotate: bool = True, cache_dir: str | Path | None = None
 ) -> AnnData:
-    """JUMP-Target-2, one 384-well plate map run at many sites.
+    """JUMP-Target-2, one plate map run at many sites.
 
     The JUMP consortium :cite:p:`Chandrasekaran_2023` ran the same plate map in every participating laboratory, so differences between plates from different sources are technical.
     This makes it suited to studying batch and source effects.
-    Twelve of the 141 plates in ``cpg0016-jump`` are pinned here (three sources, two batches each, two plates per batch), which lets :func:`~mantispy.tl.transport` separate a laboratory effect from a plate effect.
+    All 141 of its plates in ``cpg0016-jump`` are pinned here, from eleven sources and 107 batches, which lets :func:`~mantispy.tl.transport` separate a laboratory effect from a batch and a plate effect.
+    source_9 ran it on 1536-well plates, the others on 384-well plates.
 
     Args:
         plates: Plate barcodes to load.
-            The default takes one plate from each of two sources, about 117 MB, most of it the per-well table each plate's cell counts are published in; ``None`` loads all twelve.
+            The default takes one plate from each source, about 0.7 GB, most of it the per-well table each plate's cell counts are published in; ``None`` loads all 141, 9.4 GB.
         annotate: Join the JUMP annotation, which supplies ``Metadata_Perturbation`` and ``Metadata_Control``.
             Downloads another 14 MB.
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Returns:
-        384 wells per plate at well resolution, carrying ``Metadata_Source``, ``Metadata_Batch``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_CellCount``, ``Metadata_SiteCount`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_InChIKey`` and ``Metadata_Control`` (JUMP's 64 DMSO wells per plate).
+        One row per well at well resolution, carrying ``Metadata_Source``, ``Metadata_Batch``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_CellCount``, ``Metadata_SiteCount`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_InChIKey`` and ``Metadata_Control`` (the DMSO wells, 64 per 384-well plate and 256 on source_9's).
 
     Raises:
-        KeyError: A plate is not one of the twelve.
+        KeyError: A plate is not one of the 141.
     """
     paths = _plate_files("jump_target2", plates, cache_dir)
     # The profiles carry no count; each plate's backend table does, among 7,600 other columns.

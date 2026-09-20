@@ -20,7 +20,9 @@ def main(args: argparse.Namespace) -> None:
         "bbbc021": mt.ds.bbbc021,
         "rohban": mt.ds.rohban,
         "pki": mt.ds.pki,
-        "jump_target2": lambda: mt.ds.jump_target2(plates=None),
+        # The default, one plate from each source, is what the tutorials read. All 141 would be 9.4 GB,
+        # against the 10 GB GitHub gives a whole repository for its caches.
+        "jump_target2": mt.ds.jump_target2,
         "jump_cells": mt.ds.jump_cells,
         "jump_plate": mt.ds.jump_plate,
         "oasis_pilot": mt.ds.oasis_pilot,
