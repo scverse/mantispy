@@ -2155,6 +2155,42 @@ datasets:
       s3_key: cpg0033-oasis-pilot/broad/workspace/profiles/2025_07_29_OASIS_HepaRG_Ptx_AD2/BR00147879/BR00147879_normalized_feature_select_batch.csv.gz
       sha256: d0a8962619c21f27ddf18cc14631e7abccc021936c7842aca77f82b4ef1d9cd9
 
+    - name: 2024_03_29_OASIS_U2OS_AssayDev__BR00142737__platemap.txt
+      s3_key: cpg0033-oasis-pilot/broad/workspace/metadata/2024_03_29_OASIS_U2OS_AssayDev/platemap/BR00142737.txt
+      sha256: 7ca1fce7349176ef3535e228c45c6bc61c2c906ebb822a25e1aca10a3251e900
+    - name: 2024_03_29_OASIS_U2OS_AssayDev__BR00142738__platemap.txt
+      s3_key: cpg0033-oasis-pilot/broad/workspace/metadata/2024_03_29_OASIS_U2OS_AssayDev/platemap/BR00142738.txt
+      sha256: 4b1c0d42b17eadb1f65529e87dc04ca9badba9459ef464b9a5d52956f08f3f43
+    - name: 20241115_OASIS_U2OS_AD2__BR00144577__platemap.txt
+      s3_key: cpg0033-oasis-pilot/broad/workspace/metadata/20241115_OASIS_U2OS_AD2/platemap/BR00144577.txt
+      sha256: 082974442d1068ac1dbe20fa0edd152b920afc29f3303a0da11d26cf8510eee9
+    - name: 20241115_OASIS_U2OS_AD2__BR00144582__platemap.txt
+      s3_key: cpg0033-oasis-pilot/broad/workspace/metadata/20241115_OASIS_U2OS_AD2/platemap/BR00144582.txt
+      sha256: ce60128bcfb6d817e95b87b67286c921bb3ee8398f98f6cfb44f592921eb74fc
+    - name: 20241115_OASIS_HepaRG_AD__BR00145690__platemap.txt
+      s3_key: cpg0033-oasis-pilot/broad/workspace/metadata/20241115_OASIS_HepaRG_AD/platemap/BR00145690.txt
+      sha256: 6b122f4a6116f07836975f9d3d9f230bcaab4d60633af2a32532b87dc2243b27
+    - name: 20241115_OASIS_HepaRG_AD__BR00145691__platemap.txt
+      s3_key: cpg0033-oasis-pilot/broad/workspace/metadata/20241115_OASIS_HepaRG_AD/platemap/BR00145691.txt
+      sha256: 1b179b5889578d93c9e6cc45ec881c979986132ab7dbdb6fee6196d6a35dc0d7
+    - name: 20241115_OASIS_HepaRG_AD__BR00145692__platemap.txt
+      s3_key: cpg0033-oasis-pilot/broad/workspace/metadata/20241115_OASIS_HepaRG_AD/platemap/BR00145692.txt
+      sha256: 250096f4df2018cb74aece96daccd25d0e2881d1ed50070e8e540fa87c7a166e
+    - name: 20241115_OASIS_HepaRG_AD__BR00145693__platemap.txt
+      s3_key: cpg0033-oasis-pilot/broad/workspace/metadata/20241115_OASIS_HepaRG_AD/platemap/BR00145693.txt
+      sha256: 0e5a8bb87c5c42e5bb156ee13f9fdeb30c1518b3ba741b1376fa58163fc5b0f1
+    - name: 20241115_OASIS_HepaRG_AD__BR00145694__platemap.txt
+      s3_key: cpg0033-oasis-pilot/broad/workspace/metadata/20241115_OASIS_HepaRG_AD/platemap/BR00145694.txt
+      sha256: 2c67bb3d9999aa289aae5dd86be0500feb976934ca7d06b9ab87294b9fcd55be
+    - name: 20241115_OASIS_HepaRG_AD__BR00145695__platemap.txt
+      s3_key: cpg0033-oasis-pilot/broad/workspace/metadata/20241115_OASIS_HepaRG_AD/platemap/BR00145695.txt
+      sha256: bcefcc403ecdd5a18d69f275d749a92907b34f6b0ccfaeddea792117cd380a63
+    - name: 2025_07_29_OASIS_HepaRG_Ptx_AD2__BR00147878__platemap.txt
+      s3_key: cpg0033-oasis-pilot/broad/workspace/metadata/2025_07_29_OASIS_HepaRG_Ptx_AD2/platemap/BR00147878.txt
+      sha256: e9dd2c881e42d5623674fd1bbb0a58c7d1e8b777b84543f157c11f9105cc5b04
+    - name: 2025_07_29_OASIS_HepaRG_Ptx_AD2__BR00147879__platemap.txt
+      s3_key: cpg0033-oasis-pilot/broad/workspace/metadata/2025_07_29_OASIS_HepaRG_Ptx_AD2/platemap/BR00147879.txt
+      sha256: eda00ee6e9d50e91a935ae5d505c9dc751ac0a81cb46968ccd22147b138acbac
   miami:
     type: mantispy
     doc_header: MIAMI, compounds in U2OS cells.
