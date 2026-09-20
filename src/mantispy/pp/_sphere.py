@@ -230,9 +230,9 @@ def tvn(
 
         Batch correction methods disagree with each other often enough that one metric is not evidence. Compare this with :func:`~mantispy.pp.harmony` on the same object using :func:`~mantispy.metrics.evaluate_correction`, and on a screen with annotated perturbations also :func:`~mantispy.metrics.known_relationships`, which is the measure :cite:t:`Celik_2024` selects it by.
 
-        Measured that way on both screens this package ships, on control-normalized CellProfiler features, this did not beat plain principal components: mechanism retrieval on BBBC021 and replicate retrieval across the eleven JUMP sources both fell, and the share of variance the batch explains rose. The published gains are on learned embeddings, whose batches differ far more in what their controls' covariance looks like. Per-plate normalization has already removed most of that difference from CellProfiler features, so there is little left to align and whitening by a thin control covariance mostly amplifies noise.
+        Measured that way, it trades replicate consistency for relationship recall. Over the six feature sets of :func:`~mantispy.ds.jump_lite` — five learned embeddings and one CellProfiler-equivalent, on four plates run at four laboratories — recall of the compounds sharing an annotated target rose sharply on every one of them, and retrieval of a perturbation's own replicates fell on all but one. Which of the two matters is the question to answer before running this.
 
-        So reach for this on embeddings, or when the controls of one batch genuinely have a different covariance and not merely a different mean, and prefer :func:`~mantispy.pp.harmony` otherwise. Measure either way.
+        What it needs is controls, per batch and not in total, because the covariance it whitens each batch by is estimated from that batch's controls alone. On BBBC021, whose batches are 55 plates with six control wells each, it lowered mechanism retrieval at every width tried. Sixty-four control wells per batch was enough.
     """
     from sklearn.decomposition import PCA
 
