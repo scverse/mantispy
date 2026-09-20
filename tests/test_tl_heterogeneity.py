@@ -226,6 +226,37 @@ def test_the_reference_group_is_not_halved_along_the_plate_order():
     assert called <= 3, f"{called}/15 reference rows called at raw p < 0.05, where 0.05 is calibrated"
 
 
+def test_wells_that_vary_around_one_composition_are_not_called_hits():
+    """Wells differ from each other, so cluster counts are overdispersed relative to multinomial.
+
+    A chi-square on raw counts assumes each well is a multinomial draw from the control
+    composition and called 10 of 20 null wells, down to q = 9e-10. The dispersion the controls
+    show has to set the scale the test measures a well against.
+    """
+    rng = np.random.default_rng(0)
+    shares = rng.dirichlet(np.full(4, 40.0), size=32)
+    layout = {
+        f"{'A' if index < 16 else 'B'}{index % 16 + 1:02d}": dict(
+            enumerate(np.bincount(rng.choice(4, size=300, p=share), minlength=4))
+        )
+        for index, share in enumerate(shares)
+    }
+
+    composition = mt.tl.cluster_composition(_clustered_wells(layout, n_clusters=4))
+    test = composition.uns["mantispy"]["composition_test"]
+    treated = ~composition.obs["Metadata_Control"].to_numpy(dtype=bool)
+
+    called = int((test["qvalue"].to_numpy()[treated] < 0.05).sum())
+    assert called <= 1, f"{called}/16 wells of the control composition called at q < 0.05"
+    assert composition.uns["mantispy"]["composition_dispersion"] > 1.0, "the controls are overdispersed"
+
+
+def test_a_composition_test_without_the_controls_to_calibrate_it_warns():
+    layout = {"A01": {0: 50, 1: 50}, "A02": {0: 52, 1: 48}, "B01": {0: 80, 1: 20}}
+    with pytest.warns(UserWarning, match="dispersion"):
+        mt.tl.cluster_composition(_clustered_wells(layout, n_clusters=2))
+
+
 def _clustered_wells(layout: dict[str, dict[int, int]], n_clusters: int):
     """Cells labeled by well and cluster; wells whose name starts with A are the controls."""
     rows = [

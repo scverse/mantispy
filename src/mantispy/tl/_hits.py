@@ -18,6 +18,9 @@ from mantispy._core.mutation import inplace_or_copy
 
 METHODS = ("mahalanobis", "ks")
 
+#: Scatter estimators :func:`hit_calling` can measure the Mahalanobis distance in.
+COVARIANCES = ("empirical", "robust")
+
 
 def ks_statistic(samples: np.ndarray, reference: np.ndarray) -> np.ndarray:
     """Two-sample KS statistic of each row of ``samples`` against ``reference``.
@@ -61,6 +64,7 @@ def hit_calling(
     groupby: str = "Metadata_Perturbation",
     reference: str | None = "negcon",
     method: str = "mahalanobis",
+    covariance: str = "empirical",
     use_rep: str | None = None,
     n_permutations: int = 1000,
     threshold: float = 0.05,
@@ -91,6 +95,7 @@ def hit_calling(
         groupby: Column defining the groups to test.
         reference: Which rows are the controls. They are split in half, one half to fit the covariance and the other to form the null (see Notes).
         method: ``"mahalanobis"`` scores the median distance of the group's rows from the control centroid, measured in the controls' covariance so that directions the controls already vary in count for less. ``"ks"`` scores the Kolmogorov-Smirnov statistic between the group's and the controls' distance distributions, which detects a shifted subpopulation that leaves the median unchanged. Use it at cell resolution. Its p-value comes from ``scipy.stats.ks_2samp``, so ``n_permutations`` does not apply.
+        covariance: Scatter the Mahalanobis distance is measured in. ``"empirical"`` uses every fitting control row. ``"robust"`` uses the minimum covariance determinant subset, so a few stray control wells stop widening the covariance in their own direction and masking real hits there; it needs more control rows than features, so pair it with ``use_rep``.
         use_rep: Score ``obsm[use_rep]`` instead of ``X``. When the covariance-fitting half of the controls has no more rows than there are features, the covariance is singular and a warning suggests a PCA representation.
         n_permutations: Size of the permutation null. Applies to ``method="mahalanobis"`` only.
         threshold: q-value below which a group is called a hit in ``is_hit``.
@@ -132,6 +137,8 @@ def hit_calling(
 
     if method not in METHODS:
         raise ValueError(f"method must be one of {METHODS}, got {method!r}")
+    if covariance not in COVARIANCES:
+        raise ValueError(f"covariance must be one of {COVARIANCES}, got {covariance!r}")
 
     values = representation(adata, use_rep)
     is_control = reference_mask(adata, reference)
@@ -155,7 +162,7 @@ def hit_calling(
             stacklevel=3,
         )
 
-    centre, whitening = mahalanobis_transform(values[fit_rows])
+    centre, whitening = mahalanobis_transform(values[fit_rows], robust=covariance == "robust", seed=seed)
     # After whitening, the Mahalanobis distance to the control centroid is the norm of the row.
     # Fill gaps before whitening, which mixes columns; one NaN would otherwise zero the row's distance.
     to_control = np.linalg.norm(np.nan_to_num(values - centre) @ whitening, axis=1)

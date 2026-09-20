@@ -27,6 +27,10 @@ from mantispy.tl._hits import ks_statistic
 
 PHASES = ("G1", "S", "G2M")
 
+#: Control wells needed before the spread between them estimates the dispersion the composition test divides by.
+#: Below this the estimate is itself noise, and the test stays anti-conservative.
+_DISPERSION_MIN_CONTROLS = 8
+
 
 def cluster_composition(
     adata: AnnData,
@@ -46,6 +50,7 @@ def cluster_composition(
         A new object with wells as rows and clusters as columns, holding the fraction of each well's cells in each cluster.
         It is a well-level mantispy object, so :func:`~mantispy.tl.map`, :func:`~mantispy.pp.normalize` and the plots accept it.
         ``uns["mantispy"]["composition_test"]`` holds a chi-square test of each well against the pooled control composition, with ``group``, ``statistic``, ``pvalue`` and ``qvalue``.
+        ``uns["mantispy"]["composition_dispersion"]`` holds the factor the controls' own spread contributed, described below.
 
     Raises:
         KeyError: ``obs`` has no column ``cluster_key``.
@@ -54,6 +59,17 @@ def cluster_composition(
         A well with few cells has a noisy composition.
         The chi-square test is computed on counts and accounts for this, but the fractions in ``X`` do not.
         Filter with :func:`~mantispy.pp.well_qc` first.
+
+        Chi-square alone asks whether a well's cells are a multinomial draw from the control composition, and wells
+        vary beyond that: seeding, position and edge effects all move a composition without any perturbation.
+        The statistic is therefore divided by the dispersion the control wells show, ``mean(control statistic) / df``,
+        floored at one. Without that correction, wells drawn from a single composition with mild jitter were called
+        at q = 9e-10, 10 of 20 of them.
+
+        The correction is only as good as the dispersion estimate. With 16 control wells the false positive rate ran
+        near 0.10 against a nominal 0.05 in simulation, and with 32 it ran near 0.06; below
+        ``_DISPERSION_MIN_CONTROLS`` wells the function warns. Power falls accordingly: a composition shift of a few
+        percentage points is not separable from well-to-well variation, and reporting it as significant was the bug.
 
         Clusters no control cell reached are left out of the test, since the controls give them no expected frequency.
         Their fractions stay in ``X``, and :func:`subpopulation_hits` compares within a cluster.
@@ -87,24 +103,26 @@ def cluster_composition(
 
     result = ad.AnnData(X=fractions.astype(np.float32), obs=obs, var=var)
     stamp(result, resolution="well")
-    result.uns["mantispy"]["composition_test"] = _composition_test(result, counts, reference)
+    test, dispersion = _composition_test(result, counts, reference)
+    result.uns["mantispy"]["composition_test"] = test
+    result.uns["mantispy"]["composition_dispersion"] = dispersion
     return result
 
 
-def _composition_test(composition: AnnData, counts: np.ndarray, reference: str | None) -> pd.DataFrame:
-    """Chi-square each well's cluster counts against the pooled control composition."""
-    from scipy.stats import chisquare
+def _composition_test(composition: AnnData, counts: np.ndarray, reference: str | None) -> tuple[pd.DataFrame, float]:
+    """Chi-square each well's cluster counts against the pooled control composition, at the scale the controls vary on."""
+    from scipy.stats import chi2, chisquare
 
     empty = pd.DataFrame(columns=["group", "statistic", "pvalue", "qvalue"])
     if reference is None:
-        return empty
+        return empty, np.nan
     if reference == "negcon" and "Metadata_Control" not in composition.obs:
         get_logger().info("cluster_composition: no Metadata_Control, so no composition test")
-        return empty
+        return empty, np.nan
 
     is_control = reference_mask(composition, reference)
     if not is_control.any():
-        return empty
+        return empty, np.nan
 
     # A cluster no control cell reached has no expected frequency.
     # Flooring it at epsilon made a single treated cell there a chi-square of 1e10 and p exactly zero, and with enough such clusters the expected counts stopped summing to the observed ones, which scipy refuses.
@@ -136,19 +154,38 @@ def _composition_test(composition: AnnData, counts: np.ndarray, reference: str |
         else composition.obs_names.astype(str).to_numpy()
     )
 
-    records = []
+    statistics = np.full(composition.n_obs, np.nan)
     for row in range(composition.n_obs):
         observed = counts[row][reached]
-        statistic, pvalue = np.nan, np.nan
         # A well with no cells in the clusters the controls occupy has no composition to set against theirs.
         # Its fractions are still in X.
         if comparable and observed.sum() >= 1:
-            statistic, pvalue = chisquare(observed, share * observed.sum())
-        records.append({"group": str(names[row]), "statistic": float(statistic), "pvalue": float(pvalue)})
+            statistics[row] = chisquare(observed, share * observed.sum()).statistic
 
-    table = pd.DataFrame(records)
+    # Chi-square asks whether a well's cells are a multinomial draw from the control composition.
+    # Wells also differ from one another, so the counts are overdispersed and the test is anti-conservative:
+    # on wells drawn from one composition with mild jitter it called 10 of 20 at q < 0.05, down to q = 9e-10.
+    # The controls measure that extra spread, and dividing by it is the usual quasi-likelihood correction.
+    dof = max(int(reached.sum()) - 1, 1)
+    control_statistics = statistics[is_control]
+    control_statistics = control_statistics[np.isfinite(control_statistics)]
+    # Below one the controls are tighter than multinomial; scaling down would only invent hits.
+    dispersion = max(1.0, float(np.mean(control_statistics) / dof)) if control_statistics.size else np.nan
+    if comparable and control_statistics.size < _DISPERSION_MIN_CONTROLS:
+        warnings.warn(
+            f"the dispersion the composition test calibrates against comes from {control_statistics.size} control "
+            f"well(s), too few to estimate it; p-values are anti-conservative by however much the wells vary. "
+            f"Use at least {_DISPERSION_MIN_CONTROLS}, or read the statistic as a ranking rather than a test.",
+            UserWarning,
+            stacklevel=3,
+        )
+
+    pvalues = chi2.sf(statistics / dispersion, dof) if np.isfinite(dispersion) else np.full(len(statistics), np.nan)
+    table = pd.DataFrame(
+        {"group": names.astype(str), "statistic": statistics, "pvalue": np.where(np.isnan(statistics), np.nan, pvalues)}
+    )
     table["qvalue"] = benjamini_hochberg(table["pvalue"].to_numpy()) if len(table) else []
-    return table
+    return table, dispersion
 
 
 @inplace_or_copy(expects="cell")
