@@ -106,6 +106,9 @@ def hit_calling(
     Returns:
         ``None``, or the modified copy.
         Writes ``uns["mantispy"][key_added]`` with ``group``, ``n_obs``, ``distance``, ``pvalue``, ``qvalue`` and ``is_hit``, where ``n_obs`` counts the rows the statistic used rather than the rows the group has, and joins ``obs[key_added + "_distance"]`` and ``obs[key_added + "_qvalue"]`` back onto the rows.
+        Also writes ``obs[key_added + "_row_distance"]``, each row's own distance from the control centroid rather than its group's.
+        That is the column a dose-response fit wants: the group statistic is one number repeated over the group's rows, so the controls show no spread and nothing downstream can read a scale off them.
+        Rows that fitted the centroid sit a little closer to it than the held-out controls do, by the same split the Notes describe.
 
     Raises:
         ValueError: ``method`` is not one of ``METHODS``, or ``reference`` selects fewer than four rows.
@@ -240,5 +243,9 @@ def hit_calling(
     labels = as_frame(adata.obs)[groupby].astype(str)
     adata.obs[f"{key_added}_distance"] = lookup["distance"].reindex(labels).to_numpy()
     adata.obs[f"{key_added}_qvalue"] = lookup["qvalue"].reindex(labels).to_numpy()
+    # The group statistic broadcast over its rows says nothing about how one well differs from another, so anything
+    # that reads a response per row, a dose-response fit above all, has no spread to work with. The row's own
+    # distance is already computed here.
+    adata.obs[f"{key_added}_row_distance"] = to_control
     get_logger().info("hit_calling(%s) called %d of %d groups", method, int(table["is_hit"].sum()), len(table))
     return None

@@ -203,9 +203,11 @@ def _hitcall(
     p1 = 1.0 - float(expit((aic - aic_constant) / 2.0))
 
     # P2: one minus the odds of every concentration's median response falling short of the cutoff.
+    # Each factor is the chance that a response this far out still came from a truth below the cutoff, which for a
+    # response above it is the upper tail: tcplfit2 writes this as pt(..., lower.tail = top < 0).
     medians = pd.Series(response).groupby(log_dose).median().to_numpy()
     standardized = (medians - np.sign(top) * cutoff) / np.exp(log_scale)
-    below = t.cdf(standardized, _ERROR_DF) if top >= 0 else t.sf(standardized, _ERROR_DF)
+    below = t.sf(standardized, _ERROR_DF) if top >= 0 else t.cdf(standardized, _ERROR_DF)
     p2 = 1.0 - float(np.prod(below))
 
     # P3: a likelihood profile on the asymptote. The curve is re-parameterized to put its top exactly on the
@@ -270,7 +272,7 @@ def dose_response(
     adata: AnnData,
     compound_key: str = "Metadata_Compound",
     dose_key: str = "Metadata_Concentration",
-    response: str = "hits_distance",
+    response: str = "hits_row_distance",
     min_doses: int = 4,
     min_r_squared: float = 0.8,
     reference: str | None = "negcon",
@@ -305,7 +307,7 @@ def dose_response(
         adata: Object carrying a compound, a dose and a per-row response.
         compound_key: ``obs`` column holding the compound identity.
         dose_key: ``obs`` column holding the concentration. Doses must be positive; rows with a zero dose, such as vehicle, are dropped, since the fit is in log dose.
-        response: ``obs`` column holding the per-row response, normally the distance written by :func:`~mantispy.tl.hit_calling`.
+        response: ``obs`` column holding the per-row response, normally ``hits_row_distance`` from :func:`~mantispy.tl.hit_calling`. Its group-level sibling ``hits_distance`` is one number repeated over each group's rows, so the controls show no spread and no cutoff can be read from them.
         min_doses: Distinct doses below which the curve is skipped and only the trend is reported.
         min_r_squared: Coefficient of determination a fit needs before it is marked ok.
         reference: Rows that set the baseline the response is read against and the spread the cutoff comes from. ``None`` leaves the hit call out unless ``cutoff`` is given.
@@ -336,7 +338,7 @@ def dose_response(
     if response not in obs:
         raise KeyError(
             f"obs has no column {response!r} to use as the response; run mt.tl.hit_calling first, which "
-            "writes obs['hits_distance'], or name another column"
+            "writes obs['hits_row_distance'], or name another column"
         )
 
     baseline, activity_cutoff = _baseline_and_cutoff(adata, response, reference, cutoff)

@@ -180,7 +180,7 @@ def dose_response(
     key: str = "dose_response",
     compound_key: str = "Metadata_Compound",
     dose_key: str = "Metadata_Concentration",
-    response: str = "hits_distance",
+    response: str = "hits_row_distance",
     ax: Axes | None = None,
 ) -> Axes:
     """One compound's response against dose, with the fitted curve when there is one.

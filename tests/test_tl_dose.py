@@ -27,7 +27,7 @@ def dosed():
     # trend, but without a plateau a four-parameter logistic has no EC50 to find and
     # fit_ok would refuse it.
     response[active] += four_parameter_logistic(np.log10(dose[active]), 0.0, 10.0, 0.0, 1.5)
-    adata.obs["hits_distance"] = response
+    adata.obs["hits_row_distance"] = response
     return adata
 
 
@@ -85,7 +85,7 @@ def _inhibitor():
             "Metadata_Concentration": doses,
             "Metadata_Plate": "P1",
             "Metadata_Well": [f"A{i:03d}" for i in range(doses.size)],
-            "hits_distance": response,
+            "hits_row_distance": response,
         }
     )
     return frame
@@ -98,7 +98,7 @@ def test_the_fitted_asymptotes_are_kept():
 
     frame = _inhibitor()
     ec50, hill, bottom, top, r_squared, ok = _fit_curve(
-        np.log10(frame["Metadata_Concentration"].to_numpy()), frame["hits_distance"].to_numpy(), 0.8
+        np.log10(frame["Metadata_Concentration"].to_numpy()), frame["hits_row_distance"].to_numpy(), 0.8
     )
     assert ok
     assert bottom > top, "an inhibitor runs downhill; the fit must be allowed to say so"
@@ -150,7 +150,7 @@ def test_pure_noise_does_not_reach_the_hit_call_threshold():
                 "Metadata_Compound": ["c"] * len(doses) + ["DMSO"] * 12,
                 "Metadata_Concentration": np.concatenate([doses, np.zeros(12)]),
                 "Metadata_Control": [False] * len(doses) + [True] * 12,
-                "hits_distance": rng.normal(0, 1.0, len(doses) + 12),
+                "hits_row_distance": rng.normal(0, 1.0, len(doses) + 12),
             },
             index=[str(index) for index in range(len(doses) + 12)],
         )
@@ -187,7 +187,7 @@ def _one_compound(conc, resp, cutoff):
             "Metadata_Compound": "c",
             "Metadata_Concentration": conc,
             "Metadata_Control": [False] * n,
-            "hits_distance": resp,
+            "hits_row_distance": resp,
         },
         index=[str(index) for index in range(n)],
     )
