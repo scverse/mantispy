@@ -125,6 +125,7 @@ def regress_out(
     adata: AnnData,
     keys: Sequence[str] = ("Metadata_CellCount",),
     by: str | None = "Metadata_Plate",
+    reference: str | None = None,
     key_added: str | None = None,
     copy: bool = False,
 ) -> AnnData | None:
@@ -134,19 +135,24 @@ def regress_out(
         adata: Object to correct.
         keys: ``obs`` columns to regress out. Numeric columns enter directly; categorical ones are one-hot encoded with the first level dropped.
         by: Fit separately within each group of this column, usually the plate, which ``sc.pp.regress_out`` cannot do. ``None`` fits one model globally.
+        reference: Rows to fit on: ``None`` for all, ``"negcon"`` for ``Metadata_Control``, or the name of a boolean ``obs`` column. With a reference, each feature is re-expressed at the reference rows' mean covariate, and a covariate beyond the range the reference rows span is clipped to it, so no row is corrected by extrapolating the fit. Numeric covariates only.
         key_added: Write to ``layers[key_added]`` instead of overwriting ``X``.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes ``X`` or ``layers[key_added]``, where each feature is replaced by its residual plus the fitted value at an anchor: the mean over the whole object for a numeric covariate, and the group's own mean for a categorical one, which keeps the units of the data.
+        ``None``, or the modified copy. Writes ``X`` or ``layers[key_added]``, where each feature is replaced by its residual plus the fitted value at an anchor: the mean over the whole object for a numeric covariate, and the group's own mean for a categorical one, which keeps the units of the data. With ``reference``, the anchor is the reference rows' mean within each group.
 
     Raises:
         KeyError: If any of ``keys`` is not an ``obs`` column.
-        ValueError: If a categorical covariate has missing values.
+        ValueError: If a categorical covariate has missing values, or ``reference`` selects no rows or is given with a categorical covariate.
 
     Notes:
         Missing and infinite values stay as they are, and a feature holding one is fitted on its finite rows.
         A group with no more rows than design columns is left uncorrected and logged.
+
+        Without a reference, every group is re-expressed at the pooled mean covariate, which removes a density difference between plates when every plate spans that value. A plate that does not span it is corrected by extrapolating its own fit, and a warning names it.
+
+        With ``reference="negcon"`` the slope is estimated where density varies for technical reasons only. Fitted on every well of a screen whose treatments change density, the slope also carries the treatments' own effects, so the correction erodes their phenotypes and moves the controls away from the centre a control-referenced normalization put them at. With few control wells per plate, pool them with ``by=None`` and a covariate that is comparable between plates, such as the log of each well's cell count over its plate's control median.
 
         Whether the cell count is a confounder at all depends on the screen. In the ORF and CRISPR arms of JUMP, whose plate layouts were not randomized, it is largely technical, and the recipe regresses it out :cite:p:`Chandrasekaran_2023`. In a compound screen it is partly a treatment effect — a compound that kills cells is supposed to lower it — so regressing it out removes part of the phenotype along with the nuisance, and the recipe does not. Measure both ways before adopting either; :func:`~mantispy.metrics.evaluate_correction` takes a ``covariates`` argument for exactly this, and :func:`~mantispy.tl.cytotoxicity` asks the question directly.
 
@@ -162,6 +168,14 @@ def regress_out(
     out = np.array(X, dtype=np.float32)
 
     design_all, is_numeric, sources = _design_matrix(adata, keys)
+    fitted_on = reference_mask(adata, reference)
+    if reference is not None:
+        if not fitted_on.any():
+            raise ValueError(f"no reference rows selected by reference={reference!r}")
+        if not is_numeric[1:].all():
+            raise ValueError(
+                "reference= fits numeric covariates only; a categorical level absent from the reference rows has no slope to apply"
+            )
     # nanmean, so one missing covariate value does not make the pooled anchor NaN. A column
     # whose pooled mean is still non-finite (all missing, or holding an inf) falls back to
     # each group's own mean, as dummies do.
@@ -170,8 +184,10 @@ def regress_out(
         pooled = np.nanmean(design_all, axis=0)
     pooled_ok = np.isfinite(pooled)
 
+    extrapolated = []
     for group in range(len(keys_index)):
         rows = np.flatnonzero(codes == group)
+        fit = fitted_on[rows]
         block_design = design_all[rows]
         # A column that does not vary inside this group carries no within-group
         # information; its effect stays in the intercept.
@@ -179,7 +195,12 @@ def regress_out(
         # which leaves the group uncorrected. Leaving it alone is the conservative choice; doing
         # so silently is not, and the log line below reports the covariate as removed either way.
         unusable = ~np.isfinite(block_design).all(axis=0)
-        varying = (np.ptp(block_design, axis=0) > 0) & ~unusable
+        if not fit.any():
+            get_logger().warning(
+                "regress_out: no reference rows within %s=%r, so nothing is regressed out there", by, keys_index[group]
+            )
+            continue
+        varying = (np.ptp(block_design[fit], axis=0) > 0) & ~unusable
         varying[0] = True
         incomplete = sorted({str(name) for name in sources[unusable] if name})
         if incomplete:
@@ -191,9 +212,9 @@ def regress_out(
                 UserWarning,
                 stacklevel=3,
             )
-        selected = np.flatnonzero(varying)[_independent(block_design[:, varying])]
+        selected = np.flatnonzero(varying)[_independent(block_design[fit][:, varying])]
         design = block_design[:, selected]
-        if rows.size <= design.shape[1]:
+        if fit.sum() <= design.shape[1]:
             get_logger().warning(
                 "regress_out: %s has too few wells to fit within %s=%r, so nothing is regressed out there",
                 list(keys),
@@ -210,6 +231,14 @@ def regress_out(
         # `anchor @ coefficients` is the group's mean fitted value, which is unique even where
         # the least squares solution is not.
         anchor = np.where(is_numeric[selected] & pooled_ok[selected], pooled[selected], design.mean(axis=0))
+        # With a reference, the anchor is the reference rows' own mean, and a row beyond the covariate range
+        # those rows span is corrected as if it sat at the edge of it rather than by extrapolating the fit.
+        applied = design
+        if reference is not None:
+            anchor = design[fit].mean(axis=0)
+            applied = np.clip(design, design[fit].min(axis=0), design[fit].max(axis=0))
+        elif ((anchor < design.min(axis=0)) | (anchor > design.max(axis=0)))[is_numeric[selected]].any():
+            extrapolated.append(str(keys_index[group]))
 
         # Complete features share one design, so lstsq solves them together; a feature with
         # gaps is fitted alone on its own rows. The split tests for non-finite values because a
@@ -219,23 +248,33 @@ def regress_out(
         clean = np.flatnonzero(~gaps)
         if clean.size:
             values = block[:, clean]
-            coefficients, *_ = np.linalg.lstsq(design, values, rcond=None)
-            residual = values - design @ coefficients
+            coefficients, *_ = np.linalg.lstsq(design[fit], values[fit], rcond=None)
+            residual = values - applied @ coefficients
             out[np.ix_(rows, clean)] = (residual + anchor @ coefficients).astype(np.float32)
 
         for feature in np.flatnonzero(gaps):
             values = block[:, feature]
             observed = np.isfinite(values)
-            if observed.sum() <= design.shape[1]:
+            if (observed & fit).sum() <= design.shape[1]:
                 continue  # too few observations to fit; leave the feature alone
-            coefficients, *_ = np.linalg.lstsq(design[observed], values[observed], rcond=None)
-            residual = values[observed] - design[observed] @ coefficients
+            coefficients, *_ = np.linalg.lstsq(design[observed & fit], values[observed & fit], rcond=None)
+            residual = values[observed] - applied[observed] @ coefficients
             # Same anchor rule, over the rows where this feature was measured.
             gap_anchor = np.where(
                 is_numeric[selected] & pooled_ok[selected], pooled[selected], design[observed].mean(axis=0)
             )
+            if reference is not None:
+                gap_anchor = design[observed & fit].mean(axis=0)
             out[rows[observed], feature] = (residual + gap_anchor @ coefficients).astype(np.float32)
 
+    if extrapolated:
+        warnings.warn(
+            f"regress_out: the pooled mean of {list(keys)} lies outside the range {by}={extrapolated} span, so those "
+            "groups are corrected by extrapolating their own fit, which can leave the result more dependent on the "
+            "covariate than it was. Pass reference='negcon' to anchor each group at its own controls.",
+            UserWarning,
+            stacklevel=3,
+        )
     if key_added is None:
         adata.X = out
     else:

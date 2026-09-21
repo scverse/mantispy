@@ -28,9 +28,11 @@ and this project adheres to [Semantic Versioning][].
 - `mantispy.ds`: `jump_crispr` joins JUMP's CRISPR annotation by default, naming the gene each well targets, its control type and the chromosome arm the gene sits on, and `corum` returns CORUM's protein complexes in the shape `known_relationships` and `pathway_coherence` read
 - `mantispy.pp`: `annotate_jump(kind="crispr")`, which also reads profiles that already carry `Metadata_JCP2022`, as JUMP's assembled profiles do
 - `mantispy.pl`: `hits` and `feature_volcano` write how many points sit above and below the significance line, next to it
+- `mantispy.pp`: `regress_out(reference=...)` fits the covariate on the reference rows, re-expresses each group at their mean and clips it to their range, so a cell count is regressed out where density varies for technical reasons only; without a reference it warns when a group never reaches the value it is re-expressed at
 
 ### Fixed
 
+- `mantispy.io`: an `ExportToSpreadsheet` directory takes its channels from the features it measured, so a run whose images are named `OrigDNA` or `IllumDNA` no longer leaves every feature without a channel
 - `mantispy.io`: CellProfiler 4's `AreaShape_Center_X/Y` and bounding-box corners are read as where an object sits rather than as features, and the centroid goes to `Metadata_Center_X/Y`; nine of the packaged datasets carried them in their profiles
 - `mantispy.ds`: `jump_cells` keeps the image quality of every field of view, each under its own image number, instead of the first field's alone
 - `mantispy.pl`: `feature_groups` counts features that have no channel, such as `AreaShape`, under "none"; under pandas 3 it left them out of the bars

@@ -3,6 +3,7 @@
 import numpy as np
 import pandas as pd
 import pytest
+from _testdata import CHANNELS
 
 import mantispy as mt
 from mantispy._core.schema import validate
@@ -102,6 +103,25 @@ def test_a_cellprofiler_4_centroid_is_kept_in_obs_and_out_of_x(cellprofiler_dir)
     adata = mt.io.read_profiles(cellprofiler_dir)
     assert adata.obs["Metadata_Center_X"].between(0, 1024).all()
     assert not any("Center" in name for name in adata.var_names)
+
+
+def test_channels_come_from_the_features_when_the_file_names_carry_a_prefix(cellprofiler_dir):
+    """JUMP names its images OrigDNA and its illumination functions IllumDNA, and writes CellOutlines, while the
+    features end in _DNA; read by the file names, no feature got a channel."""
+    image = pd.read_csv(cellprofiler_dir / "Image.csv")
+    renamed = {
+        column: column.replace("FileName_", "FileName_Orig")
+        for column in image.columns
+        if column.startswith("FileName_")
+    }
+    image = image.rename(columns=renamed)
+    image["FileName_IllumDNA"] = "illum.npy"
+    image["FileName_CellOutlines"] = "outlines.png"
+    image.to_csv(cellprofiler_dir / "Image.csv", index=False)
+
+    adata = mt.io.read_profiles(cellprofiler_dir)
+    assert adata.var.loc["Cells_Intensity_MeanIntensity_DNA", "channel"] == "DNA"
+    assert set(adata.uns["mantispy"]["channels"]) == set(CHANNELS)
 
 
 def test_metadata_and_well_normalization(tmp_path, make_cellprofiler_dir):

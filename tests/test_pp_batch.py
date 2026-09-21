@@ -327,6 +327,71 @@ def test_regress_out_removes_a_real_confluency_difference():
     assert _plate_gap(adata) < 0.4 * before
 
 
+def test_regress_out_says_when_a_plate_never_reaches_the_pooled_density():
+    """On pki two plates hold a third of the others' cells; fitted per plate and re-expressed at the pooled
+    mean, the result correlated with the cell count more than the input had."""
+    adata = _two_plates(count_means=(600.0, 1800.0), slope=0.002)
+    with pytest.warns(UserWarning, match="extrapolating"):
+        mt.pp.regress_out(adata, keys=["Metadata_Count"], by="Metadata_Plate")
+
+
+def _treated_and_thinned(seed=0):
+    """Controls whose features follow density for technical reasons, and a treatment that both thins the wells
+    and has a phenotype of its own, so a fit over every well mistakes the phenotype for density."""
+    import anndata as ad
+
+    from mantispy._core.schema import stamp
+
+    generator = np.random.default_rng(seed)
+    control = np.arange(200) < 100
+    count = np.where(control, generator.normal(1500, 150, 200), generator.normal(900, 150, 200))
+    values = 0.002 * (count - 1500)[:, None] + np.where(control, 0.0, 3.0)[:, None] + generator.normal(0, 0.1, (200, 4))
+    obs = pd.DataFrame(
+        {
+            "Metadata_Plate": "P1",
+            "Metadata_Well": [f"W{index:03d}" for index in range(200)],
+            "Metadata_Control": control,
+            "Metadata_CellCount": count,
+        },
+        index=[str(index) for index in range(200)],
+    )
+    adata = ad.AnnData(values.astype(np.float32), obs=obs, var=pd.DataFrame(index=[f"Cells_F{i}" for i in range(4)]))
+    stamp(adata, resolution="well")
+    return adata, control
+
+
+def test_regress_out_on_the_controls_removes_density_and_keeps_the_phenotype():
+    adata, control = _treated_and_thinned()
+    before = np.asarray(adata.X).copy()
+    on_controls = mt.pp.regress_out(adata, reference="negcon", copy=True)
+    on_everything = mt.pp.regress_out(adata, copy=True)
+
+    fixed = np.asarray(on_controls.X)
+    count = adata.obs["Metadata_CellCount"].to_numpy()
+    # The technical slope is gone among the controls, and they stay where normalization put them.
+    assert abs(np.corrcoef(count[control], fixed[control, 0])[0, 1]) < 0.2
+    assert np.allclose(fixed[control].mean(axis=0), before[control].mean(axis=0), atol=1e-4)
+    # The treatment keeps most of its phenotype; a fit over every well takes it away.
+    assert fixed[~control].mean() - fixed[control].mean() > 2.0
+    assert np.asarray(on_everything.X)[~control].mean() - np.asarray(on_everything.X)[control].mean() < 1.0
+
+
+def test_regress_out_on_the_controls_does_not_extrapolate():
+    """A treated well sparser than any control is corrected as if it sat at the sparsest control."""
+    adata, control = _treated_and_thinned()
+    before = np.asarray(adata.X)
+    fixed = np.asarray(mt.pp.regress_out(adata, reference="negcon", copy=True).X)
+    count = adata.obs["Metadata_CellCount"].to_numpy()
+    widest = 0.002 * (count[control].mean() - count[control].min())
+    assert (np.abs(fixed - before)[~control] <= widest * 1.5).all()
+
+
+def test_regress_out_on_the_controls_refuses_a_categorical_covariate(gradient_cells):
+    wells = mt.tl.aggregate(gradient_cells, min_cells=0)
+    with pytest.raises(ValueError, match="numeric covariates only"):
+        mt.pp.regress_out(wells, keys=("Metadata_Plate",), by=None, reference="negcon")
+
+
 def _operator_wells(missing_label: bool):
     """24 wells whose only structure is a per-operator offset of 0, 5 or 10.
 

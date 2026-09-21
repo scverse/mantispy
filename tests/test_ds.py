@@ -6,6 +6,7 @@ import pytest
 import spatialdata as sd
 
 import mantispy as mt
+from mantispy._core.frames import as_frame
 from mantispy.ds._datasets import _DATASETS
 
 
@@ -116,7 +117,7 @@ def test_jump_cells_keeps_the_quality_of_every_field_and_where_each_cell_sits() 
 
     assert len(images) == 24 * 4 and images.index.is_unique
     assert adata.obs["Metadata_ImageNumber"].isin(images.index).all()
-    assert adata.obs[["Metadata_Center_X", "Metadata_Center_Y"]].notna().all().all()
+    assert np.isfinite(as_frame(adata.obs)[["Metadata_Center_X", "Metadata_Center_Y"]].to_numpy(dtype=float)).all()
     assert not any("_Center_" in name for name in adata.var_names)
 
 
