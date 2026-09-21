@@ -94,7 +94,7 @@ pip install 'mantispy[spatial]'
 | Function | Stores |
 | --- | --- |
 | `pp.annotate_controls` | `obs["Metadata_Control"]`, and `obs["Metadata_Control_Type"]` when `poscon` is given |
-| `pp.annotate_jump` | `obs`: `Metadata_JCP2022`, `Metadata_Perturbation`, `Metadata_InChIKey`, `Metadata_Control` |
+| `pp.annotate_jump` | `obs`: `Metadata_JCP2022`, `Metadata_Perturbation`, `Metadata_Control`; `Metadata_InChIKey` for compounds, `Metadata_Gene`, `Metadata_Control_Type` and `Metadata_ChromosomeArm` for CRISPR |
 | `pp.calculate_qc_metrics` | `obs`: `qc_n_nan_features`, `qc_nan_fraction`, `qc_is_border`, `qc_area_outlier`, `qc_pass`; `var`: `qc_n_nan`, `qc_variance`, `qc_n_unique` |
 | `pp.filter_cells` | subsets `obs` in place |
 | `pp.filter_features` | subsets `var` in place |

@@ -23,7 +23,7 @@ import pandas as pd
 from anndata import AnnData
 
 from mantispy._core.logging import get_logger
-from mantispy.io._profiles import read_profiles
+from mantispy.io._profiles import _read_frame, read_profiles
 
 #: JUMP's annotation tables, pinned by sha256 in the dataset registry because the upstream repository is mutable.
 #: A changed table fails the checksum instead of changing the annotation.
@@ -55,7 +55,7 @@ def jump_metadata(name: str) -> pd.DataFrame:
     from mantispy.ds._datasets import _files
 
     (path,) = _files("_jump_annotation", select=lambda file_name: file_name.split(".")[0] == f"jump_{name}")
-    return pd.read_csv(path, sep="\t" if path.suffix == ".tsv" else ",")
+    return _read_frame(path)
 
 
 def read_jump(paths: str | Path | Sequence[str | Path], annotate: bool = True, **kwargs: Any) -> AnnData:
@@ -93,7 +93,7 @@ def join_jump_annotation(obs: pd.DataFrame, kind: str = "compound") -> pd.DataFr
     Returns:
         A new frame with ``Metadata_JCP2022``, ``Metadata_Perturbation`` and ``Metadata_Control`` joined onto `obs`, missing on the wells the annotation does not cover.
         For ``"compound"`` it adds ``Metadata_InChIKey``, and ``Metadata_Control`` marks :data:`NEGATIVE_CONTROL`.
-        For ``"crispr"`` ``Metadata_Perturbation`` is the gene symbol, ``Metadata_Control_Type`` is ``"negcon"``, ``"poscon"`` or ``"trt"``, ``Metadata_Control`` marks the no-guide and non-targeting wells, and ``Metadata_ChromosomeArm`` is the arm the gene sits on, such as ``"1p"``, missing for a gene without a mapped locus.
+        For ``"crispr"`` ``Metadata_Gene`` and ``Metadata_Perturbation`` are the gene symbol, ``Metadata_Control_Type`` is ``"negcon"``, ``"poscon"`` or ``"trt"``, ``Metadata_Control`` marks the no-guide and non-targeting wells, and ``Metadata_ChromosomeArm`` is the arm the gene sits on, such as ``"1p"``, missing for a gene without a mapped locus.
 
     Raises:
         ValueError: `kind` is not one of :data:`KINDS`.
@@ -102,9 +102,7 @@ def join_jump_annotation(obs: pd.DataFrame, kind: str = "compound") -> pd.DataFr
     if kind not in KINDS:
         raise ValueError(f"kind must be one of {KINDS}, got {kind!r}")
 
-    joined = obs
-    if "Metadata_JCP2022" not in obs:
-        joined = _join_wells(obs)
+    joined = obs if "Metadata_JCP2022" in obs else _join_wells(obs)
 
     if kind == "compound":
         compounds = jump_metadata("compound")[["Metadata_JCP2022", "Metadata_InChIKey"]]
@@ -113,16 +111,19 @@ def join_jump_annotation(obs: pd.DataFrame, kind: str = "compound") -> pd.DataFr
         joined["Metadata_Control"] = (joined["Metadata_JCP2022"] == NEGATIVE_CONTROL).to_numpy()
         return joined
 
-    genes = jump_metadata("crispr")[["Metadata_JCP2022", "Metadata_Symbol"]]
+    genes = jump_metadata("crispr")[["Metadata_JCP2022", "Metadata_Symbol"]].rename(
+        columns={"Metadata_Symbol": "Metadata_Gene"}
+    )
     controls = jump_metadata("perturbation_control")
-    controls = controls.loc[controls["Metadata_modality"] == "crispr", ["Metadata_JCP2022", "Metadata_pert_type"]]
-    joined = joined.merge(genes, on="Metadata_JCP2022", how="left", validate="m:1")
-    controls = controls.rename(columns={"Metadata_pert_type": "Metadata_Control_Type"})
-    joined = joined.merge(controls, on="Metadata_JCP2022", how="left", validate="m:1")
+    controls = controls.loc[
+        controls["Metadata_modality"] == "crispr", ["Metadata_JCP2022", "Metadata_pert_type"]
+    ].rename(columns={"Metadata_pert_type": "Metadata_Control_Type"})
+    for table in (genes, controls):
+        joined = joined.merge(table, on="Metadata_JCP2022", how="left", validate="m:1")
     joined["Metadata_Control_Type"] = joined["Metadata_Control_Type"].fillna("trt")
-    joined["Metadata_Perturbation"] = joined["Metadata_Symbol"].fillna(joined["Metadata_JCP2022"]).astype(str)
+    joined["Metadata_Perturbation"] = joined["Metadata_Gene"].fillna(joined["Metadata_JCP2022"]).astype(str)
     joined["Metadata_Control"] = (joined["Metadata_Control_Type"] == "negcon").to_numpy()
-    joined["Metadata_ChromosomeArm"] = joined["Metadata_Symbol"].map(_chromosome_arms())
+    joined["Metadata_ChromosomeArm"] = joined["Metadata_Gene"].map(_chromosome_arms())
     return joined
 
 
@@ -152,5 +153,4 @@ def _join_wells(obs: pd.DataFrame) -> pd.DataFrame:
 def _chromosome_arms() -> pd.Series:
     """The chromosome arm of every gene symbol, read off its cytogenetic locus as jump-profiling-recipe does."""
     loci = jump_metadata("gene_chromosome_map").drop_duplicates("Approved_symbol").set_index("Approved_symbol")["Locus"]
-    arms = loci.astype(str).str.extract(r"^(\w+?[pq])", expand=False)
-    return arms.dropna()
+    return loci.astype(str).str.extract(r"^(\w+?[pq])", expand=False)

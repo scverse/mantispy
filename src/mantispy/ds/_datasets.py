@@ -700,7 +700,7 @@ def jump_crispr(annotate: bool = True, cache_dir: str | Path | None = None, **kw
         kwargs: Passed to :func:`mantispy.io.read_profiles`.
 
     Returns:
-        Wells by features, indexed by plate and well, with ``Metadata_JCP2022`` and ``Metadata_CellCount`` and, when annotated, ``Metadata_Symbol``, ``Metadata_Perturbation`` (the gene symbol), ``Metadata_Control_Type`` (``"negcon"``, ``"poscon"`` or ``"trt"``), ``Metadata_Control`` (the no-guide and non-targeting wells) and ``Metadata_ChromosomeArm``.
+        Wells by features, indexed by plate and well, with ``Metadata_JCP2022`` and ``Metadata_CellCount`` and, when annotated, ``Metadata_Gene`` and ``Metadata_Perturbation`` (the gene symbol), ``Metadata_Control_Type`` (``"negcon"``, ``"poscon"`` or ``"trt"``), ``Metadata_Control`` (the no-guide and non-targeting wells) and ``Metadata_ChromosomeArm``.
 
     References:
         :cite:t:`Chandrasekaran_2023`.
@@ -733,13 +733,8 @@ def corum(cache_dir: str | Path | None = None) -> pd.DataFrame:
         :cite:t:`Celik_2024`.
     """
     (path,) = _files("corum", cache_dir)
-    rows = [
-        (complex_name, gene)
-        for line in path.read_text().splitlines()
-        if line.strip()
-        for complex_name, members in [line.split("\t")]
-        for gene in members.split()
-    ]
+    lines = [line.split("\t") for line in path.read_text().splitlines() if line.strip()]
+    rows = [(complex_name, gene) for complex_name, members in lines for gene in members.split()]
     return pd.DataFrame(rows, columns=["source", "target"]).drop_duplicates().reset_index(drop=True)
 
 
