@@ -7,6 +7,7 @@ It is rank-based, so it needs no correlation threshold, and a permutation null g
 
 from __future__ import annotations
 
+import math
 import warnings
 from collections.abc import Sequence
 
@@ -114,7 +115,7 @@ def map(
         annotation_key: The ``obs`` column ``mode="consistency"`` groups by.
         reference: Which rows are the negative controls, which ``mode="activity"`` retrieves against and ``mode="replicability"`` leaves out: ``"negcon"``, the name of a boolean ``obs`` column, or ``None`` for none.
         use_rep: Score ``obsm[use_rep]`` instead of ``X``.
-        null_size: Size of the permutation null.
+        null_size: Size of the permutation null. No p-value falls below ``1 / (null_size + 1)``, so the correction over many groups needs a large one, and a warning says when it is too small to call a group on its own.
         threshold: Significance threshold passed to copairs.
         seed: Seed for the permutation null.
         distance: Distance copairs ranks by.
@@ -226,6 +227,19 @@ def map(
             stacklevel=3,
         )
         precision = precision[~stranded]
+
+    # copairs cannot return a p-value below 1 / (null_size + 1), and Benjamini-Hochberg over m groups calls a group
+    # at that floor only when more than m / ((null_size + 1) * threshold) groups share it.
+    groups = len(precision.loc[precision["n_pos_pairs"] > 0, group_columns].drop_duplicates())
+    sharing = groups / ((null_size + 1) * threshold)
+    if sharing >= 1:
+        warnings.warn(
+            f"with null_size={null_size} no p-value can fall below 1/{null_size + 1}, so the correction over "
+            f"{groups} groups calls none of them unless at least {math.floor(sharing) + 1} reach that floor "
+            f"together. Raise null_size above {groups / threshold:.0f} for one group to be callable on its own.",
+            UserWarning,
+            stacklevel=3,
+        )
 
     table = copairs_map.mean_average_precision(
         precision,

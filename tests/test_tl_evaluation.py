@@ -84,6 +84,18 @@ def test_a_plate_without_controls_calls_nothing_active(pure_noise_screen):
 
 
 @requires_copairs
+def test_a_null_too_small_for_the_correction_says_so(pure_noise_screen):
+    """No p-value falls below 1 / (null_size + 1), so over enough groups the correction calls nothing however
+    strong a lone effect is, and a screen scored that way would report no hits without saying why."""
+    screen = pure_noise_screen()
+    with pytest.warns(UserWarning, match="at least 3 reach that floor"):
+        mt.tl.map(screen, mode="activity", null_size=100)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        mt.tl.map(screen, mode="activity", null_size=1000)
+
+
+@requires_copairs
 def test_activity_and_replicability_are_different_questions(profiles):
     """They answer different questions, so they have separate names."""
     mt.tl.map(profiles, mode="activity", null_size=200, key_added="activity")

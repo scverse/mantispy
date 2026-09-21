@@ -140,6 +140,12 @@ def normalize(
     adata.var[flag] = degenerate
     scope = f" among the rows selected by reference={reference!r}" if reference is not None else ""
     remedy = f"They are flagged in var[{flag!r}]; drop them with adata = adata[:, ~adata.var[{flag!r}]].copy()."
+    if key_added is None:
+        # feature_select reads the unsuffixed flag, which is the one describing X.
+        remedy = (
+            f"They are flagged in var[{flag!r}], and pp.feature_select drops them by default; to drop them "
+            f"now, adata = adata[:, ~adata.var[{flag!r}]].copy()."
+        )
     if uncentred.any():
         warnings.warn(
             f"{int(uncentred.sum())} of {adata.n_vars} features have no reference values to centre on "
@@ -162,8 +168,8 @@ def normalize(
                 if method == "mad_robustize"
                 else "Their scale is clamped to 1, which sets them to 0"
             )
-            + f". {remedy} Feature selection does not catch a feature that varies across a plate but "
-            "is constant among its control wells.",
+            + f". {remedy} A variance or outlier cut does not catch a feature that varies across a plate "
+            "but is constant among its control wells; the flag does.",
             UserWarning,
             stacklevel=3,
         )

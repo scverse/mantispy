@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning][].
 - `mantispy.metrics`: `known_relationships`, the share of annotated perturbation pairs whose similarity falls in either tail of the distribution over all pairs, and `evaluate_correction(covariates=...)`, which reports what a representation spends its variance on besides the batch and the label
 - `mantispy.pp`: `tvn`, typical variation normalization with per-batch CORAL, which aligns each batch's controls onto the pooled controls
 - `mantispy.ds`: `jump_lite`, the same 1,536 JUMP Target-2 wells embedded by five models and measured by `cp_measure`, and `jump_lite_targets`, the gene each compound is annotated to act on
+- `mantispy.metrics`: `known_relationships(n_permutations=...)` measures chance by shuffling which perturbation each annotation row names, keeping every set's size and every perturbation's number of sets, and reports it as `null` with a `p_value`. Chance is 2 × `percentile` only when every perturbation belongs to the same number of sets
+- `mantispy.pp`: `feature_select`'s `drop_degenerate`, run first by default, drops the features `normalize` flagged in `var["degenerate_scale"]` so that they no longer decide which other features are kept
 
 ### Fixed
 
@@ -31,3 +33,5 @@ and this project adheres to [Semantic Versioning][].
 - `mantispy.pp`: `feature_select` warns when it selects nothing, rather than leaving an empty matrix for whatever runs next; `noise_removal`'s `stdev_cutoff` is documented as an absolute threshold on the scale `normalize` left the values on
 - `mantispy.tl`: `map(mode="activity")` retrieves against the controls on the query's own plate. It pooled every plate's controls, so a perturbation with no effect of its own looked more active the more controls the other plates carried
 - `mantispy.tl`: `map` leaves out, with a warning, a query whose replicates have no negative pair to be ranked against, such as one on a plate without controls under `mode="activity"`. Scored, it came out at an average precision of 1 and the smallest p-value
+- `mantispy.tl`: `map` warns when `null_size` is too small for the multiple-testing correction to call a group on its own
+- `mantispy.ds`: `jump_lite` returns every feature set with the wells in one order, sorted by source, plate and well, where each file lists them in its own
