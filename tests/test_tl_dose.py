@@ -246,6 +246,28 @@ def test_the_profile_refits_the_curve_around_the_pinned_top():
     assert profile <= fit.log_likelihood, "and pinning the top cannot beat fitting it"
 
 
+def test_the_constant_model_maximises_the_same_likelihood_as_the_curves():
+    """The first weight compares the curve's AIC against the constant model's, so both have to be the maximum.
+
+    The constant model is a model like the others, with an empty parameter vector: no response at any dose, and
+    the error scale fitted around that. It is not a candidate in :func:`_winning_model`, since a winner with no
+    top has nothing for the other two weights to read.
+    """
+    from mantispy.tl._dose import _fit_maximum_likelihood, _log_likelihood
+
+    rng = np.random.default_rng(0)
+    response = rng.normal(0.0, 0.7, 40)
+    log_dose = np.log10(np.geomspace(0.1, 100.0, 40))
+
+    fit = _fit_maximum_likelihood("constant", log_dose, response, np.empty(0))
+    assert fit.parameters.shape == (1,), "the error scale is the whole parameter vector"
+    assert fit.aic == pytest.approx(2.0 - 2.0 * fit.log_likelihood)
+    np.testing.assert_array_equal(fit.predict(log_dose), np.zeros_like(log_dose))
+
+    scanned = np.linspace(fit.log_scale - 2.0, fit.log_scale + 2.0, 401)
+    assert fit.log_likelihood >= max(_log_likelihood(response, scale) for scale in scanned) - 1e-6
+
+
 def test_a_curve_that_plateaus_is_read_by_the_logistic_and_one_still_rising_by_the_line():
     """tcplfit2 carries ten models so that a curve without a plateau still gets called.
 
