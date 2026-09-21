@@ -4700,7 +4700,7 @@ datasets:
 
   _jump_annotation:
     type: mantispy
-    doc_header: The plate, well and compound tables of jump-cellpainting/datasets, which the profiles are keyed into.
+    doc_header: The plate, well, compound and CRISPR tables of jump-cellpainting/datasets, which the profiles are keyed into, and the gene loci jump-profiling-recipe reads.
     files:
     - name: jump_plate.csv.gz
       url: https://github.com/jump-cellpainting/datasets/raw/main/metadata/plate.csv.gz
@@ -4711,6 +4711,23 @@ datasets:
     - name: jump_compound.csv.gz
       url: https://github.com/jump-cellpainting/datasets/raw/main/metadata/compound.csv.gz
       sha256: 8885960e92ebd99eb33699a79129f517e668d78dd94f0d7478d39c9825bd3c0a
+    - name: jump_crispr.csv.gz
+      url: https://raw.githubusercontent.com/jump-cellpainting/datasets/c68deb2babc83747e6b14d8a77e5655138a6086a/metadata/crispr.csv.gz
+      sha256: 55e36e6802c6fc5f8e5d5258554368d64601f1847205e0fceb28a2c246c8d1ed
+    - name: jump_perturbation_control.csv
+      url: https://raw.githubusercontent.com/jump-cellpainting/datasets/76cb0231ac6ae253f36d2df2b28837676ad571fd/metadata/perturbation_control.csv
+      sha256: f513c4017555efa486d07c3e9924944d5b0c44d2f2e76ca6e1fc934f5f718ef6
+    - name: jump_gene_chromosome_map.tsv
+      url: https://raw.githubusercontent.com/broadinstitute/jump-profiling-recipe/e8b7f32244194bafc08219d9a66a8a528b0ff4ce/inputs/metadata/gene_chromosome_map.tsv
+      sha256: 98d0753cea22d6d72cb32ef32ef0b807fe8b993c1ad4364c627a7c7634c51c68
+
+  corum:
+    type: mantispy
+    doc_header: Human protein complexes from CORUM, one complex per line, as the EFAAR benchmark distributes them.
+    files:
+    - name: CORUM_clusters.tsv
+      url: https://raw.githubusercontent.com/recursionpharma/EFAAR_benchmarking/2935f21f84898fc26e2a9a40bdaee685c8e63fb6/efaar_benchmarking/benchmark_annotations/CORUM_clusters.tsv
+      sha256: caab1d3db6fa694c001f41e2973492d248ea3936a1249be3bf497648071f5c99
 
   _jump_cell_counts:
     type: mantispy

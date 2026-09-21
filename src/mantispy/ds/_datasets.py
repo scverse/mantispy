@@ -614,7 +614,7 @@ def jump_lite(
 
         The embeddings are not normalized. They are the model's output on each well's images, so a per-plate control normalization is still the first step.
 
-        The trained embeddings here carry the cell count in their leading components, where it can account for more of the variance than either the laboratory or the imaging site. The untrained ``"dinov2_random"`` does not, and neither does ``"cp_measure"``, whose per-cell measurements are averaged over the well. Measure it with :func:`~mantispy.metrics.evaluate_correction` before correcting for anything else, and read :doc:`/tutorials/12_learned_embeddings` on why removing it is not obviously right.
+        The trained embeddings here carry the cell count in their leading components, where it can account for more of the variance than either the laboratory or the imaging site. The untrained ``"dinov2_random"`` does not, and neither does ``"cp_measure"``, whose per-cell measurements are averaged over the well. Measure it with :func:`~mantispy.metrics.evaluate_correction` before correcting for anything else, and read :doc:`/tutorials/multisite/learned_embeddings` on why removing it is not obviously right.
 
     References:
         :cite:t:`Munoz_2026`, :cite:t:`Chandrasekaran_2023`, :cite:t:`Weisbart_2024`.
@@ -686,26 +686,61 @@ def jump_lite_targets(cache_dir: str | Path | None = None) -> pd.DataFrame:
     return frame.drop_duplicates().reset_index(drop=True)
 
 
-def jump_crispr(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
-    """The assembled JUMP CRISPR arm, 51,185 wells of knockouts.
+def jump_crispr(annotate: bool = True, cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
+    """The assembled JUMP CRISPR arm, 51,185 wells of knockouts in U2OS cells.
 
     ``cpg0016-jump-assembled``, the ``v1.0a`` well-position-corrected and feature-selected parquet, and the largest dataset here at 180 MB.
-    ``Metadata_JCP2022`` identifies the perturbation.
-    The cell counts are the ones jump-profiling-recipe regresses out of these profiles; their ``Cells_Count_Count`` feature was normalized with the rest and is no longer a count.
+    jump-profiling-recipe has corrected it for well position and cell count, normalized it and selected its features, and has not yet sphered it.
+    The cell counts are the ones the recipe regresses out of these profiles; their ``Cells_Count_Count`` feature was normalized with the rest and is no longer a count.
 
     Args:
+        annotate: Join JUMP's CRISPR annotation, which names the gene each well's guides target and which wells are controls.
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
         kwargs: Passed to :func:`mantispy.io.read_profiles`.
 
     Returns:
-        Wells by features, indexed by plate and well, with ``Metadata_CellCount``.
+        Wells by features, indexed by plate and well, with ``Metadata_JCP2022`` and ``Metadata_CellCount`` and, when annotated, ``Metadata_Symbol``, ``Metadata_Perturbation`` (the gene symbol), ``Metadata_Control_Type`` (``"negcon"``, ``"poscon"`` or ``"trt"``), ``Metadata_Control`` (the no-guide and non-targeting wells) and ``Metadata_ChromosomeArm``.
 
     References:
         :cite:t:`Chandrasekaran_2023`.
     """
     (counts,) = _files("_jump_cell_counts", cache_dir)
-    return _profiles("jump_crispr", cache_dir, platemap=_read_counts(counts), **kwargs)
+    adata = _profiles("jump_crispr", cache_dir, platemap=_read_counts(counts), **kwargs)
+    if annotate:
+        from mantispy.pp._annotate import annotate_jump
+
+        annotate_jump(adata, kind="crispr")
+    return adata
+
+
+def corum(cache_dir: str | Path | None = None) -> pd.DataFrame:
+    """Human protein complexes from CORUM, one row per complex and member gene.
+
+    The complexes as the EFAAR benchmark of :cite:t:`Celik_2024` distributes them, in the ``source``/``target`` shape :func:`~mantispy.metrics.known_relationships` and :func:`~mantispy.tl.pathway_coherence` read, so two genes of one complex count as a related pair.
+
+    Args:
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
+
+    Returns:
+        A frame with ``source``, the complex, and ``target``, the symbol of a gene in it.
+
+    Notes:
+        CORUM is free for academic, non-commercial use, and the EFAAR copy is distributed under CC BY-NC 4.0.
+
+    References:
+        :cite:t:`Celik_2024`.
+    """
+    (path,) = _files("corum", cache_dir)
+    rows = [
+        (complex_name, gene)
+        for line in path.read_text().splitlines()
+        if line.strip()
+        for complex_name, members in [line.split("\t")]
+        for gene in members.split()
+    ]
+    return pd.DataFrame(rows, columns=["source", "target"]).drop_duplicates().reset_index(drop=True)
 
 
 def _read_site(directory: Path, source: str, channels: Sequence[str]) -> AnnData:

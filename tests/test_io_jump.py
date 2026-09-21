@@ -89,6 +89,70 @@ def test_a_duplicated_annotation_row_is_refused(profiles, fake_metadata, monkeyp
         mt.io.read_jump(profiles)
 
 
+@pytest.fixture
+def fake_crispr_metadata(monkeypatch):
+    """Stand in for the CRISPR tables: genes, control types and loci."""
+    tables = {
+        "crispr": pd.DataFrame(
+            {
+                "Metadata_JCP2022": ["JCP2022_800001", "JCP2022_800002", "JCP2022_805264", "JCP2022_900001"],
+                "Metadata_NCBI_Gene_ID": [None, None, "5347", "5690"],
+                "Metadata_Symbol": ["no-guide", "non-targeting", "PLK1", "PSMB2"],
+            }
+        ),
+        "perturbation_control": pd.DataFrame(
+            {
+                "Metadata_JCP2022": ["JCP2022_033924", "JCP2022_800001", "JCP2022_800002", "JCP2022_805264"],
+                "Metadata_pert_type": ["negcon", "negcon", "negcon", "poscon"],
+                "Metadata_Name": ["DMSO", "no-guide", "non-targeting", "PLK1"],
+                "Metadata_modality": ["compound", "crispr", "crispr", "crispr"],
+            }
+        ),
+        "gene_chromosome_map": pd.DataFrame(
+            {"Approved_symbol": ["PLK1", "PSMB2"], "Locus": ["16p12.2", "1p34.3"], "Chromosome": ["16", "1"]}
+        ),
+    }
+    monkeypatch.setattr(_jump, "jump_metadata", tables.__getitem__)
+
+
+def test_a_crispr_well_is_named_by_its_gene_and_its_controls_by_their_type(fake_crispr_metadata):
+    """Assembled profiles already carry Metadata_JCP2022, so no well table is needed to name them."""
+    wells = mt.ds.synthetic_plate(n_wells=4, n_cells=1, n_features=3, seed=0)
+    wells.obs["Metadata_JCP2022"] = ["JCP2022_800001", "JCP2022_800002", "JCP2022_805264", "JCP2022_900001"]
+    mt.pp.annotate_jump(wells, kind="crispr")
+
+    obs = wells.obs
+    assert list(obs["Metadata_Perturbation"].astype(str)) == ["no-guide", "non-targeting", "PLK1", "PSMB2"]
+    assert list(obs["Metadata_Control_Type"].astype(str)) == ["negcon", "negcon", "poscon", "trt"]
+    assert list(obs["Metadata_Control"].to_numpy()) == [True, True, False, False]
+    assert list(obs["Metadata_ChromosomeArm"].astype(object).fillna("")) == ["", "", "16p", "1p"]
+
+
+def test_corum_reads_one_row_per_complex_and_member(tmp_path, monkeypatch):
+    from mantispy.ds import _datasets
+
+    path = tmp_path / "CORUM_clusters.tsv"
+    path.write_text("20S proteasome\tPSMA1 PSMB2 PSMB2\nCCT complex\tTCP1 CCT2\n")
+    monkeypatch.setattr(_datasets, "_files", lambda name, cache_dir=None, select=None: [path])
+
+    complexes = mt.ds.corum()
+    assert complexes.to_dict("list") == {
+        "source": ["20S proteasome", "20S proteasome", "CCT complex", "CCT complex"],
+        "target": ["PSMA1", "PSMB2", "TCP1", "CCT2"],
+    }
+
+
+@pytest.mark.network
+@pytest.mark.slow
+def test_jump_crispr_names_its_genes_and_controls():
+    adata = mt.ds.jump_crispr()
+    kinds = adata.obs["Metadata_Control_Type"].astype(str).value_counts().to_dict()
+    assert kinds == {"trt": 43138, "negcon": 7478, "poscon": 569}
+    assert int(adata.obs["Metadata_Control"].sum()) == 7478
+    assert adata.obs.loc[adata.obs["Metadata_Control_Type"] == "trt", "Metadata_Perturbation"].nunique() > 7900
+    assert mt.io.validate(adata).ok, mt.io.validate(adata).errors
+
+
 @pytest.mark.network
 def test_jump_target2_loads_a_plate_from_every_source():
     # The shape and the per-well counts are asserted against the registry in test_ds.py.

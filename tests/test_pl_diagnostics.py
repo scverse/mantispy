@@ -75,6 +75,13 @@ def test_feature_correlation_is_ordered_by_annotation(diagnosed):
     assert len(ax.get_xticklabels()) == diagnosed.var["feature_group"].nunique()
 
 
+def test_feature_groups_counts_features_without_a_channel(diagnosed):
+    """Geometry has no channel, and its features count like any other."""
+    ax = mt.pl.feature_groups(diagnosed)
+    assert sum(patch.get_height() for patch in ax.patches) == diagnosed.n_vars
+    assert "AreaShape" in {label.get_text() for label in ax.get_xticklabels()}
+
+
 def test_plots_say_what_to_run_first(diagnosed):
     fresh = synthetic_plate(n_wells=8, n_cells=4, n_features=8, seed=0)
     with pytest.raises(KeyError, match="mt.pp.image_qc"):

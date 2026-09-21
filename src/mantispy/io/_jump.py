@@ -27,19 +27,19 @@ from mantispy.io._profiles import read_profiles
 
 #: JUMP's annotation tables, pinned by sha256 in the dataset registry because the upstream repository is mutable.
 #: A changed table fails the checksum instead of changing the annotation.
-TABLES = ("plate", "well", "compound")
+TABLES = ("plate", "well", "compound", "crispr", "perturbation_control", "gene_chromosome_map")
 
 #: JUMP's negative control: DMSO, under its JCP identifier.
 NEGATIVE_CONTROL = "JCP2022_033924"
 
 #: Kinds of perturbation the annotation covers, and the table each is described by.
-KINDS = ("compound",)
+KINDS = ("compound", "crispr")
 
 _JOIN_ON = ["Metadata_Source", "Metadata_Plate", "Metadata_Well"]
 
 
 def jump_metadata(name: str) -> pd.DataFrame:
-    """Read one of JUMP's annotation tables, ``"plate"``, ``"well"`` or ``"compound"``.
+    """Read one of JUMP's annotation tables, such as ``"well"``, ``"compound"`` or ``"crispr"``.
 
     Args:
         name: Which table to read, one of :data:`TABLES`.
@@ -54,8 +54,8 @@ def jump_metadata(name: str) -> pd.DataFrame:
         raise ValueError(f"name must be one of {TABLES}, got {name!r}")
     from mantispy.ds._datasets import _files
 
-    (path,) = _files("_jump_annotation", select=lambda file_name: file_name == f"jump_{name}.csv.gz")
-    return pd.read_csv(path)
+    (path,) = _files("_jump_annotation", select=lambda file_name: file_name.split(".")[0] == f"jump_{name}")
+    return pd.read_csv(path, sep="\t" if path.suffix == ".tsv" else ",")
 
 
 def read_jump(paths: str | Path | Sequence[str | Path], annotate: bool = True, **kwargs: Any) -> AnnData:
@@ -87,19 +87,47 @@ def join_jump_annotation(obs: pd.DataFrame, kind: str = "compound") -> pd.DataFr
     """Join the JUMP annotation onto an ``obs`` frame keyed by source, plate and well.
 
     Args:
-        obs: A frame carrying ``Metadata_Source``, ``Metadata_Plate`` and ``Metadata_Well``, whose three key columns are cast to strings in place before the join.
+        obs: A frame carrying ``Metadata_Source``, ``Metadata_Plate`` and ``Metadata_Well``, whose three key columns are cast to strings in place before the join, or one that already carries ``Metadata_JCP2022``, as JUMP's assembled profiles do.
         kind: Which perturbation the annotation is read for, one of :data:`KINDS`.
 
     Returns:
-        A new frame with ``Metadata_JCP2022``, ``Metadata_InChIKey``, ``Metadata_Perturbation`` and ``Metadata_Control`` (true for :data:`NEGATIVE_CONTROL`) joined onto `obs`, missing on the wells the annotation does not cover.
+        A new frame with ``Metadata_JCP2022``, ``Metadata_Perturbation`` and ``Metadata_Control`` joined onto `obs`, missing on the wells the annotation does not cover.
+        For ``"compound"`` it adds ``Metadata_InChIKey``, and ``Metadata_Control`` marks :data:`NEGATIVE_CONTROL`.
+        For ``"crispr"`` ``Metadata_Perturbation`` is the gene symbol, ``Metadata_Control_Type`` is ``"negcon"``, ``"poscon"`` or ``"trt"``, ``Metadata_Control`` marks the no-guide and non-targeting wells, and ``Metadata_ChromosomeArm`` is the arm the gene sits on, such as ``"1p"``, missing for a gene without a mapped locus.
 
     Raises:
         ValueError: `kind` is not one of :data:`KINDS`.
-        KeyError: `obs` is missing one of the three columns the annotation is keyed by.
+        KeyError: `obs` has no ``Metadata_JCP2022`` and is missing one of the three columns the annotation is keyed by.
     """
     if kind not in KINDS:
         raise ValueError(f"kind must be one of {KINDS}, got {kind!r}")
 
+    joined = obs
+    if "Metadata_JCP2022" not in obs:
+        joined = _join_wells(obs)
+
+    if kind == "compound":
+        compounds = jump_metadata("compound")[["Metadata_JCP2022", "Metadata_InChIKey"]]
+        joined = joined.merge(compounds, on="Metadata_JCP2022", how="left", validate="m:1")
+        joined["Metadata_Perturbation"] = joined["Metadata_JCP2022"].astype(str)
+        joined["Metadata_Control"] = (joined["Metadata_JCP2022"] == NEGATIVE_CONTROL).to_numpy()
+        return joined
+
+    genes = jump_metadata("crispr")[["Metadata_JCP2022", "Metadata_Symbol"]]
+    controls = jump_metadata("perturbation_control")
+    controls = controls.loc[controls["Metadata_modality"] == "crispr", ["Metadata_JCP2022", "Metadata_pert_type"]]
+    joined = joined.merge(genes, on="Metadata_JCP2022", how="left", validate="m:1")
+    controls = controls.rename(columns={"Metadata_pert_type": "Metadata_Control_Type"})
+    joined = joined.merge(controls, on="Metadata_JCP2022", how="left", validate="m:1")
+    joined["Metadata_Control_Type"] = joined["Metadata_Control_Type"].fillna("trt")
+    joined["Metadata_Perturbation"] = joined["Metadata_Symbol"].fillna(joined["Metadata_JCP2022"]).astype(str)
+    joined["Metadata_Control"] = (joined["Metadata_Control_Type"] == "negcon").to_numpy()
+    joined["Metadata_ChromosomeArm"] = joined["Metadata_Symbol"].map(_chromosome_arms())
+    return joined
+
+
+def _join_wells(obs: pd.DataFrame) -> pd.DataFrame:
+    """Map source, plate and well to ``Metadata_JCP2022`` through JUMP's well table."""
     missing = [column for column in _JOIN_ON if column not in obs]
     if missing:
         raise KeyError(
@@ -118,9 +146,11 @@ def join_jump_annotation(obs: pd.DataFrame, kind: str = "compound") -> pd.DataFr
         get_logger().warning(
             "%d of %d wells have no JUMP annotation; their Metadata_JCP2022 is missing", unannotated, len(joined)
         )
-
-    compounds = jump_metadata("compound")[["Metadata_JCP2022", "Metadata_InChIKey"]]
-    joined = joined.merge(compounds, on="Metadata_JCP2022", how="left", validate="m:1")
-    joined["Metadata_Perturbation"] = joined["Metadata_JCP2022"].astype(str)
-    joined["Metadata_Control"] = (joined["Metadata_JCP2022"] == NEGATIVE_CONTROL).to_numpy()
     return joined
+
+
+def _chromosome_arms() -> pd.Series:
+    """The chromosome arm of every gene symbol, read off its cytogenetic locus as jump-profiling-recipe does."""
+    loci = jump_metadata("gene_chromosome_map").drop_duplicates("Approved_symbol").set_index("Approved_symbol")["Locus"]
+    arms = loci.astype(str).str.extract(r"^(\w+?[pq])", expand=False)
+    return arms.dropna()

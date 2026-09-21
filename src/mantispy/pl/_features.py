@@ -87,7 +87,8 @@ def feature_groups(adata: AnnData, key: str | None = None, ax: Axes | None = Non
         KeyError: ``var`` has no ``feature_group`` column, or no ``channel`` column.
     """
     mask = feature_mask(adata, key)
-    annotation = as_frame(adata.var).loc[mask, ["feature_group", "channel"]].astype(str)
+    # A geometry feature has no channel; count it under "none" rather than let value_counts drop the NaN.
+    annotation = as_frame(adata.var).loc[mask, ["feature_group", "channel"]].astype(object).fillna("none").astype(str)
     counts = annotation.value_counts().unstack(fill_value=0)
 
     ax = _axes(ax, (7, 4))

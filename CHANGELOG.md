@@ -25,9 +25,12 @@ and this project adheres to [Semantic Versioning][].
 - `mantispy.ds`: `jump_lite`, the same 1,536 JUMP Target-2 wells embedded by five models and measured by `cp_measure`, and `jump_lite_targets`, the gene each compound is annotated to act on
 - `mantispy.metrics`: `known_relationships(n_permutations=...)` measures chance by shuffling which perturbation each annotation row names, keeping every set's size and every perturbation's number of sets, and reports it as `null` with a `p_value`. Chance is 2 × `percentile` only when every perturbation belongs to the same number of sets
 - `mantispy.pp`: `feature_select`'s `drop_degenerate`, run first by default, drops the features `normalize` flagged in `var["degenerate_scale"]` so that they no longer decide which other features are kept
+- `mantispy.ds`: `jump_crispr` joins JUMP's CRISPR annotation by default, naming the gene each well targets, its control type and the chromosome arm the gene sits on, and `corum` returns CORUM's protein complexes in the shape `known_relationships` and `pathway_coherence` read
+- `mantispy.pp`: `annotate_jump(kind="crispr")`, which also reads profiles that already carry `Metadata_JCP2022`, as JUMP's assembled profiles do
 
 ### Fixed
 
+- `mantispy.pl`: `feature_groups` counts features that have no channel, such as `AreaShape`, under "none"; under pandas 3 it left them out of the bars
 - `mantispy.io`: `cp_measure` column names are read as `<object>_<channel>/<aggregation>/<group><Feature>` rather than through the CellProfiler grammar, which left `var['channel']` empty and split one feature group into as many as the channels and aggregations it was written with
 - `mantispy.pp`: `well_qc` says it expects cell resolution, instead of counting one row per well and failing every well on a well-level object
 - `mantispy.pp`: `feature_select` warns when it selects nothing, rather than leaving an empty matrix for whatever runs next; `noise_removal`'s `stdev_cutoff` is documented as an absolute threshold on the scale `normalize` left the values on

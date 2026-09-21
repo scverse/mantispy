@@ -322,6 +322,7 @@ Plotting functions return Matplotlib axes and do not modify the object.
     ds.agnp
     ds.amish
     ds.chroma
+    ds.corum
     ds.jump_crispr
     ds.jump_lite
     ds.jump_lite_targets
@@ -355,7 +356,7 @@ replicate; the other eight are the strongest movers among the wells that survive
 `synthetic_plate` and `blobs` are generated locally. `synthetic_plate` is a single-cell profile table with injected
 artifacts for quality control to find; `blobs` is a small `SpatialData` plate of images, labels and tables. The other
 datasets download once, checked against a pinned sha256, into `mt.settings.cache_dir` (set `MANTISPY_CACHE_DIR` to
-change it). Six of them carry the annotations the analysis functions need:
+change it). Seven of them carry the annotations the analysis functions need:
 
 | dataset | download | perturbations | carries |
 |---|---|---|---|
@@ -363,10 +364,11 @@ change it). Six of them carry the annotations the analysis functions need:
 | `rohban` | ~27 MB | 194 overexpressed genes | cell counts, ~10 replicates per gene |
 | `pki` | ~71 MB | 15 kinase inhibitors x 7 doses | cell counts, MOA labels, 32-64 replicates |
 | `jump_target2` | ~0.7 GB | 302 compounds, one shared plate map | the same plate run at eleven sites, so any difference between them is technical |
+| `jump_crispr` | ~180 MB | about 8,000 knocked-out genes | gene symbols, controls and chromosome arms; `corum` gives the protein complexes the genes form |
 | `jump_cells` | ~1.5 GB | 12 compounds and DMSO | single cells, 24 wells x 4 fields of view of `BR00121438` |
 | `jump_lite` | ~10 MB per feature set | 302 compounds, four laboratories | the same 1,536 wells under five learned embeddings and `cp_measure`, so the feature set is the only thing that changes; `jump_lite_targets` gives the gene each compound acts on |
 
-The other ten are further gallery accessions, normalized and feature-selected by their authors and read with the
+The others are further gallery accessions, normalized and feature-selected by their authors and read with the
 `io.read_profiles` defaults. Use them to run a method across a range of screens.
 
 Check anything tuned on one dataset against the others. Cutoffs that looked universal on BBBC021 turned out to be
