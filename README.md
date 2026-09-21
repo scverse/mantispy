@@ -28,8 +28,8 @@ writes, and `ds` downloads public screens. Everything operates on an `AnnData`, 
 PCA, neighbors, UMAP and Leiden work on the same object. `io.read_plate` reads the images
 behind the profiles as `SpatialData`.
 
-To start, [From CellProfiler to AnnData][tutorial-1] shows how to read a screen and [Hits and
-effects][tutorial-5] how to call hits on it. Neither needs your own data, and `mt.ds.bbbc021()`
+To start, [From a CellProfiler run][tutorial-1] shows how to read a screen and [Hits, effects and cell
+loss][tutorial-5] how to call hits on it. Neither needs your own data, and `mt.ds.bbbc021()`
 downloads a public screen.
 
 Set `mt.settings.verbosity = 2` when you first run your own screen. Several steps drop
@@ -101,5 +101,5 @@ If you found a bug, please use the [issue tracker][].
 [pypi]: https://pypi.org/project/mantispy
 [venv]: https://docs.python.org/3/tutorial/venv.html
 [mantispy]: https://github.com/scverse/mantispy
-[tutorial-1]: https://mantispy.readthedocs.io/en/latest/tutorials/01_from_cellprofiler_to_anndata.html
-[tutorial-5]: https://mantispy.readthedocs.io/en/latest/tutorials/05_hits_and_effects.html
+[tutorial-1]: https://mantispy.readthedocs.io/en/latest/tutorials/data/cellprofiler.html
+[tutorial-5]: https://mantispy.readthedocs.io/en/latest/tutorials/compounds/hits.html

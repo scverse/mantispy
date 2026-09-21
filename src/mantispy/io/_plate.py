@@ -72,7 +72,7 @@ def read_plate(
 
     Where a source recorded stage coordinates and a pixel size, every element sits in three coordinate systems, ``{plate}_{well}_s{site}``, ``{plate}_{well}`` and ``{plate}``.
     Where it did not, each field sits in its own frame.
-    See :doc:`the tutorial </tutorials/reading_plates>` for what each layout publishes and what is dropped.
+    See :doc:`the tutorial </tutorials/data/images>` for what each layout publishes and what is dropped.
 
     Args:
         path: A Cell Painting Gallery source directory, or an export root or one of its plate folders.
