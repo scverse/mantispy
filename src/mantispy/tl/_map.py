@@ -25,12 +25,15 @@ REFERENCE_COLUMN = "Metadata_reference_index"
 
 #: copairs pair definitions for each ``mode`` of :func:`map`.
 MODES = {
-    # Phenotypic activity :cite:p:`Kalinin_2025`, as in copairs' own example.
-    # Is this perturbation distinguishable from the negative controls?
+    # Phenotypic activity :cite:p:`Kalinin_2025`.
+    # Is this perturbation distinguishable from the negative controls it was plated with?
+    # The negatives are the query's own plate's controls. Pooled across plates, another plate's controls are
+    # beaten trivially yet still count in the permutation null, so a perturbation with no effect of its own
+    # reads as more active the more controls the other plates carry.
     "activity": {
         "pos_sameby": ["Metadata_Perturbation", REFERENCE_COLUMN],
         "pos_diffby": [],
-        "neg_sameby": [],
+        "neg_sameby": ["Metadata_Plate"],
         "neg_diffby": ["Metadata_Perturbation", REFERENCE_COLUMN],
     },
     # Phenotypic consistency :cite:p:`Kalinin_2025`.
@@ -95,10 +98,10 @@ def map(
         mode: A preset for the pair definitions, one of the following.
 
             ``"activity"``
-                Is this perturbation distinguishable from the negative controls?
-                Its replicates are retrieved against control profiles only.
+                Is this perturbation distinguishable from the negative controls it was plated with?
+                Its replicates are retrieved against the control profiles on the query's own plate only.
                 This is the phenotypic activity of :cite:t:`Kalinin_2025`.
-                Needs ``reference``.
+                Needs ``reference`` and ``Metadata_Plate``; a plate with no controls gives its queries nothing to retrieve against.
             ``"consistency"``
                 Do perturbations sharing an annotation look more alike than those that do not?
                 This is the phenotypic consistency of :cite:t:`Kalinin_2025`.
