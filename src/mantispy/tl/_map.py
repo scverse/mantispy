@@ -8,6 +8,7 @@ It is rank-based, so it needs no correlation threshold, and a permutation null g
 from __future__ import annotations
 
 import math
+import tempfile
 import warnings
 from collections.abc import Sequence
 
@@ -241,14 +242,18 @@ def map(
             stacklevel=3,
         )
 
-    table = copairs_map.mean_average_precision(
-        precision,
-        sameby=group_columns,
-        null_size=null_size,
-        threshold=threshold,
-        seed=seed,
-        progress_bar=False,
-    ).drop(columns=list(_UNWRITABLE), errors="ignore")
+    # copairs caches each null on disk, keyed without the seed it was drawn with, which depends on the other nulls in
+    # the same call. A shared cache would make a p-value depend on whichever earlier call wrote that null first.
+    with tempfile.TemporaryDirectory() as cache:
+        table = copairs_map.mean_average_precision(
+            precision,
+            sameby=group_columns,
+            null_size=null_size,
+            threshold=threshold,
+            seed=seed,
+            progress_bar=False,
+            cache_dir=cache,
+        ).drop(columns=list(_UNWRITABLE), errors="ignore")
 
     if mode == "activity":
         # Activity is reported for treatments only.

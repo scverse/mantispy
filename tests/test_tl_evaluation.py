@@ -96,6 +96,31 @@ def test_a_null_too_small_for_the_correction_says_so(pure_noise_screen):
 
 
 @requires_copairs
+def test_a_p_value_does_not_depend_on_earlier_calls(pure_noise_screen, tmp_path, monkeypatch):
+    """copairs draws each null with a seed that depends on the other nulls in the same call. A cache shared across
+    calls hands the second object a null drawn for the first, so its p-values depend on what ran before it."""
+    alone = pure_noise_screen(n_control=0, n_groups=6, per_group=4, seed=0)
+    other_plate = pure_noise_screen(n_control=0, n_groups=3, per_group=2, seed=1)
+    other_plate.obs["Metadata_Plate"] = "P2"
+    other_plate.obs["Metadata_Perturbation"] = "q" + other_plate.obs["Metadata_Perturbation"].astype(str)
+    both = ad.concat([alone, other_plate], index_unique=":", keys=["P1", "P2"])
+    mt.io.stamp(both, resolution="well")
+
+    def p_values(*objects):
+        for adata in objects:
+            mt.tl.map(adata, mode="replicability", reference=None, null_size=200)
+        return objects[-1].uns["mantispy"]["map"]["p_value"].to_numpy()
+
+    monkeypatch.setenv("HOME", str(tmp_path / "fresh"))
+    fresh = p_values(alone.copy())
+    monkeypatch.setenv("HOME", str(tmp_path / "after"))
+    after = p_values(both, alone.copy())
+
+    np.testing.assert_array_equal(fresh, after)
+    assert not (tmp_path / "after" / ".copairs").exists()
+
+
+@requires_copairs
 def test_activity_and_replicability_are_different_questions(profiles):
     """They answer different questions, so they have separate names."""
     mt.tl.map(profiles, mode="activity", null_size=200, key_added="activity")

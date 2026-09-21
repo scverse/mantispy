@@ -35,3 +35,4 @@ and this project adheres to [Semantic Versioning][].
 - `mantispy.tl`: `map` leaves out, with a warning, a query whose replicates have no negative pair to be ranked against, such as one on a plate without controls under `mode="activity"`. Scored, it came out at an average precision of 1 and the smallest p-value
 - `mantispy.tl`: `map` warns when `null_size` is too small for the multiple-testing correction to call a group on its own
 - `mantispy.ds`: `jump_lite` returns every feature set with the wells in one order, sorted by source, plate and well, where each file lists them in its own
+- `mantispy.tl`: `map` draws its permutation nulls afresh on every call instead of through copairs' cache in the home directory. The cache keys a null without the seed it was drawn with, so a p-value depended on whichever earlier call had written that null
