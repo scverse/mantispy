@@ -39,66 +39,48 @@ def test_activity_scores_treatments_against_the_controls(profiles):
     assert {"map", "map_qvalue"} <= set(profiles.obs.columns)
 
 
-def _one_plate_with_an_inert_compound(controls_elsewhere: int) -> ad.AnnData:
-    """Plate P1 with its controls and a compound drawn exactly as those controls are, beside a plate P2
-    holding nothing but controls. P1 comes from its own seed, so it is identical whatever P2 holds."""
-    n_features = 12
-    rows, values = [], []
-    plate_one = np.random.default_rng(0)
-    for index in range(24):
-        rows.append(
-            {
-                "Metadata_Plate": "P1",
-                "Metadata_Well": f"C{index:02d}",
-                "Metadata_Perturbation": "DMSO",
-                "Metadata_Control": True,
-            }
-        )
-        values.append(np.eye(n_features)[0] * 10 + plate_one.normal(size=n_features))
-    for index in range(6):
-        rows.append(
-            {
-                "Metadata_Plate": "P1",
-                "Metadata_Well": f"N{index:02d}",
-                "Metadata_Perturbation": "inert",
-                "Metadata_Control": False,
-            }
-        )
-        values.append(np.eye(n_features)[0] * 10 + plate_one.normal(size=n_features))
-    plate_two = np.random.default_rng(1)
-    for index in range(controls_elsewhere):
-        rows.append(
-            {
-                "Metadata_Plate": "P2",
-                "Metadata_Well": f"C{index:02d}",
-                "Metadata_Perturbation": "DMSO",
-                "Metadata_Control": True,
-            }
-        )
-        values.append(np.eye(n_features)[1] * 10 + plate_two.normal(size=n_features))
-    obs = pd.DataFrame(rows)
-    obs.index = obs["Metadata_Plate"] + ":" + obs["Metadata_Well"]
-    wells = ad.AnnData(np.asarray(values, dtype=np.float32), obs=obs)
+def _inert_p_value(pure_noise_screen, controls_elsewhere: int) -> float:
+    """Score a compound drawn exactly as its plate's controls are, beside a second plate of nothing but controls.
+    Each plate has its own seed, so the first is identical whatever the second holds."""
+    here = pure_noise_screen(n_control=24, n_groups=1, per_group=6, n_features=12, seed=0)
+    there = pure_noise_screen(n_control=controls_elsewhere, n_groups=0, n_features=12, seed=1)
+    there.obs["Metadata_Plate"] = "P2"
+    here.X[:, 0] += 10
+    there.X[:, 1] += 10
+    wells = ad.concat([here, there], keys=["P1", "P2"], index_unique=":")
     mt.io.stamp(wells, resolution="well")
-    return wells
+    mt.tl.map(wells, mode="activity", null_size=2000)
+    return float(wells.uns["mantispy"]["map"]["p_value"].item())
 
 
 @requires_copairs
-def test_activity_does_not_depend_on_another_plates_controls():
+def test_activity_does_not_depend_on_another_plates_controls(pure_noise_screen):
     """Phenotypic activity asks whether a perturbation stands apart from the controls it was plated with.
 
     Pooling every plate's controls lets another plate in. Its controls sit far away and are beaten trivially,
     but they still count in the permutation null, which then expects the replicates to compete with all of
     them. So the more controls another plate has, the more active an inert compound on this plate looks.
     """
-    p_values = []
-    for controls_elsewhere in (24, 96):
-        wells = _one_plate_with_an_inert_compound(controls_elsewhere)
-        mt.tl.map(wells, mode="activity", null_size=2000, seed=0)
-        p_values.append(float(wells.uns["mantispy"]["map"].set_index("Metadata_Perturbation").loc["inert", "p_value"]))
+    few, many = _inert_p_value(pure_noise_screen, 24), _inert_p_value(pure_noise_screen, 96)
 
-    assert p_values[0] == p_values[1]
-    assert p_values[0] > 0.05
+    assert few == many
+    assert few > 0.05
+
+
+@requires_copairs
+def test_a_plate_without_controls_calls_nothing_active(pure_noise_screen):
+    """A query with replicates and nothing to rank them against has a perfect rank list by construction.
+    Scored, the inert compound on the plate without controls would come out active at the smallest p."""
+    here = pure_noise_screen(n_control=24, n_groups=1, per_group=6, n_features=12, seed=0)
+    there = pure_noise_screen(n_control=0, n_groups=1, per_group=6, n_features=12, seed=1)
+    there.obs["Metadata_Plate"], there.obs["Metadata_Perturbation"] = "P2", "stranded"
+    wells = ad.concat([here, there], keys=["P1", "P2"], index_unique=":")
+    mt.io.stamp(wells, resolution="well")
+
+    with pytest.warns(UserWarning, match="no negative pair"):
+        mt.tl.map(wells, mode="activity", null_size=200)
+
+    assert set(wells.uns["mantispy"]["map"]["Metadata_Perturbation"]) == {"p00"}
 
 
 @requires_copairs

@@ -27,9 +27,8 @@ REFERENCE_COLUMN = "Metadata_reference_index"
 MODES = {
     # Phenotypic activity :cite:p:`Kalinin_2025`.
     # Is this perturbation distinguishable from the negative controls it was plated with?
-    # The negatives are the query's own plate's controls. Pooled across plates, another plate's controls are
-    # beaten trivially yet still count in the permutation null, so a perturbation with no effect of its own
-    # reads as more active the more controls the other plates carry.
+    # Other plates' controls are beaten trivially yet still count in the permutation null, so pooling them
+    # makes an inert perturbation look more active the more controls the other plates carry.
     "activity": {
         "pos_sameby": ["Metadata_Perturbation", REFERENCE_COLUMN],
         "pos_diffby": [],
@@ -101,7 +100,7 @@ def map(
                 Is this perturbation distinguishable from the negative controls it was plated with?
                 Its replicates are retrieved against the control profiles on the query's own plate only.
                 This is the phenotypic activity of :cite:t:`Kalinin_2025`.
-                Needs ``reference`` and ``Metadata_Plate``; a plate with no controls gives its queries nothing to retrieve against.
+                Needs ``reference`` and ``Metadata_Plate``; queries on a plate without controls are left out, with a warning.
             ``"consistency"``
                 Do perturbations sharing an annotation look more alike than those that do not?
                 This is the phenotypic consistency of :cite:t:`Kalinin_2025`.
@@ -128,7 +127,7 @@ def map(
 
     Raises:
         ImportError: copairs is not installed, which it is not by default because it needs Python < 3.13.
-        ValueError: ``mode`` was passed together with explicit pair arguments or neither was passed, ``mode`` is not one of ``MODES``, ``mode="consistency"`` came without ``annotation_key``, ``mode="activity"`` found no controls, or the profiles hold missing values, which cannot be ranked.
+        ValueError: ``mode`` was passed together with explicit pair arguments or neither was passed, ``mode`` is not one of ``MODES``, ``mode="consistency"`` came without ``annotation_key``, ``mode="activity"`` found no controls, no profile has a negative pair to be ranked against, or the profiles hold missing values, which cannot be ranked.
         KeyError: ``obs`` is missing a column the pair definitions or ``reference`` name.
     """
     try:
@@ -208,9 +207,29 @@ def map(
     precision = copairs_map.average_precision(meta, features, **settings, distance=distance, progress_bar=False)
     if mode == "activity":
         precision = precision[~precision.index.isin(np.flatnonzero(is_control))]
+    group_columns = [c for c in settings["pos_sameby"] if c != REFERENCE_COLUMN]
+
+    # A query with replicates but no negatives ranks them first by construction, so copairs would score it AP = 1 at
+    # the smallest p-value. Under mode="activity" that is every query on a plate without controls.
+    queries = precision["n_pos_pairs"] > 0
+    stranded = queries & (precision["n_total_pairs"] == precision["n_pos_pairs"])
+    if stranded.any():
+        if stranded.sum() == queries.sum():
+            raise ValueError(
+                "no profile has a negative pair to rank its replicates against, so there is nothing to score"
+            )
+        scope = settings["neg_sameby"] or group_columns
+        warnings.warn(
+            f"{int(stranded.sum())} profile(s) have replicates but no negative pair to rank them against, and are "
+            f"left out. They are in {precision.loc[stranded, scope].drop_duplicates().to_dict('records')}.",
+            UserWarning,
+            stacklevel=3,
+        )
+        precision = precision[~stranded]
+
     table = copairs_map.mean_average_precision(
         precision,
-        sameby=[c for c in settings["pos_sameby"] if c != REFERENCE_COLUMN],
+        sameby=group_columns,
         null_size=null_size,
         threshold=threshold,
         seed=seed,
@@ -225,7 +244,6 @@ def map(
 
     adata.uns.setdefault("mantispy", {})[key_added] = table
 
-    group_columns = [c for c in settings["pos_sameby"] if c != REFERENCE_COLUMN]
     lookup = table.set_index(group_columns)
     index = pd.MultiIndex.from_frame(obs[group_columns]) if len(group_columns) > 1 else pd.Index(obs[group_columns[0]])
     adata.obs[key_added] = lookup["mean_average_precision"].reindex(index).to_numpy()
