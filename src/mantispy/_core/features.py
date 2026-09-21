@@ -168,7 +168,7 @@ def _split_object(tokens: list[str]) -> tuple[str | None, str, list[str]]:
     return None, tokens[0], tokens[1:]
 
 
-def _read_suffixes(row: dict, rest: list[str], group: str, texture: bool) -> None:
+def _read_suffixes(row: dict, rest: list[str], group: str) -> None:
     """Move the radial bin and the numeric suffix of ``rest`` into their own columns, leaving the feature name."""
     radial = [token for token in rest if _RADIAL_BIN_RE.match(token)]
     if radial:
@@ -180,7 +180,7 @@ def _read_suffixes(row: dict, rest: list[str], group: str, texture: bool) -> Non
         # Keep the full numeric suffix: Zernike_2_0 and Zernike_2_2 must stay distinct.
         row["params"] = "_".join(numeric)
         rest = [token for token in rest if not _is_numeric(token)]
-        if texture:
+        if group.lower() == "texture":
             for key, value in zip(("scale", "angle", "gray_levels"), numeric, strict=False):
                 row[key] = float(value)
         else:
@@ -190,7 +190,7 @@ def _read_suffixes(row: dict, rest: list[str], group: str, texture: bool) -> Non
     row["is_feature"] = True
 
 
-def _parse_cp_measure(match: re.Match[str]) -> dict:
+def _parse_cp_measure(name: str) -> dict:
     """Annotate one ``cp_measure`` name, whose channel is an index rather than the stain's name.
 
     cp_measure is handed one channel at a time and numbers them in the order it was given them, so the index is all
@@ -198,18 +198,23 @@ def _parse_cp_measure(match: re.Match[str]) -> dict:
     acquisition metadata and guessing it would put a wrong stain on every intensity feature in the screen.
     """
     row: dict = dict.fromkeys(COLUMNS)
+    match = _CP_MEASURE_RE.match(name)
+    if match is None:
+        # The grammar was chosen from the file as a whole, so a name that does not fit it is a mixed or
+        # hand-edited file rather than a name to guess at.
+        row["is_feature"] = False
+        return row
+
+    # A group ending in "_" means the name separated it from the feature, as in "sizeshape_Solidity".
     group = match["group"].rstrip("_")
     row["object"] = match["object"]
     row["feature_group"] = group
     row["channel"] = match["channel"]
-    _read_suffixes(row, match["feature"].split("_"), group, texture=group == "texture")
+    _read_suffixes(row, match["feature"].split("_"), group)
     return row
 
 
 def _parse_one(name: str, channels: frozenset[str]) -> dict:
-    if (match := _CP_MEASURE_RE.match(str(name))) is not None:
-        return _parse_cp_measure(match)
-
     row: dict = dict.fromkeys(COLUMNS)
     row["is_feature"] = False
 
@@ -233,12 +238,14 @@ def _parse_one(name: str, channels: frozenset[str]) -> dict:
         row["channel"] = "|".join(found_channels)
         rest = [token for token in rest if token not in channels]
 
-    _read_suffixes(row, rest, group, texture=group == "Texture")
+    _read_suffixes(row, rest, group)
     return row
 
 
 def parse_feature_names(names: Sequence[str], channels: Sequence[str] | None = None) -> pd.DataFrame:
     """Parse ``names`` into a table of feature annotations indexed by name.
+
+    Which grammar to read is decided once, from ``names`` as a whole, because it is a property of the file that wrote them rather than of any one column.
 
     Args:
         names: Column names from a CellProfiler or cp_measure table.
@@ -250,12 +257,13 @@ def parse_feature_names(names: Sequence[str], channels: Sequence[str] | None = N
         Text columns are ``category`` dtype (so they survive an h5ad round trip even when they are entirely missing) and ``is_feature`` is ``bool``.
     """
     names = list(names)
-    channel_set = frozenset(channels if channels is not None else _infer_channels(names))
-    parsed = pd.DataFrame(
-        [_parse_one(name, channel_set) for name in names],
-        index=pd.Index(names),
-        columns=COLUMNS,
-    )
+    if any(_CP_MEASURE_RE.match(str(name)) for name in names):
+        # cp_measure names their own channel by index, so there is no vocabulary to infer or to be given.
+        rows = [_parse_cp_measure(str(name)) for name in names]
+    else:
+        channel_set = frozenset(channels if channels is not None else _infer_channels(names))
+        rows = [_parse_one(str(name), channel_set) for name in names]
+    parsed = pd.DataFrame(rows, index=pd.Index(names), columns=COLUMNS)
     for column in _TEXT_COLUMNS:
         parsed[column] = parsed[column].astype("category")
     for column in _FLOAT_COLUMNS:

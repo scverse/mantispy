@@ -171,7 +171,7 @@ def feature_select(
         outlier_cutoff: ``drop_outliers``: drop features whose absolute value exceeds this.
         blocklist: ``blocklist``: ``"default"`` for the bundled list, or explicit names. Matched against the current names and against ``var["original_name"]``, so it works either side of :func:`~mantispy.pp.standardize_feature_names`.
         noise_removal_perturb_groups: ``noise_removal``: ``obs`` column grouping replicates.
-        noise_removal_stdev_cutoff: ``noise_removal``: drop features whose within-group standard deviation, averaged over groups, is above this. An absolute threshold on the scale ``normalize`` left the values on, and pycytominer's default assumes whole-plate standardization; against control-normalized values it drops everything.
+        noise_removal_stdev_cutoff: ``noise_removal``: drop features whose within-group standard deviation, averaged over groups, is above this. An absolute threshold on the scale ``normalize`` left the values on, so it is only meaningful next to the normalization that produced them; pycytominer's default assumes whole-plate standardization.
         key_added: Name of the boolean ``var`` column to write.
         copy: Return a modified copy instead of mutating in place.
 
@@ -224,14 +224,11 @@ def feature_select(
     if not keep.any() and adata.n_vars:
         # Selecting nothing is almost always a cutoff set against the wrong scale rather than a screen with
         # no usable features, and on its own it surfaces further down as an empty matrix in whatever runs next.
-        culprits = [name for name, count in removed.items() if count == adata.n_vars]
         warnings.warn(
             f"feature_select flagged none of the {adata.n_vars} features as selected; "
-            f"{', '.join(culprits) if culprits else 'no single operation, but the operations together'} "
-            f"removed all of them. Every cutoff here is an absolute threshold on the scale pp.normalize left "
-            f"the values on, so check it against that scale: noise_removal's stdev_cutoff in particular "
-            f"assumes whole-plate standardization and drops everything once the values are normalized "
-            f"against the controls or divided by a MAD.",
+            f"uns['mantispy']['feature_select'] says what each operation removed. Every cutoff here is an "
+            f"absolute threshold on the scale pp.normalize left the values on, so check it against that "
+            f"scale; noise_removal's stdev_cutoff is the usual cause.",
             UserWarning,
             stacklevel=3,
         )
