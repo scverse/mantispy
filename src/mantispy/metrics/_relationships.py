@@ -63,14 +63,23 @@ def _pairs_from_sets(net: pd.DataFrame, codes: dict[str, int]) -> np.ndarray:
     Raises:
         ValueError: The sets expand into more than :data:`MAX_PAIRS` pairs.
     """
-    # Mapped once for the whole frame rather than per set, because the reference relationship files
-    # are distributed as one pair per row, which makes every set a group of two and a per-group
-    # Python loop the whole cost of the benchmark.
+    # Mapped once for the whole frame rather than per set, because the reference relationship files are
+    # distributed as one pair per row, which makes every set a group of two.
     positions = net["target"].astype(str).map(codes)
     members = pd.DataFrame({"source": np.asarray(net["source"]), "position": positions})
     members = members.dropna(subset=["position"]).astype({"position": np.int64}).drop_duplicates()
 
-    sizes = members["source"].value_counts()
+    # Sorted by set and then by position, so each set's rows are adjacent and ascending. That is what lets
+    # the pairs be laid out by arithmetic below, and it means a pair comes out as (i, j) with i < j already.
+    members = members.sort_values(["source", "position"], kind="stable")
+    sets = members["source"].to_numpy()
+    positions_by_set = members["position"].to_numpy()
+
+    if positions_by_set.size == 0:
+        return np.empty((0, 2), dtype=np.int64)
+
+    starts = np.flatnonzero(np.r_[True, sets[1:] != sets[:-1]])
+    sizes = np.diff(np.r_[starts, positions_by_set.size])
     total = int((sizes * (sizes - 1) // 2).sum())
     if total > MAX_PAIRS:
         raise ValueError(
@@ -78,20 +87,15 @@ def _pairs_from_sets(net: pd.DataFrame, codes: dict[str, int]) -> np.ndarray:
             "net = net.groupby('source').filter(lambda block: len(block) <= 500)"
         )
 
-    # Sorted so that a set's rows are adjacent, which is what lets the pairs of the two-member sets
-    # be read off as one reshape.
-    members = members.sort_values("source", kind="stable")
-    per_set = members.groupby("source", sort=False, observed=True)["position"].transform("size").to_numpy()
-
-    blocks = []
-    if (paired := members.loc[per_set == 2, "position"].to_numpy()).size:
-        # np.sort rather than sorting in place, because to_numpy can hand back a read-only view.
-        blocks.append(np.sort(paired.reshape(-1, 2), axis=1))
-    for _, block in members.loc[per_set > 2].groupby("source", sort=False, observed=True):
-        positions_in_set = np.sort(block["position"].to_numpy())
-        rows, columns = np.triu_indices(positions_in_set.size, 1)
-        blocks.append(np.column_stack([positions_in_set[rows], positions_in_set[columns]]))
-    return np.concatenate(blocks) if blocks else np.empty((0, 2), dtype=np.int64)
+    # Each member pairs with the members after it in its own set, so it opens that many pairs. Expanding by
+    # those counts walks every upper-triangle pair of every set at once, with no per-set Python loop: this is
+    # the whole cost of the benchmark when the annotation is resampled to build a null.
+    within_set = np.arange(positions_by_set.size) - np.repeat(starts, sizes)
+    opened = np.repeat(sizes, sizes) - 1 - within_set
+    first = np.repeat(np.arange(positions_by_set.size), opened)
+    # The partners of one member are the rows straight after it, so the n-th pair it opens is n rows along.
+    step = np.arange(total) - np.repeat(np.cumsum(opened) - opened, opened)
+    return np.column_stack([positions_by_set[first], positions_by_set[first + 1 + step]])
 
 
 def _pair_keys(net: pd.DataFrame, codes: dict[str, int], n_labels: int) -> np.ndarray:

@@ -63,6 +63,71 @@ def test_parses_feature_names(name, expected):
             assert actual == value, f"{key}: expected {value!r}, got {actual!r}"
 
 
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        (
+            "cell_0/max/sizeshapeSolidity",
+            {"object": "cell", "feature_group": "sizeshape", "feature": "Solidity", "channel": "0"},
+        ),
+        (
+            "cell_0/max/ferretMaxFeretDiameter",
+            {"object": "cell", "feature_group": "ferret", "feature": "MaxFeretDiameter", "channel": "0"},
+        ),
+        (
+            "nuclei_3/max/radial_zernikesRadialDistribution_ZernikeMagnitude_9_7",
+            {
+                "object": "nuclei",
+                "feature_group": "radial_zernikes",
+                "feature": "RadialDistribution_ZernikeMagnitude",
+                "channel": "3",
+                "params": "9_7",
+            },
+        ),
+        (
+            "cell_4/max/textureContrast_3_03_256",
+            {
+                "object": "cell",
+                "feature_group": "texture",
+                "feature": "Contrast",
+                "channel": "4",
+                "scale": 3.0,
+                "angle": 3.0,
+                "gray_levels": 256.0,
+            },
+        ),
+        (
+            "nuclei_1/max/radial_distributionRadialDistribution_FracAtD_4of4",
+            {"feature_group": "radial_distribution", "feature": "RadialDistribution_FracAtD", "radial_bin": "4of4"},
+        ),
+        # A group separated from its feature by an underscore rather than glued to it in camel case.
+        ("cell_2/max/sizeshape_Solidity", {"feature_group": "sizeshape", "feature": "Solidity", "channel": "2"}),
+    ],
+)
+def test_parses_cp_measure_names(name, expected):
+    """cp_measure separates its tokens with slashes and glues the group to the feature in camel case, which the
+    CellProfiler parser read as the `0/max/intensityIntensity` group of nothing in particular, with no channel."""
+    row = _row(name)
+    assert row["is_feature"]
+    for key, value in expected.items():
+        assert row[key] == value, f"{key}: expected {value!r}, got {row[key]!r}"
+
+
+def test_a_cellprofiler_name_is_never_read_as_cp_measure():
+    """The two conventions are told apart by the slash, which CellProfiler never emits."""
+    row = _row("Cells_Intensity_MeanIntensity_DNA")
+    assert (row["object"], row["feature_group"], row["channel"]) == ("Cells", "Intensity", "DNA")
+
+
+def test_the_grammar_is_chosen_from_the_whole_list():
+    """A file is written by one tool, so one cp_measure name settles how the rest are read, and a CellProfiler
+    name in that file is a mixed file rather than a name to guess at."""
+    parsed = parse_feature_names(["cell_0/max/sizeshapeSolidity", "Cells_AreaShape_Area"], channels=CHANNELS)
+
+    assert parsed.loc["cell_0/max/sizeshapeSolidity", "feature_group"] == "sizeshape"
+    assert not parsed.loc["Cells_AreaShape_Area", "is_feature"]
+
+
 def test_zernike_orders_stay_distinct():
     """Keeping only the first numeric token collapses Zernike_2_0 and Zernike_2_2."""
     names = ["Cells_AreaShape_Zernike_2_0", "Cells_AreaShape_Zernike_2_2"]

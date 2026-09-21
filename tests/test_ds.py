@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import pytest
 import spatialdata as sd
 
@@ -68,8 +69,9 @@ def test_the_downloads_read_back_at_the_shape_the_registry_claims(name: str) -> 
     # Regression test for #63: every well-level dataset publishes an exact per-well count upstream.
     if name not in ("jump_cells", "pooled_rare"):
         assert (adata.obs["Metadata_CellCount"] > 0).all()
-        # jump-profiling-recipe's count table, which jump_crispr reads, has no field count.
-        if name != "jump_crispr":
+        # jump-profiling-recipe's count table, which jump_crispr reads, has no field count, and
+        # JUMP-Lite publishes one count per well rather than per field.
+        if name not in ("jump_crispr", "jump_lite"):
             assert adata.obs["Metadata_SiteCount"].between(1, 36).all()
 
 
@@ -133,3 +135,77 @@ def test_selecting_without_the_annotation_is_refused() -> None:
     """The mask is computed against the negative controls, which only the annotation names."""
     with pytest.raises(KeyError, match="needs annotate"):
         mt.ds.jump_cells(annotate=False, selected=True)
+
+
+@pytest.mark.network
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ("model", "n_features"),
+    [
+        ("openphenom", 384),
+        ("dinov2", 384),
+        ("dinov2_random", 384),
+        ("subcell", 1536),
+        ("morphem", 1920),
+        ("cp_measure", 2550),
+    ],
+)
+def test_every_jump_lite_feature_set_reads_back_at_its_own_width(model: str, n_features: int) -> None:
+    """The registry records one shape and the generic shape test only ever loads the default model, so the
+    other five widths are asserted nowhere else. The rows are the same wells in all six."""
+    adata = mt.ds.jump_lite(model=model, annotate=False)
+
+    assert adata.shape == (1536, n_features)
+    assert adata.obs["Metadata_CellCount"].notna().all()
+
+
+def test_jump_lite_names_its_feature_sets():
+    """The six feature sets cover the same wells, so a typo has to fail loudly rather than
+    silently fall back to one of them."""
+    with pytest.raises(ValueError, match="model must be one of"):
+        mt.ds.jump_lite(model="openphenome")
+    assert "cp_measure" in mt.ds.JUMP_LITE_MODELS
+
+
+@pytest.mark.parametrize(("model", "parsed"), [("openphenom", False), ("cp_measure", True)])
+def test_jump_lite_does_not_read_an_embedding_dimension_as_a_measurement(tmp_path, monkeypatch, model, parsed):
+    """The parser finds structure in names that have none: it reads `openphenom_nahualX_17` as the
+    `nahualX` feature group of an `openphenom` object, so the model's own tensor names became
+    feature families and `scale` became the dimension index. cp_measure is real measurements and
+    keeps its annotation."""
+    from mantispy.ds import _datasets
+
+    names = (
+        [f"{model}_nahualX_{index}" for index in range(4)]
+        if model == "openphenom"
+        else ["cell_0/max/sizeshapeSolidity", "nuclei_3/max/intensityIntensity_MeanIntensity"]
+    )
+    wells = pd.DataFrame(
+        {
+            "Metadata_Plate": ["P1", "P1"],
+            "Metadata_Well": ["A01", "A02"],
+            "Metadata_Source": ["source_3", "source_3"],
+            "Metadata_Batch": ["b1", "b1"],
+            "Metadata_id": ["P1_A01", "P1_A02"],
+            **{name: [float(index), float(index) + 1] for index, name in enumerate(names)},
+        }
+    )
+    wells.to_parquet(tmp_path / f"{model}.parquet")
+    pd.DataFrame({"Metadata_id": ["P1_A01", "P1_A02"], "cell_count": [120, 130]}).to_parquet(
+        tmp_path / "cell_count.parquet"
+    )
+
+    def files(name, cache_dir, select=None):
+        return [path for path in sorted(tmp_path.glob("*.parquet")) if select is None or select(path.name)]
+
+    monkeypatch.setattr(_datasets, "_files", files)
+
+    adata = mt.ds.jump_lite(model=model, annotate=False)
+
+    assert bool(adata.var["feature_group"].notna().any()) is parsed
+    # The compartment and the channel are what an embedding cannot offer, so they are what cp_measure has to keep.
+    if parsed:
+        assert list(adata.var["object"]) == ["cell", "nuclei"]
+        assert list(adata.var["feature_group"]) == ["sizeshape", "intensity"]
+        assert list(adata.var["channel"]) == ["0", "3"]
+    assert list(adata.obs["Metadata_CellCount"]) == [120, 130]

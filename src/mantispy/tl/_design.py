@@ -239,6 +239,10 @@ def cytotoxicity(
         Together they are suspect because a well with a fifth of its cells has a noisier median and drifts from the controls regardless of the biology.
         On a synthetic plate with one purely cytotoxic perturbation and its morphology effect removed, that perturbation's distance was 21.1 against 7.0 for the controls.
 
+        Run it whichever feature block a hit was read off. Cell loss moves a profile away from the controls however it is measured, so a screen's most distant perturbations are partly a cytotoxicity ranking on CellProfiler features and on learned embeddings alike.
+
+        Where the two differ is the geometry rather than the ranking. An embedding of the whole field encodes how full the well is, and on every trained model of :func:`~mantispy.ds.jump_lite` the cell count lands on the first component, while averaging per-cell measurements over a well leaves it as one signal among many. That costs distances, neighbourhoods and batch correction rather than this flag, and :doc:`/tutorials/12_learned_embeddings` measures both.
+
         The flag is a diagnostic and does not correct the distances.
         How much cytotoxicity confounds a screen varies.
         Over the pki dose series, the rank correlation between phenotype distance and cell loss is +0.79 (p < 1e-8) and the four strongest hits have viabilities of 0.27 to 0.68.

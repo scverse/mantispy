@@ -157,3 +157,19 @@ def test_an_all_nan_feature_is_selected_on_without_a_warning():
         mt.pp.feature_select(adata, operations=("variance_threshold", "drop_outliers", "noise_removal"), na_cutoff=0.05)
 
     assert not adata.var["selected"]["Cells_AreaShape_Plain"], "an all-NaN feature has no variance to keep it"
+
+
+def test_selecting_nothing_warns_rather_than_emptying_the_object_silently(wells):
+    """noise_removal's cutoff is an absolute threshold on the scale normalize left the values on, so against
+    control-normalized values it drops every feature, and on its own that surfaces as an empty matrix in
+    whatever runs next."""
+    with pytest.warns(UserWarning, match="flagged none of the"):
+        mt.pp.feature_select(
+            wells,
+            operations=("noise_removal",),
+            noise_removal_perturb_groups="Metadata_Perturbation",
+            noise_removal_stdev_cutoff=0.0,
+        )
+
+    assert not wells.var["selected"].any()
+    assert wells.uns["mantispy"]["feature_select"]["noise_removal"] == wells.n_vars

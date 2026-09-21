@@ -417,6 +417,23 @@ def test_known_relationships_matches_the_definition():
     assert measured == pytest.approx(_recall_by_hand(adata, net), abs=1e-12)
 
 
+def test_a_set_expands_into_every_pair_within_it():
+    """Sets are expanded by arithmetic over the whole annotation rather than one group at a time, so the
+    expansion has to hold for a set larger than a pair, for a member listed twice, and for one not profiled."""
+    from mantispy.metrics._relationships import _pairs_from_sets
+
+    net = pd.DataFrame(
+        {
+            "source": ["big", "big", "big", "big", "pair", "pair", "lonely", "outside"],
+            "target": ["a", "b", "c", "b", "a", "d", "a", "gone"],
+        }
+    )
+    pairs = _pairs_from_sets(net, {"a": 0, "b": 1, "c": 2, "d": 3})
+
+    assert {tuple(row) for row in pairs} == {(0, 1), (0, 2), (1, 2), (0, 3)}
+    assert (pairs[:, 0] < pairs[:, 1]).all()
+
+
 def test_known_relationships_refuses_input_it_cannot_score():
     adata, net = _gene_map(seed=4)
     with pytest.raises(ValueError, match="aggregate first"):

@@ -12,7 +12,7 @@ from mantispy._core.masks import feature_mask, reference_mask
 from mantispy._core.mutation import inplace_or_copy
 
 
-@inplace_or_copy()
+@inplace_or_copy(expects="cell")
 def well_qc(
     adata: AnnData,
     min_cells: int = 50,
@@ -36,6 +36,8 @@ def well_qc(
 
     Notes:
         The table keeps plate and well as columns because a MultiIndex in ``uns`` cannot be written to h5ad.
+
+        ``min_cells`` counts the rows of each well, so this belongs before aggregation. Run on profiles that are already one row per well every well has one row, fails ``min_cells``, and the whole plate is flagged. At well resolution the equivalent is a threshold on ``obs["Metadata_CellCount"]``.
     """
     selected = feature_mask(adata, key)
     X = get_matrix(adata)[:, selected]

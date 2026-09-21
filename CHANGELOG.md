@@ -22,3 +22,10 @@ and this project adheres to [Semantic Versioning][].
 - `mantispy.io`: `stamp`, which puts an `AnnData` built elsewhere — a published h5ad, another pipeline's output, a matrix of learned embeddings — on the mantispy API surface
 - `mantispy.metrics`: `known_relationships`, the share of annotated perturbation pairs whose similarity falls in either tail of the distribution over all pairs, and `evaluate_correction(covariates=...)`, which reports what a representation spends its variance on besides the batch and the label
 - `mantispy.pp`: `tvn`, typical variation normalization with per-batch CORAL, which aligns each batch's controls onto the pooled controls
+- `mantispy.ds`: `jump_lite`, the same 1,536 JUMP Target-2 wells embedded by five models and measured by `cp_measure`, and `jump_lite_targets`, the gene each compound is annotated to act on
+
+### Fixed
+
+- `mantispy.io`: `cp_measure` column names are read as `<object>_<channel>/<aggregation>/<group><Feature>` rather than through the CellProfiler grammar, which left `var['channel']` empty and split one feature group into as many as the channels and aggregations it was written with
+- `mantispy.pp`: `well_qc` says it expects cell resolution, instead of counting one row per well and failing every well on a well-level object
+- `mantispy.pp`: `feature_select` warns when it selects nothing, rather than leaving an empty matrix for whatever runs next; `noise_removal`'s `stdev_cutoff` is documented as an absolute threshold on the scale `normalize` left the values on
