@@ -636,6 +636,10 @@ def jump_lite(
     obs = as_frame(adata.obs)
     joined = obs.merge(counts, on="Metadata_id", how="left", validate="1:1")
     joined.index = obs.index
+    if unmatched := int(joined["cell_count"].isna().sum()):
+        # A left join leaves the count missing rather than failing, and everything that reads it downstream,
+        # from cytotoxicity to the well filters, would quietly treat those wells as having no cells.
+        get_logger().warning("jump_lite(%s): %d well(s) have no cell count in the count table", model, unmatched)
     adata.obs = joined.rename(columns={"cell_count": "Metadata_CellCount"})
 
     if annotate:

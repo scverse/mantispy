@@ -137,6 +137,28 @@ def test_selecting_without_the_annotation_is_refused() -> None:
         mt.ds.jump_cells(annotate=False, selected=True)
 
 
+@pytest.mark.network
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ("model", "n_features"),
+    [
+        ("openphenom", 384),
+        ("dinov2", 384),
+        ("dinov2_random", 384),
+        ("subcell", 1536),
+        ("morphem", 1920),
+        ("cp_measure", 2550),
+    ],
+)
+def test_every_jump_lite_feature_set_reads_back_at_its_own_width(model: str, n_features: int) -> None:
+    """The registry records one shape and the generic shape test only ever loads the default model, so the
+    other five widths are asserted nowhere else. The rows are the same wells in all six."""
+    adata = mt.ds.jump_lite(model=model, annotate=False)
+
+    assert adata.shape == (1536, n_features)
+    assert adata.obs["Metadata_CellCount"].notna().all()
+
+
 def test_jump_lite_names_its_feature_sets():
     """The six feature sets cover the same wells, so a typo has to fail loudly rather than
     silently fall back to one of them."""
