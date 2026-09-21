@@ -131,6 +131,10 @@ class _Fit:
     def predict(self, log_dose: np.ndarray) -> np.ndarray:
         if self.name == "logistic":
             return four_parameter_logistic(log_dose, *self.parameters[:-1])
+        if self.name == "constant":
+            # No response at any dose, once the baseline is subtracted. Its parameter vector is the error scale
+            # alone, which is what makes it the null the curves are scored against.
+            return np.zeros_like(log_dose)
         # tcplfit2's poly1 runs through the origin of baseline-corrected response, so its top is a rescaling of
         # the one slope. Anchoring at the lowest tested dose is the same shape in log space.
         return self.parameters[0] * (log_dose - log_dose.min())
@@ -233,11 +237,10 @@ def _hitcall(fit: _Fit, log_dose: np.ndarray, response: np.ndarray, cutoff: floa
     log_scale = fit.log_scale
 
     # P1: the Akaike weight of the winning curve against the constant model, which fits the error scale only.
-    constant = _fit_maximum_likelihood_constant(response)
+    constant = _fit_maximum_likelihood("constant", log_dose, response, np.empty(0))
     if constant is None:
         return float("nan")
-    aic_constant = 2.0 * 1.0 - 2.0 * constant
-    p1 = 1.0 - float(expit((fit.aic - aic_constant) / 2.0))
+    p1 = 1.0 - float(expit((fit.aic - constant.aic) / 2.0))
 
     # P2: one minus the odds of every concentration's median response falling short of the cutoff.
     # Each factor is the chance that a response this far out still came from a truth below the cutoff, which for a
@@ -256,18 +259,6 @@ def _hitcall(fit: _Fit, log_dose: np.ndarray, response: np.ndarray, cutoff: floa
     p3 = (1.0 + tail) / 2.0 if abs(top) >= abs(cutoff) else (1.0 - tail) / 2.0
 
     return float(np.clip(p1 * p2 * p3, 0.0, 1.0))
-
-
-def _fit_maximum_likelihood_constant(response: np.ndarray) -> float | None:
-    """Log-likelihood of the constant model, which is zero response once the baseline is subtracted."""
-    from scipy.optimize import minimize_scalar
-
-    fitted = minimize_scalar(
-        lambda log_scale: -_log_likelihood(response, log_scale),
-        bounds=(np.log(1e-8), np.log(max(float(np.std(response)) * 100.0, 1e-6))),
-        method="bounded",
-    )
-    return -float(fitted.fun) if fitted.success else None
 
 
 def _baseline_and_cutoff(
