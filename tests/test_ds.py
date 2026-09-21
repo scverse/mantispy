@@ -109,6 +109,19 @@ def test_jump_cells_holds_controls_and_treatments_at_cell_resolution() -> None:
 
 @pytest.mark.network
 @pytest.mark.slow
+def test_jump_cells_keeps_the_quality_of_every_field_and_where_each_cell_sits() -> None:
+    """Each field numbers its images from one, and stacking them kept the first field's quality alone."""
+    adata = mt.ds.jump_cells()
+    images = adata.uns["mantispy"]["image_table"]
+
+    assert len(images) == 24 * 4 and images.index.is_unique
+    assert adata.obs["Metadata_ImageNumber"].isin(images.index).all()
+    assert adata.obs[["Metadata_Center_X", "Metadata_Center_Y"]].notna().all().all()
+    assert not any("_Center_" in name for name in adata.var_names)
+
+
+@pytest.mark.network
+@pytest.mark.slow
 def test_jump_plate_reads_the_fields_that_were_downloaded() -> None:
     sdata = mt.ds.jump_plate()
 

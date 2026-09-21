@@ -114,7 +114,7 @@ def _gappy_corr(
     Ranking globally disagrees with both on the sign of the correlation in 8 of 300 trials of two columns at 25% missing, by up to 0.10.
 
     Columns are grouped by missingness pattern, so the cost is one ranking per distinct pair of patterns rather than per pair of columns, over the columns of those two groups only.
-    Real screens have few patterns because whole feature families go undefined together: rohban has one across 3634 columns, and JUMP TARGET-2 and pki have none at well level.
+    Real screens have few patterns because whole feature families go undefined together: rohban has one across all of its columns, and JUMP TARGET-2 and pki have none at well level.
     Where every column is complete, the single group spans everything and the ranks are the global ones.
     """
     if method != "spearman":

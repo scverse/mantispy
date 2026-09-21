@@ -335,14 +335,14 @@ Plotting functions return Matplotlib axes and do not modify the object.
 
 By default `io.read_profiles` keeps features from the three compartments (`Cells`, `Cytoplasm`, `Nuclei`), matching
 `pycytominer.infer_cp_features`. Whole-field `Image_` measurements are excluded (a JUMP plate has 1077 of them
-against 3634 per-cell features); `objects=None` keeps them.
+against 3616 per-cell features); `objects=None` keeps them.
 
 `jump_cells`, `jump_export` and `jump_plate` are three layers of one plate, `BR00121438`, whose well-level profiles
 `jump_target2` already reads, so a profile aggregated from the cells can be compared with the published one.
 `jump_cells` marks the features feature selection keeps in `var["selected"]`, as scanpy marks `highly_variable`, and
-`jump_cells(selected=True)` hands back only those, 1607 of 5857. The reduced object is kept beside the whole one, so
+`jump_cells(selected=True)` hands back only those, 1605 of 5839. The reduced object is kept beside the whole one, so
 a notebook that wants it reads 87 MB rather than 308 MB. No step of the selection draws a random number, so the same
-pinned files always give the same 1607 features.
+pinned files always give the same 1605 features.
 `jump_cells` returns single cells, `jump_export` the directory one field of view was measured in, as CellProfiler
 wrote it, and `jump_plate` the images and segmentations of one well as `SpatialData`. They share one download, so
 asking for more than one costs little beyond the first.

@@ -50,7 +50,7 @@ TARGET2_DEFAULT = (
 )
 
 #: Bumped whenever the assembled jump_cells object changes, so an older cached assembly is not reused.
-_ASSEMBLY_VERSION = 2
+_ASSEMBLY_VERSION = 3
 
 #: The field of view :func:`jump_export` hands out, a DMSO well of the plate :func:`jump_cells` reads.
 _EXPORT_FOV = "BR00121438-J04-1"
@@ -123,7 +123,7 @@ def bbbc021(cache_dir: str | Path | None = None) -> AnnData:
             Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Returns:
-        632 wells by 473 features at well resolution, with ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Compound``, ``Metadata_Concentration``, ``Metadata_MOA``, ``Metadata_Perturbation`` (compound at concentration), ``Metadata_Control``, and ``Metadata_CellCount`` over the ``Metadata_SiteCount`` fields, of four imaged, that contributed cells.
+        Wells by features at well resolution, with ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Compound``, ``Metadata_Concentration``, ``Metadata_MOA``, ``Metadata_Perturbation`` (compound at concentration), ``Metadata_Control``, and ``Metadata_CellCount`` over the ``Metadata_SiteCount`` fields, of four imaged, that contributed cells.
 
     References:
         :cite:t:`Caie_2010`, the image set.
@@ -767,7 +767,17 @@ def _assemble_cells(entry: DatasetEntry, cache_dir: str | Path | None, *, annota
     channels = [str(channel) for channel in entry.metadata["channels"]]
     paths = _files("jump_cells", cache_dir)
     parts = [_read_site(directory, source, channels) for directory in sorted({path.parent for path in paths})]
+    # Every field of view numbers its own images from one, so each part's numbers are shifted past the ones before
+    # it, and the image tables are stacked rather than merged, which kept only the first field's.
+    images, offset = [], 0
+    for part in parts:
+        table = part.uns["mantispy"]["image_table"]
+        numbers = {number: offset + index + 1 for index, number in enumerate(table.index)}
+        part.obs["Metadata_ImageNumber"] = part.obs["Metadata_ImageNumber"].astype(int).map(numbers)
+        images.append(table.rename(index=numbers))
+        offset += len(table)
     adata = ad.concat(parts, join="inner", merge="first", uns_merge="first")
+    adata.uns["mantispy"]["image_table"] = pd.concat(images)
     # The parts hold as much again as the result, and nothing below needs them.
     n_parts, widest = len(parts), max(part.n_vars for part in parts)
     del parts
@@ -845,7 +855,7 @@ def jump_cells(annotate: bool = True, selected: bool = False, cache_dir: str | P
     Args:
         annotate: Join the JUMP annotation, which supplies ``Metadata_Perturbation`` and ``Metadata_Control``.
             Downloads another 14 MB. Needed for `selected`, which is computed against the controls.
-        selected: Return only the features ``var["selected"]`` marks, 1607 of 5857, as
+        selected: Return only the features ``var["selected"]`` marks, as
             :func:`mantispy.pp.subset_features` would. The subset is kept beside the whole object, so a notebook that only wants the reduced one reads 87 MB instead of 308 MB.
         cache_dir: Where to keep the download. Defaults to :attr:`mantispy.settings.cache_dir`.
 

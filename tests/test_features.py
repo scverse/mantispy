@@ -144,6 +144,8 @@ def test_zernike_orders_stay_distinct():
         "Metadata_Plate",
         "Cells_Number_Object_Number",
         "Cells_Location_Center_X",
+        "Cells_AreaShape_Center_X",
+        "Nuclei_AreaShape_BoundingBoxMaximum_Y",
         "Cells_Parent_Nuclei",
         "Cells_Children_Cytoplasm_Count",
         "Image_Count_Cells",
@@ -153,6 +155,11 @@ def test_zernike_orders_stay_distinct():
 )
 def test_non_features_flagged(name):
     assert not _row(name)["is_feature"]
+
+
+def test_the_bounding_box_area_is_still_a_feature():
+    """Where an object sits is not a feature; how much of the image its bounding box covers is."""
+    assert _row("Cells_AreaShape_BoundingBoxArea")["is_feature"]
 
 
 def test_unprefixed_names_have_na_object():

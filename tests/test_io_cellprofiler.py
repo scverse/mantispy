@@ -93,6 +93,17 @@ def test_centroids_are_kept_in_obs(cellprofiler_dir):
     assert adata.obs["Metadata_Center_X"].between(0, 1024).all()
 
 
+def test_a_cellprofiler_4_centroid_is_kept_in_obs_and_out_of_x(cellprofiler_dir):
+    """CellProfiler 4 writes the centroid under AreaShape, where it was read as a morphology feature."""
+    cells = pd.read_csv(cellprofiler_dir / "Cells.csv")
+    cells.columns = [column.replace("Location_Center", "AreaShape_Center") for column in cells.columns]
+    cells.to_csv(cellprofiler_dir / "Cells.csv", index=False)
+
+    adata = mt.io.read_profiles(cellprofiler_dir)
+    assert adata.obs["Metadata_Center_X"].between(0, 1024).all()
+    assert not any("Center" in name for name in adata.var_names)
+
+
 def test_metadata_and_well_normalization(tmp_path, make_cellprofiler_dir):
     directory = make_cellprofiler_dir(tmp_path / "wells")
     image = pd.read_csv(directory / "Image.csv")

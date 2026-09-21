@@ -148,8 +148,11 @@ def read_export(
         get_logger().info("%s are on both the object tables and Image.csv; keeping the Image.csv value", shared)
         merged = merged.drop(columns=shared)
     table = merged.merge(per_image, on="ImageNumber", how="left", validate="m:1")
-    # Centroids are not profile features, but qc_is_border needs them.
+    # Centroids are not profile features, but qc_is_border and neighbors_local_density need them. CellProfiler 4
+    # writes them under AreaShape, older versions under Location.
     for axis in ("X", "Y"):
-        if (source := f"{primary_object}_Location_Center_{axis}") in table.columns:
-            table[f"Metadata_Center_{axis}"] = table[source].to_numpy()
+        for source in (f"{primary_object}_Location_Center_{axis}", f"{primary_object}_AreaShape_Center_{axis}"):
+            if source in table.columns:
+                table[f"Metadata_Center_{axis}"] = table[source].to_numpy()
+                break
     return table.rename(columns={key: f"Metadata_{key}" for key in _KEYS}), image, infer_channels(image)

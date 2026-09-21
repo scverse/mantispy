@@ -125,6 +125,10 @@ def canonical_channel(channel: str | None, aliases: dict[str, str] | None = None
 #: Bare column names CellProfiler emits that are never features.
 _BARE_NON_FEATURES = frozenset({"ImageNumber", "ObjectNumber", "TableNumber"})
 
+#: ``AreaShape`` measurements that say where an object is rather than what it looks like. CellProfiler 4 writes
+#: the centroid here instead of under ``Location``.
+_POSITIONAL_AREASHAPE = frozenset({"Center", "BoundingBoxMinimum", "BoundingBoxMaximum"})
+
 _RADIAL_BIN_RE = re.compile(r"^\d+of\d+$")
 _NUMERIC_RE = re.compile(r"^-?\d+(\.\d+)?$")
 
@@ -226,7 +230,7 @@ def _parse_one(name: str, channels: frozenset[str]) -> dict:
     row["object"] = obj
     row["feature_group"] = group
 
-    if group in NON_FEATURE_GROUPS:
+    if group in NON_FEATURE_GROUPS or (group == "AreaShape" and rest and rest[0] in _POSITIONAL_AREASHAPE):
         return row
     if not rest:
         row["feature"] = group
