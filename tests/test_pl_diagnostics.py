@@ -99,3 +99,9 @@ def test_control_drift_reads_an_infinity_as_missing(diagnosed):
         axes = mt.pl.control_drift(adata)
         drawn.append(np.vstack([points.get_offsets() for points in axes.collections]))
     np.testing.assert_array_equal(*drawn)
+
+
+def test_control_drift_names_the_minimum_it_draws(diagnosed):
+    """Regression test for #54: n_components=1 fitted, then failed on embedding[:, 1] with a bare IndexError."""
+    with pytest.raises(ValueError, match="n_components must be at least 2"):
+        mt.pl.control_drift(diagnosed, n_components=1)

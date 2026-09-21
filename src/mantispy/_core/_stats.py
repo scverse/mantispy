@@ -6,6 +6,8 @@ Results from different metrics are compared routinely, and two FDR procedures wo
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 
 #: Scale factor that makes the median absolute deviation estimate the standard deviation of a normal distribution.
@@ -130,3 +132,15 @@ def split_reference(rows: np.ndarray, generator: np.random.Generator) -> tuple[n
     order = generator.permutation(rows.size)
     half = rows.size // 2
     return np.sort(rows[order[:half]]), np.sort(rows[order[half:]])
+
+
+def nanvar(X: np.ndarray, ddof: int = 0) -> np.ndarray:
+    """Per-feature variance, ignoring missing values.
+
+    A feature measured on no cell at all yields NaN rather than a warning: numpy raises "Degrees of freedom <= 0
+    for slice" through :mod:`warnings`, where ``np.errstate`` cannot reach it.
+    ``ddof=0`` is the population variance, which is what sklearn's ``VarianceThreshold`` and pycytominer compare.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        return np.nanvar(X, axis=0, ddof=ddof)

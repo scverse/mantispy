@@ -1,5 +1,7 @@
 """Behaviour of feature_select beyond equivalence, which test_equivalence_* covers."""
 
+import warnings
+
 import anndata as ad
 import numpy as np
 import pandas as pd
@@ -140,3 +142,18 @@ def test_the_same_input_always_gives_the_same_mask(wells):
         masks.append(trial.var["selected"].to_numpy())
 
     assert np.array_equal(*masks)
+
+
+def test_an_all_nan_feature_is_selected_on_without_a_warning():
+    """Regression test for #57: the nan-functions warn through ``warnings``, which ``np.errstate`` does not reach.
+
+    A measurement that failed on every cell looks like this, and it left three RuntimeWarnings in the caller's output.
+    """
+    adata = _one_feature_per_operation()
+    adata.X[:, adata.var_names.get_loc("Cells_AreaShape_Plain")] = np.nan
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        mt.pp.feature_select(adata, operations=("variance_threshold", "drop_outliers", "noise_removal"), na_cutoff=0.05)
+
+    assert not adata.var["selected"]["Cells_AreaShape_Plain"], "an all-NaN feature has no variance to keep it"

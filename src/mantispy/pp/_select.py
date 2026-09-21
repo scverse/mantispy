@@ -10,6 +10,7 @@ Operation names and behavior follow pycytominer.
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Sequence
 
 import numpy as np
@@ -17,6 +18,7 @@ from anndata import AnnData
 
 from mantispy._core._corr import correlated_pairs
 from mantispy._core._reduce import get_matrix, group_codes, group_offsets
+from mantispy._core._stats import nanvar
 from mantispy._core.features import blocklist_hits
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
@@ -46,9 +48,8 @@ def _op_variance_threshold(X: np.ndarray, min_variance: float = 1e-6) -> np.ndar
 
     sklearn's ``VarianceThreshold`` keeps ``variance > threshold`` and uses the population variance, so ``ddof=0``.
     """
-    with np.errstate(invalid="ignore"):
-        variance = np.nanvar(X, axis=0, ddof=0)
-    return np.nan_to_num(variance, nan=0.0, posinf=0.0) > min_variance
+    # The same helper pp.filter_features uses, so the two statements of this rule cannot drift apart.
+    return np.nan_to_num(nanvar(X), nan=0.0, posinf=0.0) > min_variance
 
 
 def _op_frequency_threshold(X: np.ndarray, freq_cut: float = 0.05, unique_cut: float = 0.01) -> np.ndarray:
@@ -99,7 +100,8 @@ def _op_drop_outliers(X: np.ndarray, outlier_cutoff: float = 500.0) -> np.ndarra
 
     Ratios with a near-zero denominator blow up like this.
     """
-    with np.errstate(invalid="ignore"):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # "All-NaN slice encountered"
         largest = np.nanmax(np.abs(X), axis=0)
     return ~(np.nan_to_num(largest, nan=0.0) > outlier_cutoff)
 
@@ -122,7 +124,8 @@ def _op_noise_removal(X: np.ndarray, codes: np.ndarray, stdev_cutoff: float = 0.
     """
     n_groups = int(codes.max()) + 1
     order, offsets = group_offsets(codes, n_groups)
-    with np.errstate(invalid="ignore"):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # "Degrees of freedom <= 0 for slice", once per all-NaN group
         deviations = np.stack(
             [np.nanstd(X[order[offsets[group] : offsets[group + 1]]], axis=0, ddof=0) for group in range(n_groups)]
         )

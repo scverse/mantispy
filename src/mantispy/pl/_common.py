@@ -29,21 +29,26 @@ def axes(ax: Axes | None, figsize: tuple[float, float]) -> Axes:
     return ax if ax is not None else plt.subplots(figsize=figsize)[1]
 
 
-def table(adata: AnnData, key: str, produced_by: str) -> pd.DataFrame:
+def table(adata: AnnData, key: str, produced_by: str, when_empty: str | None = None) -> pd.DataFrame:
     """A result table from ``uns["mantispy"]``, or an error naming what writes it.
 
     Args:
         adata: Object holding the table.
         key: Name of the table in ``uns["mantispy"]``.
         produced_by: The call to name in the error, for example ``"mt.tl.hit_calling"``.
+        when_empty: Why a table this plot can read holds no rows, for the plots where that is a plausible result rather than a missing step. With ``None`` an empty table is handed back for the caller to draw.
 
     Returns:
         The table as a frame.
 
     Raises:
         KeyError: ``uns["mantispy"]`` holds no table under ``key``.
+        ValueError: The table is empty and ``when_empty`` says what that means.
     """
     store = adata.uns.get("mantispy", {})
     if key not in store:
         raise KeyError(f"uns['mantispy'][{key!r}] is missing; run {produced_by} first")
-    return pd.DataFrame(store[key])
+    frame = pd.DataFrame(store[key])
+    if when_empty is not None and frame.empty:
+        raise ValueError(f"uns['mantispy'][{key!r}] is empty; {when_empty}")
+    return frame
