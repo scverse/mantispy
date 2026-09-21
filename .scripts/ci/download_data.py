@@ -31,6 +31,7 @@ def main(args: argparse.Namespace) -> None:
         "jump_target2": mt.ds.jump_target2,
         "jump_cells": mt.ds.jump_cells,
         "jump_plate": mt.ds.jump_plate,
+        "jump_export": mt.ds.jump_export,
         "jump_lite": jump_lite_all,
         "oasis_pilot": mt.ds.oasis_pilot,
         "jump_crispr": mt.ds.jump_crispr,
