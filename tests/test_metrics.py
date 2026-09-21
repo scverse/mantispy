@@ -393,6 +393,27 @@ def test_known_relationships_separates_a_structured_map_from_a_shuffled_annotati
     assert baseline < 0.4, baseline
 
 
+def test_known_relationships_measures_chance_for_a_perturbation_in_many_sets():
+    """A compound annotated to many targets draws many of the pairs. This one points away from every other
+    profile, so its pairs sit in a tail whatever the annotation says: the recall is far above 2 x percentile,
+    and only a shuffle that keeps how many sets each perturbation belongs to shows that it is chance."""
+    import anndata as ad
+
+    values = 3.0 + np.random.default_rng(0).normal(size=(60, 16))
+    values[0] *= -1
+    names = [f"G{index}" for index in range(60)]
+    adata = ad.AnnData(values.astype(np.float32), obs=pd.DataFrame({"Metadata_Perturbation": names}, index=names))
+    hub = [(f"hub{k}", member) for k in range(1, 20) for member in ("G0", f"G{k}")]
+    rest = [(f"pair{k}", f"G{member}") for k in range(20) for member in (20 + 2 * k, 21 + 2 * k)]
+    net = pd.DataFrame(hub + rest, columns=["source", "target"])
+
+    result = mt.metrics.known_relationships(adata, net, n_permutations=200, seed=0).iloc[0]
+
+    assert result["value"] > 0.3
+    assert result["null"] > 0.3
+    assert result["p_value"] > 0.05
+
+
 def test_known_relationships_counts_the_lower_tail():
     """Two perturbations with opposite effects are related, so the recall is two-sided.
 

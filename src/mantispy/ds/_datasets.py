@@ -591,7 +591,7 @@ def jump_lite(
 
     ``cpg0016-jump``, the compact benchmark of :cite:t:`Munoz_2026`. Four plates of the JUMP Target-2 plate map, one from each of ``source_3``, ``source_4``, ``source_5`` and ``source_6``, so the four batches are four different laboratories running the same 302 compounds with 64 DMSO wells each.
 
-    Every ``model`` covers the same 1,536 wells, which is what makes this a comparison rather than six datasets: the rows and the metadata are identical and only the feature block changes. Five are learned embeddings and one, ``"cp_measure"``, is the CellProfiler-equivalent measurement of the same images.
+    Every ``model`` covers the same 1,536 wells, which is what makes this a comparison rather than six datasets: the rows, their order and the metadata are identical and only the feature block changes. The files list the wells in a different order for every model, so the rows are sorted by source, plate and well. Five are learned embeddings and one, ``"cp_measure"``, is the CellProfiler-equivalent measurement of the same images.
 
     Args:
         model: Which feature set to read, one of ``ds.JUMP_LITE_MODELS``. ``"dinov2_random"`` is the same architecture with untrained weights, which is the null model the benchmark scores the others against.
@@ -641,6 +641,10 @@ def jump_lite(
         # from cytotoxicity to the well filters, would quietly treat those wells as having no cells.
         get_logger().warning("jump_lite(%s): %d well(s) have no cell count in the count table", model, unmatched)
     adata.obs = joined.rename(columns={"cell_count": "Metadata_CellCount"})
+    # Each file lists the wells in its own order, so two feature sets stacked by position would pair one well's
+    # features with another's.
+    order = as_frame(adata.obs).sort_values(["Metadata_Source", "Metadata_Plate", "Metadata_Well"], kind="stable").index
+    adata = adata[order].copy()
 
     if annotate:
         from mantispy.pp._annotate import annotate_jump

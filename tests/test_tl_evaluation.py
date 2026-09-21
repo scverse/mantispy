@@ -3,6 +3,7 @@
 import warnings
 from importlib.util import find_spec
 
+import anndata as ad
 import numpy as np
 import pandas as pd
 import pytest
@@ -36,6 +37,62 @@ def test_activity_scores_treatments_against_the_controls(profiles):
     assert "DMSO" not in set(table["Metadata_Perturbation"])
     assert table["mean_average_precision"].median() > 0.9  # every injected effect is real
     assert {"map", "map_qvalue"} <= set(profiles.obs.columns)
+
+
+def _inert_p_value(pure_noise_screen, controls_elsewhere: int) -> float:
+    """Score a compound drawn exactly as its plate's controls are, beside a second plate of nothing but controls.
+    Each plate has its own seed, so the first is identical whatever the second holds."""
+    here = pure_noise_screen(n_control=24, n_groups=1, per_group=6, n_features=12, seed=0)
+    there = pure_noise_screen(n_control=controls_elsewhere, n_groups=0, n_features=12, seed=1)
+    there.obs["Metadata_Plate"] = "P2"
+    here.X[:, 0] += 10
+    there.X[:, 1] += 10
+    wells = ad.concat([here, there], keys=["P1", "P2"], index_unique=":")
+    mt.io.stamp(wells, resolution="well")
+    mt.tl.map(wells, mode="activity", null_size=2000)
+    return float(wells.uns["mantispy"]["map"]["p_value"].item())
+
+
+@requires_copairs
+def test_activity_does_not_depend_on_another_plates_controls(pure_noise_screen):
+    """Phenotypic activity asks whether a perturbation stands apart from the controls it was plated with.
+
+    Pooling every plate's controls lets another plate in. Its controls sit far away and are beaten trivially,
+    but they still count in the permutation null, which then expects the replicates to compete with all of
+    them. So the more controls another plate has, the more active an inert compound on this plate looks.
+    """
+    few, many = _inert_p_value(pure_noise_screen, 24), _inert_p_value(pure_noise_screen, 96)
+
+    assert few == many
+    assert few > 0.05
+
+
+@requires_copairs
+def test_a_plate_without_controls_calls_nothing_active(pure_noise_screen):
+    """A query with replicates and nothing to rank them against has a perfect rank list by construction.
+    Scored, the inert compound on the plate without controls would come out active at the smallest p."""
+    here = pure_noise_screen(n_control=24, n_groups=1, per_group=6, n_features=12, seed=0)
+    there = pure_noise_screen(n_control=0, n_groups=1, per_group=6, n_features=12, seed=1)
+    there.obs["Metadata_Plate"], there.obs["Metadata_Perturbation"] = "P2", "stranded"
+    wells = ad.concat([here, there], keys=["P1", "P2"], index_unique=":")
+    mt.io.stamp(wells, resolution="well")
+
+    with pytest.warns(UserWarning, match="no negative pair"):
+        mt.tl.map(wells, mode="activity", null_size=200)
+
+    assert set(wells.uns["mantispy"]["map"]["Metadata_Perturbation"]) == {"p00"}
+
+
+@requires_copairs
+def test_a_null_too_small_for_the_correction_says_so(pure_noise_screen):
+    """No p-value falls below 1 / (null_size + 1), so over enough groups the correction calls nothing however
+    strong a lone effect is, and a screen scored that way would report no hits without saying why."""
+    screen = pure_noise_screen()
+    with pytest.warns(UserWarning, match="at least 3 reach that floor"):
+        mt.tl.map(screen, mode="activity", null_size=100)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        mt.tl.map(screen, mode="activity", null_size=1000)
 
 
 @requires_copairs

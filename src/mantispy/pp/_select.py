@@ -3,7 +3,7 @@
 Every operation returns a boolean keep mask over ``var``.
 :func:`feature_select` combines them into one boolean column without dropping anything, and :func:`subset_features` does the subsetting.
 
-Operation names and behavior follow pycytominer.
+Operation names and behavior follow pycytominer, apart from ``drop_degenerate``, which drops the features :func:`~mantispy.pp.normalize` could not scale.
 ``variance_threshold`` is an sklearn-style variance cut, and the frequency and uniqueness rules are in the separate ``frequency_threshold``.
 ``correlation_threshold`` judges each pair against a ranking computed once from the full matrix instead of sweeping greedily, and thresholds the signed correlation, so two features correlated at -1.0 are both kept.
 """
@@ -24,8 +24,9 @@ from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy._core.mutation import inplace_or_copy
 
-#: Operations, in the order pycytominer applies them by default.
+#: Operations, in the order pycytominer applies them by default, after mantispy's own ``drop_degenerate``.
 OPERATIONS = (
+    "drop_degenerate",
     "variance_threshold",
     "frequency_threshold",
     "correlation_threshold",
@@ -36,11 +37,22 @@ OPERATIONS = (
 )
 
 DEFAULT_OPERATIONS = (
+    "drop_degenerate",
     "variance_threshold",
     "correlation_threshold",
     "drop_na_columns",
     "blocklist",
 )
+
+
+def _op_drop_degenerate(adata: AnnData) -> np.ndarray:
+    """Drop the features ``normalize`` flagged in ``var["degenerate_scale"]`` because it could not scale them.
+
+    An object ``normalize`` never flagged has no such column and keeps every feature.
+    """
+    if "degenerate_scale" not in adata.var:
+        return np.ones(adata.n_vars, dtype=bool)
+    return ~as_frame(adata.var)["degenerate_scale"].to_numpy(dtype=bool)
 
 
 def _op_variance_threshold(X: np.ndarray, min_variance: float = 1e-6) -> np.ndarray:
@@ -161,7 +173,7 @@ def feature_select(
 
     Args:
         adata: Object to select features on. Usually well-level profiles.
-        operations: Which operations to run, from ``OPERATIONS``. The default omits ``frequency_threshold``, ``drop_outliers`` and ``noise_removal``, matching pycytominer's own default.
+        operations: Which operations to run, from ``OPERATIONS``. The default is pycytominer's own, which omits ``frequency_threshold``, ``drop_outliers`` and ``noise_removal``, plus ``drop_degenerate``, which removes nothing from an object :func:`~mantispy.pp.normalize` did not flag.
         min_variance: ``variance_threshold``: keep features with variance above this.
         freq_cut: ``frequency_threshold``: drop a feature when the count of its second most common value divided by the count of its most common is below this. Either this rule or ``unique_cut`` drops a feature.
         unique_cut: ``frequency_threshold``: drop a feature when its share of distinct values is below this.
@@ -183,7 +195,8 @@ def feature_select(
         KeyError: If ``noise_removal`` is requested but ``noise_removal_perturb_groups`` is not an ``obs`` column.
 
     Notes:
-        Every operation judges the full feature set, so each count in ``uns["mantispy"]["feature_select"]`` says what that operation alone would remove and is the same whatever order ``operations`` runs in.
+        ``drop_degenerate`` runs first, and the other operations judge only the features it keeps: a feature :func:`~mantispy.pp.normalize` could not scale can hold values large enough to decide the correlation ranking of every feature it is compared with.
+        Every other operation judges that whole set, so each count in ``uns["mantispy"]["feature_select"]`` says what that operation alone would remove and is the same whatever order ``operations`` runs in.
         The counts therefore overlap: a feature that is both constant and mostly missing is counted by ``variance_threshold`` and by ``drop_na_columns``, and the counts sum to more than the number of features actually removed, which is ``n_vars`` minus ``var[key_added].sum()``.
 
         ``correlation_threshold`` is the most expensive operation.
@@ -197,8 +210,16 @@ def feature_select(
     X = get_matrix(adata)
     keep = np.ones(adata.n_vars, dtype=bool)
     removed: dict[str, int] = {}
+    if "drop_degenerate" in operations:
+        keep = _op_drop_degenerate(adata)
+        removed["drop_degenerate"] = int((~keep).sum())
+    judged = np.flatnonzero(keep)
+    if judged.size < adata.n_vars:
+        X = X[:, judged]
 
     for operation in operations:
+        if operation == "drop_degenerate":
+            continue
         if operation == "variance_threshold":
             mask = _op_variance_threshold(X, min_variance)
         elif operation == "frequency_threshold":
@@ -208,7 +229,7 @@ def feature_select(
         elif operation == "drop_na_columns":
             mask = _op_drop_na_columns(X, na_cutoff)
         elif operation == "blocklist":
-            mask = _op_blocklist(adata, blocklist)
+            mask = _op_blocklist(adata, blocklist)[judged]
         elif operation == "drop_outliers":
             mask = _op_drop_outliers(X, outlier_cutoff)
         else:
@@ -217,9 +238,9 @@ def feature_select(
                 raise KeyError(f"obs has no column {noise_removal_perturb_groups!r} to group replicates by")
             codes, _ = group_codes(adata, noise_removal_perturb_groups)
             mask = _op_noise_removal(X, codes, noise_removal_stdev_cutoff)
-        # Counted against every feature rather than against the features its predecessors left, so the count does not depend on where the operation sits in `operations`.
+        # Counted against every judged feature rather than against the features its predecessors left, so the count does not depend on where the operation sits in `operations`.
         removed[operation] = int((~mask).sum())
-        keep &= mask
+        keep[judged] &= mask
 
     if not keep.any() and adata.n_vars:
         # Selecting nothing is almost always a cutoff set against the wrong scale rather than a screen with

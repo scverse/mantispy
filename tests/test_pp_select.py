@@ -173,3 +173,17 @@ def test_selecting_nothing_warns_rather_than_emptying_the_object_silently(wells)
 
     assert not wells.var["selected"].any()
     assert wells.uns["mantispy"]["feature_select"]["noise_removal"] == wells.n_vars
+
+
+def test_features_normalize_could_not_scale_are_dropped_before_the_rest_are_judged():
+    """drop_degenerate drops what normalize flagged, and the other operations never see it: judged alongside
+    the rest, the flagged feature here would push a healthy one out through the correlation ranking."""
+    rng = np.random.default_rng(2)
+    values = rng.normal(size=(60, 4)) @ rng.normal(size=(4, 4))
+    adata = ad.AnnData(values.astype(np.float32), var=pd.DataFrame(index=[f"Cells_Intensity_f{i}" for i in range(4)]))
+    adata.var["degenerate_scale"] = [False, False, False, True]
+
+    mt.pp.feature_select(adata)
+
+    assert adata.var["selected"].tolist() == [True, True, True, False]
+    assert adata.uns["mantispy"]["feature_select"]["drop_degenerate"] == 1

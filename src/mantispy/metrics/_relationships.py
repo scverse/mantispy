@@ -2,7 +2,7 @@
 
 Two perturbations that act on the same complex or pathway should look more alike — or more opposed — than an arbitrary pair. The benchmark scores a map by the share of annotated pairs whose similarity falls in either tail of the similarity distribution over all pairs of the map :cite:p:`Celik_2024`.
 
-Both tails count, because two perturbations with opposite effects on the same process are as related as two with the same effect. A map that carries no information recovers twice ``percentile`` of its annotated pairs, so the default 5 leaves a baseline of 10%.
+Both tails count, because two perturbations with opposite effects on the same process are as related as two with the same effect. When every perturbation belongs to the same number of sets, a map that carries no information recovers twice ``percentile`` of its annotated pairs, 10% at the default 5. When some belong to many sets, as compounds with several targets do, their pairs are overrepresented and chance moves with where the map puts them, so it has to be measured by shuffling the annotation.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 from mantispy._core._reduce import representation
+from mantispy._core._stats import permutation_pvalue
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy.metrics._common import tidy
@@ -35,16 +36,13 @@ def _recall(null: np.ndarray, query: np.ndarray, tail: float) -> float:
     The rank of a query value is its position in the sorted null, as the reference implementation takes it, rather than a comparison against an interpolated quantile. That is what puts ties on the conservative side: a value tied with much of the null is credited to neither tail.
 
     Args:
-        null: The comparison distribution, which is sorted in place.
+        null: The comparison distribution, sorted.
         query: The values to rank against it.
         tail: Size of each tail, as a fraction.
 
     Returns:
         The share of ``query`` at or below the lower tail, or at or above the upper one.
     """
-    # Sorted in place, which the one caller allows: it builds this pool for this call and does not
-    # read it again, so a sorted copy would be one more array the size of the upper triangle.
-    null.sort()
     at_or_below = np.searchsorted(null, query, side="right") / null.size
     strictly_below = np.searchsorted(null, query, side="left") / null.size
     return float(np.mean((at_or_below <= tail) | (strictly_below >= 1.0 - tail)))
@@ -128,6 +126,8 @@ def known_relationships(
     use_rep: str | None = None,
     percentile: float = 5.0,
     name: str | None = None,
+    n_permutations: int = 0,
+    seed: int = 0,
 ) -> pd.DataFrame:
     """Share of annotated pairs that land in either tail of the similarity distribution :cite:p:`Celik_2024`.
 
@@ -139,10 +139,13 @@ def known_relationships(
         use_rep: Measure in ``obsm[use_rep]`` instead of ``X``.
         percentile: Size of each tail, in percent, between 0 and 50. The comparison distribution is every pair of profiles, so the tails adapt to how similar the map is overall.
         name: What to call this annotation in the ``metric`` column, as ``known_relationships:name``. Each source is scored separately, and two rows both called ``known_relationships`` would collide when :func:`~mantispy.pl.metrics` pivots the table.
+        n_permutations: How many times to shuffle which perturbation each annotation row names, to measure the recall this map gives by chance. Each shuffle keeps the size of every set and the number of sets every perturbation belongs to. ``0`` skips it.
+        seed: Seed for the shuffles.
 
     Returns:
         A one-row tidy frame with ``metric``, ``representation``, ``key`` and ``value``, so it stacks with the other metrics.
         ``value`` is the recall, between 0 and 1.
+        With ``n_permutations``, also ``null``, the mean recall over the shuffles, and ``p_value``, the share of shuffles recalling at least as much, counted as ``(k + 1) / (n + 1)``.
 
     Raises:
         KeyError: ``obs`` has no column ``label_key``.
@@ -151,7 +154,7 @@ def known_relationships(
         ValueError: ``percentile`` is not between 0 and 50, or the sets expand into more pairs than the module's ``MAX_PAIRS`` cap allows.
 
     Notes:
-        Read this against the 2 × ``percentile`` baseline, not against 100%. Annotated pairs are noisy — two genes share a complex and still do different things — so published maps recover a minority of them, and the number ranks pipelines against each other rather than standing on its own :cite:p:`Celik_2024`.
+        Read this against chance, not against 100%: 2 × ``percentile`` when every perturbation belongs to the same number of sets, and the ``null`` of ``n_permutations`` otherwise. Annotated pairs are noisy — two genes share a complex and still do different things — so published maps recover a minority of them, and the number ranks pipelines against each other rather than standing on its own :cite:p:`Celik_2024`.
 
         Which annotation is supplied matters more than any argument here. Broad sets, such as the hallmark programs, call hundreds of genes related and pull the recall toward the baseline; curated complexes are the stricter test. Score each source on its own, under its own ``name``, rather than concatenating them: a pair two sources agree on would otherwise be counted once and a source with more pairs would decide the number.
 
@@ -188,15 +191,27 @@ def known_relationships(
     # Every pair of distinct profiles is the comparison distribution. Giving each row its own
     # group makes every pair a non-replicate pair, so this is the strict upper triangle, read a
     # row block at a time rather than materialized as index arrays larger than the matrix.
-    null = _non_replicate_pool(matrix, np.arange(len(labels)))
+    pool = _non_replicate_pool(matrix, np.arange(len(labels)))
+    # Sorted in place, once for the observed recall and every shuffle: this function built the pool and nothing
+    # else reads it, so a sorted copy would be one more array the size of the upper triangle.
+    pool.sort()
 
-    recall = _recall(null, similarities, percentile / 100.0)
-    get_logger().info(
-        "known_relationships: %.1f%% of %d annotated pair(s) in the tails, against a %.1f%% baseline",
-        100 * recall,
-        keys.size,
-        2 * percentile,
-    )
-    return tidy(
+    tail = percentile / 100.0
+    recall = _recall(pool, similarities, tail)
+    get_logger().info("known_relationships: %.1f%% of %d annotated pair(s) in the tails", 100 * recall, keys.size)
+    result = tidy(
         "known_relationships" if name is None else f"known_relationships:{name}", use_rep or "X", label_key, recall
     )
+    if not n_permutations:
+        return result
+
+    rng = np.random.default_rng(seed)
+    members = net["target"].to_numpy()
+    shuffled = []
+    for _ in range(n_permutations):
+        # Moving members between sets keeps every set's size and every perturbation's number of sets, which is
+        # what decides how often its pairs are drawn.
+        permuted = _pair_keys(net.assign(target=rng.permutation(members)), codes, len(labels))
+        shuffled.append(_recall(pool, matrix[permuted // len(labels), permuted % len(labels)], tail))
+    null = np.asarray(shuffled)
+    return result.assign(null=float(null.mean()), p_value=float(permutation_pvalue(np.array([recall]), null)[0]))

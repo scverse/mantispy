@@ -7,6 +7,7 @@ It is rank-based, so it needs no correlation threshold, and a permutation null g
 
 from __future__ import annotations
 
+import math
 import warnings
 from collections.abc import Sequence
 
@@ -25,12 +26,14 @@ REFERENCE_COLUMN = "Metadata_reference_index"
 
 #: copairs pair definitions for each ``mode`` of :func:`map`.
 MODES = {
-    # Phenotypic activity :cite:p:`Kalinin_2025`, as in copairs' own example.
-    # Is this perturbation distinguishable from the negative controls?
+    # Phenotypic activity :cite:p:`Kalinin_2025`.
+    # Is this perturbation distinguishable from the negative controls it was plated with?
+    # Other plates' controls are beaten trivially yet still count in the permutation null, so pooling them
+    # makes an inert perturbation look more active the more controls the other plates carry.
     "activity": {
         "pos_sameby": ["Metadata_Perturbation", REFERENCE_COLUMN],
         "pos_diffby": [],
-        "neg_sameby": [],
+        "neg_sameby": ["Metadata_Plate"],
         "neg_diffby": ["Metadata_Perturbation", REFERENCE_COLUMN],
     },
     # Phenotypic consistency :cite:p:`Kalinin_2025`.
@@ -95,10 +98,10 @@ def map(
         mode: A preset for the pair definitions, one of the following.
 
             ``"activity"``
-                Is this perturbation distinguishable from the negative controls?
-                Its replicates are retrieved against control profiles only.
+                Is this perturbation distinguishable from the negative controls it was plated with?
+                Its replicates are retrieved against the control profiles on the query's own plate only.
                 This is the phenotypic activity of :cite:t:`Kalinin_2025`.
-                Needs ``reference``.
+                Needs ``reference`` and ``Metadata_Plate``; queries on a plate without controls are left out, with a warning.
             ``"consistency"``
                 Do perturbations sharing an annotation look more alike than those that do not?
                 This is the phenotypic consistency of :cite:t:`Kalinin_2025`.
@@ -112,7 +115,7 @@ def map(
         annotation_key: The ``obs`` column ``mode="consistency"`` groups by.
         reference: Which rows are the negative controls, which ``mode="activity"`` retrieves against and ``mode="replicability"`` leaves out: ``"negcon"``, the name of a boolean ``obs`` column, or ``None`` for none.
         use_rep: Score ``obsm[use_rep]`` instead of ``X``.
-        null_size: Size of the permutation null.
+        null_size: Size of the permutation null. No p-value falls below ``1 / (null_size + 1)``, so the correction over many groups needs a large one, and a warning says when it is too small to call a group on its own.
         threshold: Significance threshold passed to copairs.
         seed: Seed for the permutation null.
         distance: Distance copairs ranks by.
@@ -125,7 +128,7 @@ def map(
 
     Raises:
         ImportError: copairs is not installed, which it is not by default because it needs Python < 3.13.
-        ValueError: ``mode`` was passed together with explicit pair arguments or neither was passed, ``mode`` is not one of ``MODES``, ``mode="consistency"`` came without ``annotation_key``, ``mode="activity"`` found no controls, or the profiles hold missing values, which cannot be ranked.
+        ValueError: ``mode`` was passed together with explicit pair arguments or neither was passed, ``mode`` is not one of ``MODES``, ``mode="consistency"`` came without ``annotation_key``, ``mode="activity"`` found no controls, no profile has a negative pair to be ranked against, or the profiles hold missing values, which cannot be ranked.
         KeyError: ``obs`` is missing a column the pair definitions or ``reference`` name.
     """
     try:
@@ -205,9 +208,42 @@ def map(
     precision = copairs_map.average_precision(meta, features, **settings, distance=distance, progress_bar=False)
     if mode == "activity":
         precision = precision[~precision.index.isin(np.flatnonzero(is_control))]
+    group_columns = [c for c in settings["pos_sameby"] if c != REFERENCE_COLUMN]
+
+    # A query with replicates but no negatives ranks them first by construction, so copairs would score it AP = 1 at
+    # the smallest p-value. Under mode="activity" that is every query on a plate without controls.
+    queries = precision["n_pos_pairs"] > 0
+    stranded = queries & (precision["n_total_pairs"] == precision["n_pos_pairs"])
+    if stranded.any():
+        if stranded.sum() == queries.sum():
+            raise ValueError(
+                "no profile has a negative pair to rank its replicates against, so there is nothing to score"
+            )
+        scope = settings["neg_sameby"] or group_columns
+        warnings.warn(
+            f"{int(stranded.sum())} profile(s) have replicates but no negative pair to rank them against, and are "
+            f"left out. They are in {precision.loc[stranded, scope].drop_duplicates().to_dict('records')}.",
+            UserWarning,
+            stacklevel=3,
+        )
+        precision = precision[~stranded]
+
+    # copairs cannot return a p-value below 1 / (null_size + 1), and Benjamini-Hochberg over m groups calls a group
+    # at that floor only when more than m / ((null_size + 1) * threshold) groups share it.
+    groups = len(precision.loc[precision["n_pos_pairs"] > 0, group_columns].drop_duplicates())
+    sharing = groups / ((null_size + 1) * threshold)
+    if sharing >= 1:
+        warnings.warn(
+            f"with null_size={null_size} no p-value can fall below 1/{null_size + 1}, so the correction over "
+            f"{groups} groups calls none of them unless at least {math.floor(sharing) + 1} reach that floor "
+            f"together. Raise null_size above {groups / threshold:.0f} for one group to be callable on its own.",
+            UserWarning,
+            stacklevel=3,
+        )
+
     table = copairs_map.mean_average_precision(
         precision,
-        sameby=[c for c in settings["pos_sameby"] if c != REFERENCE_COLUMN],
+        sameby=group_columns,
         null_size=null_size,
         threshold=threshold,
         seed=seed,
@@ -222,7 +258,6 @@ def map(
 
     adata.uns.setdefault("mantispy", {})[key_added] = table
 
-    group_columns = [c for c in settings["pos_sameby"] if c != REFERENCE_COLUMN]
     lookup = table.set_index(group_columns)
     index = pd.MultiIndex.from_frame(obs[group_columns]) if len(group_columns) > 1 else pd.Index(obs[group_columns[0]])
     adata.obs[key_added] = lookup["mean_average_precision"].reindex(index).to_numpy()

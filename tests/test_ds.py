@@ -167,6 +167,38 @@ def test_jump_lite_names_its_feature_sets():
     assert "cp_measure" in mt.ds.JUMP_LITE_MODELS
 
 
+def test_jump_lite_returns_every_feature_set_in_one_row_order(tmp_path, monkeypatch):
+    """Each feature set is distributed with the wells in its own order, so two of them stacked by position
+    paired one well's features with another's. Read back, every set lists the wells in the same order."""
+    from mantispy.ds import _datasets
+
+    ids = ["P2_A01", "P1_B01", "P1_A01"]
+    wells = pd.DataFrame(
+        {
+            "Metadata_Plate": ["P2", "P1", "P1"],
+            "Metadata_Well": ["A01", "B01", "A01"],
+            "Metadata_Source": ["source_4", "source_3", "source_3"],
+            "Metadata_Batch": "b1",
+            "Metadata_id": ids,
+            "value": [2.0, 1.0, 0.0],
+        }
+    )
+    wells.rename(columns={"value": "openphenom_0"}).to_parquet(tmp_path / "openphenom.parquet")
+    shuffled = wells.iloc[[2, 0, 1]].reset_index(drop=True)
+    shuffled.rename(columns={"value": "dinov2_0"}).to_parquet(tmp_path / "dinov2.parquet")
+    pd.DataFrame({"Metadata_id": ids, "cell_count": [100, 110, 120]}).to_parquet(tmp_path / "cell_count.parquet")
+
+    def files(name, cache_dir, select=None):
+        return [path for path in sorted(tmp_path.glob("*.parquet")) if select is None or select(path.name)]
+
+    monkeypatch.setattr(_datasets, "_files", files)
+
+    first, second = (mt.ds.jump_lite(model=model, annotate=False) for model in ("openphenom", "dinov2"))
+
+    assert list(first.obs_names) == list(second.obs_names)
+    assert np.asarray(first.X)[:, 0].tolist() == np.asarray(second.X)[:, 0].tolist() == [0.0, 1.0, 2.0]
+
+
 @pytest.mark.parametrize(("model", "parsed"), [("openphenom", False), ("cp_measure", True)])
 def test_jump_lite_does_not_read_an_embedding_dimension_as_a_measurement(tmp_path, monkeypatch, model, parsed):
     """The parser finds structure in names that have none: it reads `openphenom_nahualX_17` as the
