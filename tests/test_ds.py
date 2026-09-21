@@ -156,7 +156,7 @@ def test_jump_lite_does_not_read_an_embedding_dimension_as_a_measurement(tmp_pat
     names = (
         [f"{model}_nahualX_{index}" for index in range(4)]
         if model == "openphenom"
-        else ["Cells_AreaShape_Area", "Nuclei_Intensity_MeanIntensity_DNA", "Cells_AreaShape_Zernike_0_0"]
+        else ["cell_0/max/sizeshapeSolidity", "nuclei_3/max/intensityIntensity_MeanIntensity"]
     )
     wells = pd.DataFrame(
         {
@@ -181,4 +181,9 @@ def test_jump_lite_does_not_read_an_embedding_dimension_as_a_measurement(tmp_pat
     adata = mt.ds.jump_lite(model=model, annotate=False)
 
     assert bool(adata.var["feature_group"].notna().any()) is parsed
+    # The compartment and the channel are what an embedding cannot offer, so they are what cp_measure has to keep.
+    if parsed:
+        assert list(adata.var["object"]) == ["cell", "nuclei"]
+        assert list(adata.var["feature_group"]) == ["sizeshape", "intensity"]
+        assert list(adata.var["channel"]) == ["0", "3"]
     assert list(adata.obs["Metadata_CellCount"]) == [120, 130]

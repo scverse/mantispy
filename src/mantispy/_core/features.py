@@ -3,9 +3,15 @@
 This is the only module that parses feature names.
 Its output populates ``adata.var``, and nothing downstream re-parses names.
 
-The grammar handled here is::
+Two grammars are handled. CellProfiler's::
 
     [<Object>_]<Group>_<feature words>[_<channel>...][_<numeric params>][_<NofM>]
+
+and cp_measure's, which separates its tokens with slashes, names the channel by index and glues the group to the feature in camel case::
+
+    <object>_<channel>/<aggregation>/<group><Feature words>[_<numeric params>][_<NofM>]
+
+A name is read as cp_measure's only when it matches that shape in full, which a CellProfiler name cannot because CellProfiler never emits a ``/``.
 
 Columns that are not measurements (object numbers, parent/child links, locations, file names, metadata) get ``is_feature = False`` so callers can route them somewhere other than ``X``.
 """
@@ -122,6 +128,13 @@ _BARE_NON_FEATURES = frozenset({"ImageNumber", "ObjectNumber", "TableNumber"})
 _RADIAL_BIN_RE = re.compile(r"^\d+of\d+$")
 _NUMERIC_RE = re.compile(r"^-?\d+(\.\d+)?$")
 
+#: ``cell_0/max/textureContrast_3_03_256``: object, channel index, per-object aggregation, then the group glued to the
+#: feature in camel case. CellProfiler separates every token with an underscore and never emits a ``/``, so a name has
+#: to match this whole shape before it is read this way.
+_CP_MEASURE_RE = re.compile(
+    r"^(?P<object>[a-z]+)_(?P<channel>\d+)/(?P<agg>[a-z]+)/(?P<group>[a-z_]+)(?P<feature>[A-Z].*)$"
+)
+
 
 def _is_numeric(token: str) -> bool:
     return bool(_NUMERIC_RE.match(token))
@@ -155,7 +168,48 @@ def _split_object(tokens: list[str]) -> tuple[str | None, str, list[str]]:
     return None, tokens[0], tokens[1:]
 
 
+def _read_suffixes(row: dict, rest: list[str], group: str, texture: bool) -> None:
+    """Move the radial bin and the numeric suffix of ``rest`` into their own columns, leaving the feature name."""
+    radial = [token for token in rest if _RADIAL_BIN_RE.match(token)]
+    if radial:
+        row["radial_bin"] = radial[0]
+        rest = [token for token in rest if token not in radial]
+
+    numeric = [token for token in rest if _is_numeric(token)]
+    if numeric:
+        # Keep the full numeric suffix: Zernike_2_0 and Zernike_2_2 must stay distinct.
+        row["params"] = "_".join(numeric)
+        rest = [token for token in rest if not _is_numeric(token)]
+        if texture:
+            for key, value in zip(("scale", "angle", "gray_levels"), numeric, strict=False):
+                row[key] = float(value)
+        else:
+            row["scale"] = float(numeric[0])
+
+    row["feature"] = "_".join(rest) if rest else group
+    row["is_feature"] = True
+
+
+def _parse_cp_measure(match: re.Match[str]) -> dict:
+    """Annotate one ``cp_measure`` name, whose channel is an index rather than the stain's name.
+
+    cp_measure is handed one channel at a time and numbers them in the order it was given them, so the index is all
+    the name carries. It is kept as the channel rather than resolved to a stain, because the mapping lives in the
+    acquisition metadata and guessing it would put a wrong stain on every intensity feature in the screen.
+    """
+    row: dict = dict.fromkeys(COLUMNS)
+    group = match["group"].rstrip("_")
+    row["object"] = match["object"]
+    row["feature_group"] = group
+    row["channel"] = match["channel"]
+    _read_suffixes(row, match["feature"].split("_"), group, texture=group == "texture")
+    return row
+
+
 def _parse_one(name: str, channels: frozenset[str]) -> dict:
+    if (match := _CP_MEASURE_RE.match(str(name))) is not None:
+        return _parse_cp_measure(match)
+
     row: dict = dict.fromkeys(COLUMNS)
     row["is_feature"] = False
 
@@ -179,24 +233,7 @@ def _parse_one(name: str, channels: frozenset[str]) -> dict:
         row["channel"] = "|".join(found_channels)
         rest = [token for token in rest if token not in channels]
 
-    radial = [token for token in rest if _RADIAL_BIN_RE.match(token)]
-    if radial:
-        row["radial_bin"] = radial[0]
-        rest = [token for token in rest if token not in radial]
-
-    numeric = [token for token in rest if _is_numeric(token)]
-    if numeric:
-        # Keep the full numeric suffix: Zernike_2_0 and Zernike_2_2 must stay distinct.
-        row["params"] = "_".join(numeric)
-        rest = [token for token in rest if not _is_numeric(token)]
-        if group == "Texture":
-            for key, value in zip(("scale", "angle", "gray_levels"), numeric, strict=False):
-                row[key] = float(value)
-        else:
-            row["scale"] = float(numeric[0])
-
-    row["feature"] = "_".join(rest) if rest else group
-    row["is_feature"] = True
+    _read_suffixes(row, rest, group, texture=group == "Texture")
     return row
 
 

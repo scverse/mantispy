@@ -608,7 +608,9 @@ def jump_lite(
         ValueError: ``model`` is not one of ``ds.JUMP_LITE_MODELS``.
 
     Notes:
-        A dimension of a learned embedding is a coordinate in the model's own basis, not a measurement with a name to parse, so for every model but ``"cp_measure"`` the annotation columns of ``var`` are supplied empty. Anything that reads ``var["feature_group"]`` or ``var["channel"]``, such as the feature families :func:`~mantispy.pl.effect_sizes` colours by, has nothing to work with on those. ``"cp_measure"`` is CellProfiler-style measurements and keeps its parsed annotation.
+        A dimension of a learned embedding is a coordinate in the model's own basis, not a measurement with a name to parse, so for every model but ``"cp_measure"`` the annotation columns of ``var`` are supplied empty. Anything that reads ``var["feature_group"]`` or ``var["channel"]``, such as the feature families :func:`~mantispy.pl.effect_sizes` colours by, has nothing to work with on those.
+
+        ``"cp_measure"`` is CellProfiler-style measurements and keeps its parsed compartment, feature group and channel. Its channel is the index cp_measure numbered its inputs by rather than the name of a stain, because the name lives in the acquisition metadata and not in the feature name.
 
         The embeddings are not normalized. They are the model's output on each well's images, so a per-plate control normalization is still the first step.
 

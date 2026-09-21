@@ -121,6 +121,14 @@ def _op_noise_removal(X: np.ndarray, codes: np.ndarray, stdev_cutoff: float = 0.
     """Drop features that vary too much within a perturbation group.
 
     The statistic is the mean, over groups, of each group's population standard deviation (``ddof=0``).
+
+    ``stdev_cutoff`` is an absolute threshold on whatever scale ``normalize`` left the values on, so it is
+    only meaningful next to the normalization that produced them. pycytominer's 0.8 is calibrated for
+    whole-plate standardization, where a feature's spread is 1 by construction. Normalizing against the
+    controls instead, as :func:`~mantispy.pp.normalize` does by default and as the JUMP recipe does, measures
+    every feature against the spread of the DMSO wells rather than of the plate, and treated wells vary more
+    than controls do. Dividing by a MAD rather than a standard deviation rescales it again. Either choice
+    puts the whole distribution above 0.8 and the operation then drops every feature.
     """
     n_groups = int(codes.max()) + 1
     order, offsets = group_offsets(codes, n_groups)
@@ -163,7 +171,7 @@ def feature_select(
         outlier_cutoff: ``drop_outliers``: drop features whose absolute value exceeds this.
         blocklist: ``blocklist``: ``"default"`` for the bundled list, or explicit names. Matched against the current names and against ``var["original_name"]``, so it works either side of :func:`~mantispy.pp.standardize_feature_names`.
         noise_removal_perturb_groups: ``noise_removal``: ``obs`` column grouping replicates.
-        noise_removal_stdev_cutoff: ``noise_removal``: drop features whose within-group standard deviation, averaged over groups, is above this.
+        noise_removal_stdev_cutoff: ``noise_removal``: drop features whose within-group standard deviation, averaged over groups, is above this. An absolute threshold on the scale ``normalize`` left the values on, and pycytominer's default assumes whole-plate standardization; against control-normalized values it drops everything.
         key_added: Name of the boolean ``var`` column to write.
         copy: Return a modified copy instead of mutating in place.
 
@@ -212,6 +220,21 @@ def feature_select(
         # Counted against every feature rather than against the features its predecessors left, so the count does not depend on where the operation sits in `operations`.
         removed[operation] = int((~mask).sum())
         keep &= mask
+
+    if not keep.any() and adata.n_vars:
+        # Selecting nothing is almost always a cutoff set against the wrong scale rather than a screen with
+        # no usable features, and on its own it surfaces further down as an empty matrix in whatever runs next.
+        culprits = [name for name, count in removed.items() if count == adata.n_vars]
+        warnings.warn(
+            f"feature_select flagged none of the {adata.n_vars} features as selected; "
+            f"{', '.join(culprits) if culprits else 'no single operation, but the operations together'} "
+            f"removed all of them. Every cutoff here is an absolute threshold on the scale pp.normalize left "
+            f"the values on, so check it against that scale: noise_removal's stdev_cutoff in particular "
+            f"assumes whole-plate standardization and drops everything once the values are normalized "
+            f"against the controls or divided by a MAD.",
+            UserWarning,
+            stacklevel=3,
+        )
 
     adata.var[key_added] = keep
     adata.uns.setdefault("mantispy", {})["feature_select"] = removed
