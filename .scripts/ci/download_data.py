@@ -9,12 +9,18 @@ from __future__ import annotations
 
 import argparse
 
-_CNT = 0  # increment this when you want to rebuild the CI cache
+_CNT = 1  # increment this when you want to rebuild the CI cache
 
 
 def main(args: argparse.Namespace) -> None:
     """Call each loader once, so its files and anything it assembles from them land in the cache."""
     import mantispy as mt
+
+    def jump_lite_all() -> None:
+        """Every feature set, because tutorial 12 compares them and each is a separate file."""
+        for model in mt.ds.JUMP_LITE_MODELS:
+            mt.ds.jump_lite(model=model)
+        mt.ds.jump_lite_targets()
 
     loaders = {
         "bbbc021": mt.ds.bbbc021,
@@ -25,6 +31,7 @@ def main(args: argparse.Namespace) -> None:
         "jump_target2": mt.ds.jump_target2,
         "jump_cells": mt.ds.jump_cells,
         "jump_plate": mt.ds.jump_plate,
+        "jump_lite": jump_lite_all,
         "oasis_pilot": mt.ds.oasis_pilot,
     }
     if args.dry_run:

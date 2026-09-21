@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import pytest
 import spatialdata as sd
 
@@ -68,8 +69,9 @@ def test_the_downloads_read_back_at_the_shape_the_registry_claims(name: str) -> 
     # Regression test for #63: every well-level dataset publishes an exact per-well count upstream.
     if name not in ("jump_cells", "pooled_rare"):
         assert (adata.obs["Metadata_CellCount"] > 0).all()
-        # jump-profiling-recipe's count table, which jump_crispr reads, has no field count.
-        if name != "jump_crispr":
+        # jump-profiling-recipe's count table, which jump_crispr reads, has no field count, and
+        # JUMP-Lite publishes one count per well rather than per field.
+        if name not in ("jump_crispr", "jump_lite"):
             assert adata.obs["Metadata_SiteCount"].between(1, 36).all()
 
 
@@ -141,3 +143,42 @@ def test_jump_lite_names_its_feature_sets():
     with pytest.raises(ValueError, match="model must be one of"):
         mt.ds.jump_lite(model="openphenome")
     assert "cp_measure" in mt.ds.JUMP_LITE_MODELS
+
+
+@pytest.mark.parametrize(("model", "parsed"), [("openphenom", False), ("cp_measure", True)])
+def test_jump_lite_does_not_read_an_embedding_dimension_as_a_measurement(tmp_path, monkeypatch, model, parsed):
+    """The parser finds structure in names that have none: it reads `openphenom_nahualX_17` as the
+    `nahualX` feature group of an `openphenom` object, so the model's own tensor names became
+    feature families and `scale` became the dimension index. cp_measure is real measurements and
+    keeps its annotation."""
+    from mantispy.ds import _datasets
+
+    names = (
+        [f"{model}_nahualX_{index}" for index in range(4)]
+        if model == "openphenom"
+        else ["Cells_AreaShape_Area", "Nuclei_Intensity_MeanIntensity_DNA", "Cells_AreaShape_Zernike_0_0"]
+    )
+    wells = pd.DataFrame(
+        {
+            "Metadata_Plate": ["P1", "P1"],
+            "Metadata_Well": ["A01", "A02"],
+            "Metadata_Source": ["source_3", "source_3"],
+            "Metadata_Batch": ["b1", "b1"],
+            "Metadata_id": ["P1_A01", "P1_A02"],
+            **{name: [float(index), float(index) + 1] for index, name in enumerate(names)},
+        }
+    )
+    wells.to_parquet(tmp_path / f"{model}.parquet")
+    pd.DataFrame({"Metadata_id": ["P1_A01", "P1_A02"], "cell_count": [120, 130]}).to_parquet(
+        tmp_path / "cell_count.parquet"
+    )
+
+    def files(name, cache_dir, select=None):
+        return [path for path in sorted(tmp_path.glob("*.parquet")) if select is None or select(path.name)]
+
+    monkeypatch.setattr(_datasets, "_files", files)
+
+    adata = mt.ds.jump_lite(model=model, annotate=False)
+
+    assert bool(adata.var["feature_group"].notna().any()) is parsed
+    assert list(adata.obs["Metadata_CellCount"]) == [120, 130]
