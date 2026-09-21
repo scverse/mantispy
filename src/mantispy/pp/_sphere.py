@@ -154,6 +154,8 @@ def _centre_scale(values: np.ndarray, reference: np.ndarray, where: str = "") ->
 
     The spread is the population standard deviation, as sklearn's ``StandardScaler`` computes it. A dimension with no spread among the reference rows is left on its own scale rather than divided by zero, and warns, as :func:`~mantispy.pp.normalize` does for the same condition — it cannot flag ``var``, because the columns being scaled are an embedding that ``var`` does not describe.
 
+    "No spread" is read against the resolution of the values rather than as an exact zero, since a dimension an embedding is constant in still carries the rounding of the rotation that built it.
+
     Args:
         values: Rows to transform.
         reference: Boolean mask over ``values``, selecting the rows the mean and spread are taken from.
@@ -165,7 +167,13 @@ def _centre_scale(values: np.ndarray, reference: np.ndarray, where: str = "") ->
     block = values[reference]
     centre = block.mean(axis=0)
     scale = block.std(axis=0, ddof=0)
-    if (no_spread := int((scale == 0).sum())) > 0:
+    # An exact zero is the wrong test for an embedding. A dimension the reference rows are constant in is constant
+    # only up to the rounding the rotation that built it left behind, so its spread arrives as 1e-16 rather than 0,
+    # passes this check, and is divided by anyway, putting that dimension 1e16 ahead of every other one. Below the
+    # resolution of the values it is measured in, and the error in a standard deviation grows with the rows it is
+    # taken over, a spread is not a spread.
+    degenerate = scale <= block.shape[0] * np.finfo(scale.dtype).eps * np.abs(block).max(axis=0)
+    if (no_spread := int(degenerate.sum())) > 0:
         warnings.warn(
             f"{no_spread} of {scale.size} dimension(s) have no spread among the {int(reference.sum())} "
             f"reference row(s){where}. Their scale is clamped to 1, so they pass through centred but "
@@ -174,7 +182,7 @@ def _centre_scale(values: np.ndarray, reference: np.ndarray, where: str = "") ->
             UserWarning,
             stacklevel=4,
         )
-    return (values - centre) / np.where(scale == 0, 1.0, scale)
+    return (values - centre) / np.where(degenerate, 1.0, scale)
 
 
 def _regularized_covariance(values: np.ndarray, epsilon: float) -> np.ndarray:
@@ -283,9 +291,8 @@ def tvn(
             thin.append(f"{key!r} ({reference_rows.size})")
         values[rows] = _centre_scale(values[rows], controls[rows], where=f" of batch {key!r}")
 
-    # Spread that is tiny rather than exactly zero, which is what a batch whose controls do not
-    # span the rotation produces, slips past the check inside _centre_scale and is divided by
-    # anyway. The output stays finite and plausible-looking, so nothing downstream reports it.
+    # _centre_scale clamps the directions such a batch leaves empty, and says so per batch. This names the cause
+    # rather than the effect, and is the actionable form: the remedy is fewer components or larger batches.
     if thin:
         warnings.warn(
             f"{len(thin)} batch(es) have no more reference rows than the {values.shape[1]} component(s) "

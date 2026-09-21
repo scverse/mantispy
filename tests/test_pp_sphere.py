@@ -174,3 +174,26 @@ def test_tvn_says_when_a_batch_cannot_scale_a_dimension():
     with pytest.warns(UserWarning, match=r"no spread among the .* of batch 'B1'"):
         mt.pp.tvn(adata, use_rep=None)
     assert np.isfinite(adata.obsm["X_tvn"]).all()
+    # Finite is not enough. The rotation leaves those components a spread of about 1e-16 rather than an exact
+    # zero, and dividing by it returns values of about 1e16: finite, plausible-looking, and 1e16 times heavier
+    # than every other dimension in any distance taken afterwards.
+    assert np.abs(adata.obsm["X_tvn"]).max() < 1e3
+
+
+def test_a_spread_of_rounding_is_not_a_spread():
+    """Whether a constant dimension arrives as an exact zero or as 1e-16 is the platform's business.
+
+    An exact-zero test passes on one and not the other, which is how this reached CI as a test that failed on
+    Linux and passed on macOS rather than as the amplification it is.
+    """
+    from mantispy.pp._sphere import _centre_scale
+
+    rng = np.random.default_rng(0)
+    values = rng.normal(size=(20, 3))
+    reference = np.zeros(20, dtype=bool)
+    reference[:10] = True
+    values[reference, 2] = 1.0 + rng.normal(0, 1e-16, 10)
+
+    with pytest.warns(UserWarning, match="1 of 3 dimension"):
+        out = _centre_scale(values, reference)
+    assert np.abs(out[:, 2]).max() < 1e3, "a dimension of rounding was divided by its own rounding"
