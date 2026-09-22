@@ -56,7 +56,8 @@ def get_matrix(adata: AnnData, layer: str | None = None, rows: np.ndarray | None
     """Return the requested matrix as a dense ``float32`` array.
 
     ``rows`` reads only those rows, so a backed object holds one group in memory instead of the whole screen.
-    h5py accepts a fancy index only in increasing order, so the indices are sorted for the read and the requested order is restored afterwards.
+    h5py accepts a fancy index only in increasing order, so rows asked for in any other order are sorted for the read and the requested order restored afterwards.
+    Every grouped path here asks for a group's rows in increasing order already, and that restoring gather is a full-size copy of what was just read, so it is done only when the order actually differs.
     """
     matrix: Any = adata.X if layer is None else adata.layers[layer]
     if matrix is None:
@@ -65,11 +66,19 @@ def get_matrix(adata: AnnData, layer: str | None = None, rows: np.ndarray | None
     if rows is not None:
         wanted = np.asarray(rows)
         if _reads_from_disk(matrix):
-            order = np.argsort(wanted, kind="stable")
-            block = matrix[wanted[order]]
-            inverse = np.empty_like(order)
-            inverse[order] = np.arange(order.size)
-            matrix = block[inverse]
+            if not np.all(np.diff(wanted) > 0):
+                # The order h5py refuses: read the rows sorted, then put them back as they were asked for.
+                order = np.argsort(wanted, kind="stable")
+                block = matrix[wanted[order]]
+                inverse = np.empty_like(order)
+                inverse[order] = np.arange(order.size)
+                matrix = block[inverse]
+            elif wanted.size == matrix.shape[0]:
+                # Increasing, and one index per row of the dataset, is every row in order. A slice lets h5py
+                # read the whole dataset in one go instead of selecting the rows point by point.
+                matrix = matrix[:]
+            else:
+                matrix = matrix[wanted]
         else:
             matrix = matrix[wanted]
 
@@ -174,8 +183,11 @@ def reduce_grouped(
         # Zero would read as a measurement and center a plate with no controls left on 0.0.
         values = np.full((len(keys), adata.n_vars), np.nan)
         counts = np.zeros(len(keys), dtype=np.int64)
-        for index in range(len(keys)):
-            rows = np.flatnonzero((codes == index) & selected)
+        # One stable ordering serves every group, as it does for the loops described in the module docstring.
+        # Scanning ``codes == index`` per group instead is two full-length passes each, so the index arithmetic
+        # grows with the group count and at well level outweighs the reads it is preparing.
+        for index, members in enumerate(group_rows(codes, len(keys))):
+            rows = members[selected[members]]
             if not rows.size:
                 continue
             block = get_matrix(adata, layer, rows=rows)

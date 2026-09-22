@@ -30,6 +30,11 @@ and this project adheres to [Semantic Versioning][].
 - `mantispy.pl`: `hits` and `feature_volcano` write how many points sit above and below the significance line, next to it
 - `mantispy.pp`: `regress_out(reference=...)` fits the covariate on the reference rows, re-expresses each group at their mean and clips it to their range, so a cell count is regressed out where density varies for technical reasons only; without a reference it warns when a group never reaches the value it is re-expressed at
 
+### Changed
+
+- `mantispy.tl`: `aggregate` and every other grouped reduction of a backed object take each group's rows from one stable ordering, rather than scanning the group codes once per group. The scan was two full-length passes per group, so its cost was set by the group count: reducing 1,000,000 cells to 50,000 wells spent 20 s on index arithmetic before a single row was read, against 0.2 s now
+- `mantispy.pp`: a backed read whose rows are already in increasing order, which is what every grouped path asks for, goes to h5py as it stands instead of being sorted and then gathered back into the order it was already in. That gather was a full-size copy of the block just read, 720 MB at JUMP well scale. Rows covering the whole matrix, as `rank_int` asks for with the default `by=None`, are read as one slice, about twice as fast as the same rows given as an index list on an uncompressed file
+
 ### Fixed
 
 - `mantispy.io`: an `ExportToSpreadsheet` directory takes its channels from the features it measured, so a run whose images are named `OrigDNA` or `IllumDNA` no longer leaves every feature without a channel
