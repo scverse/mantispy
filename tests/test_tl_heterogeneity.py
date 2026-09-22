@@ -127,6 +127,12 @@ def test_round_trip(clustered, tmp_path):
     loaded = mt.io.read(tmp_path / "composition.h5ad")
     assert loaded.n_vars == composition.n_vars
     assert len(loaded.uns["mantispy"]["composition_test"]) == composition.n_obs
+    # The annotation columns come from _core.features.empty_annotation (#103), which supplies the
+    # empty ones as categoricals precisely so that the h5ad writer keeps them.
+    assert list(loaded.var.columns) == list(composition.var.columns)
+    assert set(loaded.var["feature_group"]) == {"Composition"}
+    for column in ("channel", "radial_bin", "params"):
+        assert loaded.var[column].isna().all(), column
 
 
 def _noise_cells(

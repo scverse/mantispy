@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 from anndata import AnnData
 
+from mantispy._core.features import empty_annotation
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy._core.schema import stamp
@@ -39,7 +40,7 @@ def feature_signature(
         statistic: Column of the table to average within each family, such as ``"t"`` or ``"difference"`` (the raw contrast).
 
     Returns:
-        A new :class:`~anndata.AnnData` of perturbations by families, with each family's ``by`` columns and ``n_features`` in ``var``.
+        A new :class:`~anndata.AnnData` of perturbations by families, with each family's ``by`` columns and ``n_features`` in ``var``, beside the schema's annotation columns left empty for the families they do not describe.
         It is a perturbation-level profile object, so ``sc.pp.neighbors``, ``sc.tl.leiden`` and :func:`~mantispy.tl.nn_moa_classify` accept it.
 
     Raises:
@@ -71,10 +72,17 @@ def feature_signature(
     parts = parts.reindex(wide.columns)
     parts["n_features"] = family.value_counts().reindex(wide.columns).to_numpy()
 
+    # A family is not a CellProfiler measurement, so the schema's annotation columns are supplied empty
+    # rather than guessed at, and the columns that name the family are written over them.
+    annotation = empty_annotation(wide.columns)
+    for column in by:
+        annotation[column] = parts[column].to_numpy()
+    annotation["n_features"] = parts["n_features"].to_numpy()
+
     signature = ad.AnnData(
         X=wide.to_numpy(dtype=np.float32),
         obs=pd.DataFrame(index=pd.Index(wide.index.astype(str), name=None)),
-        var=parts,
+        var=annotation,
     )
     signature.obs["Metadata_Perturbation"] = signature.obs_names.to_numpy()
     # Copy the other per-perturbation Metadata_ columns so the result can be scored.

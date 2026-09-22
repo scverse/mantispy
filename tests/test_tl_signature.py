@@ -91,6 +91,52 @@ def test_the_signature_is_an_ordinary_profile_object(annotated):
     assert signature.obsp["similarity"].shape == (signature.n_obs, signature.n_obs)
 
 
+def test_the_signature_is_an_object_io_accepts(tmp_path, annotated):
+    """Regression test for #103: var held only the columns that name a family, so the stamped result
+    failed validation on the seven annotation columns the schema requires and could not be written."""
+    adata = annotated()
+    mt.tl.differential_features(adata, block=None, key_added="d")
+    signature = mt.tl.feature_signature(adata, key="d")
+
+    report = mt.io.validate(signature)
+    assert report.ok, str(report)
+    # A family is not a CellProfiler measurement, so the columns that do not name one stay empty.
+    for column in ("feature", "scale", "angle", "gray_levels", "radial_bin", "params"):
+        assert signature.var[column].isna().all(), column
+    assert signature.var["is_feature"].all()
+    # The columns that do name it keep their values.
+    assert set(signature.var["feature_group"]) <= {"AreaShape", "Intensity", "Texture"}
+    assert set(signature.var["object"]) <= {"Cells", "Nuclei"}
+    assert int(signature.var["n_features"].sum()) == adata.n_vars
+
+    path = tmp_path / "signature.h5ad"
+    mt.io.write(signature, path)
+    loaded = mt.io.read(path)
+    assert list(loaded.var_names) == list(signature.var_names)
+    assert list(loaded.var.columns) == list(signature.var.columns)
+    # The empty annotation columns are category dtype for exactly this reason: an object-dtype
+    # column holding only None does not survive the h5ad writer.
+    for column in ("feature", "radial_bin", "params"):
+        assert loaded.var[column].isna().all(), column
+
+
+def test_a_by_that_is_not_the_default_still_validates(annotated):
+    """`by` names whichever var columns define a family, including one the schema knows nothing about."""
+    adata = annotated()
+    adata.var["panel"] = np.where(adata.var["object"].to_numpy() == "Cells", "outer", "inner")
+    mt.tl.differential_features(adata, block=None, key_added="d")
+    signature = mt.tl.feature_signature(adata, key="d", by=("feature_group", "panel"))
+
+    report = mt.io.validate(signature)
+    assert report.ok, str(report)
+    # The column the schema does not know sits alongside its own, and a schema column that names
+    # no family here is left empty rather than filled with the family it was not grouped by.
+    assert set(signature.var["panel"]) == {"outer", "inner"}
+    assert signature.var["channel"].isna().all()
+    assert signature.var["object"].isna().all()
+    assert int(signature.var["n_features"].sum()) == adata.n_vars
+
+
 def test_it_says_so_when_the_table_or_the_annotation_is_missing(annotated):
     adata = annotated()
     with pytest.raises(KeyError, match="differential_features"):

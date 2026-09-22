@@ -475,6 +475,28 @@ def test_dose_trajectory_puts_every_compound_on_one_relative_axis(phenotypes):
     assert (paths.obs["window_low"] < paths.obs["window_high"]).all()
 
 
+def test_a_trajectory_is_an_object_io_accepts(tmp_path, phenotypes):
+    """Same defect as #103: var held only `feature` and `position`, so the stamped result failed
+    validation on the nine annotation columns the schema requires."""
+    mt.tl.dose_direction(phenotypes)
+    paths = mt.tl.dose_trajectory(phenotypes, n_positions=3)
+
+    report = mt.io.validate(paths)
+    assert report.ok, str(report)
+    # `feature` is the one annotation column a trajectory can fill honestly: the source feature the
+    # column was read from. The rest describe a CellProfiler measurement this is not, and stay empty.
+    assert paths.var["feature"].nunique() == phenotypes.n_vars - 1
+    for column in ("object", "feature_group", "channel", "scale", "angle", "gray_levels", "radial_bin", "params"):
+        assert paths.var[column].isna().all(), column
+    assert paths.var["is_feature"].all()
+
+    written = tmp_path / "trajectory.h5ad"
+    mt.io.write(paths, written)
+    loaded = mt.io.read(written)
+    assert list(loaded.var_names) == list(paths.var_names)
+    assert list(loaded.var.columns) == list(paths.var.columns)
+
+
 def test_a_trajectory_needs_at_least_two_points(phenotypes):
     with pytest.raises(ValueError, match="at least two"):
         mt.tl.dose_trajectory(phenotypes, n_positions=1)

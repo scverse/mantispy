@@ -14,6 +14,7 @@ from anndata import AnnData
 
 from mantispy._core._reduce import get_matrix, group_rows
 from mantispy._core._stats import MAD_TO_SIGMA, benjamini_hochberg
+from mantispy._core.features import empty_annotation
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger, report_drop
 from mantispy._core.masks import held_out_reference, reference_mask
@@ -1084,8 +1085,13 @@ def dose_trajectory(
 
     names = scale.features(adata)
     # Position-major, to mirror the ravel of each compound's (n_positions, n_features) path above.
-    var = pd.DataFrame({"feature": np.tile(names, n_positions), "position": np.repeat(grid, names.size)})
-    var.index = var["feature"] + "@" + var["position"].map("{:.2f}".format)
+    feature = np.tile(names, n_positions)
+    position = np.repeat(grid, names.size)
+    # A feature read at a relative position along a window is not a CellProfiler measurement of its own, so the
+    # schema's annotation columns are supplied empty, and the two that describe the column are set beside them.
+    var = empty_annotation([f"{name}@{point:.2f}" for name, point in zip(feature, position, strict=True)])
+    var["feature"] = feature
+    var["position"] = position
     result = ad.AnnData(
         X=np.array(paths, dtype=np.float32) if paths else np.empty((0, var.shape[0]), dtype=np.float32),
         obs=pd.DataFrame(records, columns=[compound_key, "n_doses", "window_low", "window_high"]).set_axis(

@@ -17,6 +17,7 @@ from anndata import AnnData
 from mantispy._core._distance import pairwise_sqeuclidean
 from mantispy._core._reduce import get_matrix, group_codes, group_offsets, representation
 from mantispy._core._stats import benjamini_hochberg, split_reference
+from mantispy._core.features import empty_annotation
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy._core.masks import reference_mask
@@ -95,11 +96,10 @@ def cluster_composition(
 
     obs = _group_obs(adata, columns, keys, codes, {"Metadata_CellCount": counts.sum(axis=1).astype(int)})
     obs.index = pd.Index([str(row) for row in range(len(obs))])
-    var = pd.DataFrame(index=pd.Index(labels))
+    # A cluster fraction is not a CellProfiler measurement, so the schema's annotation columns come
+    # from the same helper every such object uses, and the three that mean something here are set.
+    var = empty_annotation(pd.Index(labels))
     var["object"], var["feature_group"], var["feature"] = "Cluster", "Composition", labels
-    for column in ("channel", "scale", "angle", "gray_levels", "radial_bin", "params"):
-        var[column] = np.nan
-    var["is_feature"] = True
 
     result = ad.AnnData(X=fractions.astype(np.float32), obs=obs, var=var)
     stamp(result, resolution="well")
