@@ -35,17 +35,27 @@ def export_prefix(path: Path) -> str | None:
     return prefixes[0] if prefixes else None
 
 
-def infer_channels(image: pd.DataFrame) -> list[str]:
-    """Channel names, taken from the ``FileName_<channel>`` columns.
+def infer_channels(image: pd.DataFrame, features: Sequence[str] = ()) -> list[str]:
+    """Channel names, taken from the features and otherwise from the ``FileName_<channel>`` columns.
+
+    CellProfiler writes one ``Intensity_MeanIntensity_<channel>`` measurement per channel it measured, under the name
+    the features carry. The file names can differ from it: a pipeline loads ``OrigDNA``, corrects it with
+    ``IllumDNA`` and saves ``CellOutlines``, and measures the corrected image as ``DNA``.
 
     Args:
         image: The ``Image.csv`` table of an export.
+        features: The feature columns of the export.
 
     Returns:
-        The channel names its ``FileName_`` or ``Image_FileName_`` columns carry, sorted, and an empty list when it has none, in which case the parser infers the channels from the feature names instead.
-        No channel vocabulary is assumed.
+        The channels the features were measured in, sorted. Without an intensity feature, the names the ``FileName_`` or ``Image_FileName_`` columns carry, with the ``Orig`` and ``Illum`` prefixes stripped and saved outlines left out. An empty list when neither is present, in which case the parser infers the channels from the feature names instead.
     """
-    return sorted({match.group(1) for match in map(_FILENAME_RE.match, image.columns) if match})
+    measured = {
+        name.split("_Intensity_MeanIntensity_", 1)[1] for name in features if "_Intensity_MeanIntensity_" in name
+    }
+    if measured:
+        return sorted(measured)
+    names = {match.group(1) for match in map(_FILENAME_RE.match, image.columns) if match}
+    return sorted({name.removeprefix("Orig").removeprefix("Illum") for name in names if not name.endswith("Outlines")})
 
 
 def _prefix(frame: pd.DataFrame, obj: str) -> pd.DataFrame:
@@ -148,8 +158,15 @@ def read_export(
         get_logger().info("%s are on both the object tables and Image.csv; keeping the Image.csv value", shared)
         merged = merged.drop(columns=shared)
     table = merged.merge(per_image, on="ImageNumber", how="left", validate="m:1")
-    # Centroids are not profile features, but qc_is_border needs them.
+    # Centroids are not profile features, but qc_is_border and neighbors_local_density need them. CellProfiler 4
+    # writes them under AreaShape, older versions under Location.
     for axis in ("X", "Y"):
-        if (source := f"{primary_object}_Location_Center_{axis}") in table.columns:
-            table[f"Metadata_Center_{axis}"] = table[source].to_numpy()
-    return table.rename(columns={key: f"Metadata_{key}" for key in _KEYS}), image, infer_channels(image)
+        for source in (f"{primary_object}_Location_Center_{axis}", f"{primary_object}_AreaShape_Center_{axis}"):
+            if source in table.columns:
+                table[f"Metadata_Center_{axis}"] = table[source].to_numpy()
+                break
+    return (
+        table.rename(columns={key: f"Metadata_{key}" for key in _KEYS}),
+        image,
+        infer_channels(image, list(table.columns)),
+    )

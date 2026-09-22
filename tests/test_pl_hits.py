@@ -92,6 +92,19 @@ def test_the_hits_plot_draws_the_threshold_that_colored_the_points():
     assert called.shape[0] and (called[:, 1] >= height).all()
 
 
+def test_both_volcano_plots_count_the_points_on_each_side_of_the_line(scored):
+    hits = scored.uns["mantispy"]["hits"]
+    called = int(hits["is_hit"].sum())
+    ax = mt.pl.hits(scored)
+    assert {f"{called} above", f"{len(hits) - called} below"} <= {text.get_text() for text in ax.texts}
+
+    effect = scored.uns["mantispy"]["effect"]
+    rows = effect[effect["group"] == "pert00"]
+    above = int((rows["qvalue"] < 0.05).sum())
+    ax = mt.pl.feature_volcano(scored, group="pert00")
+    assert {f"{above} above", f"{len(rows) - above} below"} <= {text.get_text() for text in ax.texts}
+
+
 def test_plots_say_what_to_run_first():
     fresh = mt.tl.aggregate(mt.ds.synthetic_plate(n_wells=8, n_cells=4, n_features=8, seed=0), min_cells=0)
     with pytest.raises(KeyError, match="mt.tl.hit_calling"):

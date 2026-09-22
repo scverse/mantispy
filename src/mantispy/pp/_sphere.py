@@ -54,9 +54,8 @@ def _fit(reference: np.ndarray, method: str, epsilon: float) -> tuple[np.ndarray
     if n_obs <= n_vars:
         warnings.warn(
             f"sphering is fitted on {n_obs} reference rows for {n_vars} features. With fewer rows "
-            "than features the covariance is singular and the transform amplifies noise (on BBBC021 "
-            "it lowered not-same-compound MOA retrieval from 78% to 22%). Select fewer features first, "
-            "or use more controls.",
+            "than features the covariance is singular and the transform amplifies noise. Select fewer "
+            "features first, or use more controls.",
             UserWarning,
             stacklevel=4,
         )

@@ -6,7 +6,8 @@ import pytest
 import spatialdata as sd
 
 import mantispy as mt
-from mantispy.ds._datasets import _DATASETS
+from mantispy._core.frames import as_frame
+from mantispy.ds._datasets import _DATASETS, TARGET2_DEFAULT, _plate
 
 
 @pytest.mark.parametrize(("n_wells", "n_sites"), [(1, 1), (4, 2)])
@@ -52,6 +53,20 @@ def test_every_registered_dataset_has_a_loader_and_hashed_files(name: str) -> No
     assert all(file.sha256 and (file.s3_key or file.url) for file in entry.files)
     # names starting with an underscore hold files another loader reads, such as JUMP's annotation tables
     assert name.startswith("_") or getattr(mt.ds, name)
+
+
+def test_jump_target2_default_names_one_pinned_plate_per_source() -> None:
+    """A typo in a default barcode otherwise surfaces only over the network, on every tutorial call.
+
+    The s3 key carries the source, so the one-plate-from-every-source invariant is checkable offline.
+    """
+    source_of = {
+        _plate(file.name): file.s3_key.split("/")[1]
+        for file in _DATASETS["jump_target2"].files
+        if file.s3_key and file.s3_key.startswith("cpg0016-jump/")
+    }
+    assert set(TARGET2_DEFAULT) <= set(source_of)
+    assert sorted(source_of[plate] for plate in TARGET2_DEFAULT) == sorted(set(source_of.values()))
 
 
 @pytest.mark.network
@@ -105,6 +120,19 @@ def test_jump_cells_holds_controls_and_treatments_at_cell_resolution() -> None:
     assert bool(adata.obs["Metadata_Control"].any()) and not bool(adata.obs["Metadata_Control"].all())
     assert adata.obs_names.is_unique
     assert mt.io.validate(adata).ok
+
+
+@pytest.mark.network
+@pytest.mark.slow
+def test_jump_cells_keeps_the_quality_of_every_field_and_where_each_cell_sits() -> None:
+    """Each field numbers its images from one, and stacking them kept the first field's quality alone."""
+    adata = mt.ds.jump_cells()
+    images = adata.uns["mantispy"]["image_table"]
+
+    assert len(images) == 24 * 4 and images.index.is_unique
+    assert adata.obs["Metadata_ImageNumber"].isin(images.index).all()
+    assert np.isfinite(as_frame(adata.obs)[["Metadata_Center_X", "Metadata_Center_Y"]].to_numpy(dtype=float)).all()
+    assert not any("_Center_" in name for name in adata.var_names)
 
 
 @pytest.mark.network

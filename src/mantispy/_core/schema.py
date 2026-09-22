@@ -66,7 +66,8 @@ RESERVED_OBS: tuple[str, ...] = (
     "Metadata_JCP2022",
     "Metadata_InChIKey",
     "Metadata_PlateType",
-    # reserved for optical pooled screening, unused before 0.8
+    # reserved for optical pooled screening, unused before 0.8, except Metadata_Gene, the gene a genetic
+    # perturbation targets, which pp.annotate_jump(kind="crispr") writes
     "Metadata_Barcode",
     "Metadata_Gene",
     "Metadata_sgRNA",

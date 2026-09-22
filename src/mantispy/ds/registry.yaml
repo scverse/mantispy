@@ -5,7 +5,7 @@ datasets:
     type: mantispy
     doc_header: BBBC021, 632 wells of 38 compounds and DMSO annotated with a mechanism of action.
     accession: cpg0010-caie-drugresponse
-    shape: [632, 473]
+    shape: [632, 467]
     files:
     - name: ljosa_2013__analysis_batch_stable__ljosa_2013.csv
       s3_key: cpg0010-caie-drugresponse/broad-az/workspace/backend/ljosa_2013/analysis_batch_stable/ljosa_2013.csv
@@ -1919,7 +1919,7 @@ datasets:
       resolution: perturbation
     doc_header: Pooled rare variants, one row per barcode rather than per well.
     accession: cpg0032-pooled-rare
-    shape: [290, 4441]
+    shape: [290, 4417]
     files:
     - name: 2023_06_05_24W_RD3_poscon__2023_06_05_24W_RD3_poscon_gene_normalized_ALLBATCHES___ALLPLATES___ALLWELLS.csv.gz
       s3_key: cpg0032-pooled-rare/broad/workspace/profiles/2023_06_05_24W_RD3_poscon/2023_06_05_24W_RD3_poscon_gene_normalized_ALLBATCHES___ALLPLATES___ALLWELLS.csv.gz
@@ -1929,7 +1929,7 @@ datasets:
     type: mantispy
     doc_header: Rohban 2017, 1,918 wells of 194 genes overexpressed in U2OS cells.
     accession: cpg0017-rohban-pathways
-    shape: [1918, 3634]
+    shape: [1918, 3616]
     files:
     - name: 2013_10_11_SIGMA2_Pilot__41744__41744_augmented.csv.gz
       s3_key: cpg0017-rohban-pathways/broad/workspace/profiles/2013_10_11_SIGMA2_Pilot/41744/41744_augmented.csv.gz
@@ -1951,7 +1951,7 @@ datasets:
     type: mantispy
     doc_header: LUAD alleles, wild-type against mutant.
     accession: cpg0031-caicedo-cmvip
-    shape: [6144, 432]
+    shape: [6144, 427]
     read:
       on_column_mismatch: intersect
       index_columns: [Metadata_Plate, Metadata_Well]
@@ -2058,7 +2058,7 @@ datasets:
     type: mantispy
     doc_header: An Amish cohort, varying seeding density and timepoint.
     accession: cpg0047-amish
-    shape: [468, 575]
+    shape: [468, 571]
     read:
       on_column_mismatch: intersect
       index_columns: [Metadata_Plate, Metadata_Well]
@@ -2247,7 +2247,7 @@ datasets:
     type: mantispy
     doc_header: Kinase inhibitors, 3,072 wells over a seven-point dose series.
     accession: cpg0008-pki
-    shape: [3072, 5857]
+    shape: [3072, 5839]
     files:
     - name: 2021_04_07_Batch1__BR00122970__BR00122970_augmented.csv.gz
       s3_key: cpg0008-pki/broad/workspace/profiles/2021_04_07_Batch1/BR00122970/BR00122970_augmented.csv.gz
@@ -2278,7 +2278,7 @@ datasets:
     type: mantispy
     doc_header: The assembled JUMP CRISPR arm, 51,185 wells of knockouts.
     accession: cpg0016-jump-assembled
-    shape: [51185, 597]
+    shape: [51185, 595]
     read:
       index_columns: [Metadata_Plate, Metadata_Well]
     files:
@@ -2324,7 +2324,7 @@ datasets:
     type: mantispy
     doc_header: JUMP-Target-2, one plate map run at eleven sources, 141 plates.
     accession: cpg0016-jump
-    shape: [5374, 3634]
+    shape: [5374, 3616]
     files:
     - name: 20210614_Batch_1__1053600674__1053600674.parquet
       s3_key: cpg0016-jump/source_2/workspace/profiles/20210614_Batch_1/1053600674/1053600674.parquet
@@ -3180,7 +3180,7 @@ datasets:
     plate: BR00121438
     batch: 2021_04_26_Batch1
     source: source_4
-    shape: [13578, 5857]
+    shape: [13578, 5839]
     channels: [AGP, Brightfield, Brightfield_H, Brightfield_L, DNA, ER, Mito, RNA]
     files:
     - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-A02-1/Cells.csv
@@ -4700,7 +4700,7 @@ datasets:
 
   _jump_annotation:
     type: mantispy
-    doc_header: The plate, well and compound tables of jump-cellpainting/datasets, which the profiles are keyed into.
+    doc_header: The plate, well, compound and CRISPR tables of jump-cellpainting/datasets, which the profiles are keyed into, and the gene loci jump-profiling-recipe reads.
     files:
     - name: jump_plate.csv.gz
       url: https://github.com/jump-cellpainting/datasets/raw/main/metadata/plate.csv.gz
@@ -4711,6 +4711,23 @@ datasets:
     - name: jump_compound.csv.gz
       url: https://github.com/jump-cellpainting/datasets/raw/main/metadata/compound.csv.gz
       sha256: 8885960e92ebd99eb33699a79129f517e668d78dd94f0d7478d39c9825bd3c0a
+    - name: jump_crispr.csv.gz
+      url: https://raw.githubusercontent.com/jump-cellpainting/datasets/c68deb2babc83747e6b14d8a77e5655138a6086a/metadata/crispr.csv.gz
+      sha256: 55e36e6802c6fc5f8e5d5258554368d64601f1847205e0fceb28a2c246c8d1ed
+    - name: jump_perturbation_control.csv
+      url: https://raw.githubusercontent.com/jump-cellpainting/datasets/76cb0231ac6ae253f36d2df2b28837676ad571fd/metadata/perturbation_control.csv
+      sha256: f513c4017555efa486d07c3e9924944d5b0c44d2f2e76ca6e1fc934f5f718ef6
+    - name: jump_gene_chromosome_map.tsv
+      url: https://raw.githubusercontent.com/broadinstitute/jump-profiling-recipe/e8b7f32244194bafc08219d9a66a8a528b0ff4ce/inputs/metadata/gene_chromosome_map.tsv
+      sha256: 98d0753cea22d6d72cb32ef32ef0b807fe8b993c1ad4364c627a7c7634c51c68
+
+  corum:
+    type: mantispy
+    doc_header: Human protein complexes from CORUM, one complex per line, as the EFAAR benchmark distributes them.
+    files:
+    - name: CORUM_clusters.tsv
+      url: https://raw.githubusercontent.com/recursionpharma/EFAAR_benchmarking/2935f21f84898fc26e2a9a40bdaee685c8e63fb6/efaar_benchmarking/benchmark_annotations/CORUM_clusters.tsv
+      sha256: caab1d3db6fa694c001f41e2973492d248ea3936a1249be3bf497648071f5c99
 
   _jump_cell_counts:
     type: mantispy

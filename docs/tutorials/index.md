@@ -1,21 +1,69 @@
 # Tutorials
 
+The tutorials are grouped by the question you bring. Start with the overview, which runs the whole workflow on
+one page and links to the page that covers each step.
+
 ```{toctree}
 :maxdepth: 1
+:caption: Start here
 
-00_overview
-01_from_cellprofiler_to_anndata
-reading_profiles
-reading_plates
-02_from_cells_to_profiles
-03_trustworthy_profiles
-04_correcting_and_evaluating
-05_hits_and_effects
-06_mechanism_of_action
-07_single_cell_heterogeneity
-08_trustworthy_features_and_design
-09_scaling_and_sites
-10_differential_features
-11_dose_response
-12_learned_embeddings
+overview
+```
+
+```{toctree}
+:maxdepth: 1
+:caption: Building a dataset
+
+data/cellprofiler
+data/profiles
+data/embeddings
+data/images
+```
+
+```{toctree}
+:maxdepth: 1
+:caption: Trustworthy profiles
+
+profiles/quality_control
+profiles/normalize_and_select
+profiles/artifacts
+profiles/screen_quality
+```
+
+```{toctree}
+:maxdepth: 1
+:caption: Compound screens
+
+compounds/hits
+compounds/mechanism_of_action
+compounds/dose_response
+```
+
+```{toctree}
+:maxdepth: 1
+:caption: Genetic screens
+
+genetics/crispr
+```
+
+```{toctree}
+:maxdepth: 1
+:caption: Single cells
+
+single_cells/heterogeneity
+```
+
+```{toctree}
+:maxdepth: 1
+:caption: Interpreting phenotypes
+
+phenotypes/which_features_moved
+```
+
+```{toctree}
+:maxdepth: 1
+:caption: Laboratories and representations
+
+multisite/cross_laboratory
+multisite/learned_embeddings
 ```

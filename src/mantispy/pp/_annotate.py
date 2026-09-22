@@ -97,12 +97,14 @@ def annotate_jump(adata: AnnData, kind: str = "compound", copy: bool = False) ->
     What the well contained is published in a separate repository keyed by ``Metadata_JCP2022``.
 
     Args:
-        adata: Well-level JUMP profiles carrying ``Metadata_Source``, ``Metadata_Plate`` and ``Metadata_Well``.
-        kind: Which annotation to join. ``"compound"`` today.
+        adata: Well-level JUMP profiles carrying ``Metadata_Source``, ``Metadata_Plate`` and ``Metadata_Well``, or ``Metadata_JCP2022`` as the assembled profiles do.
+        kind: Which annotation to join, ``"compound"`` or ``"crispr"``.
         copy: Return an annotated copy instead of annotating in place.
 
     Returns:
-        ``None``, or the annotated copy. Adds ``Metadata_JCP2022`` (the perturbation identifier), ``Metadata_Perturbation``, ``Metadata_InChIKey`` and ``Metadata_Control``, which marks JUMP's DMSO wells.
+        ``None``, or the annotated copy. Adds ``Metadata_JCP2022`` (the perturbation identifier), ``Metadata_Perturbation`` and ``Metadata_Control``.
+        For compounds it adds ``Metadata_InChIKey``, and the controls are JUMP's DMSO wells.
+        For CRISPR ``Metadata_Perturbation`` is the gene symbol, the controls are the no-guide and non-targeting wells, and it adds ``Metadata_Gene``, ``Metadata_Control_Type`` (``"negcon"``, ``"poscon"`` or ``"trt"``) and ``Metadata_ChromosomeArm``, the arm the gene sits on.
 
     Notes:
         Downloads about 14 MB of annotation once and caches it.

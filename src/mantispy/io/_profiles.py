@@ -123,7 +123,7 @@ def from_dataframe(
         keep_non_features: Keep those dropped numeric non-feature columns in ``obs`` instead.
         objects: Which CellProfiler objects count as features.
             The default is the three compartments, matching ``pycytominer.infer_cp_features``.
-            ``None`` keeps every object, including the whole-field ``Image`` measurements, of which a JUMP profile has 1089 against 3634 per-cell ones.
+            ``None`` keeps every object, including the whole-field ``Image`` measurements.
         resolution: Resolution to record.
             Profile tables are usually well-level.
 
@@ -320,7 +320,7 @@ def read_profiles(
         keep_non_features: Keep the numeric columns that do not parse as features in ``obs`` instead.
         objects: Which CellProfiler objects count as features, and for an export directory which object tables are read.
             The default is the three compartments, matching ``pycytominer.infer_cp_features``.
-            ``None`` keeps every object, including the whole-field ``Image`` measurements, of which a JUMP profile has 1089 against 3634 per-cell ones.
+            ``None`` keeps every object, including the whole-field ``Image`` measurements.
         on_column_mismatch: ``"raise"``, or ``"intersect"`` to keep the shared columns in the first file's order.
             Batches with disjoint feature sets do occur.
         path_columns: Metadata read from the path: maps a column name to how many directories up to take the name of, counting the directory holding a file, or a directory that was given, as 1.

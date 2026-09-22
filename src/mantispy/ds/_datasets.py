@@ -50,7 +50,7 @@ TARGET2_DEFAULT = (
 )
 
 #: Bumped whenever the assembled jump_cells object changes, so an older cached assembly is not reused.
-_ASSEMBLY_VERSION = 2
+_ASSEMBLY_VERSION = 3
 
 #: The field of view :func:`jump_export` hands out, a DMSO well of the plate :func:`jump_cells` reads.
 _EXPORT_FOV = "BR00121438-J04-1"
@@ -73,7 +73,7 @@ def _plate(file_name: str) -> str:
 
 
 def _plate_files(name: str, plates: Sequence[str] | None, cache_dir: str | Path | None) -> list[Path]:
-    # A set, because a plate contributes several files and listing it once per file printed all 141 twice.
+    # A set, because a plate contributes several files and would otherwise be listed once per file.
     known = {_plate(file.name) for file in _DATASETS[name].files}
     if plates is not None and (unknown := sorted(set(plates) - known)):
         raise KeyError(f"{name} has no plate(s) {unknown}; available: {sorted(known)}")
@@ -123,7 +123,7 @@ def bbbc021(cache_dir: str | Path | None = None) -> AnnData:
             Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Returns:
-        632 wells by 473 features at well resolution, with ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Compound``, ``Metadata_Concentration``, ``Metadata_MOA``, ``Metadata_Perturbation`` (compound at concentration), ``Metadata_Control``, and ``Metadata_CellCount`` over the ``Metadata_SiteCount`` fields, of four imaged, that contributed cells.
+        Wells by features at well resolution, with ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Compound``, ``Metadata_Concentration``, ``Metadata_MOA``, ``Metadata_Perturbation`` (compound at concentration), ``Metadata_Control``, and ``Metadata_CellCount`` over the ``Metadata_SiteCount`` fields, of four imaged, that contributed cells.
 
     References:
         :cite:t:`Caie_2010`, the image set.
@@ -288,7 +288,7 @@ def jump_target2(
             Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Returns:
-        One row per well at well resolution, carrying ``Metadata_Source``, ``Metadata_Batch``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_CellCount``, ``Metadata_SiteCount`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_InChIKey`` and ``Metadata_Control`` (the DMSO wells, 64 per 384-well plate and 256 on source_9's).
+        One row per well at well resolution, carrying ``Metadata_Source``, ``Metadata_Batch``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_CellCount``, ``Metadata_SiteCount`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_InChIKey`` and ``Metadata_Control`` (the DMSO wells).
 
     Raises:
         KeyError: A plate is not one of the 141.
@@ -614,7 +614,7 @@ def jump_lite(
 
         The embeddings are not normalized. They are the model's output on each well's images, so a per-plate control normalization is still the first step.
 
-        The trained embeddings here carry the cell count in their leading components, where it can account for more of the variance than either the laboratory or the imaging site. The untrained ``"dinov2_random"`` does not, and neither does ``"cp_measure"``, whose per-cell measurements are averaged over the well. Measure it with :func:`~mantispy.metrics.evaluate_correction` before correcting for anything else, and read :doc:`/tutorials/12_learned_embeddings` on why removing it is not obviously right.
+        The trained embeddings here carry the cell count in their leading components, where it can account for more of the variance than either the laboratory or the imaging site. The untrained ``"dinov2_random"`` does not, and neither does ``"cp_measure"``, whose per-cell measurements are averaged over the well. Measure it with :func:`~mantispy.metrics.evaluate_correction` before correcting for anything else, and read :doc:`/tutorials/multisite/learned_embeddings` on why removing it is not obviously right.
 
     References:
         :cite:t:`Munoz_2026`, :cite:t:`Chandrasekaran_2023`, :cite:t:`Weisbart_2024`.
@@ -686,26 +686,56 @@ def jump_lite_targets(cache_dir: str | Path | None = None) -> pd.DataFrame:
     return frame.drop_duplicates().reset_index(drop=True)
 
 
-def jump_crispr(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
-    """The assembled JUMP CRISPR arm, 51,185 wells of knockouts.
+def jump_crispr(annotate: bool = True, cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
+    """The assembled JUMP CRISPR arm, 51,185 wells of knockouts in U2OS cells.
 
     ``cpg0016-jump-assembled``, the ``v1.0a`` well-position-corrected and feature-selected parquet, and the largest dataset here at 180 MB.
-    ``Metadata_JCP2022`` identifies the perturbation.
-    The cell counts are the ones jump-profiling-recipe regresses out of these profiles; their ``Cells_Count_Count`` feature was normalized with the rest and is no longer a count.
+    jump-profiling-recipe has corrected it for well position and cell count, normalized it and selected its features, and has not yet sphered it.
+    The cell counts are the ones the recipe regresses out of these profiles; their ``Cells_Count_Count`` feature was normalized with the rest and is no longer a count.
 
     Args:
+        annotate: Join JUMP's CRISPR annotation, which names the gene each well's guides target and which wells are controls.
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
         kwargs: Passed to :func:`mantispy.io.read_profiles`.
 
     Returns:
-        Wells by features, indexed by plate and well, with ``Metadata_CellCount``.
+        Wells by features, indexed by plate and well, with ``Metadata_JCP2022`` and ``Metadata_CellCount`` and, when annotated, ``Metadata_Gene`` and ``Metadata_Perturbation`` (the gene symbol), ``Metadata_Control_Type`` (``"negcon"``, ``"poscon"`` or ``"trt"``), ``Metadata_Control`` (the no-guide and non-targeting wells) and ``Metadata_ChromosomeArm``.
 
     References:
         :cite:t:`Chandrasekaran_2023`.
     """
     (counts,) = _files("_jump_cell_counts", cache_dir)
-    return _profiles("jump_crispr", cache_dir, platemap=_read_counts(counts), **kwargs)
+    adata = _profiles("jump_crispr", cache_dir, platemap=_read_counts(counts), **kwargs)
+    if annotate:
+        from mantispy.pp._annotate import annotate_jump
+
+        annotate_jump(adata, kind="crispr")
+    return adata
+
+
+def corum(cache_dir: str | Path | None = None) -> pd.DataFrame:
+    """Human protein complexes from CORUM, one row per complex and member gene.
+
+    The complexes as the EFAAR benchmark of :cite:t:`Celik_2024` distributes them, in the ``source``/``target`` shape :func:`~mantispy.metrics.known_relationships` and :func:`~mantispy.tl.pathway_coherence` read, so two genes of one complex count as a related pair.
+
+    Args:
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
+
+    Returns:
+        A frame with ``source``, the complex, and ``target``, the symbol of a gene in it.
+
+    Notes:
+        CORUM is free for academic, non-commercial use, and the EFAAR copy is distributed under CC BY-NC 4.0.
+
+    References:
+        :cite:t:`Celik_2024`.
+    """
+    (path,) = _files("corum", cache_dir)
+    lines = [line.split("\t") for line in path.read_text().splitlines() if line.strip()]
+    rows = [(complex_name, gene) for complex_name, members in lines for gene in members.split()]
+    return pd.DataFrame(rows, columns=["source", "target"]).drop_duplicates().reset_index(drop=True)
 
 
 def _read_site(directory: Path, source: str, channels: Sequence[str]) -> AnnData:
@@ -737,7 +767,17 @@ def _assemble_cells(entry: DatasetEntry, cache_dir: str | Path | None, *, annota
     channels = [str(channel) for channel in entry.metadata["channels"]]
     paths = _files("jump_cells", cache_dir)
     parts = [_read_site(directory, source, channels) for directory in sorted({path.parent for path in paths})]
+    # Every field of view numbers its own images from one, so each part's numbers are shifted past the ones before
+    # it, and the image tables are stacked rather than merged, which kept only the first field's.
+    images, offset = [], 0
+    for part in parts:
+        table = part.uns["mantispy"]["image_table"]
+        numbers = {number: offset + index + 1 for index, number in enumerate(table.index)}
+        part.obs["Metadata_ImageNumber"] = part.obs["Metadata_ImageNumber"].astype(int).map(numbers)
+        images.append(table.rename(index=numbers))
+        offset += len(table)
     adata = ad.concat(parts, join="inner", merge="first", uns_merge="first")
+    adata.uns["mantispy"]["image_table"] = pd.concat(images)
     # The parts hold as much again as the result, and nothing below needs them.
     n_parts, widest = len(parts), max(part.n_vars for part in parts)
     del parts
@@ -815,7 +855,7 @@ def jump_cells(annotate: bool = True, selected: bool = False, cache_dir: str | P
     Args:
         annotate: Join the JUMP annotation, which supplies ``Metadata_Perturbation`` and ``Metadata_Control``.
             Downloads another 14 MB. Needed for `selected`, which is computed against the controls.
-        selected: Return only the features ``var["selected"]`` marks, 1607 of 5857, as
+        selected: Return only the features ``var["selected"]`` marks, as
             :func:`mantispy.pp.subset_features` would. The subset is kept beside the whole object, so a notebook that only wants the reduced one reads 87 MB instead of 308 MB.
         cache_dir: Where to keep the download. Defaults to :attr:`mantispy.settings.cache_dir`.
 

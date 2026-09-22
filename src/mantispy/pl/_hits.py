@@ -31,6 +31,27 @@ def _threshold(adata: AnnData, function: str, default: float = 0.05) -> float:
     return float(recorded.get("threshold", default))
 
 
+def _count_either_side(ax: Axes, significance: np.ndarray, line: float) -> None:
+    """Write how many points sit above and below a horizontal line, next to it at the right edge.
+
+    Above means strictly above, as a hit is strictly below the q-value threshold.
+    """
+    shown = significance[np.isfinite(significance)]
+    above = int((shown > line).sum())
+    for text, offset, align in ((f"{above} above", 2, "bottom"), (f"{shown.size - above} below", -2, "top")):
+        ax.annotate(
+            text,
+            (0.98, line),
+            xycoords=ax.get_yaxis_transform(),
+            xytext=(0, offset),
+            textcoords="offset points",
+            ha="right",
+            va=align,
+            fontsize=7,
+            color="0.35",
+        )
+
+
 def _recorded_response(adata: AnnData, function: str, default: str) -> str:
     """The response column the run read, so the plot draws what the table was built from."""
     recorded = adata.uns.get("mantispy", {}).get("params", {}).get(function, {})
@@ -41,7 +62,8 @@ def hits(adata: AnnData, key: str = "hits", label_top: int = 10, ax: Axes | None
     """Distance from the controls against significance, with the most distant groups labeled.
 
     A point in the upper right moved far from the controls and is significant under the permutation null.
-    The dashed line is the q-value threshold the run used, so every point colored as a hit sits on or above it.
+    The dashed line is the q-value threshold the run used, so every point colored as a hit sits on or above it,
+    and the counts beside it say how many groups sit on either side.
 
     Args:
         adata: Object holding the table :func:`~mantispy.tl.hit_calling` wrote.
@@ -67,6 +89,7 @@ def hits(adata: AnnData, key: str = "hits", label_top: int = 10, ax: Axes | None
     # it wrote, so reading it under `key` drew every run against the default of 0.05.
     threshold = _threshold(adata, "hit_calling")
     ax.axhline(-np.log10(threshold), color="grey", ls="--", lw=1, label=f"q = {threshold}")
+    _count_either_side(ax, significance, -np.log10(threshold))
     for _, row in table.nlargest(label_top, "distance").iterrows():
         ax.annotate(str(row["group"]), (row["distance"], -np.log10(max(float(row["qvalue"]), _FLOOR))), fontsize=6)
 
@@ -146,6 +169,8 @@ def feature_volcano(
 ) -> Axes:
     """Effect against significance, per feature, for one group.
 
+    The dashed line is q = 0.05, and the counts beside it say how many features sit on either side.
+
     Args:
         adata: Object holding the table :func:`~mantispy.tl.effect_size` wrote.
         group: Which group of that table to draw.
@@ -174,6 +199,7 @@ def feature_volcano(
         ax.annotate(str(row["feature"]), (row["effect"], -np.log10(max(float(row["qvalue"]), _FLOOR))), fontsize=5)
 
     ax.axhline(-np.log10(0.05), color="grey", ls="--", lw=1)
+    _count_either_side(ax, significance, -np.log10(0.05))
     ax.axvline(0, color="black", lw=0.6)
     ax.set_xlabel("effect size")
     ax.set_ylabel("-log10 q")
