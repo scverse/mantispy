@@ -14,7 +14,16 @@ import pytest
 from scipy import sparse
 
 import mantispy as mt
-from mantispy._core._reduce import MAD, MEAN, MEDIAN, STD, get_matrix, reduce_grouped, transform_grouped
+from mantispy._core._reduce import (
+    MAD,
+    MEAN,
+    MEDIAN,
+    STD,
+    _reads_from_disk,
+    get_matrix,
+    reduce_grouped,
+    transform_grouped,
+)
 
 
 @pytest.fixture
@@ -114,8 +123,10 @@ def test_a_groups_rows_are_asked_for_in_increasing_order(backed, reads, call):
 
 
 class _Dataset:
-    """An h5py dataset as get_matrix sees one: a shape and a dtype, no ``toarray``, and h5py's own rule.
+    """An h5py dataset as get_matrix sees one: a shape and a dtype, no ``toarray``, and h5py's own rules.
 
+    Those rules are spelled out here element by element rather than with the expression get_matrix
+    branches on, so that the double and the code it stands in for cannot be wrong in the same way.
     It records the index it was asked for and the block it gave back, so a test can say both how the
     rows were requested and whether what get_matrix returned is that block or a copy of it.
     """
@@ -128,32 +139,46 @@ class _Dataset:
         self.given: list = []
 
     def __getitem__(self, index):
-        if isinstance(index, np.ndarray) and not np.all(np.diff(index) > 0):
-            raise TypeError("Indexing elements must be in increasing order")  # h5py's message
+        if not isinstance(index, slice):
+            wanted = np.asarray(index).tolist()  # h5py takes a list as readily as an array
+            if not all(later > earlier for earlier, later in zip(wanted, wanted[1:], strict=False)):
+                raise TypeError("Indexing elements must be in increasing order")  # h5py's message
+            if wanted and not 0 <= min(wanted) <= max(wanted) < self.shape[0]:
+                raise OSError("Can't synchronously read data (selection + offset not within extent)")
         self.asked.append(index)
-        self.given.append(self._values[index])
+        # h5py reads into a buffer of its own, where a numpy slice would hand back a view.
+        self.given.append(np.array(self._values[index]))
         return self.given[-1]
 
 
 def _on_disk(values):
     """The least an object needs for get_matrix to treat its matrix as one on disk."""
     dataset = _Dataset(values)
+    # Both branches read `matrix[wanted]` for an in-order subset, so without this the tests below
+    # would go on passing if _reads_from_disk stopped recognising a dataset and every backed read
+    # quietly went back to point selection.
+    assert _reads_from_disk(dataset), "the double must take the on-disk branch, or these tests watch the wrong one"
     return SimpleNamespace(X=dataset, layers={}), dataset
 
 
-def test_rows_already_in_order_are_read_without_a_second_copy():
+@pytest.mark.parametrize("dtype", [np.float32, np.float64], ids=["float32 file", "float64 file"])
+def test_rows_already_in_order_are_read_without_a_second_copy(dtype):
     """Regression test for #114: the index was sorted for h5py and the block gathered back into the
     order asked for, but every caller asks in order, so the gather was a full-size copy of what had
-    just been read. At JUMP well scale that copy is a 736 MB allocation made to be thrown away."""
-    values = np.arange(40, dtype=np.float32).reshape(10, 4)
+    just been read. At JUMP well scale that copy is a 720 MB allocation made to be thrown away."""
+    values = np.arange(40, dtype=dtype).reshape(10, 4)
     adata, dataset = _on_disk(values)
 
     block = get_matrix(adata, rows=np.array([1, 4, 7]))
 
     np.testing.assert_array_equal(block, values[[1, 4, 7]])
-    assert len(dataset.asked) == 1
+    assert len(dataset.asked) == 1, "the rows were read more than once"
     np.testing.assert_array_equal(dataset.asked[0], [1, 4, 7])
-    assert block is dataset.given[0], "the block the dataset returned was copied again"
+    if dtype is np.float32:
+        # The file's own dtype, so the float32 cast that ends get_matrix is the identity and what
+        # comes back is the block the dataset read. A float64 file still pays that cast, which is a
+        # copy of the same size: the gather is gone either way, this is what is left.
+        assert block is dataset.given[0], "the block the dataset returned was copied again"
 
 
 def test_every_row_in_order_is_read_as_a_slice():
@@ -169,6 +194,38 @@ def test_every_row_in_order_is_read_as_a_slice():
     index = dataset.asked[0]
     assert isinstance(index, slice), f"expected one slice, got an index list of {np.size(index)}"
     np.testing.assert_array_equal(block, values)
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        np.arange(1, 11),
+        np.array([-1, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
+        np.array([True, False] * 5),
+    ],
+    ids=["one past the last row", "a negative index", "a boolean mask"],
+)
+def test_an_index_the_backend_refuses_is_not_read_as_every_row(rows):
+    """Each of these has exactly as many entries as the dataset has rows, so a whole-matrix shortcut
+    that takes the length as proof of "every row in order" hands back all ten rows where the backend
+    would have refused. A mask is the live risk: `_core.masks.reference_mask` returns one, and
+    `tl/_dose.py:495` is the caller that has to remember `np.flatnonzero`."""
+    adata, _ = _on_disk(np.arange(40, dtype=np.float32).reshape(10, 4))
+
+    with pytest.raises((TypeError, OSError, IndexError)):
+        get_matrix(adata, rows=rows)
+
+
+def test_an_unsigned_index_is_ordered_by_comparison_and_not_by_subtraction():
+    """np.diff on a uint index wraps, so [7, 4, 1] subtracts to two large positive numbers and reads
+    as increasing. h5py's own check wraps the same way, so it accepts the index and returns the rows
+    ascending: the one order the caller did not ask for, and no error either side."""
+    values = np.arange(40, dtype=np.float32).reshape(10, 4)
+    adata, _ = _on_disk(values)
+
+    block = get_matrix(adata, rows=np.array([7, 4, 1], dtype=np.uint32))
+
+    np.testing.assert_array_equal(block, values[[7, 4, 1]])
 
 
 def test_rows_out_of_order_still_come_back_in_the_order_asked_for():
@@ -191,6 +248,26 @@ def test_streamed_and_single_pass_reductions_agree(backed, cells):
         np.testing.assert_allclose(streamed, single, rtol=1e-10)
         np.testing.assert_array_equal(counts, counts_memory)
         assert list(keys) == list(keys_memory)
+
+
+@pytest.mark.parametrize("container", ["backed", "dense"])
+def test_a_mask_that_is_not_one_per_row_is_refused_on_both_paths(container, tmp_path):
+    """Each group's rows are selected out of the mask, which reads only the entries that group owns,
+    so a mask longer than the object went unnoticed on disk and raised in memory. A mask computed
+    against a pre-filter superset is the way that happens."""
+    obs = pd.DataFrame({"g": ["a"] * 4 + ["b"] * 4 + ["c"] * 4}, index=[str(index) for index in range(12)])
+    values = np.arange(24, dtype=np.float32).reshape(12, 2)
+
+    if container == "backed":
+        path = tmp_path / "masked.h5ad"
+        ad.AnnData(X=values.copy(), obs=obs).write_h5ad(path)
+        adata = ad.read_h5ad(path, backed="r")
+    else:
+        adata = ad.AnnData(X=values.copy(), obs=obs.copy())
+
+    for wrong in (np.ones(15, dtype=bool), np.ones(10, dtype=bool)):
+        with pytest.raises(ValueError, match="one boolean per row"):
+            reduce_grouped(adata, "g", MEAN, mask=wrong)
 
 
 @pytest.fixture
@@ -298,7 +375,5 @@ def test_an_empty_group_has_no_statistic_whichever_path_reduces_it(container, tm
 
 def test_sparse_is_not_mistaken_for_an_on_disk_dataset():
     """It has .shape and .dtype like an h5py dataset, and is entirely in memory."""
-    from mantispy._core._reduce import _reads_from_disk
-
     assert not _reads_from_disk(sparse.csr_matrix(np.eye(3)))
     assert not _reads_from_disk(np.eye(3))

@@ -6,11 +6,15 @@ Every read goes through :func:`get_matrix` and every grouping through :func:`gro
 Built on them:
 
 * :func:`reduce_grouped`: a per-group statistic through the numba kernels (the read path).
-* :func:`transform_grouped`: rewrite the matrix group by group (the write path).
-* :func:`iter_groups`: the ``(key, rows, block)`` iteration both are built on.
+* :func:`transform_grouped`: rewrite the matrix group by group (the write path), over :func:`iter_groups`.
+* :func:`iter_groups`: the ``(key, rows, block)`` iteration, which yields a group's rows in increasing order.
+
+:func:`reduce_grouped` orders its own groups rather than going through :func:`iter_groups`, because it applies ``mask`` to each group's rows before reading them.
+Both orderings have to stay increasing: :func:`get_matrix` hands an increasing index straight to h5py and sorts any other one, at the cost of a full-size copy.
 
 A dozen call sites across ``pp`` and ``tl`` loop over the groups themselves, because what they compute per group (a whitening, a permutation null, a chi-square) is not a statistic the kernels can express.
-They take their rows from :func:`~mantispy._core._numba.group_offsets`, re-exported here, rather than scanning ``codes == group`` once per group: that scan is O(n_obs) per group, so a loop over g groups costs O(g * n_obs) where one stable ordering serves every group.
+Most take their rows from :func:`~mantispy._core._numba.group_offsets`, re-exported here, rather than scanning ``codes == group`` once per group: that scan is O(n_obs) per group, so a loop over g groups costs O(g * n_obs) where one stable ordering serves every group.
+A handful still scan, among them ``tl/_heterogeneity.py``, ``pp/_batch.py`` and ``pp/_sphere.py``; see #113 for the measured cost.
 Each loop would need rewriting for a streaming backend.
 They still take the matrix and the grouping from this module, so the code to change is easy to find.
 """
@@ -58,6 +62,7 @@ def get_matrix(adata: AnnData, layer: str | None = None, rows: np.ndarray | None
     ``rows`` reads only those rows, so a backed object holds one group in memory instead of the whole screen.
     h5py accepts a fancy index only in increasing order, so rows asked for in any other order are sorted for the read and the requested order restored afterwards.
     Every grouped path here asks for a group's rows in increasing order already, and that restoring gather is a full-size copy of what was just read, so it is done only when the order actually differs.
+    Rows that cover the whole matrix in order are read as one slice rather than selected point by point, and an in-order read hands back the block the backend produced rather than a copy of it, so treat the result as read-only.
     """
     matrix: Any = adata.X if layer is None else adata.layers[layer]
     if matrix is None:
@@ -66,16 +71,23 @@ def get_matrix(adata: AnnData, layer: str | None = None, rows: np.ndarray | None
     if rows is not None:
         wanted = np.asarray(rows)
         if _reads_from_disk(matrix):
-            if not np.all(np.diff(wanted) > 0):
+            # Only an integer index takes a shortcut, and its order is settled by comparison rather than by
+            # np.diff: subtraction wraps on an unsigned dtype, which would read a descending index as an
+            # increasing one, and on a boolean array it is a not-equal, which says nothing about order at all.
+            # Anything else goes the way every read went before, and is refused by the backend if it is invalid.
+            increasing = wanted.dtype.kind in "iu" and bool(np.all(wanted[1:] > wanted[:-1]))
+            if not increasing:
                 # The order h5py refuses: read the rows sorted, then put them back as they were asked for.
                 order = np.argsort(wanted, kind="stable")
                 block = matrix[wanted[order]]
                 inverse = np.empty_like(order)
                 inverse[order] = np.arange(order.size)
                 matrix = block[inverse]
-            elif wanted.size == matrix.shape[0]:
-                # Increasing, and one index per row of the dataset, is every row in order. A slice lets h5py
-                # read the whole dataset in one go instead of selecting the rows point by point.
+            elif wanted.size and wanted.size == matrix.shape[0] and wanted[0] == 0 and wanted[-1] == wanted.size - 1:
+                # Increasing, one index per row of the dataset, and spanning them: every row in order. A slice
+                # lets h5py read the whole dataset in one go instead of selecting the rows point by point.
+                # The ends are checked rather than inferred from the length, so an index that runs past the
+                # dataset still reaches the backend and is still refused there.
                 matrix = matrix[:]
             else:
                 matrix = matrix[wanted]
@@ -171,10 +183,18 @@ def reduce_grouped(
 
     Returns:
         ``(values, keys, counts)`` where ``values`` is ``(n_groups, n_vars)`` float64, ``keys`` indexes the groups and ``counts`` holds the contributing row count.
+
+    Raises:
+        ValueError: ``mask`` does not hold one entry per row of ``adata``.
     """
     codes, keys = group_codes(adata, by)
     source: Any = adata.X if layer is None else adata.layers[layer]
-    selected = np.ones(adata.n_obs, dtype=bool) if mask is None else np.asarray(mask, dtype=bool)
+    selected = None if mask is None else np.asarray(mask, dtype=bool)
+    # Checked here rather than left to whichever branch runs. Selecting a group's rows with the mask reads
+    # only the entries that group owns, so a mask longer than the object would go unnoticed on a backed
+    # object and raise in memory, which is the divergence the backed tests exist to catch.
+    if selected is not None and selected.shape != (adata.n_obs,):
+        raise ValueError(f"mask must be one boolean per row: got shape {selected.shape} for {adata.n_obs} rows")
 
     if _reads_from_disk(source):
         # One group at a time, so a screen that does not fit in memory still reduces.
@@ -183,11 +203,12 @@ def reduce_grouped(
         # Zero would read as a measurement and center a plate with no controls left on 0.0.
         values = np.full((len(keys), adata.n_vars), np.nan)
         counts = np.zeros(len(keys), dtype=np.int64)
-        # One stable ordering serves every group, as it does for the loops described in the module docstring.
-        # Scanning ``codes == index`` per group instead is two full-length passes each, so the index arithmetic
-        # grows with the group count and at well level outweighs the reads it is preparing.
+        # One stable ordering serves every group. Scanning ``codes == index`` per group instead is two
+        # full-length passes each, so the index arithmetic grows with the group count and at well level
+        # outweighs the reads it is preparing. Without a mask the ordering is already the answer, and
+        # group_rows' slices are views, so the common case copies nothing.
         for index, members in enumerate(group_rows(codes, len(keys))):
-            rows = members[selected[members]]
+            rows = members if selected is None else members[selected[members]]
             if not rows.size:
                 continue
             block = get_matrix(adata, layer, rows=rows)
@@ -196,7 +217,7 @@ def reduce_grouped(
         return values, keys, counts
 
     matrix = get_matrix(adata, layer)
-    if mask is not None:
+    if selected is not None:
         codes, matrix = codes[selected], matrix[selected]
     values = grouped_stat(matrix, codes, len(keys), stat, q=q, ddof=ddof)
     return values, keys, group_counts(codes, len(keys))
