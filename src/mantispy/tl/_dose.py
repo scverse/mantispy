@@ -1023,7 +1023,7 @@ def dose_trajectory(
 
     Returns:
         A new object of compounds by features-and-positions, at ``"perturbation"`` resolution.
-        ``var`` carries ``feature`` and ``position``; ``obs`` carries ``n_doses`` and the window's ends.
+        ``var`` carries ``feature`` and ``position``, beside the schema's remaining annotation columns, left empty because a resampled path is not a measurement they describe; ``obs`` carries ``n_doses`` and the window's ends.
         Compounds whose window holds fewer than two concentrations are left out, since a single point is not a path.
 
     Raises:

@@ -40,7 +40,8 @@ def feature_signature(
         statistic: Column of the table to average within each family, such as ``"t"`` or ``"difference"`` (the raw contrast).
 
     Returns:
-        A new :class:`~anndata.AnnData` of perturbations by families, with each family's ``by`` columns and ``n_features`` in ``var``, beside the schema's annotation columns left empty for the families they do not describe.
+        A new :class:`~anndata.AnnData` of perturbations by families, with each family's ``by`` columns and ``n_features`` in ``var``, beside the schema's remaining annotation columns, left empty because a family is not a measurement they describe.
+        A ``by`` column carries the family's own value, which is ``"none"`` where the features it was grouped from had none.
         It is a perturbation-level profile object, so ``sc.pp.neighbors``, ``sc.tl.leiden`` and :func:`~mantispy.tl.nn_moa_classify` accept it.
 
     Raises:
@@ -70,14 +71,16 @@ def feature_signature(
     # Take the components from var rather than splitting the joined name, since a feature group or channel may contain the separator (rohban2017's do).
     parts = labels.assign(__family__=family).drop_duplicates("__family__").set_index("__family__")
     parts = parts.reindex(wide.columns)
-    parts["n_features"] = family.value_counts().reindex(wide.columns).to_numpy()
+    parts["n_features"] = family.value_counts().reindex(wide.columns)
 
     # A family is not a CellProfiler measurement, so the schema's annotation columns are supplied empty
-    # rather than guessed at, and the columns that name the family are written over them.
-    annotation = empty_annotation(wide.columns)
+    # rather than guessed at, and the columns that name the family are written over them. The columns are
+    # assigned as Series, so a family's components are aligned onto its own row by index rather than by
+    # position, and the index drops the pivot's grouping key rather than carrying it into the file.
+    annotation = empty_annotation(wide.columns.rename(None))
     for column in by:
-        annotation[column] = parts[column].to_numpy()
-    annotation["n_features"] = parts["n_features"].to_numpy()
+        annotation[column] = parts[column]
+    annotation["n_features"] = parts["n_features"]
 
     signature = ad.AnnData(
         X=wide.to_numpy(dtype=np.float32),

@@ -120,7 +120,7 @@ def test_the_signature_is_an_object_io_accepts(tmp_path, annotated):
         assert loaded.var[column].isna().all(), column
 
 
-def test_a_by_that_is_not_the_default_still_validates(annotated):
+def test_a_by_that_is_not_the_default_still_round_trips(tmp_path, annotated):
     """`by` names whichever var columns define a family, including one the schema knows nothing about."""
     adata = annotated()
     adata.var["panel"] = np.where(adata.var["object"].to_numpy() == "Cells", "outer", "inner")
@@ -135,6 +135,13 @@ def test_a_by_that_is_not_the_default_still_validates(annotated):
     assert signature.var["channel"].isna().all()
     assert signature.var["object"].isna().all()
     assert int(signature.var["n_features"].sum()) == adata.n_vars
+
+    # validate checks that the ten names are present and never checks a dtype, so the writer is what
+    # says whether a var assembled from a non-default `by` can actually be saved.
+    path = tmp_path / "signature.h5ad"
+    mt.io.write(signature, path)
+    loaded = mt.io.read(path)
+    assert list(loaded.var["panel"]) == list(signature.var["panel"])
 
 
 def test_it_says_so_when_the_table_or_the_annotation_is_missing(annotated):

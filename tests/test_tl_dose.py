@@ -495,6 +495,9 @@ def test_a_trajectory_is_an_object_io_accepts(tmp_path, phenotypes):
     loaded = mt.io.read(written)
     assert list(loaded.var_names) == list(paths.var_names)
     assert list(loaded.var.columns) == list(paths.var.columns)
+    # Both columns the Returns clause promises survive the writer, not just the schema's own.
+    assert list(loaded.var["position"]) == list(paths.var["position"])
+    assert list(loaded.var["feature"]) == list(paths.var["feature"])
 
 
 def test_a_trajectory_needs_at_least_two_points(phenotypes):
