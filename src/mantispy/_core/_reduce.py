@@ -29,6 +29,7 @@ import pandas as pd
 
 from ._numba import MAD, MEAN, MEDIAN, QUANTILE, STD, group_counts, group_offsets, grouped_stat
 from .frames import as_frame
+from .logging import get_logger
 
 if TYPE_CHECKING:
     from anndata import AnnData
@@ -83,20 +84,47 @@ def get_matrix(adata: AnnData, layer: str | None = None, rows: np.ndarray | None
                 inverse = np.empty_like(order)
                 inverse[order] = np.arange(order.size)
                 matrix = block[inverse]
-            elif wanted.size and wanted.size == matrix.shape[0] and wanted[0] == 0 and wanted[-1] == wanted.size - 1:
-                # Increasing, one index per row of the dataset, and spanning them: every row in order. A slice
-                # lets h5py read the whole dataset in one go instead of selecting the rows point by point.
-                # The ends are checked rather than inferred from the length, so an index that runs past the
-                # dataset still reaches the backend and is still refused there.
-                matrix = matrix[:]
+            elif (
+                wanted.size
+                and 0 <= wanted[0]
+                and wanted[-1] < matrix.shape[0]
+                and wanted[-1] - wanted[0] + 1 == wanted.size
+            ):
+                # Increasing with no gaps is a range, and asking for it as one lets the backend read a
+                # contiguous block instead of selecting the rows point by point. Every group of a file
+                # stored in the grouping's own order looks like this, and so does ``by=None``, which asks
+                # for all of them. The ends are checked against the dataset first, because a slice would
+                # silently clamp to what is there where a fancy index is refused.
+                matrix = matrix[int(wanted[0]) : int(wanted[-1]) + 1]
             else:
                 matrix = matrix[wanted]
         else:
             matrix = matrix[wanted]
+    elif _reads_from_disk(matrix) and not hasattr(matrix, "__array__"):
+        # anndata's CSRDataset and CSCDataset have no ``__array__``, so the read below sees a sequence of
+        # sparse rows and raises rather than returning the matrix. Asking for every row gives the scipy
+        # matrix that ``toarray`` then flattens out. An h5py dataset does have one and is left alone,
+        # because reading through it converts to float32 as it goes instead of afterwards.
+        matrix = matrix[:]
 
     if hasattr(matrix, "toarray"):
         matrix = matrix.toarray()
     return np.asarray(matrix, dtype=np.float32)
+
+
+def _warn_if_not_streamable(matrix: Any) -> None:
+    """Say so when a per-group loop over this on-disk matrix will read the whole of it every time.
+
+    anndata indexes a CSR dataset by row without leaving the file, which is what makes streaming work.
+    On a CSC dataset the same index falls back to ``to_memory()``, so a loop over g groups reads and
+    densifies the entire matrix g times rather than once, and the groups are where that is least visible.
+    """
+    if getattr(matrix, "format", None) == "csc":
+        get_logger().warning(
+            "the matrix on disk is stored column-major (CSC), which cannot be read row by row: every "
+            "group's read loads the whole matrix. Store it row-major before writing, with "
+            "adata.X = adata.X.tocsr(), or read the object into memory with mt.io.read(path)."
+        )
 
 
 def _reads_from_disk(matrix: Any) -> bool:
@@ -153,6 +181,7 @@ def iter_groups(
 ) -> Iterator[tuple[Any, np.ndarray, np.ndarray]]:
     """Yield ``(key, row_index, block)`` per group, in group-key order."""
     codes, keys = group_codes(adata, by)
+    _warn_if_not_streamable(adata.X if layer is None else adata.layers[layer])
     order = np.argsort(codes, kind="stable")
     bounds = np.searchsorted(codes[order], np.arange(len(keys) + 1))
     for index, key in enumerate(keys):
@@ -197,6 +226,7 @@ def reduce_grouped(
         raise ValueError(f"mask must be one boolean per row: got shape {selected.shape} for {adata.n_obs} rows")
 
     if _reads_from_disk(source):
+        _warn_if_not_streamable(source)
         # One group at a time, so a screen that does not fit in memory still reduces.
         # Each group's statistic depends only on its own rows, so the result matches the single kernel call (tests/test_backed.py).
         # A group with no contributing rows is NaN, as in the in-memory kernel.

@@ -5,6 +5,7 @@ same numbers as the in-memory path. Functions that write X in place refuse backe
 with an error.
 """
 
+import logging
 from types import SimpleNamespace
 
 import anndata as ad
@@ -196,6 +197,30 @@ def test_every_row_in_order_is_read_as_a_slice():
     np.testing.assert_array_equal(block, values)
 
 
+def test_a_contiguous_run_of_rows_is_read_as_one_block():
+    """A group's rows are a run like this whenever the file is stored in the grouping's own order,
+    which is the case the slice is worth having for: it fires once per group, where covering the
+    whole matrix fires once per call. Measured on an uncompressed 20,000 x 200 file, a 200-row
+    well-sized run costs 0.168 ms as an index list against 0.022 ms as a slice, and 7x holds to
+    10,000 rows."""
+    values = np.arange(40, dtype=np.float32).reshape(10, 4)
+    adata, dataset = _on_disk(values)
+
+    block = get_matrix(adata, rows=np.arange(3, 7))
+
+    assert dataset.asked == [slice(3, 7)]
+    np.testing.assert_array_equal(block, values[3:7])
+
+
+def test_a_run_reaching_past_the_dataset_is_refused_rather_than_clamped():
+    """A slice clamps to what is there, so rows 5 to 14 of a ten-row dataset would come back as five
+    rows and no error at all, where the index list they were asked for as is refused."""
+    adata, _ = _on_disk(np.arange(40, dtype=np.float32).reshape(10, 4))
+
+    with pytest.raises(OSError):
+        get_matrix(adata, rows=np.arange(5, 15))
+
+
 @pytest.mark.parametrize(
     "rows",
     [
@@ -248,6 +273,60 @@ def test_streamed_and_single_pass_reductions_agree(backed, cells):
         np.testing.assert_allclose(streamed, single, rtol=1e-10)
         np.testing.assert_array_equal(counts, counts_memory)
         assert list(keys) == list(keys_memory)
+
+
+@pytest.fixture
+def backed_sparse(tmp_path):
+    """The same values as a sparse file on disk and as an in-memory object, in either storage order."""
+
+    def build(fmt):
+        obs = pd.DataFrame({"g": np.repeat(["a", "b", "c"], 4)}, index=[str(index) for index in range(12)])
+        dense = np.zeros((12, 3), dtype=np.float32)
+        dense[np.arange(12), np.arange(12) % 3] = np.arange(1, 13)
+        maker = sparse.csr_matrix if fmt == "csr" else sparse.csc_matrix
+        path = tmp_path / f"{fmt}.h5ad"
+        ad.AnnData(X=maker(dense), obs=obs).write_h5ad(path)
+        return ad.read_h5ad(path, backed="r"), ad.AnnData(X=dense.copy(), obs=obs.copy())
+
+    return build
+
+
+@pytest.mark.parametrize("fmt", ["csr", "csc"])
+def test_a_sparse_matrix_on_disk_can_be_read_whole(backed_sparse, fmt):
+    """anndata's sparse datasets have no ``__array__``, so the float32 read that ends get_matrix saw a
+    sequence of sparse rows and raised `setting an array element with a sequence`. Every caller that
+    reads the matrix without naming rows took that path, `pp.calculate_qc_metrics` among them."""
+    from_disk, in_memory = backed_sparse(fmt)
+    expected = np.asarray(in_memory.X)
+
+    np.testing.assert_array_equal(get_matrix(from_disk), expected)
+    np.testing.assert_array_equal(get_matrix(from_disk, rows=np.arange(12)), expected)
+    np.testing.assert_array_equal(get_matrix(from_disk, rows=np.array([1, 5, 9])), expected[[1, 5, 9]])
+
+
+@pytest.mark.parametrize("fmt", ["csr", "csc"])
+def test_a_sparse_matrix_on_disk_reduces_to_what_it_does_in_memory(backed_sparse, fmt):
+    from_disk, in_memory = backed_sparse(fmt)
+
+    streamed, keys, counts = reduce_grouped(from_disk, "g", MEAN)
+    single, keys_memory, counts_memory = reduce_grouped(in_memory, "g", MEAN)
+
+    np.testing.assert_allclose(streamed, single, rtol=1e-10)
+    np.testing.assert_array_equal(counts, counts_memory)
+    assert list(keys) == list(keys_memory)
+
+
+@pytest.mark.parametrize(("fmt", "warned"), [("csc", True), ("csr", False)], ids=["column-major", "row-major"])
+def test_a_matrix_that_cannot_be_streamed_says_so(backed_sparse, caplog, fmt, warned):
+    """anndata indexes a CSR dataset by row without leaving the file, which is what makes the
+    per-group loop a stream. On CSC the same index falls back to `to_memory()`: measured at 60 reads
+    of 10 rows, CSR called it 0 times and CSC 60, so the whole matrix is read once per group."""
+    from_disk, _ = backed_sparse(fmt)
+
+    with caplog.at_level(logging.WARNING, logger="mantispy"):
+        reduce_grouped(from_disk, "g", MEAN)
+
+    assert ("column-major" in caplog.text) is warned
 
 
 @pytest.mark.parametrize("container", ["backed", "dense"])
