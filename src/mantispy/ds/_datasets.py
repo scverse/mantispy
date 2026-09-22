@@ -73,7 +73,7 @@ def _plate(file_name: str) -> str:
 
 
 def _plate_files(name: str, plates: Sequence[str] | None, cache_dir: str | Path | None) -> list[Path]:
-    # A set, because a plate contributes several files and listing it once per file printed all 141 twice.
+    # A set, because a plate contributes several files and would otherwise be listed once per file.
     known = {_plate(file.name) for file in _DATASETS[name].files}
     if plates is not None and (unknown := sorted(set(plates) - known)):
         raise KeyError(f"{name} has no plate(s) {unknown}; available: {sorted(known)}")
@@ -288,7 +288,7 @@ def jump_target2(
             Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Returns:
-        One row per well at well resolution, carrying ``Metadata_Source``, ``Metadata_Batch``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_CellCount``, ``Metadata_SiteCount`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_InChIKey`` and ``Metadata_Control`` (the DMSO wells, 64 per 384-well plate and 256 on source_9's).
+        One row per well at well resolution, carrying ``Metadata_Source``, ``Metadata_Batch``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_CellCount``, ``Metadata_SiteCount`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_InChIKey`` and ``Metadata_Control`` (the DMSO wells).
 
     Raises:
         KeyError: A plate is not one of the 141.

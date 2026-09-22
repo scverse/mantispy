@@ -11,6 +11,13 @@ import argparse
 
 _CNT = 1  # increment this when you want to rebuild the CI cache
 
+# The plates docs/tutorials/multisite/cross_laboratory.ipynb loads by name for its cross-source hierarchy.
+_TARGET2_HIERARCHY = [
+    "JCPQC051", "JCPQC052", "JCPQC053", "JCPQC054",
+    "BR00121438", "BR00121439", "BR00126113", "BR00126114",
+    "110000294936", "110000296682", "110000296339", "110000296356",
+]  # fmt: skip
+
 
 def main(args: argparse.Namespace) -> None:
     """Call each loader once, so its files and anything it assembles from them land in the cache."""
@@ -26,9 +33,10 @@ def main(args: argparse.Namespace) -> None:
         "bbbc021": mt.ds.bbbc021,
         "rohban": mt.ds.rohban,
         "pki": mt.ds.pki,
-        # The default, one plate from each source, is what the tutorials read. All 141 would be 9.4 GB,
-        # against the 10 GB GitHub gives a whole repository for its caches.
+        # The one-plate-per-source default, plus the twelve plates cross_laboratory.ipynb names for its
+        # source/batch/plate hierarchy. Together ~1.2 GB; all 141 would be 9.4 GB, over GitHub's 10 GB cache.
         "jump_target2": mt.ds.jump_target2,
+        "jump_target2_hierarchy": lambda: mt.ds.jump_target2(plates=_TARGET2_HIERARCHY),
         "jump_cells": mt.ds.jump_cells,
         "jump_plate": mt.ds.jump_plate,
         "jump_export": mt.ds.jump_export,

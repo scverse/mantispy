@@ -43,7 +43,7 @@ def main() -> None:
     # jump_cells keeps its assembly in the cache, which would be written out again instead of rebuilt.
     for cached in Path(mt.settings.cache_dir).glob(f"{args.name}-*.h5ad"):
         cached.unlink()
-    adata = getattr(mt.ds, args.name)(**({"plates": None} if args.name == "jump_target2" else {}))
+    adata = getattr(mt.ds, args.name)()
     # The parameters it was read with name paths on this machine.
     adata.uns["mantispy"].pop("params", None)
 
