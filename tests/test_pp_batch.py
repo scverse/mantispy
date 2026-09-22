@@ -74,6 +74,19 @@ def test_a_plate_is_polished_on_its_own_format_not_the_objects_largest(gradient_
     np.testing.assert_allclose(beside, alone.X, rtol=1e-6)
 
 
+def test_polish_uses_the_wells_present_not_a_padded_standard_format():
+    """A plate that fills only part of a standard format must not be padded out to it.
+
+    The empty rows would enter the median that removes the grand level, shifting the whole plate.
+    A plate of one constant value has no position effect, so correction must return it unchanged.
+    """
+    cells = synthetic_plate(n_plates=1, n_wells=40, n_cells=4, n_features=3, row_gradient=0.0, col_gradient=0.0, seed=0)
+    wells = mt.tl.aggregate(cells, min_cells=0)
+    wells.X[:] = 10.0
+    mt.pp.correct_plate_position(wells)
+    np.testing.assert_allclose(wells.X, 10.0)
+
+
 def test_regress_out_removes_cell_count_dependence():
     cells = synthetic_plate(n_wells=96, n_cells=30, n_features=10, confounder_effect=3.0, seed=0)
     wells = mt.tl.aggregate(cells, min_cells=0)

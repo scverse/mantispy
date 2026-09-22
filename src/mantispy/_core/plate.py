@@ -86,10 +86,5 @@ def detect_plate_format(wells: Iterable[str]) -> int:
 
 
 def plate_grid(wells: Iterable[str]) -> tuple[int, int]:
-    """Rows and columns of the format these wells came off.
-
-    A format belongs to a plate, not to the object holding it: JUMP-Target-2 runs the same map on 384-well plates
-    at ten sources and 1536-well plates at the eleventh. Sizing one grid for every plate at once puts the smaller
-    ones in a mostly empty corner of the larger one, so anything fitted on the grid is fitted on the wrong shape.
-    """
+    """Rows and columns of the smallest standard format these wells fit, so a plate is drawn on its own grid."""
     return PLATE_FORMATS[detect_plate_format(wells)]

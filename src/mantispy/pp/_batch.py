@@ -23,7 +23,7 @@ from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy._core.masks import reference_mask
 from mantispy._core.mutation import inplace_or_copy
-from mantispy._core.plate import plate_grid, well_col, well_row
+from mantispy._core.plate import well_col, well_row
 
 METHODS = ("median_polish",)
 
@@ -96,9 +96,9 @@ def correct_plate_position(
         if fit_rows.size == 0:
             raise ValueError(f"no reference rows in group {key!r}")
 
-        # Each plate is polished on its own format's grid; one grid for the object would drop a 384-well plate
-        # into a corner of a 1536-well one and fit the row and column effects on three quarters of nothing.
-        n_rows, n_columns = plate_grid(wells[selected])
+        # Each plate is polished on its own extent. One grid for the object would drop a 384-well plate into a
+        # corner of a 1536-well one, and padding to a standard format would fit the effects on empty rows.
+        n_rows, n_columns = rows[selected].max() + 1, columns[selected].max() + 1
 
         # One value per well, so several cells in a well cannot overwrite each other.
         well_index = rows[fit_rows] * n_columns + columns[fit_rows]
