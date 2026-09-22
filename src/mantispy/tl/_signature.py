@@ -41,11 +41,12 @@ def feature_signature(
 
     Returns:
         A new :class:`~anndata.AnnData` of perturbations by families, with each family's ``by`` columns and ``n_features`` in ``var``, beside the schema's remaining annotation columns, left empty because a family is not a measurement they describe.
-        A ``by`` column carries the family's own value, which is ``"none"`` where the features it was grouped from had none.
+        A ``by`` column carries the family's own value, in the dtype ``var`` held it in; the ``"none"`` that names a family whose features had no value appears in the family's name, not in the column.
         It is a perturbation-level profile object, so ``sc.pp.neighbors``, ``sc.tl.leiden`` and :func:`~mantispy.tl.nn_moa_classify` accept it.
 
     Raises:
         KeyError: ``uns["mantispy"][key]`` is missing, that table has no ``statistic`` column, or ``var`` is missing one of the ``by`` columns.
+        ValueError: ``by`` names the same column more than once, which would give one family two copies of a component.
 
     Notes:
         Signed statistics are averaged, so a family that decreased stays distinct from one that increased.
@@ -62,14 +63,20 @@ def feature_signature(
     missing = [column for column in by if column not in var.columns]
     if missing:
         raise KeyError(f"var is missing the column(s) that name a feature family: {missing}")
+    if len(set(by)) != len(list(by)):
+        raise ValueError(f"by names the same column more than once: {list(by)}")
 
-    labels = var[list(by)].astype(str).fillna("none")
+    components = var[list(by)]
+    labels = components.astype(str).fillna("none")
     family = labels.apply(lambda row: " | ".join(row), axis=1)
     table = table.join(family.rename("__family__"), on="feature")
 
     wide = table.pivot_table(index="group", columns="__family__", values=statistic, aggfunc="mean", observed=True)
-    # Take the components from var rather than splitting the joined name, since a feature group or channel may contain the separator (rohban2017's do).
-    parts = labels.assign(__family__=family).drop_duplicates("__family__").set_index("__family__")
+    # Take the components from var rather than splitting the joined name, since a feature group or channel may
+    # contain the separator (rohban2017's do), and from `components` rather than `labels`, so that a by column
+    # that is also a schema column keeps its own dtype and its true missing values instead of the strings and
+    # the "none" sentinel that name the family.
+    parts = components.assign(__family__=family).drop_duplicates("__family__").set_index("__family__")
     parts = parts.reindex(wide.columns)
     parts["n_features"] = family.value_counts().reindex(wide.columns)
 

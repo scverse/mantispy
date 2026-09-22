@@ -1,5 +1,7 @@
 """Cluster composition, cell cycle, subpopulation hits and local density."""
 
+import warnings
+
 import anndata as ad
 import numpy as np
 import pandas as pd
@@ -25,6 +27,30 @@ def test_composition_rows_are_wells_and_sum_to_one(clustered):
     assert composition.n_obs == clustered.obs.groupby(["Metadata_Plate", "Metadata_Well"], observed=True).ngroups
     assert composition.n_vars == clustered.obs["leiden"].nunique()
     np.testing.assert_allclose(np.asarray(composition.X).sum(axis=1), 1.0, atol=1e-5)
+    assert mt.io.validate(composition).ok, mt.io.validate(composition).errors
+
+
+def test_a_cell_with_no_cluster_is_left_out_rather_than_made_into_one(clustered, caplog):
+    """Its code is -1, which indexes a numpy array from the end, so it was counted into the last cluster;
+    and the label it contributed either crashed sorted() (pandas 3) or became a cluster called "nan"."""
+    import logging
+
+    clusters = clustered.obs["leiden"].astype(str)
+    unassigned = np.zeros(clustered.n_obs, dtype=bool)
+    unassigned[:5] = True
+    clustered.obs["leiden"] = pd.Categorical(np.where(unassigned, None, clusters))
+
+    with caplog.at_level(logging.WARNING, logger="mantispy"), warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        composition = mt.tl.cluster_composition(clustered)
+    assert "5 of 1920 cells have no 'leiden'" in " ".join(record.message for record in caplog.records)
+
+    assert list(composition.var_names) == sorted(set(clusters[~unassigned]))
+    assert "nan" not in set(composition.var_names)
+    assert "None" not in set(composition.var_names)
+    # The fractions are over the cells that were assigned, so they still sum to one per well.
+    totals = np.asarray(composition.X).sum(axis=1)
+    np.testing.assert_allclose(totals[totals > 0], 1.0, atol=1e-5)
     assert mt.io.validate(composition).ok, mt.io.validate(composition).errors
 
 

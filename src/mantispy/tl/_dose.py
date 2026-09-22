@@ -5,6 +5,7 @@ from __future__ import annotations
 import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
+from itertools import count
 from math import lgamma, log, pi
 
 import anndata as ad
@@ -1087,9 +1088,14 @@ def dose_trajectory(
     # Position-major, to mirror the ravel of each compound's (n_positions, n_features) path above.
     feature = np.tile(names, n_positions)
     position = np.repeat(grid, names.size)
+    # The fewest decimals that still tell the grid's points apart, never fewer than two. Two covers every grid
+    # up to 101 positions, so the familiar "@0.00"/"@0.50"/"@1.00" is unchanged wherever it was already unique;
+    # a closer grid widens rather than naming several positions identically, which would give the object
+    # duplicate var_names that neither validate nor the writer objects to.
+    decimals = next(width for width in count(2) if len({f"{point:.{width}f}" for point in grid}) == grid.size)
     # A feature read at a relative position along a window is not a CellProfiler measurement of its own, so the
     # schema's annotation columns are supplied empty, and the two that describe the column are set beside them.
-    var = empty_annotation([f"{name}@{point:.2f}" for name, point in zip(feature, position, strict=True)])
+    var = empty_annotation([f"{name}@{point:.{decimals}f}" for name, point in zip(feature, position, strict=True)])
     var["feature"] = feature
     var["position"] = position
     result = ad.AnnData(

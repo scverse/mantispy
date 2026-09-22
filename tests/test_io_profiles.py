@@ -127,6 +127,14 @@ def test_write_refuses_an_invalid_object(tmp_path, cells):
         mt.io.write(cells, tmp_path / "bad.h5ad")
 
 
+def test_write_refuses_an_object_whose_annotation_was_stripped(tmp_path, cells):
+    """stamp fills the annotation columns for every tool that builds an object, but io.write asks it not
+    to: a var column a caller removed is something to report, not to repair on the way out."""
+    del cells.var["feature"]
+    with pytest.raises(ValueError, match="feature"):
+        mt.io.write(cells, tmp_path / "stripped.h5ad")
+
+
 def test_read_rejects_a_foreign_schema_version(tmp_path, cells):
     import anndata as ad
 

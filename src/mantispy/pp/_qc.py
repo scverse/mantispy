@@ -60,17 +60,19 @@ def calculate_qc_metrics(
         ``None``, or the modified copy. Writes the ``obs`` columns ``qc_n_nan_features``, ``qc_nan_fraction``, ``qc_is_border``, ``qc_area_outlier`` and ``qc_pass``, and the ``var`` columns ``qc_n_nan``, ``qc_variance`` and ``qc_n_unique``.
 
     Raises:
-        KeyError: If ``var`` has no ``feature`` column, which ``qc_area_outlier`` needs to find the area features, and which the schema requires.
+        KeyError: If ``var``'s ``feature`` column is missing or entirely empty, which ``qc_area_outlier`` needs to find the area features, and which the schema requires. An object that only went through :func:`~mantispy._core.schema.stamp` carries the column with nothing in it, which is no more usable than its absence.
     """
-    if "feature" not in adata.var:
+    if "feature" not in adata.var or adata.var["feature"].isna().all():
         # An all-false flag for a check that did not run makes qc_pass a weaker statement than
         # it claims to be: a cell of any area passes. 'feature' is a schema requirement, and
-        # mt.io.validate reports it as an error too.
+        # mt.io.validate reports it as an error too. An empty column counts as no column: stamp
+        # supplies the schema's annotation columns to whatever lacks them, so presence alone says
+        # only that the object went through stamp, not that anything parsed its feature names.
         raise KeyError(
-            "var has no 'feature' column, which qc_area_outlier needs to find the area features. "
-            "mt.io.read_profiles writes it, and mantispy._core.features.parse_feature_names builds it "
-            "for a var table made by hand; an object from tl.feature_signature carries no per-feature "
-            "annotation, and cell-level QC does not apply to it."
+            "var's 'feature' column is missing or empty, and qc_area_outlier needs it to find the area "
+            "features. mt.io.read_profiles writes it, and mantispy._core.features.parse_feature_names "
+            "builds it for a var table made by hand; an object from tl.feature_signature carries no "
+            "per-feature annotation, and cell-level QC does not apply to it."
         )
 
     X = get_matrix(adata)

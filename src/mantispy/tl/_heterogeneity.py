@@ -85,12 +85,24 @@ def cluster_composition(
 
     columns = [by] if isinstance(by, str) else list(by)
     codes, keys = group_codes(adata, columns)
-    clusters = as_frame(adata.obs)[cluster_key].astype(str)
-    labels = sorted(clusters.unique())
+    clusters = as_frame(adata.obs)[cluster_key]
+    # A cell the clustering left unassigned belongs to no cluster. Dropping the missing values before the labels
+    # are read keeps it from becoming a cluster of its own: under pandas 3 sorted() refuses to order NaN against
+    # the names, and under pandas 2 astype(str) turned it into a cluster literally called "nan". Its code is -1,
+    # which would otherwise count it into the last cluster, since -1 indexes a numpy array from the end.
+    assigned = clusters.notna().to_numpy()
+    labels = sorted(clusters[assigned].astype(str).unique())
+    if not assigned.all():
+        get_logger().warning(
+            "cluster_composition: %d of %d cells have no %r and are left out of the fractions",
+            int((~assigned).sum()),
+            assigned.size,
+            cluster_key,
+        )
 
     counts = np.zeros((len(keys), len(labels)))
-    membership = pd.Categorical(clusters, categories=labels).codes
-    np.add.at(counts, (codes, membership), 1)
+    membership = pd.Categorical(clusters.astype(str).where(assigned), categories=labels).codes
+    np.add.at(counts, (codes[assigned], membership[assigned]), 1)
     totals = counts.sum(axis=1, keepdims=True)
     fractions = np.divide(counts, totals, out=np.zeros_like(counts), where=totals > 0)
 

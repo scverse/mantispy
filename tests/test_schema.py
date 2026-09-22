@@ -184,3 +184,34 @@ def test_an_object_with_no_features_does_not_validate():
     assert not report
     assert len(report.errors) == 1
     assert "no features" in report.errors[0]
+
+
+def test_stamp_supplies_the_annotation_columns_var_does_not_carry():
+    """Every tool that builds a new object stamps it, so filling here is what stops the next one from
+    returning something validate rejects, the way tl.feature_signature did (#103)."""
+    obj = ad.AnnData(
+        np.ones((2, 3), dtype=np.float32),
+        obs=pd.DataFrame({"Metadata_Plate": ["P1", "P1"], "Metadata_Well": ["A01", "A02"]}, index=["0", "1"]),
+    )
+    obj.var_names = ["emb_0", "emb_1", "emb_2"]
+    assert not validate(obj).ok
+
+    stamp(obj, resolution="well")
+    assert validate(obj).ok, validate(obj).errors
+    assert obj.var["is_feature"].all()
+    assert obj.var["feature"].isna().all()
+
+
+def test_stamp_does_not_touch_an_annotation_that_is_already_there():
+    obj = ad.AnnData(np.ones((2, 1), dtype=np.float32), var=parse_feature_names(["Cells_AreaShape_Area"]))
+    stamp(obj)
+    assert obj.var["feature"].tolist() == ["Area"]
+
+
+def test_stamp_can_be_asked_to_leave_var_alone():
+    """io.write passes fill_var=False, so a damaged annotation is reported rather than repaired."""
+    obj = ad.AnnData(np.ones((2, 1), dtype=np.float32), var=parse_feature_names(["Cells_AreaShape_Area"]))
+    del obj.var["feature"]
+    stamp(obj, fill_var=False)
+    assert "feature" not in obj.var
+    assert not validate(obj).ok

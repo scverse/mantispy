@@ -144,6 +144,38 @@ def test_a_by_that_is_not_the_default_still_round_trips(tmp_path, annotated):
     assert list(loaded.var["panel"]) == list(signature.var["panel"])
 
 
+def test_a_by_column_keeps_the_dtype_and_the_missing_values_var_held(annotated):
+    """The family's name needs strings and a sentinel for a missing component; its var column does not, and
+    writing them there put "none" in the schema's channel and the string "True" in its boolean is_feature."""
+    adata = annotated()
+    # A channel that is genuinely absent, which is what parse_feature_names leaves on an AreaShape feature.
+    adata.var["channel"] = pd.Categorical(np.where(adata.var["feature_group"].to_numpy() == "AreaShape", None, "DNA"))
+    adata.var["scale"] = np.where(adata.var["object"].to_numpy() == "Cells", 3.0, 5.0)
+    mt.tl.differential_features(adata, block=None, key_added="d")
+
+    signature = mt.tl.feature_signature(adata, key="d")
+    assert signature.var["channel"].isna().any(), "a missing channel stays missing"
+    assert "none" not in set(signature.var["channel"].dropna())
+    assert any(name.endswith("| none | Cells") or "| none |" in name for name in signature.var_names), (
+        "the sentinel still names the family"
+    )
+
+    on_scale = mt.tl.feature_signature(adata, key="d", by=("feature_group", "scale"))
+    assert on_scale.var["scale"].dtype == np.float64
+    assert set(on_scale.var["scale"]) == {3.0, 5.0}
+
+    on_flag = mt.tl.feature_signature(adata, key="d", by=("feature_group", "is_feature"))
+    assert on_flag.var["is_feature"].dtype == bool, "validate's is_feature check reads a boolean"
+    assert (~on_flag.var["is_feature"]).sum() == 0
+
+
+def test_by_refuses_the_same_column_twice(annotated):
+    adata = annotated()
+    mt.tl.differential_features(adata, block=None, key_added="d")
+    with pytest.raises(ValueError, match="more than once"):
+        mt.tl.feature_signature(adata, key="d", by=("object", "object"))
+
+
 def test_it_says_so_when_the_table_or_the_annotation_is_missing(annotated):
     adata = annotated()
     with pytest.raises(KeyError, match="differential_features"):

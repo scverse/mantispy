@@ -14,14 +14,13 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
-from mantispy._core.features import _infer_channels, empty_annotation, parse_feature_names
+from mantispy._core.features import _infer_channels, parse_feature_names
 from mantispy._core.frames import as_frame, categorize_metadata
 from mantispy._core.logging import get_logger, report_drop
 from mantispy._core.plate import normalize_well
 from mantispy._core.provenance import record_params
 from mantispy._core.schema import (
     REQUIRED_OBS,
-    REQUIRED_VAR,
     RESOLUTIONS,
     SCHEMA_VERSION,
     SUPPORTED_VERSIONS,
@@ -472,7 +471,9 @@ def write(adata: ad.AnnData, path: str | Path) -> None:
         ValueError: The object does not satisfy the schema, with every failure :func:`~mantispy.io.validate` found in the message.
     """
     path = Path(path)
-    _record(adata)
+    # Stamp the version so an unstamped object can be written, but leave var as the caller built it:
+    # a missing annotation column is something to report here, not to repair on the way out.
+    _record(adata, fill_var=False)
     validate(adata, raise_on_error=True)
     if path.suffix == ".zarr":
         adata.write_zarr(path)
@@ -524,11 +525,6 @@ def stamp(adata: ad.AnnData, resolution: str | None = None, copy: bool = False) 
         )
 
     target = adata.copy() if copy else adata
-    absent = [column for column in REQUIRED_VAR if column not in target.var]
-    if absent:
-        empty = empty_annotation(target.var.index)
-        for column in absent:
-            target.var[column] = empty[column]
-
+    # _record supplies the annotation columns var does not carry.
     _record(target, resolution=resolution)
     return target if copy else None

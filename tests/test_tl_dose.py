@@ -500,6 +500,22 @@ def test_a_trajectory_is_an_object_io_accepts(tmp_path, phenotypes):
     assert list(loaded.var["feature"]) == list(paths.var["feature"])
 
 
+def test_a_close_grid_does_not_name_two_positions_the_same(phenotypes):
+    """The suffix carried two decimals, so past 101 positions several of them formatted identically and the
+    object got duplicate var_names -- which neither validate nor the writer objects to, and which makes a
+    per-column lookup silently return more than one column."""
+    mt.tl.dose_direction(phenotypes)
+    paths = mt.tl.dose_trajectory(phenotypes, n_positions=150)
+    assert paths.var_names.is_unique
+    assert paths.n_vars == 150 * (phenotypes.n_vars - 1)
+    assert mt.io.validate(paths).ok
+
+    # The familiar two-decimal names are unchanged wherever two decimals already told the grid apart.
+    assert list(mt.tl.dose_trajectory(phenotypes, n_positions=3).var_names[:1]) == [
+        f"{paths.var['feature'].iloc[0]}@0.00"
+    ]
+
+
 def test_a_trajectory_needs_at_least_two_points(phenotypes):
     with pytest.raises(ValueError, match="at least two"):
         mt.tl.dose_trajectory(phenotypes, n_positions=1)
