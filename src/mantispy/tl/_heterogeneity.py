@@ -231,9 +231,9 @@ def _composition_test(composition: AnnData, counts: np.ndarray, reference: str |
     control_rows = np.flatnonzero(is_control)
     calibration = np.full(control_rows.size, np.nan)
     if comparable:
-        for position, row in enumerate(control_rows):
-            observed = counts[row][reached]
-            others = pooled[reached] - counts[row][reached]
+        for position, control_row in enumerate(control_rows):
+            observed = counts[control_row][reached]
+            others = pooled[reached] - counts[control_row][reached]
             # A cluster only this control reached leaves the others no expected frequency there; skip the well.
             if observed.sum() >= 1 and others.min() > 0:
                 calibration[position] = chisquare(observed, others / others.sum() * observed.sum()).statistic
