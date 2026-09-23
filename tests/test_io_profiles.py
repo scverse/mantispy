@@ -1,3 +1,4 @@
+import anndata as ad
 import numpy as np
 import pandas as pd
 import pytest
@@ -510,3 +511,78 @@ def test_stamp_fills_only_the_annotation_columns_that_are_missing():
     assert adata.var["feature_group"].isna().all()
     assert isinstance(adata.var["feature_group"].dtype, pd.CategoricalDtype)
     assert mt.io.validate(adata).ok
+
+
+def test_stamping_a_view_keeps_the_stamp():
+    """Writing uns before touching var let the var write materialise the view and discard the
+    store written moments earlier, so the object came back unstamped and get_resolution quietly
+    read a well-level object as single-cell."""
+    obj = ad.AnnData(
+        np.ones((4, 3), dtype=np.float32),
+        obs=pd.DataFrame(
+            {"Metadata_Plate": "P1", "Metadata_Well": ["A01", "A02", "A03", "A04"]},
+            index=[str(index) for index in range(4)],
+        ),
+    )
+    obj.var_names = ["emb_0", "emb_1", "emb_2"]
+    view = obj[[0, 1]]
+    assert view.is_view
+
+    mt.io.stamp(view, resolution="well")
+
+    assert view.uns["mantispy"]["schema_version"] == SCHEMA_VERSION
+    assert view.uns["mantispy"]["resolution"] == "well"
+    assert mt.io.validate(view).ok, mt.io.validate(view).errors
+
+
+def test_a_tool_does_not_repair_the_annotation_its_input_had_damaged(tmp_path):
+    """io.write refuses a damaged annotation, but every tool stamps its own result, so a fill in
+    the shared stamp repaired the damage one call earlier and handed the writer a file whose
+    feature column is blank and whose is_feature is a fabrication."""
+    frame = _frame()
+    adata = from_dataframe(frame, resolution="well")
+    del adata.var["feature"]
+
+    aggregated = mt.tl.aggregate(adata, by="Metadata_Plate")
+
+    assert not mt.io.validate(aggregated).ok, "a tool must not launder an annotation its input had lost"
+    with pytest.raises(ValueError, match="feature"):
+        mt.io.write(aggregated, tmp_path / "laundered.h5ad")
+
+
+def test_stamp_supplies_the_annotation_columns_var_does_not_carry():
+    """An object built elsewhere -- a published h5ad, a matrix of embeddings -- carries none of the
+    schema's annotation, and io.stamp is the entry point that gives it the columns empty."""
+    obj = ad.AnnData(
+        np.ones((2, 3), dtype=np.float32),
+        obs=pd.DataFrame({"Metadata_Plate": ["P1", "P1"], "Metadata_Well": ["A01", "A02"]}, index=["0", "1"]),
+    )
+    obj.var_names = ["emb_0", "emb_1", "emb_2"]
+    assert not mt.io.validate(obj).ok
+
+    mt.io.stamp(obj, resolution="well")
+
+    assert mt.io.validate(obj).ok, mt.io.validate(obj).errors
+    assert obj.var["is_feature"].all()
+    assert obj.var["feature"].isna().all(), "supplied empty, not guessed at by parsing the names"
+
+
+def test_stamp_leaves_an_annotation_that_is_already_there_alone():
+    """Only the absent columns are supplied. Filling all ten unconditionally would overwrite a
+    parsed annotation with blanks, so the test deletes one and checks the rest survived."""
+    from mantispy._core.features import parse_feature_names
+
+    var = parse_feature_names(["Cells_AreaShape_Area", "Nuclei_Intensity_MeanIntensity_DNA"])
+    parsed = var.drop(columns=["channel"]).copy()
+    obj = ad.AnnData(
+        np.ones((2, 2), dtype=np.float32),
+        obs=pd.DataFrame({"Metadata_Plate": ["P1", "P1"], "Metadata_Well": ["A01", "A02"]}, index=["0", "1"]),
+        var=parsed,
+    )
+
+    mt.io.stamp(obj, resolution="well")
+
+    assert obj.var["channel"].isna().all(), "the one that was absent is supplied empty"
+    for column in parsed.columns:
+        # .equals, not ==: a column the parser left empty holds NaN, which is not equal to itself.
+        assert obj.var[column].equals(var[column]), f"{column} kept what the parser found"

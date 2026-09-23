@@ -60,21 +60,8 @@ def calculate_qc_metrics(
         ``None``, or the modified copy. Writes the ``obs`` columns ``qc_n_nan_features``, ``qc_nan_fraction``, ``qc_is_border``, ``qc_area_outlier`` and ``qc_pass``, and the ``var`` columns ``qc_n_nan``, ``qc_variance`` and ``qc_n_unique``.
 
     Raises:
-        KeyError: If ``var``'s ``feature`` column is missing or entirely empty, which ``qc_area_outlier`` needs to find the area features, and which the schema requires. An object that only went through :func:`~mantispy.io.stamp` carries the column with nothing in it, which is no more usable than its absence.
+        KeyError: If no column in ``var`` names an area, so ``qc_area_outlier`` cannot be scored and ``qc_pass`` would be an ``and`` over one check fewer than it claims.
     """
-    if "feature" not in adata.var or adata.var["feature"].isna().all():
-        # An all-false flag for a check that did not run makes qc_pass a weaker statement than
-        # it claims to be: a cell of any area passes. 'feature' is a schema requirement, and
-        # mt.io.validate reports it as an error too. An empty column counts as no column: stamp
-        # supplies the schema's annotation columns to whatever lacks them, so presence alone says
-        # only that the object went through stamp, not that anything parsed its feature names.
-        raise KeyError(
-            "var's 'feature' column is missing or empty, and qc_area_outlier needs it to find the area "
-            "features. mt.io.read_profiles writes it, and mantispy._core.features.parse_feature_names "
-            "builds it for a var table made by hand; an object from tl.feature_signature carries no "
-            "per-feature annotation, and cell-level QC does not apply to it."
-        )
-
     X = get_matrix(adata)
     missing = np.isnan(X)
     nan_fraction = missing.mean(axis=1)
@@ -114,10 +101,21 @@ def _area_outlier_flag(adata: AnnData, X: np.ndarray) -> np.ndarray:
     Every compartment that measured an area is scored within its own plate and the flags are OR-ed, so a cell is an outlier when any of its areas is.
     Scoring only the first matching column made the flag, and so ``qc_pass``, depend on the order of ``var``.
 
-    The ``feature`` column this needs is a precondition of :func:`calculate_qc_metrics`, checked there before anything is written.
+    Raises rather than returning an all-false flag when no column names an area, since ``qc_pass`` is
+    an ``and`` over the checks and a check that did not run would weaken it silently. Called before
+    :func:`calculate_qc_metrics` writes anything.
     """
-    area = adata.var_names[adata.var["feature"].astype(str).eq("Area")]
-    if not len(area) or "Metadata_Plate" not in adata.obs:
+    named = adata.var["feature"].astype(str).eq("Area") if "feature" in adata.var else slice(0, 0)
+    area = adata.var_names[named]
+    if not len(area):
+        raise KeyError(
+            "no column in var names an area, and qc_area_outlier has nothing to score. var's 'feature' "
+            "column is written by mt.io.read_profiles and built by mantispy._core.features."
+            "parse_feature_names for a var table made by hand; mt.io.stamp supplies it empty, which "
+            "names no area either. An object with no area measurement -- an embedding, an "
+            "Intensity-only export, or anything from tl.feature_signature -- has no cell-level QC to run."
+        )
+    if "Metadata_Plate" not in adata.obs:
         return np.zeros(adata.n_obs, dtype=bool)
     if len(area) > 1:
         get_logger().info("qc_area_outlier flags a cell outlying in any of %s", list(area))

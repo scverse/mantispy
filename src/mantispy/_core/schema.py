@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from .features import COLUMNS as VAR_COLUMNS
-from .features import empty_annotation
 from .logging import get_logger
 from .plate import normalize_well
 
@@ -164,15 +163,22 @@ class ValidationReport:
         return "\n".join(lines) or "valid"
 
 
-def stamp(adata: AnnData, resolution: str | None = None, *, fill_var: bool = True) -> None:
-    """Write the schema version, and optionally the resolution, into ``uns``, and supply the annotation columns ``var`` is missing.
+def stamp(adata: AnnData, resolution: str | None = None) -> None:
+    """Write the schema version, and optionally the resolution, into ``uns``.
 
     Args:
         adata: The object to stamp, in place.
         resolution: What one row is; left as it is when ``None``.
-        fill_var: Supply any of :data:`REQUIRED_VAR` that ``var`` does not carry, from :func:`~mantispy._core.features.empty_annotation`.
-            Every tool that builds a new object stamps it, so filling here is what keeps a tool from returning something :func:`validate` rejects.
-            :func:`~mantispy.io.write` passes ``False``, so that writing an object whose annotation a caller has damaged still reports it rather than quietly repairing it.
+
+    Raises:
+        ValueError: ``resolution`` is not one of :data:`RESOLUTIONS`.
+
+    Notes:
+        This records what the object is; it does not make it valid. A tool that builds a new object
+        supplies its own annotation from :func:`~mantispy._core.features.empty_annotation` before
+        stamping, and :func:`~mantispy.io.stamp` supplies it for an object built elsewhere. Filling
+        here instead would repair an annotation a caller had damaged, and :func:`~mantispy.io.write`
+        would then have nothing left to report.
     """
     store = adata.uns.setdefault("mantispy", {})
     store["schema_version"] = SCHEMA_VERSION
@@ -180,10 +186,6 @@ def stamp(adata: AnnData, resolution: str | None = None, *, fill_var: bool = Tru
         if resolution not in RESOLUTIONS:
             raise ValueError(f"resolution must be one of {RESOLUTIONS}, got {resolution!r}")
         store["resolution"] = resolution
-    if fill_var and (absent := [column for column in REQUIRED_VAR if column not in adata.var]):
-        empty = empty_annotation(adata.var.index)
-        for column in absent:
-            adata.var[column] = empty[column]
 
 
 def get_resolution(adata: AnnData) -> str:

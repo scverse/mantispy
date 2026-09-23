@@ -151,6 +151,9 @@ def test_a_by_column_keeps_the_dtype_and_the_missing_values_var_held(annotated):
     # A channel that is genuinely absent, which is what parse_feature_names leaves on an AreaShape feature.
     adata.var["channel"] = pd.Categorical(np.where(adata.var["feature_group"].to_numpy() == "AreaShape", None, "DNA"))
     adata.var["scale"] = np.where(adata.var["object"].to_numpy() == "Cells", 3.0, 5.0)
+    # Supplied here like the two above: the fixture stamps, and a stamp records what an object is
+    # rather than completing its annotation.
+    adata.var["is_feature"] = True
     mt.tl.differential_features(adata, block=None, key_added="d")
 
     signature = mt.tl.feature_signature(adata, key="d")
@@ -221,3 +224,31 @@ def test_the_heatmap_reads_an_infinity_as_missing():
         drawn.append(mt.pl.feature_signature(ad.AnnData(values.copy())).images[0])
     assert drawn[0].get_clim() == drawn[1].get_clim()
     np.testing.assert_array_equal(drawn[0].get_array(), drawn[1].get_array())
+
+
+def test_a_by_column_that_is_entirely_missing_still_writes(annotated, tmp_path):
+    """empty_annotation makes the text columns categorical so an entirely missing one survives an
+    h5ad round trip; assigning the raw var column over it put the object dtype back, and the
+    signature validated but could not be saved -- the defect this whole change set out to fix."""
+    adata = annotated(n_features=40)
+    adata.var["channel"] = pd.Series([None] * adata.n_vars, dtype=object).values
+    mt.tl.differential_features(adata, block=None, key_added="d")
+
+    signature = mt.tl.feature_signature(adata, key="d")
+
+    assert mt.io.validate(signature).ok
+    mt.io.write(signature, tmp_path / "signature.h5ad")
+
+
+def test_the_pivot_key_does_not_name_the_obs_index(annotated, tmp_path):
+    """pd.Index(index, name=None) keeps the name it had -- None is pandas' 'leave it alone'. var was
+    cleared with rename(None); obs was not, so every signature on disk carried the pivot's key."""
+    adata = annotated(n_features=40)
+    mt.tl.differential_features(adata, block=None, key_added="d")
+
+    signature = mt.tl.feature_signature(adata, key="d")
+    assert signature.obs.index.name is None
+
+    path = tmp_path / "signature.h5ad"
+    mt.io.write(signature, path)
+    assert mt.io.read(path).obs.index.name is None

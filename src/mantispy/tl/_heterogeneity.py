@@ -86,10 +86,10 @@ def cluster_composition(
     columns = [by] if isinstance(by, str) else list(by)
     codes, keys = group_codes(adata, columns)
     clusters = as_frame(adata.obs)[cluster_key]
-    # A cell the clustering left unassigned belongs to no cluster. Dropping the missing values before the labels
-    # are read keeps it from becoming a cluster of its own: under pandas 3 sorted() refuses to order NaN against
-    # the names, and under pandas 2 astype(str) turned it into a cluster literally called "nan". Its code is -1,
-    # which would otherwise count it into the last cluster, since -1 indexes a numpy array from the end.
+    # A cell the clustering left unassigned belongs to no cluster. Dropping the missing values before the
+    # labels are read keeps it from becoming a cluster of its own: sorted() cannot order NaN against the
+    # names and raises on pandas 3, while on pandas 2 astype(str) first turned it into a cluster literally
+    # called "nan". The same drop is owed to subpopulation_hits, which still reads its labels this way.
     assigned = clusters.notna().to_numpy()
     labels = sorted(clusters[assigned].astype(str).unique())
     if not assigned.all():

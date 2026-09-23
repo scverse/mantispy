@@ -81,17 +81,21 @@ def feature_signature(
     parts["n_features"] = family.value_counts().reindex(wide.columns)
 
     # A family is not a CellProfiler measurement, so the schema's annotation columns are supplied empty
-    # rather than guessed at, and the columns that name the family are written over them. The columns are
-    # assigned as Series, so a family's components are aligned onto its own row by index rather than by
-    # position, and the index drops the pivot's grouping key rather than carrying it into the file.
+    # rather than guessed at, and the columns that name the family are written over them by index.
     annotation = empty_annotation(wide.columns.rename(None))
     for column in by:
-        annotation[column] = parts[column]
+        values = parts[column]
+        # Keep the dtype var held, except an object one: empty_annotation makes the text columns
+        # categorical so a family whose component is missing throughout still writes, and assigning
+        # over that would put the unwritable object dtype back.
+        annotation[column] = values.astype("category") if values.dtype == object else values
     annotation["n_features"] = parts["n_features"]
 
     signature = ad.AnnData(
         X=wide.to_numpy(dtype=np.float32),
-        obs=pd.DataFrame(index=pd.Index(wide.index.astype(str), name=None)),
+        # rename, not pd.Index(..., name=None): None is pandas' "keep the name", so the pivot's key
+        # rode into obs and onto the file's obs index.
+        obs=pd.DataFrame(index=wide.index.astype(str).rename(None)),
         var=annotation,
     )
     signature.obs["Metadata_Perturbation"] = signature.obs_names.to_numpy()

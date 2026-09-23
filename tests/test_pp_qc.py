@@ -239,3 +239,29 @@ def test_qc_metrics_refuses_a_var_table_without_a_feature_column():
         mt.pp.calculate_qc_metrics(adata)
     assert "qc_pass" not in adata.obs, "and no qc_ column is written before the check fails"
     assert "qc_variance" not in adata.var
+
+
+def test_qc_metrics_refuses_an_object_whose_var_names_no_area():
+    """The guard asked whether the feature column was populated, not whether it named an area.
+    A genuinely parsed Intensity-and-Texture export passes that guard, and _area_outlier_flag
+    then returns an all-false flag -- the silently weakened qc_pass the guard exists to stop."""
+    import anndata as ad
+
+    from mantispy._core.features import parse_feature_names
+
+    names = ["Cells_Intensity_MeanIntensity_DNA", "Cells_Texture_Contrast_DNA"]
+    var = parse_feature_names(names)
+    assert var["feature"].notna().all(), "the annotation is parsed; it simply measured no area"
+
+    values = np.random.default_rng(0).normal(500.0, 10.0, (20, 2)).astype(np.float32)
+    adata = ad.AnnData(
+        X=values,
+        obs=pd.DataFrame(
+            {"Metadata_Plate": "P1", "Metadata_Well": [f"A{index % 4 + 1:02d}" for index in range(20)]},
+            index=[str(index) for index in range(20)],
+        ),
+        var=var,
+    )
+
+    with pytest.raises(KeyError, match="area"):
+        mt.pp.calculate_qc_metrics(adata)

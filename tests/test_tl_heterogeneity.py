@@ -31,8 +31,8 @@ def test_composition_rows_are_wells_and_sum_to_one(clustered):
 
 
 def test_a_cell_with_no_cluster_is_left_out_rather_than_made_into_one(clustered, caplog):
-    """Its code is -1, which indexes a numpy array from the end, so it was counted into the last cluster;
-    and the label it contributed either crashed sorted() (pandas 3) or became a cluster called "nan"."""
+    """The label an unassigned cell contributed either crashed sorted(), on pandas 3, where NaN cannot be
+    ordered against the cluster names, or became a cluster literally called "nan" on pandas 2."""
     import logging
 
     clusters = clustered.obs["leiden"].astype(str)
