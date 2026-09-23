@@ -70,7 +70,8 @@ def feature_signature(
         raise ValueError(f"by names the same column more than once: {list(by)}")
 
     components = var[list(by)]
-    if components.isna().all().all():
+    gaps = components.isna()
+    if gaps.all().all():
         raise ValueError(
             f"var's {list(by)} name no family: every one is empty, so every feature would join into "
             "a single column averaging the whole object. mt.io.read_profiles writes the parsed "
@@ -78,7 +79,7 @@ def feature_signature(
         )
     # Masked on the original frame rather than filled after astype: pandas 3 keeps a missing value
     # through astype(str) and pandas 2 turns it into the string "nan", which fillna cannot see.
-    labels = components.astype(str).mask(components.isna(), "none")
+    labels = components.astype(str).mask(gaps, "none")
     # str.cat, not a per-row apply: same bytes, and the apply is a Python loop over every feature.
     family = labels.iloc[:, 0].str.cat(labels.iloc[:, 1:], sep=SEPARATOR) if len(by) > 1 else labels.iloc[:, 0]
     # Compared on the names, not the raw components: a missing value and a literal "none" are the
@@ -100,14 +101,14 @@ def feature_signature(
     # separator would break, and from `components` rather than `labels`, so that a by column
     # that is also a schema column keeps its own dtype and its true missing values instead of the strings and
     # the "none" sentinel that name the family.
-    parts = components.assign(__family__=family).drop_duplicates("__family__").set_index("__family__")
-    parts = parts.reindex(wide.columns)
-    parts["n_features"] = family.value_counts().reindex(wide.columns)
+    parts = (
+        components.assign(__family__=family).drop_duplicates("__family__").set_index("__family__").reindex(wide.columns)
+    )
 
     var = annotation(
         wide.columns.rename(None),
         **{column: parts[column] for column in by},
-        n_features=parts["n_features"],
+        n_features=family.value_counts().reindex(wide.columns),
     )
 
     signature = ad.AnnData(

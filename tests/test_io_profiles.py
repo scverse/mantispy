@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 import mantispy as mt
-from mantispy._core.features import canonical_channel
+from mantispy._core.features import canonical_channel, parse_feature_names
 from mantispy._core.schema import SCHEMA_VERSION
 from mantispy._core.schema import stamp as _record
 from mantispy.io._profiles import from_dataframe
@@ -138,8 +138,6 @@ def test_write_refuses_an_object_whose_annotation_was_stripped(tmp_path, cells):
 
 
 def test_read_rejects_a_foreign_schema_version(tmp_path, cells):
-    import anndata as ad
-
     path = tmp_path / "old.h5ad"
     mt.io.write(cells, path)
     stored = ad.read_h5ad(path)
@@ -400,8 +398,6 @@ def test_index_columns_name_the_observations(tmp_path):
 def test_stamp_puts_a_hand_built_object_on_the_api_surface(resolution):
     """An object from another pipeline, or a matrix of learned embeddings, arrives without the
     stamp every reader here writes, and nothing public used to establish it."""
-    import anndata as ad
-
     columns = {
         "cell": {"Metadata_Plate": "P1", "Metadata_Well": "A01"},
         "well": {"Metadata_Plate": "P1", "Metadata_Well": "A01"},
@@ -417,8 +413,6 @@ def test_stamp_puts_a_hand_built_object_on_the_api_surface(resolution):
 
 def test_stamp_refuses_what_the_resolution_needs_and_obs_lacks():
     """Stamping regardless would push the failure into whichever tool ran next."""
-    import anndata as ad
-
     adata = ad.AnnData(np.zeros((3, 2), dtype=np.float32), obs=pd.DataFrame(index=list("abc")))
     with pytest.raises(ValueError, match=r"Metadata_Plate.*Metadata_Well"):
         mt.io.stamp(adata)
@@ -428,8 +422,6 @@ def test_stamp_refuses_what_the_resolution_needs_and_obs_lacks():
 
 
 def test_stamp_can_leave_the_original_alone():
-    import anndata as ad
-
     obs = pd.DataFrame({"Metadata_Perturbation": ["a", "b"]}, index=["x", "y"])
     adata = ad.AnnData(np.zeros((2, 3), dtype=np.float32), obs=obs)
 
@@ -443,8 +435,6 @@ def test_stamp_keeps_the_resolution_the_object_already_records():
     """A subset of a cell-resolution object is still cell-resolution, and the well default would
     have demoted it silently: tl.aggregate then takes the non-cell branch and fills
     Metadata_CellCount with NaN, which disables its min_cells filter."""
-    import anndata as ad
-
     obs = pd.DataFrame({"Metadata_Plate": ["P1"] * 3, "Metadata_Well": ["A01"] * 3}, index=list("abc"))
     adata = ad.AnnData(np.zeros((3, 2), dtype=np.float32), obs=obs)
     mt.io.stamp(adata, resolution="cell")
@@ -460,8 +450,6 @@ def test_stamp_lets_a_learned_embedding_be_written(tmp_path):
     """An embedding has no CellProfiler feature names, so its var carries none of the annotation
     the schema requires, and `io.write` validates before writing. Without the annotation columns
     a stamped embedding failed on ten missing var columns and could not be written at all."""
-    import anndata as ad
-
     obs = pd.DataFrame(
         {"Metadata_Plate": ["P1"] * 4, "Metadata_Well": ["A01", "A02", "A03", "A04"]},
         index=list("abcd"),
@@ -499,8 +487,6 @@ def test_stamp_fills_only_the_annotation_columns_that_are_missing():
     """An object hand-built with part of the annotation is the case where the merge can go wrong:
     the columns that are there have to survive, and the ones added have to be categorical, because
     an object array of NaN cannot be written to h5ad."""
-    import anndata as ad
-
     obs = pd.DataFrame({"Metadata_Plate": ["P1"] * 2, "Metadata_Well": ["A01", "A02"]}, index=list("ab"))
     adata = ad.AnnData(np.zeros((2, 3), dtype=np.float32), obs=obs)
     adata.var["object"] = pd.Categorical(["Cells", "Nuclei", "Cells"])
@@ -571,8 +557,6 @@ def test_stamp_supplies_the_annotation_columns_var_does_not_carry():
 def test_stamp_leaves_an_annotation_that_is_already_there_alone():
     """Only the absent columns are supplied. Filling all ten unconditionally would overwrite a
     parsed annotation with blanks, so the test deletes one and checks the rest survived."""
-    from mantispy._core.features import parse_feature_names
-
     var = parse_feature_names(["Cells_AreaShape_Area", "Nuclei_Intensity_MeanIntensity_DNA"])
     parsed = var.drop(columns=["channel"]).copy()
     obj = ad.AnnData(
@@ -593,8 +577,6 @@ def test_stamping_a_view_whose_annotation_is_complete_keeps_the_stamp():
     """The companion to the test above, and the branch it does not reach: with nothing absent there
     is no var write, so nothing materialised the view and the store went to a DictView that discards
     it. uns.setdefault bypasses the overridden __setitem__, so the fill was doing the work."""
-    from mantispy._core.features import parse_feature_names
-
     obj = ad.AnnData(
         np.ones((4, 2), dtype=np.float32),
         obs=pd.DataFrame(

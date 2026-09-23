@@ -16,7 +16,6 @@ from anndata import AnnData
 
 from mantispy._core._reduce import get_matrix, group_codes, group_offsets
 from mantispy._core._stats import benjamini_hochberg
-from mantispy._core.features import annotation
 from mantispy._core.frames import as_frame
 from mantispy._core.masks import reference_mask
 from mantispy._core.schema import get_resolution, stamp
@@ -43,7 +42,7 @@ def _empirical_null(controls: AnnData, size: int, n_draws: int, seed: int, block
         obs = as_frame(controls.obs).copy()
         obs["Metadata_Perturbation"] = labels
         obs["Metadata_Control"] = labels == "__reference__"
-        scratch = ad.AnnData(X=values.copy(), obs=obs, var=annotation(controls.var_names))
+        scratch = ad.AnnData(X=values.copy(), obs=obs, var=as_frame(controls.var).copy())
         stamp(scratch, resolution="well")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -73,7 +72,7 @@ def _empirical_hit_rate(
         obs = as_frame(controls.obs).copy()
         obs["Metadata_Perturbation"] = labels
         obs["Metadata_Control"] = labels == "__reference__"
-        scratch = ad.AnnData(X=values.copy(), obs=obs, var=annotation(controls.var_names))
+        scratch = ad.AnnData(X=values.copy(), obs=obs, var=as_frame(controls.var).copy())
         stamp(scratch, resolution="well")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")

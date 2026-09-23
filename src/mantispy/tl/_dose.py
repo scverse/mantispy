@@ -1046,14 +1046,6 @@ def dose_trajectory(
     """
     if n_positions < 2:
         raise ValueError(f"n_positions must be at least two, got {n_positions}")
-    # Checked here, not where the names are built: it depends only on n_positions, and the caller
-    # should not pay for the whole interpolation before being told the request cannot be named.
-    if len({f"{point:.{POSITION_DECIMALS}f}" for point in np.linspace(0.0, 1.0, n_positions)}) != n_positions:
-        raise ValueError(
-            f"n_positions={n_positions} spaces the window more finely than {POSITION_DECIMALS} decimals "
-            "can tell apart, so two positions would carry the same name and the object would have "
-            "duplicate var_names. Ask for fewer positions."
-        )
     obs = as_frame(adata.obs)
     _require_columns(obs, compound_key, dose_key)
     scale = _control_scale(adata, reference)
@@ -1100,13 +1092,15 @@ def dose_trajectory(
     position = np.repeat(grid, names.size)
     # A fixed width, not one chosen from the grid: choosing it per call named the endpoints every grid
     # shares "@0.00" at 101 positions and "@0.000" at 102, so no two runs of one screen lined up.
-    suffixes = [f"@{point:.{POSITION_DECIMALS}f}" for point in grid]
-    # names is cast once, before the tile, rather than the tiled copy of it; and the feature column
-    # is built from codes over that same vocabulary rather than re-hashing every tiled string.
-    index = np.char.add(np.tile(names.astype(str), n_positions), np.repeat(suffixes, names.size))
-    codes = np.tile(np.arange(names.size), n_positions)
-    var = annotation(index, position=position)
-    var["feature"] = pd.Categorical.from_codes(codes, categories=pd.Index(names).astype(str))
+    labelled = pd.Index(names).astype(str)
+    index = pd.Index(np.concatenate([labelled + f"@{point:.{POSITION_DECIMALS}f}" for point in grid]))
+    if index.has_duplicates:
+        raise ValueError(
+            f"n_positions={n_positions} spaces the window more finely than {POSITION_DECIMALS} decimals "
+            "can tell apart, so two positions carry the same name and the object would have duplicate "
+            "var_names. Ask for fewer positions."
+        )
+    var = annotation(index, feature=np.tile(labelled, n_positions), position=position)
     result = ad.AnnData(
         X=np.array(paths, dtype=np.float32) if paths else np.empty((0, var.shape[0]), dtype=np.float32),
         obs=pd.DataFrame(records, columns=[compound_key, "n_doses", "window_low", "window_high"]).set_axis(

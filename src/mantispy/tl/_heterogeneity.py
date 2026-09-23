@@ -33,6 +33,23 @@ PHASES = ("G1", "S", "G2M")
 _DISPERSION_MIN_CONTROLS = 8
 
 
+def _cluster_labels(obs: pd.DataFrame, cluster_key: str) -> tuple[pd.Series, np.ndarray]:
+    """The cluster column as strings, and which cells the clustering actually assigned.
+
+    Read through here rather than ``astype(str)`` directly: a missing value becomes a cluster
+    literally called ``"nan"`` on pandas 2, and makes ``sorted`` raise on pandas 3.
+
+    Args:
+        obs: The observation frame.
+        cluster_key: Column holding the cluster of each cell.
+
+    Returns:
+        The stringified column, and a boolean mask of the assigned cells.
+    """
+    assigned = obs[cluster_key].notna().to_numpy()
+    return obs[cluster_key].astype(str), assigned
+
+
 def cluster_composition(
     adata: AnnData,
     cluster_key: str = "leiden",
@@ -92,11 +109,7 @@ def cluster_composition(
 
     columns = [by] if isinstance(by, str) else list(by)
     codes, keys = group_codes(adata, columns)
-    clusters = as_frame(adata.obs)[cluster_key]
-    # Read the labels from the assigned cells only: NaN becomes a cluster called "nan" on pandas 2,
-    # and makes sorted() raise on pandas 3.
-    assigned = clusters.notna().to_numpy()
-    named = clusters.astype(str)
+    named, assigned = _cluster_labels(as_frame(adata.obs), cluster_key)
     labels = sorted(named[assigned].unique())
     if not labels:
         raise ValueError(
@@ -117,25 +130,22 @@ def cluster_composition(
     # A group none of whose cells were assigned has no composition. Zero everywhere would say it was
     # measured and found empty, and NaN would make the result something tl.map refuses although the
     # Returns clause promises tl.map takes it, so the group is dropped like any other empty one.
-    measured = counts.sum(axis=1) > 0
+    totals = counts.sum(axis=1)
+    measured = totals > 0
     report_drop(
         "group(s)",
         int((~measured).sum()),
         int(measured.size),
         remedy=f"no cell in them carries a {cluster_key!r}, so they have no composition",
     )
-    counts = counts[measured]
-    fractions = counts / counts.sum(axis=1, keepdims=True)
+    counts, totals = counts[measured], totals[measured]
+    fractions = counts / totals[:, None]
 
     # Every cell of the group, not only the clustered ones: Metadata_CellCount is tl.cytotoxicity's
     # default count_key, and a group that merely lost cluster labels must not read as cell loss.
     cell_count = np.bincount(codes, minlength=len(keys)).astype(int)
-    # Two different denominators, so both are written: Metadata_CellCount is every cell of the group,
-    # which is what tl.cytotoxicity reads, while the fractions are over the clustered ones. Multiplying
-    # X by Metadata_CellCount does not give the counts back unless the two agree.
-    clustered = counts.sum(axis=1).astype(int)
     obs = _group_obs(adata, columns, keys, codes, {"Metadata_CellCount": cell_count})[measured]
-    obs["Metadata_ClusteredCellCount"] = clustered
+    obs["Metadata_ClusteredCellCount"] = totals.astype(int)
     obs.index = pd.Index([str(row) for row in range(len(obs))])
     var = annotation(pd.Index(labels), object="Cluster", feature_group="Composition", feature=labels)
 
@@ -370,10 +380,8 @@ def subpopulation_hits(
     values = representation(adata, use_rep)
     obs = as_frame(adata.obs)
     is_control = reference_mask(adata, reference)
-    # Masked before the cast, as cluster_composition does: an unassigned cell would otherwise be a
-    # cluster of its own, named "nan" on pandas 2 and skipped as an empty one on pandas 3.
-    assigned = obs[cluster_key].notna().to_numpy()
-    clusters = obs[cluster_key].astype(str).where(assigned).to_numpy()
+    named, assigned = _cluster_labels(obs, cluster_key)
+    clusters = named.where(assigned).to_numpy()
     groups = obs[groupby].astype(str).to_numpy()
 
     generator = np.random.default_rng(seed)

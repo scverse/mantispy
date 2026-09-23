@@ -63,15 +63,15 @@ def calculate_qc_metrics(
     Raises:
         KeyError: If no column in ``var`` names an area, so ``qc_area_outlier`` cannot be scored and ``qc_pass`` would be an ``and`` over one check fewer than it claims.
     """
-    # First, before get_matrix densifies and before @inplace_or_copy's duplicate is touched:
-    # a call that is going to be rejected should not read the matrix or copy the object.
-    _area_features(adata)
+    # Before get_matrix densifies: a call that is going to be rejected should not read the matrix.
+    # (inplace_or_copy has already made the copy by the time any of this runs.)
+    area = _area_features(adata)
 
     X = get_matrix(adata)
     missing = np.isnan(X)
     nan_fraction = missing.mean(axis=1)
     border = _border_flag(adata, image_shape, border_margin)
-    area_outlier = _area_outlier_flag(adata, X)
+    area_outlier = _area_outlier_flag(adata, X, area)
 
     adata.obs["qc_n_nan_features"] = missing.sum(axis=1).astype(np.int32)
     adata.obs["qc_nan_fraction"] = nan_fraction
@@ -103,8 +103,6 @@ def _border_flag(adata: AnnData, image_shape: tuple[int, int] | None, margin: in
 def _area_features(adata: AnnData) -> pd.Index:
     """The ``var`` names that measure an area, refusing an object where none do.
 
-    ``qc_pass`` is an ``and`` over its checks, so one that could not run would weaken it silently.
-
     Raises:
         KeyError: No column in ``var`` names an area.
     """
@@ -121,16 +119,13 @@ def _area_features(adata: AnnData) -> pd.Index:
     return area
 
 
-def _area_outlier_flag(adata: AnnData, X: np.ndarray) -> np.ndarray:
+def _area_outlier_flag(adata: AnnData, X: np.ndarray, area: pd.Index) -> np.ndarray:
     """Cells whose area is more than :data:`AREA_Z_CUTOFF` robust SDs from the plate median.
 
     Every compartment that measured an area is scored within its own plate and the flags are OR-ed, so a cell is an outlier when any of its areas is.
     Scoring only the first matching column made the flag, and so ``qc_pass``, depend on the order of ``var``.
 
-    The area columns come from :func:`_area_features`, which :func:`calculate_qc_metrics` has already
-    called, so reaching here means at least one column names an area.
     """
-    area = _area_features(adata)
     if "Metadata_Plate" not in adata.obs:
         return np.zeros(adata.n_obs, dtype=bool)
     if len(area) > 1:

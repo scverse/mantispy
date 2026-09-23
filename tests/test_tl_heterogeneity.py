@@ -1,5 +1,7 @@
 """Cluster composition, cell cycle, subpopulation hits and local density."""
 
+import logging
+
 import anndata as ad
 import numpy as np
 import pandas as pd
@@ -32,8 +34,6 @@ def test_composition_rows_are_wells_and_sum_to_one(clustered):
 def test_a_cell_with_no_cluster_is_left_out_rather_than_made_into_one(clustered, caplog):
     """The label an unassigned cell contributed either crashed sorted(), on pandas 3, where NaN cannot be
     ordered against the cluster names, or became a cluster literally called "nan" on pandas 2."""
-    import logging
-
     clusters = clustered.obs["leiden"].astype(str)
     unassigned = np.zeros(clustered.n_obs, dtype=bool)
     unassigned[:5] = True
@@ -397,29 +397,19 @@ def test_a_well_with_no_assigned_cell_is_left_out(clustered):
 
     assert wells[0] not in set(composition.obs["Metadata_Well"])
     assert not np.isnan(np.asarray(composition.X)).any(), "the result stays mappable"
+    pytest.importorskip("copairs")  # tl.map below; copairs declares requires-python <3.13
     mt.tl.map(composition, mode="activity", null_size=50)
 
 
 def test_the_drop_is_reported_only_when_something_is_dropped(clustered, caplog):
     """report_drop ran before the no-cluster refusal, so an unclustered object was told its cells
     were 'left out of the fractions' immediately before being told there are no fractions."""
-    import logging
-
     clustered.obs["leiden"] = pd.Categorical([None] * clustered.n_obs)
     with caplog.at_level(logging.INFO, logger="mantispy"), pytest.raises(ValueError, match="no cell"):
         mt.tl.cluster_composition(clustered)
     assert not [record for record in caplog.records if "left out of the fractions" in record.getMessage()]
 
 
-def test_a_clustering_that_assigned_nothing_is_refused(clustered):
-    """labels == [] gave an (n_wells, 0) object, which io.validate rejects -- a tool returning
-    something validate will not accept is the defect this change set out to remove."""
-    clustered.obs["leiden"] = pd.Categorical([None] * clustered.n_obs)
-    with pytest.raises(ValueError, match="no cell"):
-        mt.tl.cluster_composition(clustered)
-
-
-@pytest.mark.filterwarnings("ignore:the controls occupy")
 def test_the_annotation_columns_that_carry_values_stay_categorical(clustered):
     """empty_annotation makes the text columns categorical; df[column] = value replaces the column
     rather than setting into it, so the three that carry values silently lost the dtype."""

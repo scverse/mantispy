@@ -472,8 +472,6 @@ def write(adata: ad.AnnData, path: str | Path) -> None:
         ValueError: The object does not satisfy the schema, with every failure :func:`~mantispy.io.validate` found in the message.
     """
     path = Path(path)
-    # Stamp the version so an unstamped object can be written, but leave var as the caller built it:
-    # a missing annotation column is something to report here, not to repair on the way out.
     _record(adata)
     validate(adata, raise_on_error=True)
     if path.suffix == ".zarr":
@@ -526,8 +524,6 @@ def stamp(adata: ad.AnnData, resolution: str | None = None, copy: bool = False) 
         )
 
     target = adata.copy() if copy else adata
-    # Before the stamp, not after: writing var materialises a view, which would discard a store
-    # written first and hand back an object that records nothing.
     if absent := [column for column in REQUIRED_VAR if column not in target.var]:
         empty = empty_annotation(target.var.index)
         target.var[absent] = empty[absent]

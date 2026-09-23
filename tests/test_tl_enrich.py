@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 import mantispy as mt
+from mantispy._core.features import empty_annotation, parse_feature_names
 from mantispy._core.schema import stamp
 
 
@@ -113,29 +114,28 @@ def test_ora_scores_the_extreme_features_not_the_ordinary_ones():
     assert float(explicit.obsm["score_ora"]["TOP"].iloc[0]) != float(scores["TOP"].iloc[0])
 
 
-def _unparsed(n=6):
-    """An object shaped like a tl.dose_trajectory result: the ten columns present, all but one empty."""
-    import anndata as ad
-
-    from mantispy._core.features import empty_annotation
-
-    var = empty_annotation(pd.Index([f"F{index}@0.50" for index in range(n)]))
-    var["feature"] = [f"F{index}" for index in range(n)]
-    adata = ad.AnnData(
-        np.random.default_rng(0).random((5, n)).astype(np.float32),
+def _object(var, n_obs=5):
+    """A small well-level object over a hand-made var."""
+    return ad.AnnData(
+        np.random.default_rng(0).random((n_obs, len(var))).astype(np.float32),
         obs=pd.DataFrame(
-            {"Metadata_Plate": "P0", "Metadata_Well": [f"A{index + 1:02d}" for index in range(5)]},
-            index=[str(index) for index in range(5)],
+            {"Metadata_Plate": "P0", "Metadata_Well": [f"A{index + 1:02d}" for index in range(n_obs)]},
+            index=[str(index) for index in range(n_obs)],
         ),
         var=var,
     )
-    return adata
+
+
+def _unparsed(n=6):
+    """The shape of a tl.dose_trajectory result: the ten columns present, all but one empty."""
+    var = empty_annotation(pd.Index([f"F{index}@0.50" for index in range(n)]))
+    var["feature"] = [f"F{index}" for index in range(n)]
+    return _object(var)
 
 
 def test_feature_sets_returns_an_empty_network_when_no_feature_is_fully_annotated():
-    """Not a raise: an object may legitimately have an annotation that names no family, and the
-    caller asked for the network, not for a verdict on the annotation. It crashed with
-    AttributeError: 'DataFrame' object has no attribute 'str' instead."""
+    """An object may legitimately have an annotation that names no family, and the caller asked for
+    the network, not for a verdict on the annotation."""
     network = mt.tl.feature_sets(_unparsed())
     assert list(network.columns) == ["source", "target", "weight"]
     assert network.empty
@@ -144,40 +144,17 @@ def test_feature_sets_returns_an_empty_network_when_no_feature_is_fully_annotate
 def test_feature_sets_survives_an_annotation_no_row_completes():
     """The all-empty column is not the only way in: two features can each fill a different half of
     `by`, so neither column is empty and still no row has both."""
-    import anndata as ad
-
-    from mantispy._core.features import empty_annotation
-
     var = empty_annotation(pd.Index(["f0", "f1"]))
     var["feature_group"] = pd.Categorical(["AreaShape", None])
     var["channel"] = pd.Categorical([None, "DNA"])
-    adata = ad.AnnData(
-        np.random.default_rng(0).random((4, 2)).astype(np.float32),
-        obs=pd.DataFrame(
-            {"Metadata_Plate": "P0", "Metadata_Well": [f"A{index + 1:02d}" for index in range(4)]},
-            index=[str(index) for index in range(4)],
-        ),
-        var=var,
-    )
-    assert mt.tl.feature_sets(adata, by=("feature_group", "channel")).empty
+    assert mt.tl.feature_sets(_object(var, n_obs=4), by=("feature_group", "channel")).empty
 
 
 def test_get_features_filters_a_column_that_is_legitimately_empty():
     """An AreaShape feature has no channel, and parse_feature_names correctly leaves it missing.
     Asking for a channel there matches nothing; it is not a broken annotation."""
-    import anndata as ad
-
-    from mantispy._core.features import parse_feature_names
-
     var = parse_feature_names(["Cells_AreaShape_Area", "Nuclei_AreaShape_Area"])
     assert var["channel"].isna().all(), "the parser leaves a geometry feature's channel missing"
-    adata = ad.AnnData(
-        np.random.default_rng(0).random((4, 2)).astype(np.float32),
-        obs=pd.DataFrame(
-            {"Metadata_Plate": "P0", "Metadata_Well": [f"A{index + 1:02d}" for index in range(4)]},
-            index=[str(index) for index in range(4)],
-        ),
-        var=var,
-    )
+    adata = _object(var, n_obs=4)
     assert mt.get.features(adata, channel="DNA") == []
     assert mt.get.features(adata, feature_group="AreaShape") == list(adata.var_names)
