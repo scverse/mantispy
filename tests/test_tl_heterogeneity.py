@@ -1,6 +1,7 @@
 """Cluster composition, cell cycle, subpopulation hits and local density."""
 
 import logging
+import warnings
 
 import anndata as ad
 import numpy as np
@@ -285,6 +286,65 @@ def test_wells_that_vary_around_one_composition_are_not_called_hits():
     called = int((test["qvalue"].to_numpy()[treated] < 0.05).sum())
     assert called <= 1, f"{called}/16 wells of the control composition called at q < 0.05"
     assert composition.uns["mantispy"]["composition_dispersion"] > 1.0, "the controls are overdispersed"
+
+
+def _null_wells(layout, n_controls):
+    """Every well drawn from one composition, no real hits: the first ``n_controls`` are the controls.
+
+    The rest carry a perturbation label but the same null composition, so any of them called at p < 0.05
+    is a false positive. This is the issue #89 reproduction as a well-level object.
+    """
+    rows = [
+        {
+            "Metadata_Plate": "P1",
+            "Metadata_Well": w,
+            "Metadata_Perturbation": "DMSO" if i < n_controls else "pert",
+            "Metadata_Control": i < n_controls,
+            "leiden": str(c),
+        }
+        for i, (w, clusters) in enumerate(layout.items())
+        for c, n in clusters.items()
+        for _ in range(n)
+    ]
+    obs = pd.DataFrame(rows, index=[str(i) for i in range(len(rows))])
+    adata = ad.AnnData(
+        X=np.zeros((len(rows), 4), dtype=np.float32),
+        obs=obs,
+        var=pd.DataFrame(index=[f"Cells_AreaShape_f{i}" for i in range(4)]),
+    )
+    stamp(adata, resolution="cell")
+    return adata
+
+
+def _null_plate_fpr(n_controls, trials=200):
+    """Fraction of pseudo-treatment wells called at p < 0.05 across ``trials`` pure-null plates."""
+    called = total = 0
+    for trial in range(trials):
+        rng = np.random.default_rng(trial)
+        shares = rng.dirichlet(np.full(4, 40.0), size=n_controls * 2)
+        layout = {
+            f"W{i:03d}": dict(enumerate(np.bincount(rng.choice(4, size=300, p=s), minlength=4)))
+            for i, s in enumerate(shares)
+        }
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            comp = mt.tl.cluster_composition(_null_wells(layout, n_controls))
+        p = comp.uns["mantispy"]["composition_test"]["pvalue"].to_numpy()
+        treated = ~comp.obs["Metadata_Control"].to_numpy(dtype=bool)
+        called += int((p[treated] < 0.05).sum())
+        total += int(treated.sum())
+    return called / total
+
+
+@pytest.mark.parametrize("n_controls", [8, 16, 32, 64])
+def test_a_null_plate_is_called_at_most_at_the_nominal_rate(n_controls):
+    """Issue #89: with every well drawn from one composition and no real hits, the pure-null false positive
+    rate ran above the nominal 0.05 and worse with fewer controls (0.138, 0.092, 0.070, 0.059 at 8, 16, 32,
+    64 controls). Two causes: the dispersion was estimated from control wells each scored against a pool that
+    included itself, which shrank their statistics and biased it low; and statistic / dispersion was referred
+    to chi-square, treating the estimated dispersion as known. Leave-one-out calibration and an F reference
+    each address one, and together bring the false positive rate to nominal for every control count."""
+    assert _null_plate_fpr(n_controls) <= 0.06
 
 
 def test_a_composition_test_without_the_controls_to_calibrate_it_warns():
