@@ -265,3 +265,23 @@ def test_qc_metrics_refuses_an_object_whose_var_names_no_area():
 
     with pytest.raises(KeyError, match="area"):
         mt.pp.calculate_qc_metrics(adata)
+
+
+def test_standardize_leaves_a_feature_whose_annotation_names_nothing_alone():
+    """empty_annotation marks every column is_feature so the schema is satisfied, but its other
+    columns are empty, and _canonical rebuilds the name from exactly those -- giving "". Every
+    feature of an embedding then renamed to the empty string and collided."""
+    import anndata as ad
+
+    from mantispy._core.features import empty_annotation
+
+    adata = ad.AnnData(
+        np.ones((2, 3), dtype=np.float32),
+        obs=pd.DataFrame({"Metadata_Plate": "P1", "Metadata_Well": ["A01", "A02"]}, index=["0", "1"]),
+        var=empty_annotation(pd.Index(["emb_0", "emb_1", "emb_2"])),
+    )
+
+    mt.pp.standardize_feature_names(adata)
+
+    assert list(adata.var_names) == ["emb_0", "emb_1", "emb_2"]
+    assert list(adata.var["original_name"]) == ["emb_0", "emb_1", "emb_2"]

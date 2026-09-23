@@ -266,3 +266,42 @@ def test_two_components_that_name_the_same_family_are_refused(annotated):
 
     with pytest.raises(ValueError, match="name the same family"):
         mt.tl.feature_signature(adata, key="d")
+
+
+def test_a_signature_over_an_annotation_that_names_nothing_is_refused(annotated):
+    """Every by column empty makes one family called "none | none | none", averaging every feature
+    in the object into a single column and reporting nothing about any of them."""
+    adata = annotated(n_features=20)
+    for column in ("feature_group", "channel", "object"):
+        adata.var[column] = pd.Categorical([None] * adata.n_vars)
+    mt.tl.differential_features(adata, block=None, key_added="d")
+
+    with pytest.raises(ValueError, match="name no family"):
+        mt.tl.feature_signature(adata, key="d")
+
+
+def test_a_by_column_that_is_empty_beside_a_populated_one_still_makes_families(annotated):
+    """The companion direction: only some components missing is ordinary -- a geometry feature has
+    no channel -- and must still give one family per populated combination."""
+    adata = annotated(n_features=20)
+    adata.var["channel"] = pd.Categorical([None] * adata.n_vars)
+    mt.tl.differential_features(adata, block=None, key_added="d")
+
+    signature = mt.tl.feature_signature(adata, key="d")
+    assert signature.n_vars > 1
+    assert all("none" in name for name in signature.var_names)
+
+
+def test_the_sentinel_and_a_genuine_gap_are_one_family(annotated):
+    """ "none" is this codebase's own spelling of a missing channel (pl/_features.py fills it in), so
+    a var that spells it out and one that leaves it missing name the same family. Comparing the raw
+    components rather than the names made that a clash and refused the object outright."""
+    adata = annotated(n_features=4)
+    adata.var["feature_group"] = ["Intensity"] * 4
+    adata.var["channel"] = pd.Categorical(["none", None, "none", None])
+    adata.var["object"] = ["Cells"] * 4
+    mt.tl.differential_features(adata, block=None, key_added="d")
+
+    signature = mt.tl.feature_signature(adata, key="d")
+    assert list(signature.var_names) == ["Intensity | none | Cells"]
+    assert signature.var["n_features"].tolist() == [4]

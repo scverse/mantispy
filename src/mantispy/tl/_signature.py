@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 from anndata import AnnData
 
-from mantispy._core.features import empty_annotation
+from mantispy._core.features import annotation
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy._core.schema import stamp
@@ -49,11 +49,11 @@ def feature_signature(
 
     Raises:
         KeyError: ``uns["mantispy"][key]`` is missing, that table has no ``statistic`` column, or ``var`` is missing one of the ``by`` columns.
-        ValueError: ``by`` names the same column more than once, which would give one family two copies of a component.
+        ValueError: ``by`` names the same column more than once, which would give one family two copies of a component; every ``by`` column is empty, so there is no family to name; or two different sets of values name the same family.
 
     Notes:
         Signed statistics are averaged, so a family that decreased stays distinct from one that increased.
-        On BBBC021, microtubule stabilizers score +2.2 on ``Intensity|CorrTub|Nuclei``, while destabilizers score +1.4 on ``Intensity|CorrActin|Nuclei`` with no tubulin signal; as the microtubules come apart the cells round up, which is the largest remaining change.
+        On BBBC021, microtubule stabilizers score +2.2 on ``Intensity | CorrTub | Nuclei``, while destabilizers score +1.4 on ``Intensity | CorrActin | Nuclei`` with no tubulin signal; as the microtubules come apart the cells round up, which is the largest remaining change.
     """
     store = adata.uns.get("mantispy", {})
     if key not in store:
@@ -70,49 +70,52 @@ def feature_signature(
         raise ValueError(f"by names the same column more than once: {list(by)}")
 
     components = var[list(by)]
+    if components.isna().all().all():
+        raise ValueError(
+            f"var's {list(by)} name no family: every one is empty, so every feature would join into "
+            "a single column averaging the whole object. mt.io.read_profiles writes the parsed "
+            "annotation; an object whose feature names carry no structure has no families to collapse."
+        )
     # Masked on the original frame rather than filled after astype: pandas 3 keeps a missing value
     # through astype(str) and pandas 2 turns it into the string "nan", which fillna cannot see.
     labels = components.astype(str).mask(components.isna(), "none")
-    family = labels.apply(SEPARATOR.join, axis=1)
-    # A component may contain the separator -- rohban2017's feature groups do -- so two different
-    # tuples can join to one name. They would be averaged into a single column and var would report
-    # whichever came first, which changes when var is reordered.
-    distinct = components.assign(__family__=family).drop_duplicates()["__family__"]
+    # str.cat, not a per-row apply: same bytes, and the apply is a Python loop over every feature.
+    family = labels.iloc[:, 0].str.cat(labels.iloc[:, 1:], sep=SEPARATOR) if len(by) > 1 else labels.iloc[:, 0]
+    # Compared on the names, not the raw components: a missing value and a literal "none" are the
+    # same family, and only a component that itself holds SEPARATOR can make two different names
+    # collide. Nothing the parser writes can -- it joins multi-channel values with a bare "|" --
+    # so this catches a var assembled by hand.
+    distinct = labels.assign(__family__=family).drop_duplicates()["__family__"]
     if distinct.duplicated().any():
         clash = sorted(set(distinct[distinct.duplicated(keep=False)]))[:3]
         raise ValueError(
-            f"different {list(by)} values name the same family: {clash}. A component holds the "
-            f"{SEPARATOR!r} that joins them, so the names are ambiguous and one family's columns would "
-            "be averaged with another's; group on columns that do not hold it, or rename those values"
+            f"different {list(by)} values name the same family: {clash}. A value holds the "
+            f"{SEPARATOR!r} that joins them, so one family's columns would be averaged with another's; "
+            "rename those values, or group on columns that do not hold it"
         )
     table = table.join(family.rename("__family__"), on="feature")
 
     wide = table.pivot_table(index="group", columns="__family__", values=statistic, aggfunc="mean", observed=True)
-    # Take the components from var rather than splitting the joined name, since a feature group or channel may
-    # contain the separator (rohban2017's do), and from `components` rather than `labels`, so that a by column
+    # Take the components from var rather than splitting the joined name, which a value holding the
+    # separator would break, and from `components` rather than `labels`, so that a by column
     # that is also a schema column keeps its own dtype and its true missing values instead of the strings and
     # the "none" sentinel that name the family.
     parts = components.assign(__family__=family).drop_duplicates("__family__").set_index("__family__")
     parts = parts.reindex(wide.columns)
     parts["n_features"] = family.value_counts().reindex(wide.columns)
 
-    # A family is not a CellProfiler measurement, so the schema's annotation columns are supplied empty
-    # rather than guessed at, and the columns that name the family are written over them by index.
-    annotation = empty_annotation(wide.columns.rename(None))
-    for column in by:
-        values = parts[column]
-        # Keep the dtype var held, except an object one: empty_annotation makes the text columns
-        # categorical so a family whose component is missing throughout still writes, and assigning
-        # over that would put the unwritable object dtype back.
-        annotation[column] = values.astype("category") if values.dtype == object else values
-    annotation["n_features"] = parts["n_features"]
+    var = annotation(
+        wide.columns.rename(None),
+        **{column: parts[column] for column in by},
+        n_features=parts["n_features"],
+    )
 
     signature = ad.AnnData(
         X=wide.to_numpy(dtype=np.float32),
         # rename, not pd.Index(..., name=None): None is pandas' "keep the name", so the pivot's key
         # rode into obs and onto the file's obs index.
         obs=pd.DataFrame(index=wide.index.astype(str).rename(None)),
-        var=annotation,
+        var=var,
     )
     signature.obs["Metadata_Perturbation"] = signature.obs_names.to_numpy()
     # Copy the other per-perturbation Metadata_ columns so the result can be scored.

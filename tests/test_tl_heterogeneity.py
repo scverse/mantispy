@@ -384,9 +384,10 @@ def test_the_cell_count_covers_every_cell_not_only_the_clustered_ones(clustered)
 
 
 @pytest.mark.filterwarnings("ignore:the controls occupy")
-def test_a_well_with_no_assigned_cell_has_no_composition(clustered):
-    """Zero in every cluster asserts the well was measured and found empty everywhere. It was not
-    measured at all, and a fraction that is unknown must not read as a fraction that is zero."""
+def test_a_well_with_no_assigned_cell_is_left_out(clustered):
+    """Zero in every cluster said the well was measured and found empty everywhere; NaN said it was
+    unknown, and tl.map refuses an object with missing values although the Returns clause promises
+    tl.map accepts it. A well with nothing to measure is dropped, like any other empty group."""
     clusters = clustered.obs["leiden"].astype(str)
     wells = clustered.obs["Metadata_Well"].to_numpy()
     blanked = wells == wells[0]
@@ -394,9 +395,20 @@ def test_a_well_with_no_assigned_cell_has_no_composition(clustered):
 
     composition = mt.tl.cluster_composition(clustered)
 
-    row = np.asarray(composition.X)[0]
-    assert np.isnan(row).all(), "an unmeasured well is unknown, not zero"
-    assert not np.isnan(np.asarray(composition.X)[1:]).any(), "every other well is unaffected"
+    assert wells[0] not in set(composition.obs["Metadata_Well"])
+    assert not np.isnan(np.asarray(composition.X)).any(), "the result stays mappable"
+    mt.tl.map(composition, mode="activity", null_size=50)
+
+
+def test_the_drop_is_reported_only_when_something_is_dropped(clustered, caplog):
+    """report_drop ran before the no-cluster refusal, so an unclustered object was told its cells
+    were 'left out of the fractions' immediately before being told there are no fractions."""
+    import logging
+
+    clustered.obs["leiden"] = pd.Categorical([None] * clustered.n_obs)
+    with caplog.at_level(logging.INFO, logger="mantispy"), pytest.raises(ValueError, match="no cell"):
+        mt.tl.cluster_composition(clustered)
+    assert not [record for record in caplog.records if "left out of the fractions" in record.getMessage()]
 
 
 def test_a_clustering_that_assigned_nothing_is_refused(clustered):

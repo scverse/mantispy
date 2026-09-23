@@ -14,7 +14,7 @@ from anndata import AnnData
 
 from mantispy._core._reduce import get_matrix, group_rows
 from mantispy._core._stats import MAD_TO_SIGMA, benjamini_hochberg
-from mantispy._core.features import empty_annotation
+from mantispy._core.features import annotation
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger, report_drop
 from mantispy._core.masks import held_out_reference, reference_mask
@@ -1032,7 +1032,7 @@ def dose_trajectory(
 
     Raises:
         KeyError: ``obs`` has no ``compound_key`` or no ``dose_key``.
-        ValueError: ``n_positions`` is below two, or fewer than two reference rows.
+        ValueError: ``n_positions`` is below two, spaces the window more finely than the position suffix can name, or there are fewer than two reference rows.
 
     Notes:
         The axis is relative, so position 0 means a different concentration for every compound. That is the
@@ -1046,6 +1046,14 @@ def dose_trajectory(
     """
     if n_positions < 2:
         raise ValueError(f"n_positions must be at least two, got {n_positions}")
+    # Checked here, not where the names are built: it depends only on n_positions, and the caller
+    # should not pay for the whole interpolation before being told the request cannot be named.
+    if len({f"{point:.{POSITION_DECIMALS}f}" for point in np.linspace(0.0, 1.0, n_positions)}) != n_positions:
+        raise ValueError(
+            f"n_positions={n_positions} spaces the window more finely than {POSITION_DECIMALS} decimals "
+            "can tell apart, so two positions would carry the same name and the object would have "
+            "duplicate var_names. Ask for fewer positions."
+        )
     obs = as_frame(adata.obs)
     _require_columns(obs, compound_key, dose_key)
     scale = _control_scale(adata, reference)
@@ -1089,24 +1097,16 @@ def dose_trajectory(
 
     names = scale.features(adata)
     # Position-major, to mirror the ravel of each compound's (n_positions, n_features) path above.
-    feature = np.tile(names, n_positions)
     position = np.repeat(grid, names.size)
     # A fixed width, not one chosen from the grid: choosing it per call named the endpoints every grid
     # shares "@0.00" at 101 positions and "@0.000" at 102, so no two runs of one screen lined up.
     suffixes = [f"@{point:.{POSITION_DECIMALS}f}" for point in grid]
-    if len(set(suffixes)) != grid.size:
-        raise ValueError(
-            f"n_positions={n_positions} spaces the window more finely than {POSITION_DECIMALS} decimals "
-            "can tell apart, so two positions would carry the same name and the object would have "
-            "duplicate var_names. Ask for fewer positions."
-        )
-    # Formatted once per position rather than once per column, and joined as arrays.
-    # A feature read at a relative position along a window is not a CellProfiler measurement of its own, so the
-    # schema's annotation columns are supplied empty, and the two that describe the column are set beside them.
-    var = empty_annotation(np.char.add(feature.astype(str), np.repeat(suffixes, names.size)))
-    # pd.Categorical: a bare assignment replaces the column and drops the dtype empty_annotation gives it.
-    var["feature"] = pd.Categorical(feature)
-    var["position"] = position
+    # names is cast once, before the tile, rather than the tiled copy of it; and the feature column
+    # is built from codes over that same vocabulary rather than re-hashing every tiled string.
+    index = np.char.add(np.tile(names.astype(str), n_positions), np.repeat(suffixes, names.size))
+    codes = np.tile(np.arange(names.size), n_positions)
+    var = annotation(index, position=position)
+    var["feature"] = pd.Categorical.from_codes(codes, categories=pd.Index(names).astype(str))
     result = ad.AnnData(
         X=np.array(paths, dtype=np.float32) if paths else np.empty((0, var.shape[0]), dtype=np.float32),
         obs=pd.DataFrame(records, columns=[compound_key, "n_doses", "window_low", "window_high"]).set_axis(

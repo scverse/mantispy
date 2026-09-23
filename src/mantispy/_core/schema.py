@@ -174,18 +174,22 @@ def stamp(adata: AnnData, resolution: str | None = None) -> None:
         ValueError: ``resolution`` is not one of :data:`RESOLUTIONS`.
 
     Notes:
-        This records what the object is; it does not make it valid. A tool that builds a new object
-        supplies its own annotation from :func:`~mantispy._core.features.empty_annotation` before
-        stamping, and :func:`~mantispy.io.stamp` supplies it for an object built elsewhere. Filling
-        here instead would repair an annotation a caller had damaged, and :func:`~mantispy.io.write`
-        would then have nothing left to report.
+        This records what the object is; it does not make it valid. A tool building a new object supplies
+        its own annotation from :func:`~mantispy._core.features.annotation`, and :func:`~mantispy.io.stamp`
+        supplies it for an object built elsewhere. Filling here would repair an annotation a caller had
+        damaged, leaving :func:`~mantispy.io.write` nothing to report.
     """
-    store = adata.uns.setdefault("mantispy", {})
-    store["schema_version"] = SCHEMA_VERSION
+    if resolution is not None and resolution not in RESOLUTIONS:
+        raise ValueError(f"resolution must be one of {RESOLUTIONS}, got {resolution!r}")
+
+    # A fresh dict assigned through __setitem__, not uns.setdefault: on a view, setdefault is
+    # dict's own, so it neither materialises the view nor writes anywhere the caller can see --
+    # and when the view has a parent it hands back the parent's inner dict, so the resolution
+    # went to the object the subset came from.
+    store = {**adata.uns.get("mantispy", {}), "schema_version": SCHEMA_VERSION}
     if resolution is not None:
-        if resolution not in RESOLUTIONS:
-            raise ValueError(f"resolution must be one of {RESOLUTIONS}, got {resolution!r}")
         store["resolution"] = resolution
+    adata.uns["mantispy"] = store
 
 
 def get_resolution(adata: AnnData) -> str:

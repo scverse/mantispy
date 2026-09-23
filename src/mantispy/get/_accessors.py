@@ -9,7 +9,7 @@ import pandas as pd
 from anndata import AnnData
 
 from mantispy._core._reduce import get_matrix
-from mantispy._core.features import canonical_channel, unparsed
+from mantispy._core.features import canonical_channel
 from mantispy._core.frames import as_frame
 from mantispy._core.masks import feature_mask, reference_mask
 
@@ -36,17 +36,8 @@ def features(
         Feature names, in ``var`` order.
 
     Raises:
-        KeyError: `key` names a column ``var`` does not have, or a column filtered on is absent or entirely empty.
+        KeyError: `key` names a column ``var`` does not have.
     """
-    filters = {"object": object, "feature_group": feature_group, "channel": channel}
-    # A column supplied empty is present, so filtering on it silently matched nothing.
-    if unusable := unparsed(as_frame(adata.var), [name for name, value in filters.items() if value is not None]):
-        raise KeyError(
-            f"var has no usable column(s) {unusable} to filter on; they are absent, or present with "
-            "nothing in them. mt.io.read_profiles writes the parsed annotation, and mt.io.stamp "
-            "supplies these columns empty for an object whose names carry no structure."
-        )
-
     mask = np.ones(adata.n_vars, dtype=bool)
     if object is not None:
         mask &= (adata.var["object"] == object).to_numpy()

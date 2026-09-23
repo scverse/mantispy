@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import numpy as np
+import pandas as pd
 from anndata import AnnData
 
 from mantispy._core._corr import CHUNK_BYTES
@@ -62,6 +63,10 @@ def calculate_qc_metrics(
     Raises:
         KeyError: If no column in ``var`` names an area, so ``qc_area_outlier`` cannot be scored and ``qc_pass`` would be an ``and`` over one check fewer than it claims.
     """
+    # First, before get_matrix densifies and before @inplace_or_copy's duplicate is touched:
+    # a call that is going to be rejected should not read the matrix or copy the object.
+    _area_features(adata)
+
     X = get_matrix(adata)
     missing = np.isnan(X)
     nan_fraction = missing.mean(axis=1)
@@ -95,17 +100,15 @@ def _border_flag(adata: AnnData, image_shape: tuple[int, int] | None, margin: in
     return (x < margin) | (y < margin) | (x > width - margin) | (y > height - margin)
 
 
-def _area_outlier_flag(adata: AnnData, X: np.ndarray) -> np.ndarray:
-    """Cells whose area is more than :data:`AREA_Z_CUTOFF` robust SDs from the plate median.
+def _area_features(adata: AnnData) -> pd.Index:
+    """The ``var`` names that measure an area, refusing an object where none do.
 
-    Every compartment that measured an area is scored within its own plate and the flags are OR-ed, so a cell is an outlier when any of its areas is.
-    Scoring only the first matching column made the flag, and so ``qc_pass``, depend on the order of ``var``.
+    ``qc_pass`` is an ``and`` over its checks, so one that could not run would weaken it silently.
 
-    Raises rather than returning an all-false flag when no column names an area, since ``qc_pass`` is
-    an ``and`` over the checks and a check that did not run would weaken it silently. Called before
-    :func:`calculate_qc_metrics` writes anything.
+    Raises:
+        KeyError: No column in ``var`` names an area.
     """
-    named = adata.var["feature"].astype(str).eq("Area") if "feature" in adata.var else slice(0, 0)
+    named = adata.var["feature"].astype(str).eq("Area") if "feature" in adata.var else []
     area = adata.var_names[named]
     if not len(area):
         raise KeyError(
@@ -115,6 +118,19 @@ def _area_outlier_flag(adata: AnnData, X: np.ndarray) -> np.ndarray:
             "names no area either. An object with no area measurement — an embedding, an "
             "Intensity-only export, or anything from tl.feature_signature — has no cell-level QC to run."
         )
+    return area
+
+
+def _area_outlier_flag(adata: AnnData, X: np.ndarray) -> np.ndarray:
+    """Cells whose area is more than :data:`AREA_Z_CUTOFF` robust SDs from the plate median.
+
+    Every compartment that measured an area is scored within its own plate and the flags are OR-ed, so a cell is an outlier when any of its areas is.
+    Scoring only the first matching column made the flag, and so ``qc_pass``, depend on the order of ``var``.
+
+    The area columns come from :func:`_area_features`, which :func:`calculate_qc_metrics` has already
+    called, so reaching here means at least one column names an area.
+    """
+    area = _area_features(adata)
     if "Metadata_Plate" not in adata.obs:
         return np.zeros(adata.n_obs, dtype=bool)
     if len(area) > 1:

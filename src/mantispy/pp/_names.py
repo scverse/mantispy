@@ -48,8 +48,11 @@ def standardize_feature_names(adata: AnnData, target: str = "cp_measure", copy: 
     if "original_name" not in adata.var:
         adata.var["original_name"] = adata.var_names.to_numpy()
 
+    # `or name`: empty_annotation marks a column is_feature so the schema is satisfied while leaving
+    # every descriptive column empty, and _canonical builds the name out of exactly those. A feature
+    # whose annotation names nothing keeps the name it came with rather than becoming "".
     renamed = [
-        _canonical(row) if row["is_feature"] else name
+        (_canonical(row) or name) if row["is_feature"] else name
         for name, row in zip(adata.var_names, as_frame(adata.var).to_dict("records"), strict=True)
     ]
     values, counts = np.unique(renamed, return_counts=True)

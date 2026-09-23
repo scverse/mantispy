@@ -22,6 +22,7 @@ import re
 from collections import defaultdict
 from collections.abc import Sequence
 from importlib.resources import files
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -276,24 +277,6 @@ def parse_feature_names(names: Sequence[str], channels: Sequence[str] | None = N
     return parsed
 
 
-def unparsed(var: pd.DataFrame, columns: Sequence[str]) -> list[str]:
-    """Of ``columns``, those ``var`` does not usably carry: absent, or present with nothing in them.
-
-    :func:`empty_annotation` supplies the schema's annotation columns empty to every object whose
-    feature names carry no CellProfiler structure, so presence alone says only that the object has
-    an annotation table, not that anything parsed its names. A caller that gates on ``in var`` reads
-    an empty column as a populated one and either matches nothing or fails somewhere less obvious.
-
-    Args:
-        var: The annotation table to inspect.
-        columns: Column names to check.
-
-    Returns:
-        The unusable names, in the order given.
-    """
-    return [column for column in columns if column not in var or var[column].isna().all()]
-
-
 def empty_annotation(names: Sequence[str] | pd.Index) -> pd.DataFrame:
     """The annotation table for features whose names carry no CellProfiler structure.
 
@@ -314,6 +297,32 @@ def empty_annotation(names: Sequence[str] | pd.Index) -> pd.DataFrame:
         empty[column] = np.full(len(index), np.nan)
     empty["is_feature"] = True
     return empty
+
+
+def annotation(names: Sequence[str] | pd.Index, **known: Any) -> pd.DataFrame:
+    """:func:`empty_annotation` with the columns the caller does know filled in.
+
+    Every tool that returns features which are not CellProfiler measurements builds its ``var`` this
+    way. Assigning a value into one of the text columns would replace it and drop the ``category``
+    dtype :func:`empty_annotation` gives it, so anything landing in one is wrapped here instead.
+
+    Args:
+        names: The feature names, used as the index.
+        known: Column name to value, for the columns the caller can fill. A column outside
+            :data:`COLUMNS` is added as given, which is how ``position`` and ``n_features`` are written.
+
+    Returns:
+        The annotation frame, the named columns filled and the rest empty.
+    """
+    frame = empty_annotation(names)
+    for column, values in known.items():
+        if column in _TEXT_COLUMNS:
+            # A scalar names every feature the same, and pd.Categorical takes only a sequence.
+            spread = [values] * len(frame) if isinstance(values, str) else values
+            frame[column] = pd.Categorical(spread)
+        else:
+            frame[column] = values
+    return frame
 
 
 def load_blocklist(name: str = "default") -> list[str]:

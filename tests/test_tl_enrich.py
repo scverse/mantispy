@@ -132,14 +132,52 @@ def _unparsed(n=6):
     return adata
 
 
-def test_feature_sets_names_a_column_that_was_never_parsed():
-    """A column supplied empty is present, so the `column in var` gate passed it through and the
-    join then failed with AttributeError: 'DataFrame' object has no attribute 'str'."""
-    with pytest.raises(KeyError, match="feature_group"):
-        mt.tl.feature_sets(_unparsed())
+def test_feature_sets_returns_an_empty_network_when_no_feature_is_fully_annotated():
+    """Not a raise: an object may legitimately have an annotation that names no family, and the
+    caller asked for the network, not for a verdict on the annotation. It crashed with
+    AttributeError: 'DataFrame' object has no attribute 'str' instead."""
+    network = mt.tl.feature_sets(_unparsed())
+    assert list(network.columns) == ["source", "target", "weight"]
+    assert network.empty
 
 
-def test_get_features_refuses_to_filter_on_a_column_that_was_never_parsed():
-    """Returning [] is a selection that matches nothing and flows on silently."""
-    with pytest.raises(KeyError, match="feature_group"):
-        mt.get.features(_unparsed(), feature_group="Intensity")
+def test_feature_sets_survives_an_annotation_no_row_completes():
+    """The all-empty column is not the only way in: two features can each fill a different half of
+    `by`, so neither column is empty and still no row has both."""
+    import anndata as ad
+
+    from mantispy._core.features import empty_annotation
+
+    var = empty_annotation(pd.Index(["f0", "f1"]))
+    var["feature_group"] = pd.Categorical(["AreaShape", None])
+    var["channel"] = pd.Categorical([None, "DNA"])
+    adata = ad.AnnData(
+        np.random.default_rng(0).random((4, 2)).astype(np.float32),
+        obs=pd.DataFrame(
+            {"Metadata_Plate": "P0", "Metadata_Well": [f"A{index + 1:02d}" for index in range(4)]},
+            index=[str(index) for index in range(4)],
+        ),
+        var=var,
+    )
+    assert mt.tl.feature_sets(adata, by=("feature_group", "channel")).empty
+
+
+def test_get_features_filters_a_column_that_is_legitimately_empty():
+    """An AreaShape feature has no channel, and parse_feature_names correctly leaves it missing.
+    Asking for a channel there matches nothing; it is not a broken annotation."""
+    import anndata as ad
+
+    from mantispy._core.features import parse_feature_names
+
+    var = parse_feature_names(["Cells_AreaShape_Area", "Nuclei_AreaShape_Area"])
+    assert var["channel"].isna().all(), "the parser leaves a geometry feature's channel missing"
+    adata = ad.AnnData(
+        np.random.default_rng(0).random((4, 2)).astype(np.float32),
+        obs=pd.DataFrame(
+            {"Metadata_Plate": "P0", "Metadata_Well": [f"A{index + 1:02d}" for index in range(4)]},
+            index=[str(index) for index in range(4)],
+        ),
+        var=var,
+    )
+    assert mt.get.features(adata, channel="DNA") == []
+    assert mt.get.features(adata, feature_group="AreaShape") == list(adata.var_names)

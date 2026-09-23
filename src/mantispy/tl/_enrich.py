@@ -18,7 +18,6 @@ import pandas as pd
 from anndata import AnnData
 
 from mantispy._core._reduce import get_matrix
-from mantispy._core.features import unparsed
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy._core.mutation import inplace_or_copy
@@ -47,22 +46,22 @@ def feature_sets(adata: AnnData, by: str | Sequence[str] = "feature_group") -> p
     columns = [requested] if isinstance(requested, str) else list(requested)
 
     var = as_frame(adata.var)
-    # Unusable, not merely absent: a column supplied empty is present, and reading it as an
-    # annotation gives an empty join rather than the error the caller needs.
-    missing = unparsed(var, columns)
+    missing = [column for column in columns if column not in var]
     if missing:
-        raise KeyError(
-            f"var has no usable column(s) {missing}; they are absent, or present with nothing in "
-            f"them. available: {sorted(var.columns)}"
-        )
+        raise KeyError(f"var has no column(s) {missing}; available: {sorted(var.columns)}")
 
     known = var[columns].notna().all(axis=1).to_numpy()
+    if not known.any():
+        # No feature carries every component, so no family can be named. An empty frame, not a
+        # raise: an annotation that names nothing is a fact about the object, and .agg over no rows
+        # returns a frame rather than a Series and fails on the line below.
+        return pd.DataFrame({"source": [], "target": [], "weight": []})
+
     labels = var.loc[known, columns].astype(str).agg("|".join, axis=1)
-    usable = ~labels.str.contains("nan").to_numpy()
     return pd.DataFrame(
         {
-            "source": labels[usable].to_numpy(),
-            "target": var.index[known][usable].to_numpy(),
+            "source": labels.to_numpy(),
+            "target": var.index[known].to_numpy(),
             "weight": 1.0,
         }
     )

@@ -6,6 +6,7 @@ import pytest
 import mantispy as mt
 from mantispy._core.features import canonical_channel
 from mantispy._core.schema import SCHEMA_VERSION
+from mantispy._core.schema import stamp as _record
 from mantispy.io._profiles import from_dataframe
 
 
@@ -586,3 +587,53 @@ def test_stamp_leaves_an_annotation_that_is_already_there_alone():
     for column in parsed.columns:
         # .equals, not ==: a column the parser left empty holds NaN, which is not equal to itself.
         assert obj.var[column].equals(var[column]), f"{column} kept what the parser found"
+
+
+def test_stamping_a_view_whose_annotation_is_complete_keeps_the_stamp():
+    """The companion to the test above, and the branch it does not reach: with nothing absent there
+    is no var write, so nothing materialised the view and the store went to a DictView that discards
+    it. uns.setdefault bypasses the overridden __setitem__, so the fill was doing the work."""
+    from mantispy._core.features import parse_feature_names
+
+    obj = ad.AnnData(
+        np.ones((4, 2), dtype=np.float32),
+        obs=pd.DataFrame(
+            {"Metadata_Plate": "P1", "Metadata_Well": ["A01", "A02", "A03", "A04"]},
+            index=[str(index) for index in range(4)],
+        ),
+        var=parse_feature_names(["Cells_AreaShape_Area", "Nuclei_Intensity_MeanIntensity_DNA"]),
+    )
+    view = obj[[0, 1]]
+    assert view.is_view
+
+    mt.io.stamp(view, resolution="well")
+
+    assert view.uns["mantispy"]["resolution"] == "well"
+    assert mt.io.validate(view).ok, mt.io.validate(view).errors
+
+
+def test_stamping_a_view_does_not_restamp_the_object_it_came_from():
+    """setdefault hands back the parent's own inner dict, so writing the resolution into it wrote
+    through to the parent -- the opposite of the promise that re-stamping a subset does not demote it."""
+    obj = ad.AnnData(
+        np.ones((4, 2), dtype=np.float32),
+        obs=pd.DataFrame(
+            {"Metadata_Plate": "P1", "Metadata_Well": ["A01", "A02", "A03", "A04"]},
+            index=[str(index) for index in range(4)],
+        ),
+    )
+    obj.var_names = ["e0", "e1"]
+    mt.io.stamp(obj, resolution="cell")
+
+    mt.io.stamp(obj[[0, 1]], resolution="perturbation")
+
+    assert obj.uns["mantispy"]["resolution"] == "cell"
+
+
+def test_a_resolution_that_is_refused_leaves_the_store_as_it_was():
+    """The version was written before the resolution was checked, so a rejected call still changed uns."""
+    obj = ad.AnnData(np.ones((2, 1), dtype=np.float32))
+    obj.var_names = ["e0"]
+    with pytest.raises(ValueError, match="resolution must be one of"):
+        _record(obj, resolution="galaxy")
+    assert "mantispy" not in obj.uns
