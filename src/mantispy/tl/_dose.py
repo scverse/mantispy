@@ -14,6 +14,7 @@ from anndata import AnnData
 
 from mantispy._core._reduce import get_matrix, group_rows
 from mantispy._core._stats import MAD_TO_SIGMA, benjamini_hochberg
+from mantispy._core.features import annotation
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger, report_drop
 from mantispy._core.masks import held_out_reference, reference_mask
@@ -990,6 +991,10 @@ def dose_direction(
     return None
 
 
+#: Decimals in a trajectory column's position suffix. Fixed, so one position keeps one name.
+POSITION_DECIMALS = 4
+
+
 def dose_trajectory(
     adata: AnnData,
     compound_key: str = "Metadata_Compound",
@@ -1022,12 +1027,12 @@ def dose_trajectory(
 
     Returns:
         A new object of compounds by features-and-positions, at ``"perturbation"`` resolution.
-        ``var`` carries ``feature`` and ``position``; ``obs`` carries ``n_doses`` and the window's ends.
+        ``var`` carries ``feature`` and ``position``, beside the schema's remaining annotation columns, left empty because a resampled path is not a measurement they describe; ``obs`` carries ``n_doses`` and the window's ends.
         Compounds whose window holds fewer than two concentrations are left out, since a single point is not a path.
 
     Raises:
         KeyError: ``obs`` has no ``compound_key`` or no ``dose_key``.
-        ValueError: ``n_positions`` is below two, or fewer than two reference rows.
+        ValueError: ``n_positions`` is below two, spaces the window more finely than the position suffix can name, or there are fewer than two reference rows.
 
     Notes:
         The axis is relative, so position 0 means a different concentration for every compound. That is the
@@ -1084,8 +1089,18 @@ def dose_trajectory(
 
     names = scale.features(adata)
     # Position-major, to mirror the ravel of each compound's (n_positions, n_features) path above.
-    var = pd.DataFrame({"feature": np.tile(names, n_positions), "position": np.repeat(grid, names.size)})
-    var.index = var["feature"] + "@" + var["position"].map("{:.2f}".format)
+    position = np.repeat(grid, names.size)
+    # A fixed width, not one chosen from the grid: choosing it per call named the endpoints every grid
+    # shares "@0.00" at 101 positions and "@0.000" at 102, so no two runs of one screen lined up.
+    labelled = pd.Index(names).astype(str)
+    index = pd.Index(np.concatenate([labelled + f"@{point:.{POSITION_DECIMALS}f}" for point in grid]))
+    if index.has_duplicates:
+        raise ValueError(
+            f"n_positions={n_positions} spaces the window more finely than {POSITION_DECIMALS} decimals "
+            "can tell apart, so two positions carry the same name and the object would have duplicate "
+            "var_names. Ask for fewer positions."
+        )
+    var = annotation(index, feature=np.tile(labelled, n_positions), position=position)
     result = ad.AnnData(
         X=np.array(paths, dtype=np.float32) if paths else np.empty((0, var.shape[0]), dtype=np.float32),
         obs=pd.DataFrame(records, columns=[compound_key, "n_doses", "window_low", "window_high"]).set_axis(

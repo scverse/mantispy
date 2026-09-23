@@ -42,7 +42,7 @@ def _empirical_null(controls: AnnData, size: int, n_draws: int, seed: int, block
         obs = as_frame(controls.obs).copy()
         obs["Metadata_Perturbation"] = labels
         obs["Metadata_Control"] = labels == "__reference__"
-        scratch = ad.AnnData(X=values.copy(), obs=obs, var=pd.DataFrame(index=controls.var_names))
+        scratch = ad.AnnData(X=values.copy(), obs=obs, var=as_frame(controls.var).copy())
         stamp(scratch, resolution="well")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -72,7 +72,7 @@ def _empirical_hit_rate(
         obs = as_frame(controls.obs).copy()
         obs["Metadata_Perturbation"] = labels
         obs["Metadata_Control"] = labels == "__reference__"
-        scratch = ad.AnnData(X=values.copy(), obs=obs, var=pd.DataFrame(index=controls.var_names))
+        scratch = ad.AnnData(X=values.copy(), obs=obs, var=as_frame(controls.var).copy())
         stamp(scratch, resolution="well")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")

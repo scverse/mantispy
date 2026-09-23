@@ -17,8 +17,9 @@ from anndata import AnnData
 from mantispy._core._distance import pairwise_sqeuclidean
 from mantispy._core._reduce import get_matrix, group_codes, group_offsets, representation
 from mantispy._core._stats import benjamini_hochberg, split_reference
+from mantispy._core.features import annotation
 from mantispy._core.frames import as_frame
-from mantispy._core.logging import get_logger
+from mantispy._core.logging import get_logger, report_drop
 from mantispy._core.masks import reference_mask
 from mantispy._core.mutation import inplace_or_copy
 from mantispy._core.schema import stamp
@@ -30,6 +31,23 @@ PHASES = ("G1", "S", "G2M")
 #: Control wells needed before the spread between them estimates the dispersion the composition test divides by.
 #: Below this the estimate is itself noise, and the test stays anti-conservative.
 _DISPERSION_MIN_CONTROLS = 8
+
+
+def _cluster_labels(obs: pd.DataFrame, cluster_key: str) -> tuple[pd.Series, np.ndarray]:
+    """The cluster column as strings, and which cells the clustering actually assigned.
+
+    Read through here rather than ``astype(str)`` directly: a missing value becomes a cluster
+    literally called ``"nan"`` on pandas 2, and makes ``sorted`` raise on pandas 3.
+
+    Args:
+        obs: The observation frame.
+        cluster_key: Column holding the cluster of each cell.
+
+    Returns:
+        The stringified column, and a boolean mask of the assigned cells.
+    """
+    assigned = obs[cluster_key].notna().to_numpy()
+    return obs[cluster_key].astype(str), assigned
 
 
 def cluster_composition(
@@ -48,12 +66,14 @@ def cluster_composition(
 
     Returns:
         A new object with wells as rows and clusters as columns, holding the fraction of each well's cells in each cluster.
+        A cell the clustering left unassigned is left out of the fractions, and a group in which no cell was assigned is left out altogether.
         It is a well-level mantispy object, so :func:`~mantispy.tl.map`, :func:`~mantispy.pp.normalize` and the plots accept it.
         ``uns["mantispy"]["composition_test"]`` holds a chi-square test of each well against the pooled control composition, with ``group``, ``statistic``, ``pvalue`` and ``qvalue``.
         ``uns["mantispy"]["composition_dispersion"]`` holds the factor the controls' own spread contributed, described below.
 
     Raises:
         KeyError: ``obs`` has no column ``cluster_key``.
+        ValueError: No cell carries a cluster, so there is no composition to take.
 
     Notes:
         A well with few cells has a noisy composition.
@@ -74,6 +94,11 @@ def cluster_composition(
         Clusters no control cell reached are left out of the test, since the controls give them no expected frequency.
         Their fractions stay in ``X``, and :func:`subpopulation_hits` compares within a cluster.
 
+        ``Metadata_CellCount`` is every cell of the well, since :func:`~mantispy.tl.cytotoxicity` reads it
+        to tell a hit from cell loss. The fractions are over the cells the clustering assigned, counted in
+        ``Metadata_ClusteredCellCount``; the two differ when the clustering left cells out, so recovering
+        the counts from ``X`` needs the latter.
+
         The test holds one row per well, in the order of the rows of the returned object.
         A well with no cells in the clusters the controls occupy gets ``NaN``.
         So does every well when the controls occupy fewer than two clusters, since a chi-square over a single category has no degrees of freedom.
@@ -84,22 +109,45 @@ def cluster_composition(
 
     columns = [by] if isinstance(by, str) else list(by)
     codes, keys = group_codes(adata, columns)
-    clusters = as_frame(adata.obs)[cluster_key].astype(str)
-    labels = sorted(clusters.unique())
+    named, assigned = _cluster_labels(as_frame(adata.obs), cluster_key)
+    labels = sorted(named[assigned].unique())
+    if not labels:
+        raise ValueError(
+            f"no cell carries a {cluster_key!r}, so there is no cluster to take a composition over. "
+            "Run the clustering first, or name the column that holds it with cluster_key="
+        )
+    report_drop(
+        "cell(s)",
+        int((~assigned).sum()),
+        int(assigned.size),
+        remedy=f"they have no {cluster_key!r}, so they are left out of the fractions",
+    )
 
     counts = np.zeros((len(keys), len(labels)))
-    membership = pd.Categorical(clusters, categories=labels).codes
-    np.add.at(counts, (codes, membership), 1)
-    totals = counts.sum(axis=1, keepdims=True)
-    fractions = np.divide(counts, totals, out=np.zeros_like(counts), where=totals > 0)
+    # membership needs no mask of its own: an unassigned cell is outside the categories already.
+    np.add.at(counts, (codes[assigned], pd.Categorical(named, categories=labels).codes[assigned]), 1)
 
-    obs = _group_obs(adata, columns, keys, codes, {"Metadata_CellCount": counts.sum(axis=1).astype(int)})
+    # A group none of whose cells were assigned has no composition. Zero everywhere would say it was
+    # measured and found empty, and NaN would make the result something tl.map refuses although the
+    # Returns clause promises tl.map takes it, so the group is dropped like any other empty one.
+    totals = counts.sum(axis=1)
+    measured = totals > 0
+    report_drop(
+        "group(s)",
+        int((~measured).sum()),
+        int(measured.size),
+        remedy=f"no cell in them carries a {cluster_key!r}, so they have no composition",
+    )
+    counts, totals = counts[measured], totals[measured]
+    fractions = counts / totals[:, None]
+
+    # Every cell of the group, not only the clustered ones: Metadata_CellCount is tl.cytotoxicity's
+    # default count_key, and a group that merely lost cluster labels must not read as cell loss.
+    cell_count = np.bincount(codes, minlength=len(keys)).astype(int)
+    obs = _group_obs(adata, columns, keys, codes, {"Metadata_CellCount": cell_count})[measured]
+    obs["Metadata_ClusteredCellCount"] = totals.astype(int)
     obs.index = pd.Index([str(row) for row in range(len(obs))])
-    var = pd.DataFrame(index=pd.Index(labels))
-    var["object"], var["feature_group"], var["feature"] = "Cluster", "Composition", labels
-    for column in ("channel", "scale", "angle", "gray_levels", "radial_bin", "params"):
-        var[column] = np.nan
-    var["is_feature"] = True
+    var = annotation(pd.Index(labels), object="Cluster", feature_group="Composition", feature=labels)
 
     result = ad.AnnData(X=fractions.astype(np.float32), obs=obs, var=var)
     stamp(result, resolution="well")
@@ -332,7 +380,8 @@ def subpopulation_hits(
     values = representation(adata, use_rep)
     obs = as_frame(adata.obs)
     is_control = reference_mask(adata, reference)
-    clusters = obs[cluster_key].astype(str).to_numpy()
+    named, assigned = _cluster_labels(obs, cluster_key)
+    clusters = named.where(assigned).to_numpy()
     groups = obs[groupby].astype(str).to_numpy()
 
     generator = np.random.default_rng(seed)
