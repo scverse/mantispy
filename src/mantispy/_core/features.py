@@ -276,6 +276,24 @@ def parse_feature_names(names: Sequence[str], channels: Sequence[str] | None = N
     return parsed
 
 
+def unparsed(var: pd.DataFrame, columns: Sequence[str]) -> list[str]:
+    """Of ``columns``, those ``var`` does not usably carry: absent, or present with nothing in them.
+
+    :func:`empty_annotation` supplies the schema's annotation columns empty to every object whose
+    feature names carry no CellProfiler structure, so presence alone says only that the object has
+    an annotation table, not that anything parsed its names. A caller that gates on ``in var`` reads
+    an empty column as a populated one and either matches nothing or fails somewhere less obvious.
+
+    Args:
+        var: The annotation table to inspect.
+        columns: Column names to check.
+
+    Returns:
+        The unusable names, in the order given.
+    """
+    return [column for column in columns if column not in var or var[column].isna().all()]
+
+
 def empty_annotation(names: Sequence[str] | pd.Index) -> pd.DataFrame:
     """The annotation table for features whose names carry no CellProfiler structure.
 

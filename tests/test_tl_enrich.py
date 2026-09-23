@@ -111,3 +111,35 @@ def test_ora_scores_the_extreme_features_not_the_ordinary_ones():
     explicit = adata.copy()
     mt.tl.enrich(explicit, net=net, method="ora", n_bg=100, tmin=5, n_up=5)
     assert float(explicit.obsm["score_ora"]["TOP"].iloc[0]) != float(scores["TOP"].iloc[0])
+
+
+def _unparsed(n=6):
+    """An object shaped like a tl.dose_trajectory result: the ten columns present, all but one empty."""
+    import anndata as ad
+
+    from mantispy._core.features import empty_annotation
+
+    var = empty_annotation(pd.Index([f"F{index}@0.50" for index in range(n)]))
+    var["feature"] = [f"F{index}" for index in range(n)]
+    adata = ad.AnnData(
+        np.random.default_rng(0).random((5, n)).astype(np.float32),
+        obs=pd.DataFrame(
+            {"Metadata_Plate": "P0", "Metadata_Well": [f"A{index + 1:02d}" for index in range(5)]},
+            index=[str(index) for index in range(5)],
+        ),
+        var=var,
+    )
+    return adata
+
+
+def test_feature_sets_names_a_column_that_was_never_parsed():
+    """A column supplied empty is present, so the `column in var` gate passed it through and the
+    join then failed with AttributeError: 'DataFrame' object has no attribute 'str'."""
+    with pytest.raises(KeyError, match="feature_group"):
+        mt.tl.feature_sets(_unparsed())
+
+
+def test_get_features_refuses_to_filter_on_a_column_that_was_never_parsed():
+    """Returning [] is a selection that matches nothing and flows on silently."""
+    with pytest.raises(KeyError, match="feature_group"):
+        mt.get.features(_unparsed(), feature_group="Intensity")

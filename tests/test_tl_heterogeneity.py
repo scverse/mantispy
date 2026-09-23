@@ -160,6 +160,9 @@ def test_round_trip(clustered, tmp_path):
     assert set(loaded.var["feature_group"]) == {"Composition"}
     for column in ("channel", "radial_bin", "params"):
         assert loaded.var[column].isna().all(), column
+        # The dtype is the point of the comment above, so assert it: the float-NaN construction this
+        # replaced round-trips identically and would otherwise pass.
+        assert isinstance(loaded.var[column].dtype, pd.CategoricalDtype), column
 
 
 def _noise_cells(
@@ -362,3 +365,52 @@ def test_many_unreached_clusters_do_not_break_the_chi_square():
     assert np.isfinite(test["statistic"].to_numpy()).all()
     # Ten cells in cluster 0 against an even control split over clusters 0 and 1.
     assert float(test.loc["P1/B01", "statistic"]) == pytest.approx(10.0)
+
+
+@pytest.mark.filterwarnings("ignore:the controls occupy")
+def test_the_cell_count_covers_every_cell_not_only_the_clustered_ones(clustered):
+    """Metadata_CellCount is tl.cytotoxicity's default count_key, and validate warns that without it
+    cytotoxicity cannot separate a hit from cell loss. Summing the fractions' counts made it the number
+    of *clustered* cells, so a well the clustering merely left cells out of read as cell loss."""
+    clusters = clustered.obs["leiden"].astype(str)
+    unassigned = np.zeros(clustered.n_obs, dtype=bool)
+    unassigned[::10] = True
+    clustered.obs["leiden"] = pd.Categorical(np.where(unassigned, None, clusters))
+
+    composition = mt.tl.cluster_composition(clustered)
+
+    actual = clustered.obs.groupby(["Metadata_Plate", "Metadata_Well"], observed=True).size()
+    assert composition.obs["Metadata_CellCount"].tolist() == actual.tolist()
+
+
+@pytest.mark.filterwarnings("ignore:the controls occupy")
+def test_a_well_with_no_assigned_cell_has_no_composition(clustered):
+    """Zero in every cluster asserts the well was measured and found empty everywhere. It was not
+    measured at all, and a fraction that is unknown must not read as a fraction that is zero."""
+    clusters = clustered.obs["leiden"].astype(str)
+    wells = clustered.obs["Metadata_Well"].to_numpy()
+    blanked = wells == wells[0]
+    clustered.obs["leiden"] = pd.Categorical(np.where(blanked, None, clusters))
+
+    composition = mt.tl.cluster_composition(clustered)
+
+    row = np.asarray(composition.X)[0]
+    assert np.isnan(row).all(), "an unmeasured well is unknown, not zero"
+    assert not np.isnan(np.asarray(composition.X)[1:]).any(), "every other well is unaffected"
+
+
+def test_a_clustering_that_assigned_nothing_is_refused(clustered):
+    """labels == [] gave an (n_wells, 0) object, which io.validate rejects -- a tool returning
+    something validate will not accept is the defect this change set out to remove."""
+    clustered.obs["leiden"] = pd.Categorical([None] * clustered.n_obs)
+    with pytest.raises(ValueError, match="no cell"):
+        mt.tl.cluster_composition(clustered)
+
+
+@pytest.mark.filterwarnings("ignore:the controls occupy")
+def test_the_annotation_columns_that_carry_values_stay_categorical(clustered):
+    """empty_annotation makes the text columns categorical; df[column] = value replaces the column
+    rather than setting into it, so the three that carry values silently lost the dtype."""
+    composition = mt.tl.cluster_composition(clustered)
+    for column in ("object", "feature_group", "feature"):
+        assert isinstance(composition.var[column].dtype, pd.CategoricalDtype), column

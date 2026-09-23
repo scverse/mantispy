@@ -24,6 +24,9 @@ from mantispy._core.schema import stamp
 #: Default ``var`` columns that define a family; see the module docstring for its BBBC021 score.
 DEFAULT_BY = ("feature_group", "channel", "object")
 
+#: What joins a family's components into its name.
+SEPARATOR = " | "
+
 
 def feature_signature(
     adata: AnnData,
@@ -63,12 +66,25 @@ def feature_signature(
     missing = [column for column in by if column not in var.columns]
     if missing:
         raise KeyError(f"var is missing the column(s) that name a feature family: {missing}")
-    if len(set(by)) != len(list(by)):
+    if pd.Index(by).has_duplicates:
         raise ValueError(f"by names the same column more than once: {list(by)}")
 
     components = var[list(by)]
-    labels = components.astype(str).fillna("none")
-    family = labels.apply(lambda row: " | ".join(row), axis=1)
+    # Masked on the original frame rather than filled after astype: pandas 3 keeps a missing value
+    # through astype(str) and pandas 2 turns it into the string "nan", which fillna cannot see.
+    labels = components.astype(str).mask(components.isna(), "none")
+    family = labels.apply(SEPARATOR.join, axis=1)
+    # A component may contain the separator -- rohban2017's feature groups do -- so two different
+    # tuples can join to one name. They would be averaged into a single column and var would report
+    # whichever came first, which changes when var is reordered.
+    distinct = components.assign(__family__=family).drop_duplicates()["__family__"]
+    if distinct.duplicated().any():
+        clash = sorted(set(distinct[distinct.duplicated(keep=False)]))[:3]
+        raise ValueError(
+            f"different {list(by)} values name the same family: {clash}. A component holds the "
+            f"{SEPARATOR!r} that joins them, so the names are ambiguous and one family's columns would "
+            "be averaged with another's; group on columns that do not hold it, or rename those values"
+        )
     table = table.join(family.rename("__family__"), on="feature")
 
     wide = table.pivot_table(index="group", columns="__family__", values=statistic, aggfunc="mean", observed=True)

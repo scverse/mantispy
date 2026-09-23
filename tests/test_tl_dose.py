@@ -510,9 +510,9 @@ def test_a_close_grid_does_not_name_two_positions_the_same(phenotypes):
     assert paths.n_vars == 150 * (phenotypes.n_vars - 1)
     assert mt.io.validate(paths).ok
 
-    # The familiar two-decimal names are unchanged wherever two decimals already told the grid apart.
+    # The width does not depend on the grid, so a coarse run names its first position identically.
     assert list(mt.tl.dose_trajectory(phenotypes, n_positions=3).var_names[:1]) == [
-        f"{paths.var['feature'].iloc[0]}@0.00"
+        f"{paths.var['feature'].iloc[0]}@0.0000"
     ]
 
 
@@ -554,3 +554,17 @@ def test_viability_is_read_against_each_plate_not_the_whole_screen(phenotypes):
 
     assert (table["phase"] != "cytotoxic").all(), "a ten-fold difference between plates is not cell loss"
     assert table["viability"].between(0.8, 1.2).all()
+
+
+def test_a_position_is_named_the_same_whatever_the_grid_holds(phenotypes):
+    """The suffix width was chosen from the grid, so the endpoints shared by every grid -- 0.0 and
+    1.0 -- were named @0.00 at 101 positions and @0.000 at 102, and no two runs of one screen lined
+    up. The width no longer depends on how many positions were asked for."""
+    narrow = mt.tl.dose_trajectory(phenotypes, n_positions=101)
+    wide = mt.tl.dose_trajectory(phenotypes, n_positions=102)
+
+    def endpoint_names(paths):
+        at_zero = np.asarray(paths.var["position"]) == 0.0
+        return {name.split("@", 1)[1] for name in paths.var_names[at_zero]}
+
+    assert endpoint_names(narrow) == endpoint_names(wide)

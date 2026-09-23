@@ -5,7 +5,6 @@ from __future__ import annotations
 import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
-from itertools import count
 from math import lgamma, log, pi
 
 import anndata as ad
@@ -992,6 +991,10 @@ def dose_direction(
     return None
 
 
+#: Decimals in a trajectory column's position suffix. Fixed, so one position keeps one name.
+POSITION_DECIMALS = 4
+
+
 def dose_trajectory(
     adata: AnnData,
     compound_key: str = "Metadata_Compound",
@@ -1088,15 +1091,21 @@ def dose_trajectory(
     # Position-major, to mirror the ravel of each compound's (n_positions, n_features) path above.
     feature = np.tile(names, n_positions)
     position = np.repeat(grid, names.size)
-    # The fewest decimals that still tell the grid's points apart, never fewer than two. Two covers every grid
-    # up to 101 positions, so the familiar "@0.00"/"@0.50"/"@1.00" is unchanged wherever it was already unique;
-    # a closer grid widens rather than naming several positions identically, which would give the object
-    # duplicate var_names that neither validate nor the writer objects to.
-    decimals = next(width for width in count(2) if len({f"{point:.{width}f}" for point in grid}) == grid.size)
+    # A fixed width, not one chosen from the grid: choosing it per call named the endpoints every grid
+    # shares "@0.00" at 101 positions and "@0.000" at 102, so no two runs of one screen lined up.
+    suffixes = [f"@{point:.{POSITION_DECIMALS}f}" for point in grid]
+    if len(set(suffixes)) != grid.size:
+        raise ValueError(
+            f"n_positions={n_positions} spaces the window more finely than {POSITION_DECIMALS} decimals "
+            "can tell apart, so two positions would carry the same name and the object would have "
+            "duplicate var_names. Ask for fewer positions."
+        )
+    # Formatted once per position rather than once per column, and joined as arrays.
     # A feature read at a relative position along a window is not a CellProfiler measurement of its own, so the
     # schema's annotation columns are supplied empty, and the two that describe the column are set beside them.
-    var = empty_annotation([f"{name}@{point:.{decimals}f}" for name, point in zip(feature, position, strict=True)])
-    var["feature"] = feature
+    var = empty_annotation(np.char.add(feature.astype(str), np.repeat(suffixes, names.size)))
+    # pd.Categorical: a bare assignment replaces the column and drops the dtype empty_annotation gives it.
+    var["feature"] = pd.Categorical(feature)
     var["position"] = position
     result = ad.AnnData(
         X=np.array(paths, dtype=np.float32) if paths else np.empty((0, var.shape[0]), dtype=np.float32),

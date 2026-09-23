@@ -252,3 +252,17 @@ def test_the_pivot_key_does_not_name_the_obs_index(annotated, tmp_path):
     path = tmp_path / "signature.h5ad"
     mt.io.write(signature, path)
     assert mt.io.read(path).obs.index.name is None
+
+
+def test_two_components_that_name_the_same_family_are_refused(annotated):
+    """The separator can appear inside a component -- rohban2017's feature groups do -- so
+    ('A | B', 'C') and ('A', 'B | C') join to one name. They were averaged into a single column and
+    var reported whichever tuple came first, which flips when var is reordered."""
+    adata = annotated(n_features=4)
+    adata.var["feature_group"] = ["A | B", "A", "A | B", "A"]
+    adata.var["channel"] = ["C", "B | C", "C", "B | C"]
+    adata.var["object"] = ["Cells"] * 4
+    mt.tl.differential_features(adata, block=None, key_added="d")
+
+    with pytest.raises(ValueError, match="name the same family"):
+        mt.tl.feature_signature(adata, key="d")

@@ -92,26 +92,43 @@ def cluster_composition(
     # names and raises on pandas 3, while on pandas 2 astype(str) first turned it into a cluster literally
     # called "nan". The same drop is owed to subpopulation_hits, which still reads its labels this way.
     assigned = clusters.notna().to_numpy()
-    labels = sorted(clusters[assigned].astype(str).unique())
+    named = clusters.astype(str)
+    labels = sorted(named[assigned].unique())
     report_drop(
         "cell(s)",
         int((~assigned).sum()),
         int(assigned.size),
         remedy=f"they have no {cluster_key!r}, so they are left out of the fractions",
     )
+    if not labels:
+        raise ValueError(
+            f"no cell carries a {cluster_key!r}, so there is no cluster to take a composition over. "
+            "Run the clustering first, or name the column that holds it with cluster_key="
+        )
 
     counts = np.zeros((len(keys), len(labels)))
-    membership = pd.Categorical(clusters.astype(str).where(assigned), categories=labels).codes
+    # An unassigned cell stringifies to a name no label matches, so its code is already -1 and the
+    # mask below drops it; there is nothing left for a `.where` to do.
+    membership = pd.Categorical(named, categories=labels).codes
     np.add.at(counts, (codes[assigned], membership[assigned]), 1)
     totals = counts.sum(axis=1, keepdims=True)
-    fractions = np.divide(counts, totals, out=np.zeros_like(counts), where=totals > 0)
+    # A well none of whose cells were assigned was not measured, so its composition is unknown.
+    # Zero in every cluster would say it was measured and found empty everywhere.
+    fractions = np.divide(counts, totals, out=np.full_like(counts, np.nan), where=totals > 0)
 
-    obs = _group_obs(adata, columns, keys, codes, {"Metadata_CellCount": counts.sum(axis=1).astype(int)})
+    # Every cell in the well, not only the clustered ones: Metadata_CellCount is tl.cytotoxicity's
+    # default count_key, and a well that merely lost cluster labels must not read as cell loss.
+    cell_count = np.bincount(codes, minlength=len(keys)).astype(int)
+    obs = _group_obs(adata, columns, keys, codes, {"Metadata_CellCount": cell_count})
     obs.index = pd.Index([str(row) for row in range(len(obs))])
     # A cluster fraction is not a CellProfiler measurement, so the schema's annotation columns come
     # from the same helper every such object uses, and the three that mean something here are set.
     var = empty_annotation(pd.Index(labels))
-    var["object"], var["feature_group"], var["feature"] = "Cluster", "Composition", labels
+    # pd.Categorical, not the bare value: df[column] = value replaces the column, which would drop
+    # the category dtype empty_annotation supplies these columns in.
+    var["object"] = pd.Categorical(["Cluster"] * len(labels))
+    var["feature_group"] = pd.Categorical(["Composition"] * len(labels))
+    var["feature"] = pd.Categorical(labels)
 
     result = ad.AnnData(X=fractions.astype(np.float32), obs=obs, var=var)
     stamp(result, resolution="well")
