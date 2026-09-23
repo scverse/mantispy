@@ -30,6 +30,34 @@ def test_default_method_is_median(profiles):
     assert not np.allclose(default, np.asarray(mt.tl.consensus(profiles, method="modz").X))
 
 
+def test_default_is_robust_to_an_outlier_replicate(profiles):
+    """The default must recover the clean signature better than modz when one replicate is an outlier.
+
+    A constant added to every feature of a row leaves its Spearman rank profile unchanged, so
+    modz cannot downweight it and its weighted mean is dragged toward the outlier, while the
+    median default ignores it. If the package default silently reverts to modz this fails.
+    """
+    rows = np.flatnonzero((profiles.obs["Metadata_Perturbation"] == "pert00").to_numpy())
+    clean_rows, outlier_row = rows[:-1], rows[-1]
+
+    corrupted = profiles.copy()
+    values = corrupted.X.copy()
+    values[outlier_row] += 50.0  # a strong outlier well, Spearman-invariant so modz keeps it
+    corrupted.X = values
+
+    clean_consensus = np.asarray(mt.tl.consensus(profiles[clean_rows].copy(), min_replicates=1).X)[0]
+
+    def group_signature(result):
+        return np.asarray(result.X)[list(result.obs["Metadata_Perturbation"]).index("pert00")]
+
+    default = group_signature(mt.tl.consensus(corrupted))
+    modz = group_signature(mt.tl.consensus(corrupted, method="modz"))
+
+    default_distance = np.linalg.norm(default - clean_consensus)
+    modz_distance = np.linalg.norm(modz - clean_consensus)
+    assert default_distance < modz_distance, (default_distance, modz_distance)
+
+
 def test_modz_is_dragged_far_less_than_a_mean_by_one_bad_replicate(profiles):
     """modz is a weighted mean, so it is compared with the unweighted mean. A median is
     more robust still (see the tl.consensus docstring) and would not show what the

@@ -113,8 +113,7 @@ def consensus(
 
         median is the default, matching pycytominer, which aggregates by median unless told otherwise.
         modz is a weighted mean: with one outlying replicate it drifts about forty times less than the unweighted mean, but it does not beat a median.
-        On BBBC021, not-same-compound MOA retrieval was 0.777 with ``method="median"`` and 0.660 with modz.
-        Compare both methods on your own data.
+        median is at least as robust as modz for consensus signatures, so compare both on your own data.
 
         Normalize before taking a consensus, and first drop the features ``pp.normalize`` flags in ``var["degenerate_scale"]``.
         A feature that is constant among the controls is divided by epsilon, and a weighted mean carries the resulting values of order 1e17 into the signature, where a median would discard them.
