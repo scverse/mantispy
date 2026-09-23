@@ -258,7 +258,7 @@ def _composition_test(composition: AnnData, counts: np.ndarray, reference: str |
     # is ~chi-square on that many degrees of freedom), so the denominator df is calibration.size * dof, and as
     # the controls multiply the F reference approaches the chi-square one. With dispersion =
     # mean(control chi-square) / dof, F = statistic / (dof * dispersion) = (statistic / dispersion) / dof.
-    residual_df = calibration.size * dof
+    residual_df = int(calibration.size) * dof
     pvalues = (
         f.sf(statistics / (dof * dispersion), dof, residual_df)
         if np.isfinite(dispersion)
