@@ -81,7 +81,7 @@ def modz_weights(
 def consensus(
     adata: AnnData,
     by: str = "Metadata_Perturbation",
-    method: str = "modz",
+    method: str = "median",
     correlation: str = "spearman",
     min_replicates: int = 2,
     min_weight: float = 0.01,
@@ -92,7 +92,7 @@ def consensus(
     Args:
         adata: Profiles to summarize, normally well level.
         by: Column defining a perturbation.
-        method: ``"modz"`` weights replicates by their agreement, so a single bad replicate moves the signature far less than it would a plain mean. ``"median"`` is the unweighted alternative, identical to ``tl.aggregate`` by the same column.
+        method: ``"median"`` (the default, matching pycytominer and identical to ``tl.aggregate`` by the same column) or ``"modz"``, which weights replicates by their agreement so a single bad replicate moves the signature far less than a plain mean would.
         correlation: How replicate agreement is measured: ``"spearman"`` (pycytominer's default, and insensitive to a few extreme features) or ``"pearson"``.
         min_replicates: Groups with fewer replicates are dropped.
         min_weight: Floor on a replicate's weight. A group whose replicates all land on the floor becomes an unweighted mean.
@@ -111,10 +111,9 @@ def consensus(
         Zero would be an extreme value among ranks, and two replicates sharing a gap would look alike.
         The signature itself is a weighted sum, so a NaN feature stays NaN.
 
-        modz is a weighted mean.
-        With one outlying replicate it drifts about forty times less than the unweighted mean, but it does not beat a median.
+        median is the default, matching pycytominer, which aggregates by median unless told otherwise.
+        modz is a weighted mean: with one outlying replicate it drifts about forty times less than the unweighted mean, but it does not beat a median.
         On BBBC021, not-same-compound MOA retrieval was 0.777 with ``method="median"`` and 0.660 with modz.
-        It is the default because it matches pycytominer and is the usual definition of a consensus signature.
         Compare both methods on your own data.
 
         Normalize before taking a consensus, and first drop the features ``pp.normalize`` flags in ``var["degenerate_scale"]``.

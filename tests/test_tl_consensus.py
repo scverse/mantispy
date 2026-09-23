@@ -23,6 +23,13 @@ def test_consensus_has_one_row_per_perturbation(profiles):
     assert bool(result.obs.loc[result.obs["Metadata_Perturbation"] == "DMSO", "Metadata_Control"].iloc[0])
 
 
+def test_default_method_is_median(profiles):
+    """pycytominer aggregates by median by default; the default here must be median, not modz."""
+    default = np.asarray(mt.tl.consensus(profiles).X)
+    np.testing.assert_array_equal(default, np.asarray(mt.tl.consensus(profiles, method="median").X))
+    assert not np.allclose(default, np.asarray(mt.tl.consensus(profiles, method="modz").X))
+
+
 def test_modz_is_dragged_far_less_than_a_mean_by_one_bad_replicate(profiles):
     """modz is a weighted mean, so it is compared with the unweighted mean. A median is
     more robust still (see the tl.consensus docstring) and would not show what the
@@ -39,12 +46,12 @@ def test_modz_is_dragged_far_less_than_a_mean_by_one_bad_replicate(profiles):
     mean = np.abs(np.asarray(corrupted.X, dtype=float)[rows].mean(axis=0) - reference.X[position]).mean()
     assert modz < mean / 10, (modz, mean)
 
-    weights = mt.tl.consensus(corrupted).uns["mantispy"]["consensus_weights"]
+    weights = mt.tl.consensus(corrupted, method="modz").uns["mantispy"]["consensus_weights"]
     assert weights["weight"].to_numpy()[rows[0]] < 0.01
 
 
 def test_weights_are_recorded_and_normalised(profiles):
-    result = mt.tl.consensus(profiles)
+    result = mt.tl.consensus(profiles, method="modz")
     weights = result.uns["mantispy"]["consensus_weights"]
     assert len(weights) == profiles.n_obs
     np.testing.assert_allclose(weights.groupby("group")["weight"].sum(), 1.0, atol=1e-3)
