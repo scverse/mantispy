@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning][].
 
 ### Changed
 
+- `mantispy.tl`: `consensus` now defaults to `method="median"` (was `modz`) — it matches pycytominer and is more robust; breaking change
 - `mantispy.tl`: `aggregate` and every other grouped reduction of a backed object take each group's rows from one stable ordering, rather than scanning the group codes once per group. The scan was two full-length passes per group, so its cost was set by the group count: reducing 1,000,000 cells to 50,000 wells spent 21 s on index arithmetic before a single row was read, against 0.03 s now when the rows arrive grouped, as they do from a plate-ordered file, or 0.14 s when they are shuffled
 - `mantispy`: a backed read whose rows are already in increasing order, which is what every grouped path asks for, goes to h5py as it stands instead of being sorted and then gathered back into the order it was already in. That gather was a full-size copy of the block just read, 720 MB at JUMP well scale. Rows that form a run with no gaps, which is every group of a file stored in the grouping's own order and every row under `by=None`, are read as one block rather than selected point by point: 0.022 ms against 0.168 ms for a 200-row well on an uncompressed 20,000 x 200 file, and the same 7x at 10,000 rows
 - `mantispy`: `reduce_grouped` rejects a `mask` that does not hold one entry per row with one message on both the backed and the in-memory path, where each previously raised a different error from inside numpy
