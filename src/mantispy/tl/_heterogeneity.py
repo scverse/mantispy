@@ -86,10 +86,14 @@ def cluster_composition(
         floored at one. Without that correction, wells drawn from a single composition with mild jitter were called
         at q = 9e-10, 10 of 20 of them.
 
-        The correction is only as good as the dispersion estimate. With 16 control wells the false positive rate ran
-        near 0.10 against a nominal 0.05 in simulation, and with 32 it ran near 0.06; below
-        ``_DISPERSION_MIN_CONTROLS`` wells the function warns. Power falls accordingly: a composition shift of a few
-        percentage points is not separable from well-to-well variation, and reporting it as significant was the bug.
+        The dispersion is estimated leave-one-out — each control well is scored against the pooled composition of
+        the *other* controls, never one that includes itself — and the scaled statistic is referred to an F
+        distribution rather than chi-square, so the uncertainty in that estimate widens the tail (issue #89).
+        Without either, the pure-null false positive rate ran above nominal and worse with fewer controls
+        (0.138, 0.092, 0.070, 0.059 at 8, 16, 32, 64 control wells against a nominal 0.05); with both it sits at
+        or below nominal. Below ``_DISPERSION_MIN_CONTROLS`` wells the estimate is too noisy to trust and the
+        function warns. Power falls accordingly: a composition shift of a few percentage points is not separable
+        from well-to-well variation, and reporting it as significant was the bug.
 
         Clusters no control cell reached are left out of the test, since the controls give them no expected frequency.
         Their fractions stay in ``X``, and :func:`subpopulation_hits` compares within a cluster.
@@ -159,7 +163,7 @@ def cluster_composition(
 
 def _composition_test(composition: AnnData, counts: np.ndarray, reference: str | None) -> tuple[pd.DataFrame, float]:
     """Chi-square each well's cluster counts against the pooled control composition, at the scale the controls vary on."""
-    from scipy.stats import chi2, chisquare
+    from scipy.stats import chisquare, f
 
     empty = pd.DataFrame(columns=["group", "statistic", "pvalue", "qvalue"])
     if reference is None:
@@ -202,6 +206,11 @@ def _composition_test(composition: AnnData, counts: np.ndarray, reference: str |
         else composition.obs_names.astype(str).to_numpy()
     )
 
+    dof = max(int(reached.sum()) - 1, 1)
+
+    # The reported statistic scores every well against the full pooled control composition. A treated well is
+    # not in that pool, so its statistic is a clean draw; a control well is, but the reported value is only
+    # informational and the calibration below scores the controls leave-one-out instead.
     statistics = np.full(composition.n_obs, np.nan)
     for row in range(composition.n_obs):
         observed = counts[row][reached]
@@ -210,25 +219,51 @@ def _composition_test(composition: AnnData, counts: np.ndarray, reference: str |
         if comparable and observed.sum() >= 1:
             statistics[row] = chisquare(observed, share * observed.sum()).statistic
 
-    # Chi-square asks whether a well's cells are a multinomial draw from the control composition.
-    # Wells also differ from one another, so the counts are overdispersed and the test is anti-conservative:
-    # on wells drawn from one composition with mild jitter it called 10 of 20 at q < 0.05, down to q = 9e-10.
-    # The controls measure that extra spread, and dividing by it is the usual quasi-likelihood correction.
-    dof = max(int(reached.sum()) - 1, 1)
-    control_statistics = statistics[is_control]
-    control_statistics = control_statistics[np.isfinite(control_statistics)]
+    # Chi-square asks whether a well's cells are a multinomial draw from the control composition. Wells also
+    # differ from one another, so the counts are overdispersed and the raw test is anti-conservative: on wells
+    # drawn from one composition with mild jitter it called 10 of 20 at q < 0.05, down to q = 9e-10. The
+    # controls measure that extra spread, and dividing by it is the usual quasi-likelihood correction.
+    #
+    # A control well scored against a pool that includes itself pulls that pool toward its own counts, shrinking
+    # its chi-square and biasing the dispersion low, the more so with fewer controls (issue #89). Each control
+    # well's calibration statistic is therefore leave-one-out: scored against the pooled composition of the
+    # *other* controls, so it is an honest draw from the null rather than a well compared with part of itself.
+    control_rows = np.flatnonzero(is_control)
+    calibration = np.full(control_rows.size, np.nan)
+    if comparable:
+        for position, control_row in enumerate(control_rows):
+            observed = counts[control_row][reached]
+            others = pooled[reached] - counts[control_row][reached]
+            # A cluster only this control reached leaves the others no expected frequency there; skip the well.
+            if observed.sum() >= 1 and others.min() > 0:
+                calibration[position] = chisquare(observed, others / others.sum() * observed.sum()).statistic
+    calibration = calibration[np.isfinite(calibration)]
+
     # Below one the controls are tighter than multinomial; scaling down would only invent hits.
-    dispersion = max(1.0, float(np.mean(control_statistics) / dof)) if control_statistics.size else np.nan
-    if comparable and control_statistics.size < _DISPERSION_MIN_CONTROLS:
+    dispersion = max(1.0, float(np.mean(calibration) / dof)) if calibration.size else np.nan
+    if comparable and calibration.size < _DISPERSION_MIN_CONTROLS:
         warnings.warn(
-            f"the dispersion the composition test calibrates against comes from {control_statistics.size} control "
+            f"the dispersion the composition test calibrates against comes from {calibration.size} control "
             f"well(s), too few to estimate it; p-values are anti-conservative by however much the wells vary. "
             f"Use at least {_DISPERSION_MIN_CONTROLS}, or read the statistic as a ranking rather than a test.",
             UserWarning,
             stacklevel=3,
         )
 
-    pvalues = chi2.sf(statistics / dispersion, dof) if np.isfinite(dispersion) else np.full(len(statistics), np.nan)
+    # The dispersion is estimated, not known, so referring statistic / dispersion to chi-square treats an
+    # uncertain denominator as certain and keeps the tail too thin (the second half of issue #89). A
+    # quasi-likelihood F-test accounts for that estimation: statistic / dof is the numerator mean square with
+    # `dof` numerator degrees of freedom, and the dispersion is the denominator mean square. Each of the
+    # `calibration.size` finite control statistics contributes ~dof to it (sum(control chi-square) / dispersion
+    # is ~chi-square on that many degrees of freedom), so the denominator df is calibration.size * dof, and as
+    # the controls multiply the F reference approaches the chi-square one. With dispersion =
+    # mean(control chi-square) / dof, F = statistic / (dof * dispersion) = (statistic / dispersion) / dof.
+    residual_df = int(calibration.size) * dof
+    pvalues = (
+        f.sf(statistics / (dof * dispersion), dof, residual_df)
+        if np.isfinite(dispersion)
+        else np.full(len(statistics), np.nan)
+    )
     table = pd.DataFrame(
         {"group": names.astype(str), "statistic": statistics, "pvalue": np.where(np.isnan(statistics), np.nan, pvalues)}
     )

@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning][].
 
 ### Fixed
 
+- `mantispy.tl`: `cluster_composition` p-values are now calibrated — the overdispersion is estimated leave-one-out and the scaled statistic is referred to an F distribution, so the pure-null false positive rate no longer exceeds the nominal level (it ran to 0.14 at 8 control wells) (#89)
 - `mantispy`: a sparse matrix on disk can be read whole. anndata's `CSRDataset` and `CSCDataset` have no `__array__`, so every read that did not name rows raised `setting an array element with a sequence`, `pp.calculate_qc_metrics` on a backed sparse object among them
 - `mantispy.io`: an `ExportToSpreadsheet` directory takes its channels from the features it measured, so a run whose images are named `OrigDNA` or `IllumDNA` no longer leaves every feature without a channel
 - `mantispy.io`: CellProfiler 4's `AreaShape_Center_X/Y` and bounding-box corners are read as where an object sits rather than as features, and the centroid goes to `Metadata_Center_X/Y`; nine of the packaged datasets carried them in their profiles
