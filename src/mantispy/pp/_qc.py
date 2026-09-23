@@ -60,7 +60,7 @@ def calculate_qc_metrics(
         ``None``, or the modified copy. Writes the ``obs`` columns ``qc_n_nan_features``, ``qc_nan_fraction``, ``qc_is_border``, ``qc_area_outlier`` and ``qc_pass``, and the ``var`` columns ``qc_n_nan``, ``qc_variance`` and ``qc_n_unique``.
 
     Raises:
-        KeyError: If ``var``'s ``feature`` column is missing or entirely empty, which ``qc_area_outlier`` needs to find the area features, and which the schema requires. An object that only went through :func:`~mantispy._core.schema.stamp` carries the column with nothing in it, which is no more usable than its absence.
+        KeyError: If ``var``'s ``feature`` column is missing or entirely empty, which ``qc_area_outlier`` needs to find the area features, and which the schema requires. An object that only went through :func:`~mantispy.io.stamp` carries the column with nothing in it, which is no more usable than its absence.
     """
     if "feature" not in adata.var or adata.var["feature"].isna().all():
         # An all-false flag for a check that did not run makes qc_pass a weaker statement than
