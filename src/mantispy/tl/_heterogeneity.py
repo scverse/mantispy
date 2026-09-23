@@ -19,7 +19,7 @@ from mantispy._core._reduce import get_matrix, group_codes, group_offsets, repre
 from mantispy._core._stats import benjamini_hochberg, split_reference
 from mantispy._core.features import empty_annotation
 from mantispy._core.frames import as_frame
-from mantispy._core.logging import get_logger
+from mantispy._core.logging import get_logger, report_drop
 from mantispy._core.masks import reference_mask
 from mantispy._core.mutation import inplace_or_copy
 from mantispy._core.schema import stamp
@@ -49,6 +49,7 @@ def cluster_composition(
 
     Returns:
         A new object with wells as rows and clusters as columns, holding the fraction of each well's cells in each cluster.
+        A cell the clustering left unassigned is left out of both the fraction and the count, since it belongs to no cluster.
         It is a well-level mantispy object, so :func:`~mantispy.tl.map`, :func:`~mantispy.pp.normalize` and the plots accept it.
         ``uns["mantispy"]["composition_test"]`` holds a chi-square test of each well against the pooled control composition, with ``group``, ``statistic``, ``pvalue`` and ``qvalue``.
         ``uns["mantispy"]["composition_dispersion"]`` holds the factor the controls' own spread contributed, described below.
@@ -92,13 +93,12 @@ def cluster_composition(
     # called "nan". The same drop is owed to subpopulation_hits, which still reads its labels this way.
     assigned = clusters.notna().to_numpy()
     labels = sorted(clusters[assigned].astype(str).unique())
-    if not assigned.all():
-        get_logger().warning(
-            "cluster_composition: %d of %d cells have no %r and are left out of the fractions",
-            int((~assigned).sum()),
-            assigned.size,
-            cluster_key,
-        )
+    report_drop(
+        "cell(s)",
+        int((~assigned).sum()),
+        int(assigned.size),
+        remedy=f"they have no {cluster_key!r}, so they are left out of the fractions",
+    )
 
     counts = np.zeros((len(keys), len(labels)))
     membership = pd.Categorical(clusters.astype(str).where(assigned), categories=labels).codes

@@ -244,7 +244,7 @@ def test_qc_metrics_refuses_a_var_table_without_a_feature_column():
 def test_qc_metrics_refuses_an_object_whose_var_names_no_area():
     """The guard asked whether the feature column was populated, not whether it named an area.
     A genuinely parsed Intensity-and-Texture export passes that guard, and _area_outlier_flag
-    then returns an all-false flag -- the silently weakened qc_pass the guard exists to stop."""
+    then returns an all-false flag — the silently weakened qc_pass the guard exists to stop."""
     import anndata as ad
 
     from mantispy._core.features import parse_feature_names

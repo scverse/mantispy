@@ -502,7 +502,7 @@ def test_a_trajectory_is_an_object_io_accepts(tmp_path, phenotypes):
 
 def test_a_close_grid_does_not_name_two_positions_the_same(phenotypes):
     """The suffix carried two decimals, so past 101 positions several of them formatted identically and the
-    object got duplicate var_names -- which neither validate nor the writer objects to, and which makes a
+    object got duplicate var_names — which neither validate nor the writer objects to, and which makes a
     per-column lookup silently return more than one column."""
     mt.tl.dose_direction(phenotypes)
     paths = mt.tl.dose_trajectory(phenotypes, n_positions=150)

@@ -229,7 +229,7 @@ def test_the_heatmap_reads_an_infinity_as_missing():
 def test_a_by_column_that_is_entirely_missing_still_writes(annotated, tmp_path):
     """empty_annotation makes the text columns categorical so an entirely missing one survives an
     h5ad round trip; assigning the raw var column over it put the object dtype back, and the
-    signature validated but could not be saved -- the defect this whole change set out to fix."""
+    signature validated but could not be saved — the defect this whole change set out to fix."""
     adata = annotated(n_features=40)
     adata.var["channel"] = pd.Series([None] * adata.n_vars, dtype=object).values
     mt.tl.differential_features(adata, block=None, key_added="d")
@@ -241,7 +241,7 @@ def test_a_by_column_that_is_entirely_missing_still_writes(annotated, tmp_path):
 
 
 def test_the_pivot_key_does_not_name_the_obs_index(annotated, tmp_path):
-    """pd.Index(index, name=None) keeps the name it had -- None is pandas' 'leave it alone'. var was
+    """pd.Index(index, name=None) keeps the name it had — None is pandas' 'leave it alone'. var was
     cleared with rename(None); obs was not, so every signature on disk carried the pivot's key."""
     adata = annotated(n_features=40)
     mt.tl.differential_features(adata, block=None, key_added="d")

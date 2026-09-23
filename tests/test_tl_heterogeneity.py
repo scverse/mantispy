@@ -1,7 +1,5 @@
 """Cluster composition, cell cycle, subpopulation hits and local density."""
 
-import warnings
-
 import anndata as ad
 import numpy as np
 import pandas as pd
@@ -30,6 +28,7 @@ def test_composition_rows_are_wells_and_sum_to_one(clustered):
     assert mt.io.validate(composition).ok, mt.io.validate(composition).errors
 
 
+@pytest.mark.filterwarnings("ignore:the controls occupy")
 def test_a_cell_with_no_cluster_is_left_out_rather_than_made_into_one(clustered, caplog):
     """The label an unassigned cell contributed either crashed sorted(), on pandas 3, where NaN cannot be
     ordered against the cluster names, or became a cluster literally called "nan" on pandas 2."""
@@ -40,10 +39,12 @@ def test_a_cell_with_no_cluster_is_left_out_rather_than_made_into_one(clustered,
     unassigned[:5] = True
     clustered.obs["leiden"] = pd.Categorical(np.where(unassigned, None, clusters))
 
-    with caplog.at_level(logging.WARNING, logger="mantispy"), warnings.catch_warnings():
-        warnings.simplefilter("ignore")
+    # info, not warning: report_drop escalates only at half the input or more, and this is 5 of 1920.
+    with caplog.at_level(logging.INFO, logger="mantispy"):
         composition = mt.tl.cluster_composition(clustered)
-    assert "5 of 1920 cells have no 'leiden'" in " ".join(record.message for record in caplog.records)
+    assert "dropped 5 of 1920 cell(s); they have no 'leiden'" in " ".join(
+        record.getMessage() for record in caplog.records
+    )
 
     assert list(composition.var_names) == sorted(set(clusters[~unassigned]))
     assert "nan" not in set(composition.var_names)

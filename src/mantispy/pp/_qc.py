@@ -112,8 +112,8 @@ def _area_outlier_flag(adata: AnnData, X: np.ndarray) -> np.ndarray:
             "no column in var names an area, and qc_area_outlier has nothing to score. var's 'feature' "
             "column is written by mt.io.read_profiles and built by mantispy._core.features."
             "parse_feature_names for a var table made by hand; mt.io.stamp supplies it empty, which "
-            "names no area either. An object with no area measurement -- an embedding, an "
-            "Intensity-only export, or anything from tl.feature_signature -- has no cell-level QC to run."
+            "names no area either. An object with no area measurement — an embedding, an "
+            "Intensity-only export, or anything from tl.feature_signature — has no cell-level QC to run."
         )
     if "Metadata_Plate" not in adata.obs:
         return np.zeros(adata.n_obs, dtype=bool)

@@ -551,7 +551,7 @@ def test_a_tool_does_not_repair_the_annotation_its_input_had_damaged(tmp_path):
 
 
 def test_stamp_supplies_the_annotation_columns_var_does_not_carry():
-    """An object built elsewhere -- a published h5ad, a matrix of embeddings -- carries none of the
+    """An object built elsewhere — a published h5ad, a matrix of embeddings — carries none of the
     schema's annotation, and io.stamp is the entry point that gives it the columns empty."""
     obj = ad.AnnData(
         np.ones((2, 3), dtype=np.float32),
