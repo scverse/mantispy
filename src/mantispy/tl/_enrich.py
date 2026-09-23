@@ -51,12 +51,14 @@ def feature_sets(adata: AnnData, by: str | Sequence[str] = "feature_group") -> p
         raise KeyError(f"var has no column(s) {missing}; available: {sorted(var.columns)}")
 
     known = var[columns].notna().all(axis=1).to_numpy()
-    labels = var.loc[known, columns].astype(str).agg("|".join, axis=1)
-    usable = ~labels.str.contains("nan").to_numpy()
+    # str.cat, not .agg(join, axis=1): the latter returns a frame rather than a Series over no rows,
+    # so an annotation that names no family needed a branch of its own to avoid failing below.
+    named = var.loc[known, columns].astype(str)
+    labels = named.iloc[:, 0].str.cat(named.iloc[:, 1:], sep="|")
     return pd.DataFrame(
         {
-            "source": labels[usable].to_numpy(),
-            "target": var.index[known][usable].to_numpy(),
+            "source": labels.to_numpy(),
+            "target": var.index[known].to_numpy(),
             "weight": 1.0,
         }
     )

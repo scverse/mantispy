@@ -475,6 +475,47 @@ def test_dose_trajectory_puts_every_compound_on_one_relative_axis(phenotypes):
     assert (paths.obs["window_low"] < paths.obs["window_high"]).all()
 
 
+def test_a_trajectory_is_an_object_io_accepts(tmp_path, phenotypes):
+    """Same defect as #103: var held only `feature` and `position`, so the stamped result failed
+    validation on the nine annotation columns the schema requires."""
+    mt.tl.dose_direction(phenotypes)
+    paths = mt.tl.dose_trajectory(phenotypes, n_positions=3)
+
+    report = mt.io.validate(paths)
+    assert report.ok, str(report)
+    # `feature` is the one annotation column a trajectory can fill honestly: the source feature the
+    # column was read from. The rest describe a CellProfiler measurement this is not, and stay empty.
+    assert paths.var["feature"].nunique() == phenotypes.n_vars - 1
+    for column in ("object", "feature_group", "channel", "scale", "angle", "gray_levels", "radial_bin", "params"):
+        assert paths.var[column].isna().all(), column
+    assert paths.var["is_feature"].all()
+
+    written = tmp_path / "trajectory.h5ad"
+    mt.io.write(paths, written)
+    loaded = mt.io.read(written)
+    assert list(loaded.var_names) == list(paths.var_names)
+    assert list(loaded.var.columns) == list(paths.var.columns)
+    # Both columns the Returns clause promises survive the writer, not just the schema's own.
+    assert list(loaded.var["position"]) == list(paths.var["position"])
+    assert list(loaded.var["feature"]) == list(paths.var["feature"])
+
+
+def test_a_close_grid_does_not_name_two_positions_the_same(phenotypes):
+    """The suffix carried two decimals, so past 101 positions several of them formatted identically and the
+    object got duplicate var_names — which neither validate nor the writer objects to, and which makes a
+    per-column lookup silently return more than one column."""
+    mt.tl.dose_direction(phenotypes)
+    paths = mt.tl.dose_trajectory(phenotypes, n_positions=150)
+    assert paths.var_names.is_unique
+    assert paths.n_vars == 150 * (phenotypes.n_vars - 1)
+    assert mt.io.validate(paths).ok
+
+    # The width does not depend on the grid, so a coarse run names its first position identically.
+    assert list(mt.tl.dose_trajectory(phenotypes, n_positions=3).var_names[:1]) == [
+        f"{paths.var['feature'].iloc[0]}@0.0000"
+    ]
+
+
 def test_a_trajectory_needs_at_least_two_points(phenotypes):
     with pytest.raises(ValueError, match="at least two"):
         mt.tl.dose_trajectory(phenotypes, n_positions=1)
@@ -513,3 +554,17 @@ def test_viability_is_read_against_each_plate_not_the_whole_screen(phenotypes):
 
     assert (table["phase"] != "cytotoxic").all(), "a ten-fold difference between plates is not cell loss"
     assert table["viability"].between(0.8, 1.2).all()
+
+
+def test_a_position_is_named_the_same_whatever_the_grid_holds(phenotypes):
+    """The suffix width was chosen from the grid, so the endpoints shared by every grid -- 0.0 and
+    1.0 -- were named @0.00 at 101 positions and @0.000 at 102, and no two runs of one screen lined
+    up. The width no longer depends on how many positions were asked for."""
+    narrow = mt.tl.dose_trajectory(phenotypes, n_positions=101)
+    wide = mt.tl.dose_trajectory(phenotypes, n_positions=102)
+
+    def endpoint_names(paths):
+        at_zero = np.asarray(paths.var["position"]) == 0.0
+        return {name.split("@", 1)[1] for name in paths.var_names[at_zero]}
+
+    assert endpoint_names(narrow) == endpoint_names(wide)

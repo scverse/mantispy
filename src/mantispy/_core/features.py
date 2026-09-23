@@ -22,6 +22,7 @@ import re
 from collections import defaultdict
 from collections.abc import Sequence
 from importlib.resources import files
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -276,13 +277,14 @@ def parse_feature_names(names: Sequence[str], channels: Sequence[str] | None = N
     return parsed
 
 
-def empty_annotation(names: Sequence[str] | pd.Index) -> pd.DataFrame:
+def empty_annotation(names: Sequence[str] | pd.Index, skip: Sequence[str] | None = None) -> pd.DataFrame:
     """The annotation table for features whose names carry no CellProfiler structure.
 
     Learned embeddings, cluster compositions and feature-family signatures all have columns that are features but are not measurements of a compartment in a channel. The schema still asks for the annotation columns, so they are supplied empty rather than guessed at: :func:`parse_feature_names` reads ``openphenom_nahualX_17`` as the ``nahualX`` group of the ``openphenom`` object, which would give such an object feature families named after the model's own tensors.
 
     Args:
         names: The feature names, which are used only as the index.
+        skip: Text columns to leave out of the categorical fill, for a caller about to overwrite them.
 
     Returns:
         A frame indexed by ``names`` with the columns of :data:`COLUMNS`, every annotation column null and ``is_feature`` true.
@@ -290,12 +292,40 @@ def empty_annotation(names: Sequence[str] | pd.Index) -> pd.DataFrame:
     """
     index = pd.Index(names)
     empty = pd.DataFrame(index=index, columns=COLUMNS, dtype=object)
+    blank = pd.Categorical.from_codes(np.full(len(index), -1, dtype=np.int8), pd.Index([], dtype=object))
     for column in _TEXT_COLUMNS:
-        empty[column] = pd.Categorical([None] * len(index))
+        if column in (skip or ()):
+            continue
+        empty[column] = blank
     for column in _FLOAT_COLUMNS:
         empty[column] = np.full(len(index), np.nan)
     empty["is_feature"] = True
     return empty
+
+
+def annotation(names: Sequence[str] | pd.Index, **known: Any) -> pd.DataFrame:
+    """:func:`empty_annotation` with the columns the caller does know filled in.
+
+    Every tool that returns features which are not CellProfiler measurements builds its ``var`` this
+    way. Assigning a value into one of the text columns would replace it and drop the ``category``
+    dtype :func:`empty_annotation` gives it, so anything landing in one is wrapped here instead.
+
+    Args:
+        names: The feature names, used as the index.
+        known: Column name to value, for the columns the caller can fill. A column outside
+            :data:`COLUMNS` is added as given, which is how ``position`` and ``n_features`` are written.
+
+    Returns:
+        The annotation frame, the named columns filled and the rest empty.
+    """
+    frame = empty_annotation(names, skip=[column for column in known if column in _TEXT_COLUMNS])
+    for column, values in known.items():
+        frame[column] = values
+        if column in _TEXT_COLUMNS:
+            # Assigning a value replaces the column, so the category dtype is put back rather than
+            # built first and thrown away.
+            frame[column] = frame[column].astype("category")
+    return frame
 
 
 def load_blocklist(name: str = "default") -> list[str]:

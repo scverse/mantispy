@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import numpy as np
+import pandas as pd
 from anndata import AnnData
 
 from mantispy._core._corr import CHUNK_BYTES
@@ -60,24 +61,17 @@ def calculate_qc_metrics(
         ``None``, or the modified copy. Writes the ``obs`` columns ``qc_n_nan_features``, ``qc_nan_fraction``, ``qc_is_border``, ``qc_area_outlier`` and ``qc_pass``, and the ``var`` columns ``qc_n_nan``, ``qc_variance`` and ``qc_n_unique``.
 
     Raises:
-        KeyError: If ``var`` has no ``feature`` column, which ``qc_area_outlier`` needs to find the area features, and which the schema requires.
+        KeyError: If no column in ``var`` names an area, so ``qc_area_outlier`` cannot be scored and ``qc_pass`` would be an ``and`` over one check fewer than it claims.
     """
-    if "feature" not in adata.var:
-        # An all-false flag for a check that did not run makes qc_pass a weaker statement than
-        # it claims to be: a cell of any area passes. 'feature' is a schema requirement, and
-        # mt.io.validate reports it as an error too.
-        raise KeyError(
-            "var has no 'feature' column, which qc_area_outlier needs to find the area features. "
-            "mt.io.read_profiles writes it, and mantispy._core.features.parse_feature_names builds it "
-            "for a var table made by hand; an object from tl.feature_signature carries no per-feature "
-            "annotation, and cell-level QC does not apply to it."
-        )
+    # Before get_matrix densifies: a call that is going to be rejected should not read the matrix.
+    # (inplace_or_copy has already made the copy by the time any of this runs.)
+    area = _area_features(adata)
 
     X = get_matrix(adata)
     missing = np.isnan(X)
     nan_fraction = missing.mean(axis=1)
     border = _border_flag(adata, image_shape, border_margin)
-    area_outlier = _area_outlier_flag(adata, X)
+    area_outlier = _area_outlier_flag(adata, X, area)
 
     adata.obs["qc_n_nan_features"] = missing.sum(axis=1).astype(np.int32)
     adata.obs["qc_nan_fraction"] = nan_fraction
@@ -106,16 +100,33 @@ def _border_flag(adata: AnnData, image_shape: tuple[int, int] | None, margin: in
     return (x < margin) | (y < margin) | (x > width - margin) | (y > height - margin)
 
 
-def _area_outlier_flag(adata: AnnData, X: np.ndarray) -> np.ndarray:
+def _area_features(adata: AnnData) -> pd.Index:
+    """The ``var`` names that measure an area, refusing an object where none do.
+
+    Raises:
+        KeyError: No column in ``var`` names an area.
+    """
+    named = adata.var["feature"].astype(str).eq("Area") if "feature" in adata.var else []
+    area = adata.var_names[named]
+    if not len(area):
+        raise KeyError(
+            "no column in var names an area, and qc_area_outlier has nothing to score. var's 'feature' "
+            "column is written by mt.io.read_profiles and built by mantispy._core.features."
+            "parse_feature_names for a var table made by hand; mt.io.stamp supplies it empty, which "
+            "names no area either. An object with no area measurement — an embedding, an "
+            "Intensity-only export, or anything from tl.feature_signature — has no cell-level QC to run."
+        )
+    return area
+
+
+def _area_outlier_flag(adata: AnnData, X: np.ndarray, area: pd.Index) -> np.ndarray:
     """Cells whose area is more than :data:`AREA_Z_CUTOFF` robust SDs from the plate median.
 
     Every compartment that measured an area is scored within its own plate and the flags are OR-ed, so a cell is an outlier when any of its areas is.
     Scoring only the first matching column made the flag, and so ``qc_pass``, depend on the order of ``var``.
 
-    The ``feature`` column this needs is a precondition of :func:`calculate_qc_metrics`, checked there before anything is written.
     """
-    area = adata.var_names[adata.var["feature"].astype(str).eq("Area")]
-    if not len(area) or "Metadata_Plate" not in adata.obs:
+    if "Metadata_Plate" not in adata.obs:
         return np.zeros(adata.n_obs, dtype=bool)
     if len(area) > 1:
         get_logger().info("qc_area_outlier flags a cell outlying in any of %s", list(area))

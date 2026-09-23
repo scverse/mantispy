@@ -164,13 +164,32 @@ class ValidationReport:
 
 
 def stamp(adata: AnnData, resolution: str | None = None) -> None:
-    """Write the schema version, and optionally the resolution, into ``uns``."""
-    store = adata.uns.setdefault("mantispy", {})
-    store["schema_version"] = SCHEMA_VERSION
+    """Write the schema version, and optionally the resolution, into ``uns``.
+
+    Args:
+        adata: The object to stamp, in place.
+        resolution: What one row is; left as it is when ``None``.
+
+    Raises:
+        ValueError: ``resolution`` is not one of :data:`RESOLUTIONS`.
+
+    Notes:
+        This records what the object is; it does not make it valid. A tool building a new object supplies
+        its own annotation from :func:`~mantispy._core.features.annotation`, and :func:`~mantispy.io.stamp`
+        supplies it for an object built elsewhere. Filling here would repair an annotation a caller had
+        damaged, leaving :func:`~mantispy.io.write` nothing to report.
+    """
+    if resolution is not None and resolution not in RESOLUTIONS:
+        raise ValueError(f"resolution must be one of {RESOLUTIONS}, got {resolution!r}")
+
+    # A fresh dict assigned through __setitem__, not uns.setdefault: on a view, setdefault is
+    # dict's own, so it neither materialises the view nor writes anywhere the caller can see --
+    # and when the view has a parent it hands back the parent's inner dict, so the resolution
+    # went to the object the subset came from.
+    store = {**adata.uns.get("mantispy", {}), "schema_version": SCHEMA_VERSION}
     if resolution is not None:
-        if resolution not in RESOLUTIONS:
-            raise ValueError(f"resolution must be one of {RESOLUTIONS}, got {resolution!r}")
         store["resolution"] = resolution
+    adata.uns["mantispy"] = store
 
 
 def get_resolution(adata: AnnData) -> str:

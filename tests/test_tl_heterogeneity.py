@@ -1,5 +1,7 @@
 """Cluster composition, cell cycle, subpopulation hits and local density."""
 
+import logging
+
 import anndata as ad
 import numpy as np
 import pandas as pd
@@ -25,6 +27,31 @@ def test_composition_rows_are_wells_and_sum_to_one(clustered):
     assert composition.n_obs == clustered.obs.groupby(["Metadata_Plate", "Metadata_Well"], observed=True).ngroups
     assert composition.n_vars == clustered.obs["leiden"].nunique()
     np.testing.assert_allclose(np.asarray(composition.X).sum(axis=1), 1.0, atol=1e-5)
+    assert mt.io.validate(composition).ok, mt.io.validate(composition).errors
+
+
+@pytest.mark.filterwarnings("ignore:the controls occupy")
+def test_a_cell_with_no_cluster_is_left_out_rather_than_made_into_one(clustered, caplog):
+    """The label an unassigned cell contributed either crashed sorted(), on pandas 3, where NaN cannot be
+    ordered against the cluster names, or became a cluster literally called "nan" on pandas 2."""
+    clusters = clustered.obs["leiden"].astype(str)
+    unassigned = np.zeros(clustered.n_obs, dtype=bool)
+    unassigned[:5] = True
+    clustered.obs["leiden"] = pd.Categorical(np.where(unassigned, None, clusters))
+
+    # info, not warning: report_drop escalates only at half the input or more, and this is 5 of 1920.
+    with caplog.at_level(logging.INFO, logger="mantispy"):
+        composition = mt.tl.cluster_composition(clustered)
+    assert "dropped 5 of 1920 cell(s); they have no 'leiden'" in " ".join(
+        record.getMessage() for record in caplog.records
+    )
+
+    assert list(composition.var_names) == sorted(set(clusters[~unassigned]))
+    assert "nan" not in set(composition.var_names)
+    assert "None" not in set(composition.var_names)
+    # The fractions are over the cells that were assigned, so they still sum to one per well.
+    totals = np.asarray(composition.X).sum(axis=1)
+    np.testing.assert_allclose(totals[totals > 0], 1.0, atol=1e-5)
     assert mt.io.validate(composition).ok, mt.io.validate(composition).errors
 
 
@@ -127,6 +154,15 @@ def test_round_trip(clustered, tmp_path):
     loaded = mt.io.read(tmp_path / "composition.h5ad")
     assert loaded.n_vars == composition.n_vars
     assert len(loaded.uns["mantispy"]["composition_test"]) == composition.n_obs
+    # The annotation columns come from _core.features.empty_annotation (#103), which supplies the
+    # empty ones as categoricals precisely so that the h5ad writer keeps them.
+    assert list(loaded.var.columns) == list(composition.var.columns)
+    assert set(loaded.var["feature_group"]) == {"Composition"}
+    for column in ("channel", "radial_bin", "params"):
+        assert loaded.var[column].isna().all(), column
+        # The dtype is the point of the comment above, so assert it: the float-NaN construction this
+        # replaced round-trips identically and would otherwise pass.
+        assert isinstance(loaded.var[column].dtype, pd.CategoricalDtype), column
 
 
 def _noise_cells(
@@ -329,3 +365,54 @@ def test_many_unreached_clusters_do_not_break_the_chi_square():
     assert np.isfinite(test["statistic"].to_numpy()).all()
     # Ten cells in cluster 0 against an even control split over clusters 0 and 1.
     assert float(test.loc["P1/B01", "statistic"]) == pytest.approx(10.0)
+
+
+@pytest.mark.filterwarnings("ignore:the controls occupy")
+def test_the_cell_count_covers_every_cell_not_only_the_clustered_ones(clustered):
+    """Metadata_CellCount is tl.cytotoxicity's default count_key, and validate warns that without it
+    cytotoxicity cannot separate a hit from cell loss. Summing the fractions' counts made it the number
+    of *clustered* cells, so a well the clustering merely left cells out of read as cell loss."""
+    clusters = clustered.obs["leiden"].astype(str)
+    unassigned = np.zeros(clustered.n_obs, dtype=bool)
+    unassigned[::10] = True
+    clustered.obs["leiden"] = pd.Categorical(np.where(unassigned, None, clusters))
+
+    composition = mt.tl.cluster_composition(clustered)
+
+    actual = clustered.obs.groupby(["Metadata_Plate", "Metadata_Well"], observed=True).size()
+    assert composition.obs["Metadata_CellCount"].tolist() == actual.tolist()
+
+
+@pytest.mark.filterwarnings("ignore:the controls occupy")
+def test_a_well_with_no_assigned_cell_is_left_out(clustered):
+    """Zero in every cluster said the well was measured and found empty everywhere; NaN said it was
+    unknown, and tl.map refuses an object with missing values although the Returns clause promises
+    tl.map accepts it. A well with nothing to measure is dropped, like any other empty group."""
+    clusters = clustered.obs["leiden"].astype(str)
+    wells = clustered.obs["Metadata_Well"].to_numpy()
+    blanked = wells == wells[0]
+    clustered.obs["leiden"] = pd.Categorical(np.where(blanked, None, clusters))
+
+    composition = mt.tl.cluster_composition(clustered)
+
+    assert wells[0] not in set(composition.obs["Metadata_Well"])
+    assert not np.isnan(np.asarray(composition.X)).any(), "the result stays mappable"
+    pytest.importorskip("copairs")  # tl.map below; copairs declares requires-python <3.13
+    mt.tl.map(composition, mode="activity", null_size=50)
+
+
+def test_the_drop_is_reported_only_when_something_is_dropped(clustered, caplog):
+    """report_drop ran before the no-cluster refusal, so an unclustered object was told its cells
+    were 'left out of the fractions' immediately before being told there are no fractions."""
+    clustered.obs["leiden"] = pd.Categorical([None] * clustered.n_obs)
+    with caplog.at_level(logging.INFO, logger="mantispy"), pytest.raises(ValueError, match="no cell"):
+        mt.tl.cluster_composition(clustered)
+    assert not [record for record in caplog.records if "left out of the fractions" in record.getMessage()]
+
+
+def test_the_annotation_columns_that_carry_values_stay_categorical(clustered):
+    """empty_annotation makes the text columns categorical; df[column] = value replaces the column
+    rather than setting into it, so the three that carry values silently lost the dtype."""
+    composition = mt.tl.cluster_composition(clustered)
+    for column in ("object", "feature_group", "feature"):
+        assert isinstance(composition.var[column].dtype, pd.CategoricalDtype), column

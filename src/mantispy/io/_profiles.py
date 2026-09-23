@@ -524,11 +524,8 @@ def stamp(adata: ad.AnnData, resolution: str | None = None, copy: bool = False) 
         )
 
     target = adata.copy() if copy else adata
-    absent = [column for column in REQUIRED_VAR if column not in target.var]
-    if absent:
+    if absent := [column for column in REQUIRED_VAR if column not in target.var]:
         empty = empty_annotation(target.var.index)
-        for column in absent:
-            target.var[column] = empty[column]
-
+        target.var[absent] = empty[absent]
     _record(target, resolution=resolution)
     return target if copy else None
