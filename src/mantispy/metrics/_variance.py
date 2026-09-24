@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
+from mantispy._core._reduce import get_matrix
 from mantispy._core.frames import as_frame
 from mantispy.metrics._common import embedding, r_squared, tidy
 
@@ -90,7 +91,6 @@ def variance_carried(
     Notes:
         The two blocks may hold the same wells in different row orders, so the rows are aligned on the shared ``obs_names`` before regressing; matching by position instead returns a near-zero R^2 for an informative block, which reads as a real negative result.
     """
-    from scipy.sparse import issparse
     from sklearn.linear_model import RidgeCV
     from sklearn.model_selection import KFold
 
@@ -106,8 +106,7 @@ def variance_carried(
         raise ValueError("adata and reference share no obs_names; the two blocks must hold the same wells")
 
     predictors = embedding(adata[shared], use_rep)
-    block = reference[shared].X
-    targets = np.asarray(block.toarray() if issparse(block) else block, dtype=np.float64)
+    targets = get_matrix(reference[shared]).astype(np.float64)
 
     splitter = KFold(n_splits=n_splits, shuffle=True, random_state=0)
     scores = np.full(targets.shape[1], np.nan)
