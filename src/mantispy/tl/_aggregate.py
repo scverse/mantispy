@@ -34,6 +34,7 @@ def aggregate(
     func: str = "median",
     min_cells: int = 10,
     layer: str | None = None,
+    use_rep: str | None = None,
     count_key: str = "Metadata_CellCount",
     site_key: str = "Metadata_SiteCount",
 ) -> AnnData:
@@ -45,6 +46,7 @@ def aggregate(
         func: ``"median"`` (the pycytominer default) or ``"mean"``.
         min_cells: Groups with fewer cells than this are dropped.
         layer: Aggregate this layer instead of ``X``.
+        use_rep: Aggregate this ``obsm`` representation (e.g. an embedding from ``pp.tvn``/``pp.harmony``) instead of ``X``; the result's ``X`` holds the reduced representation and ``var`` is a plain range index, since the axes are not named features. Mutually exclusive with ``layer``.
         count_key: ``obs`` column the cell count is written to, and read from when ``adata`` holds profiles.
         site_key: ``obs`` column the number of fields of view is written to, and read from when ``adata`` holds profiles.
 
@@ -56,16 +58,18 @@ def aggregate(
         The resolution recorded is ``"well"`` when ``by`` holds both ``Metadata_Plate`` and ``Metadata_Well``, since a finer grouping such as one row per site is still per-well or finer, and ``"perturbation"`` otherwise.
 
     Raises:
-        ValueError: ``func`` is not one of ``FUNCTIONS``.
+        ValueError: ``func`` is not one of ``FUNCTIONS``, or ``use_rep`` and ``layer`` are both given, or ``use_rep`` is not a 2-D representation in ``obsm``.
 
     Notes:
         This uses mantispy's own NaN-skipping kernel rather than :func:`scanpy.get.aggregate`, which propagates NaN and is slower on both mean and median.
     """
     if func not in FUNCTIONS:
         raise ValueError(f"func must be one of {tuple(FUNCTIONS)}, got {func!r}")
+    if use_rep is not None and layer is not None:
+        raise ValueError(f"use_rep={use_rep!r} and layer={layer!r} are mutually exclusive; pass only one")
     columns = [by] if isinstance(by, str) else list(by)
 
-    values, keys, counts = reduce_grouped(adata, columns, FUNCTIONS[func], layer=layer)
+    values, keys, counts = reduce_grouped(adata, columns, FUNCTIONS[func], layer=layer, use_rep=use_rep)
     codes, _ = group_codes(adata, columns)
     frame = as_frame(adata.obs)
     tallies = {count_key: counts}
@@ -89,7 +93,12 @@ def aggregate(
     obs = obs.loc[keep].reset_index(drop=True)
     obs.index = pd.Index([str(index) for index in range(len(obs))])
 
-    result = ad.AnnData(X=values[keep].astype(np.float32), obs=obs, var=as_frame(adata.var).copy())
+    var = (
+        pd.DataFrame(index=pd.Index([str(index) for index in range(values.shape[1])]))
+        if use_rep is not None
+        else as_frame(adata.var).copy()
+    )
+    result = ad.AnnData(X=values[keep].astype(np.float32), obs=obs, var=var)
     stamp(result, resolution=resolution_for(columns))
     store = adata.uns.get("mantispy", {})
     # Deep copies, so the aggregate and its source do not share mutable frames.
@@ -111,6 +120,7 @@ def aggregate(
             "func": func,
             "min_cells": min_cells,
             "layer": layer,
+            "use_rep": use_rep,
             "count_key": count_key,
             "site_key": site_key,
         },

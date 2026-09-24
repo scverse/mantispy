@@ -86,6 +86,7 @@ def consensus(
     min_replicates: int = 2,
     min_weight: float = 0.01,
     precision: int = 4,
+    use_rep: str | None = None,
 ) -> AnnData:
     """One profile per group, weighting replicates by how well they agree.
 
@@ -97,6 +98,7 @@ def consensus(
         min_replicates: Groups with fewer replicates are dropped.
         min_weight: Floor on a replicate's weight. A group whose replicates all land on the floor becomes an unweighted mean.
         precision: Decimals the weights are rounded to, as in pycytominer.
+        use_rep: Reduce this ``obsm`` representation (e.g. an embedding from ``pp.tvn``/``pp.harmony``) instead of ``X``; the result's ``X`` holds the reduced representation and ``var`` is a plain range index, since the axes are not named features.
 
     Returns:
         A new object at ``"perturbation"`` resolution, one row per group, with ``Metadata_ReplicateCount`` and the metadata that is constant within a group.
@@ -104,7 +106,7 @@ def consensus(
         Under ``method="median"`` no weights are computed and every row is recorded as 1.0, since a median is not a weighted sum.
 
     Raises:
-        ValueError: ``method`` is not one of ``METHODS``, or ``correlation`` is not one of ``CORRELATIONS``.
+        ValueError: ``method`` is not one of ``METHODS``, ``correlation`` is not one of ``CORRELATIONS``, or ``use_rep`` is not a 2-D representation in ``obsm``.
 
     Notes:
         A missing value is filled with its own replicate's mean before the replicates are correlated.
@@ -128,10 +130,10 @@ def consensus(
     weights = np.ones(adata.n_obs)
 
     if method == "median":
-        values, _, _ = reduce_grouped(adata, [by], MEDIAN)
+        values, _, _ = reduce_grouped(adata, [by], MEDIAN, use_rep=use_rep)
     else:
-        X = get_matrix(adata)
-        values = np.zeros((len(keys), adata.n_vars), dtype=np.float64)
+        X = get_matrix(adata, use_rep=use_rep)
+        values = np.zeros((len(keys), X.shape[1]), dtype=np.float64)
         order, offsets = group_offsets(codes, len(keys))
         for index in range(len(keys)):
             rows = order[offsets[index] : offsets[index + 1]]
@@ -144,16 +146,29 @@ def consensus(
     keep = counts >= min_replicates
     report_drop("group(s)", int((~keep).sum()), int(keep.size), remedy=f"lower min_replicates below {min_replicates}")
 
+    var = (
+        pd.DataFrame(index=pd.Index([str(i) for i in range(values.shape[1])]))
+        if use_rep is not None
+        else as_frame(adata.var).copy()
+    )
     result = ad.AnnData(
         X=values[keep].astype(np.float32),
         obs=obs.loc[keep].reset_index(drop=True).set_axis(pd.Index([str(i) for i in range(int(keep.sum()))])),
-        var=as_frame(adata.var).copy(),
+        var=var,
     )
     stamp(result, resolution="perturbation")
     result.uns["mantispy"]["consensus_weights"] = pd.DataFrame(
         {"group": [str(keys[code]) for code in codes], "weight": weights}
     )
     record_params(
-        result, "consensus", {"by": by, "method": method, "correlation": correlation, "min_replicates": min_replicates}
+        result,
+        "consensus",
+        {
+            "by": by,
+            "method": method,
+            "correlation": correlation,
+            "min_replicates": min_replicates,
+            "use_rep": use_rep,
+        },
     )
     return result
