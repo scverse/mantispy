@@ -119,7 +119,7 @@ def process_notebook(nb: dict) -> tuple[int, int]:
 
 
 def _dumps(nb: dict) -> str:
-    """Serialize like the repo's notebooks: indent=1, unicode kept, trailing \\n."""
+    r"""Serialize like the repo's notebooks: indent=1, unicode kept, trailing \\n."""
     return json.dumps(nb, indent=1, ensure_ascii=False) + "\n"
 
 
