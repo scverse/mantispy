@@ -133,7 +133,11 @@ def variance_carried(
         for group in pd.Series(labels).dropna().unique():
             members = labels == group
             rows.append(
-                {groupby: group, "variance_carried": float(np.nanmean(scores[members])), "n_features": int(members.sum())}
+                {
+                    groupby: group,
+                    "variance_carried": float(np.nanmean(scores[members])),
+                    "n_features": int(members.sum()),
+                }
             )
         frame = pd.DataFrame(rows)
     return frame.sort_values("variance_carried", ascending=False).reset_index(drop=True)
