@@ -9,8 +9,8 @@ import pytest
 
 _SCRUBBER = Path(__file__).resolve().parents[1] / ".scripts" / "ci" / "scrub_notebook_outputs.py"
 _spec = importlib.util.spec_from_file_location("scrub_notebook_outputs", _SCRUBBER)
+assert _spec is not None and _spec.loader is not None
 scrub = importlib.util.module_from_spec(_spec)
-assert _spec.loader is not None
 _spec.loader.exec_module(scrub)
 
 
