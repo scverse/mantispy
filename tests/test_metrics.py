@@ -551,6 +551,76 @@ def test_known_relationships_takes_a_pair_list_once_it_is_reshaped():
         mt.metrics.known_relationships(adata, pairs)
 
 
+def _carried_pair(seed=0):
+    """An embedding and a named block on the same wells: three features are linear in the embedding, three are pure noise."""
+    import anndata as ad
+
+    rng = np.random.default_rng(seed)
+    n_obs, k = 60, 4
+    names = [f"W{index}" for index in range(n_obs)]
+    emb = rng.normal(size=(n_obs, k))
+
+    adata = ad.AnnData(X=rng.normal(size=(n_obs, 3)).astype(np.float32), obs=pd.DataFrame(index=names))
+    adata.obsm["X_emb"] = emb
+
+    signal = emb @ rng.normal(size=(k, 3)) + 0.01 * rng.normal(size=(n_obs, 3))
+    noise = rng.normal(size=(n_obs, 3))
+    var = pd.DataFrame({"feature_group": ["signal"] * 3 + ["noise"] * 3}, index=[f"F{index}" for index in range(6)])
+    reference = ad.AnnData(
+        X=np.hstack([signal, noise]).astype(np.float32),
+        obs=pd.DataFrame(index=names),
+        var=var,
+    )
+    return adata, reference
+
+
+def test_variance_carried_separates_recoverable_features_from_noise():
+    adata, reference = _carried_pair()
+    frame = mt.metrics.variance_carried(adata, reference, use_rep="X_emb")
+
+    carried = frame.set_index("feature_group")["variance_carried"]
+    assert carried["signal"] > 0.7
+    assert carried["noise"] < 0.2
+    assert set(frame["n_features"]) == {3}
+
+
+def test_variance_carried_returns_one_row_per_feature_or_per_group():
+    adata, reference = _carried_pair()
+
+    per_feature = mt.metrics.variance_carried(adata, reference, use_rep="X_emb", groupby=None)
+    assert list(per_feature.columns) == ["feature", "variance_carried"]
+    assert len(per_feature) == reference.n_vars
+
+    per_group = mt.metrics.variance_carried(adata, reference, use_rep="X_emb", groupby="feature_group")
+    assert len(per_group) == 2
+    assert "n_features" in per_group.columns
+
+
+def test_variance_carried_aligns_on_obs_names_not_position():
+    """The footgun: the two blocks hold the same wells in different row orders, and regressing without reindexing returns a near-zero R^2 for an informative block."""
+    adata, reference = _carried_pair()
+    shuffled = reference[np.random.default_rng(1).permutation(reference.n_obs)].copy()
+
+    base = mt.metrics.variance_carried(adata, reference, use_rep="X_emb", groupby=None)
+    permuted = mt.metrics.variance_carried(adata, shuffled, use_rep="X_emb", groupby=None)
+    pd.testing.assert_series_equal(
+        base.set_index("feature")["variance_carried"].sort_index(),
+        permuted.set_index("feature")["variance_carried"].sort_index(),
+    )
+
+
+def test_variance_carried_refuses_input_it_cannot_score():
+    adata, reference = _carried_pair()
+
+    disjoint = reference.copy()
+    disjoint.obs_names = [f"other{index}" for index in range(disjoint.n_obs)]
+    with pytest.raises(ValueError, match="obs_names"):
+        mt.metrics.variance_carried(adata, disjoint, use_rep="X_emb")
+
+    with pytest.raises(ValueError, match="not a column"):
+        mt.metrics.variance_carried(adata, reference, use_rep="X_emb", groupby="nope")
+
+
 def test_evaluate_correction_reports_a_covariate_nothing_else_would_catch(corrected):
     """A representation can be dominated by something that is neither the batch nor the label.
     On the learned embeddings of `ds.jump_lite` the cell count explains several times more of the
