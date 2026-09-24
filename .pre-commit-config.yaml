@@ -35,6 +35,12 @@ repos:
         require_serial: true
         pass_filenames: false
         groups: [typecheck]
+      - id: scrub-notebook-outputs
+        name: scrub-notebook-outputs
+        entry: python .scripts/ci/scrub_notebook_outputs.py
+        language: system
+        files: \.ipynb$
+        groups: [format]
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
