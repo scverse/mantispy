@@ -132,9 +132,7 @@ def test_scrubs_mixed_stderr_in_place():
     scrubbed, dropped = scrub.process_notebook(nb)
     assert dropped == 0
     assert scrubbed == 1
-    assert scrub._as_text(nb["cells"][0]["outputs"][0]["text"]) == (
-        "<path>:1: UserWarning: keep me\n"
-    )
+    assert scrub._as_text(nb["cells"][0]["outputs"][0]["text"]) == ("<path>:1: UserWarning: keep me\n")
 
 
 def test_scrubs_error_traceback():
