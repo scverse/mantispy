@@ -39,7 +39,7 @@ _BODY = r"[^\s:'\"<>]"
 # "Application Support" paths break at the space, leaving this tail). The
 # trailing lookbehind backtracks off sentence punctuation the path never owns.
 _PATH = re.compile(
-    rf"(?:/ictstr01|/lustre|/scratch|/home/{_BODY}+|/Users/{_BODY}+"
+    rf"(?:/ictstr01|/lustre|/localscratch|/scratch|/home/{_BODY}+|/Users/{_BODY}+"
     rf"|/{_BODY}*(?:site-packages|\.venv)){_BODY}*(?<![.,;)])"
 )
 
