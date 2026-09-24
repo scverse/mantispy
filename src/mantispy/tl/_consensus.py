@@ -21,8 +21,7 @@ import pandas as pd
 from anndata import AnnData
 
 from mantispy._core._numba import MEDIAN
-from mantispy._core._reduce import get_matrix, group_codes, group_offsets, reduce_grouped
-from mantispy._core.frames import as_frame
+from mantispy._core._reduce import get_matrix, group_codes, group_offsets, reduce_grouped, reduced_var
 from mantispy._core.logging import report_drop
 from mantispy._core.provenance import record_params
 from mantispy._core.schema import stamp
@@ -146,11 +145,7 @@ def consensus(
     keep = counts >= min_replicates
     report_drop("group(s)", int((~keep).sum()), int(keep.size), remedy=f"lower min_replicates below {min_replicates}")
 
-    var = (
-        pd.DataFrame(index=pd.Index([str(i) for i in range(values.shape[1])]))
-        if use_rep is not None
-        else as_frame(adata.var).copy()
-    )
+    var = reduced_var(adata, use_rep, values.shape[1])
     result = ad.AnnData(
         X=values[keep].astype(np.float32),
         obs=obs.loc[keep].reset_index(drop=True).set_axis(pd.Index([str(i) for i in range(int(keep.sum()))])),

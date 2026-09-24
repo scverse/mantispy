@@ -46,6 +46,7 @@ __all__ = [
     "group_rows",
     "iter_groups",
     "reduce_grouped",
+    "reduced_var",
     "representation",
     "transform_grouped",
 ]
@@ -67,6 +68,17 @@ def _obsm_source(adata: AnnData, use_rep: str, layer: str | None) -> np.ndarray:
     if matrix.ndim != 2:
         raise ValueError(f"obsm {use_rep!r} must be 2-D, got {matrix.ndim}-D")
     return matrix
+
+
+def reduced_var(adata: AnnData, use_rep: str | None, n_cols: int) -> pd.DataFrame:
+    """The ``var`` for an object reduced by :func:`reduce_grouped`.
+
+    ``use_rep`` reduces an embedding whose axes are not named features, so its ``var`` is a plain
+    range index over ``n_cols``; otherwise the source ``var`` is carried over unchanged.
+    """
+    if use_rep is not None:
+        return pd.DataFrame(index=pd.Index([str(index) for index in range(n_cols)]))
+    return as_frame(adata.var).copy()
 
 
 def get_matrix(

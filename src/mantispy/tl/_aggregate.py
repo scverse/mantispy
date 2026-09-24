@@ -11,7 +11,7 @@ import pandas as pd
 from anndata import AnnData
 
 from mantispy._core._numba import MEAN, MEDIAN
-from mantispy._core._reduce import group_codes, reduce_grouped
+from mantispy._core._reduce import group_codes, reduce_grouped, reduced_var
 from mantispy._core.frames import as_frame, categorize_metadata
 from mantispy._core.logging import get_logger
 from mantispy._core.provenance import record_params
@@ -65,8 +65,7 @@ def aggregate(
     """
     if func not in FUNCTIONS:
         raise ValueError(f"func must be one of {tuple(FUNCTIONS)}, got {func!r}")
-    if use_rep is not None and layer is not None:
-        raise ValueError(f"use_rep={use_rep!r} and layer={layer!r} are mutually exclusive; pass only one")
+    # use_rep/layer mutual exclusion and obsm validation are enforced once, in reduce_grouped's _obsm_source.
     columns = [by] if isinstance(by, str) else list(by)
 
     values, keys, counts = reduce_grouped(adata, columns, FUNCTIONS[func], layer=layer, use_rep=use_rep)
@@ -93,11 +92,7 @@ def aggregate(
     obs = obs.loc[keep].reset_index(drop=True)
     obs.index = pd.Index([str(index) for index in range(len(obs))])
 
-    var = (
-        pd.DataFrame(index=pd.Index([str(index) for index in range(values.shape[1])]))
-        if use_rep is not None
-        else as_frame(adata.var).copy()
-    )
+    var = reduced_var(adata, use_rep, values.shape[1])
     result = ad.AnnData(X=values[keep].astype(np.float32), obs=obs, var=var)
     stamp(result, resolution=resolution_for(columns))
     store = adata.uns.get("mantispy", {})

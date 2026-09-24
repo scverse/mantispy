@@ -109,6 +109,9 @@ def variance_carried(
     targets = get_matrix(reference[shared]).astype(np.float64)
 
     splitter = KFold(n_splits=n_splits, shuffle=True, random_state=0)
+    # A column that drops no rows regresses on the whole predictor block, whose folds never change, so
+    # the common all-finite case reuses one split and the unmasked block instead of copying per column.
+    full_split = list(splitter.split(predictors))
     scores = np.full(targets.shape[1], np.nan)
     for column in range(targets.shape[1]):
         # Drop rows missing this target rather than impute; a per-feature mask is simpler and unbiased.
@@ -116,9 +119,13 @@ def variance_carried(
         target = targets[finite, column]
         if target.size < n_splits or target.min() == target.max():
             continue  # all-NaN, too few rows to cross-fit, or constant (SS_tot == 0): leave NaN
-        design = predictors[finite]
+        if finite.all():
+            design, folds = predictors, full_split
+        else:
+            design = predictors[finite]
+            folds = splitter.split(design)
         predicted = np.empty_like(target)
-        for train, test in splitter.split(design):
+        for train, test in folds:
             predicted[test] = RidgeCV().fit(design[train], target[train]).predict(design[test])
         residual = float(np.sum((target - predicted) ** 2))
         total = float(np.sum((target - target.mean()) ** 2))
