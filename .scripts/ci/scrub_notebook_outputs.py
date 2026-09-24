@@ -2,13 +2,13 @@
 """Scrub build-environment leaks out of committed notebook outputs.
 
 Notebooks under docs/ are committed with their executed outputs, and those
-outputs are public. Captured warnings print absolute source paths, leaking the
-build environment (username, cluster layout, virtualenv); the tqdm/ipywidgets
-``IProgress not found`` warning is pure noise. For each ``.ipynb`` given, in
-every code cell's outputs:
+outputs are public. Captured warnings and error tracebacks print absolute
+source paths, leaking the build environment (username, cluster layout,
+virtualenv, kernel temp files); the tqdm/ipywidgets ``IProgress not found``
+warning is pure noise. For each ``.ipynb`` given, in every code cell's outputs:
 
-* In ``stream`` outputs and ``data["text/plain"]``, replace any absolute
-  build-environment path with ``<path>``.
+* In ``stream`` outputs, ``data["text/plain"]`` and ``error`` tracebacks,
+  replace any absolute build-environment path with ``<path>``.
 * Drop a ``stderr`` stream whose whole content is tqdm/ipywidgets noise or the
   "running over TCP" kernel notice; if it also carries real content, keep it
   and only scrub the paths.
@@ -32,21 +32,48 @@ PLACEHOLDER = "<path>"
 # or angle brackets (so we never re-match a placeholder we already wrote).
 _BODY = r"[^\s:'\"<>]"
 
-# One absolute build-environment path. The roots are known build locations
-# (``/home`` and ``/Users`` consume the user segment so an empty root cannot
-# match); the final branch catches an interpreter path carrying a
-# ``site-packages`` or ``.venv`` segment wherever it starts (the Library/
-# "Application Support" paths break at the space, leaving this tail). The
-# trailing lookbehind backtracks off sentence punctuation the path never owns.
+# Absolute build-environment paths an executed notebook's warnings and
+# tracebacks print. Matched three ways so the pattern never accretes one
+# machine's root at a time (the reason it kept needing a commit per leak):
+#   * a known storage or OS-temp root (``/home`` and ``/Users`` consume the
+#     user segment so an empty root cannot match);
+#   * any path naming an ``ipykernel_<pid>`` temp file, on whatever root, which
+#     is what the degenerate-scale and similar UserWarnings actually carry;
+#   * an interpreter path carrying a ``site-packages`` or ``.venv`` segment
+#     (the Library/"Application Support" paths break at the space, leaving this
+#     tail).
+# The leading boundary keeps a root from biting into a URL such as
+# ``https://example.org/home/x``; the trailing lookbehind backtracks off
+# sentence punctuation the path never owns.
+_ROOTS = (
+    "/ictstr01",
+    "/lustre",
+    "/localscratch",
+    "/scratch",
+    "/private/var/folders",
+    "/var/folders",
+    "/private/tmp",
+    "/tmp",
+    rf"/home/{_BODY}+",
+    rf"/Users/{_BODY}+",
+)
 _PATH = re.compile(
-    rf"(?:/ictstr01|/lustre|/localscratch|/scratch|/home/{_BODY}+|/Users/{_BODY}+"
-    rf"|/{_BODY}*(?:site-packages|\.venv)){_BODY}*(?<![.,;)])"
+    r"(?<![A-Za-z0-9._-])"
+    r"(?:"
+    + "|".join(_ROOTS)
+    + rf"|/{_BODY}*ipykernel_[0-9]+"
+    + rf"|/{_BODY}*(?:site-packages|\.venv)"
+    + r")"
+    + rf"{_BODY}*(?<![.,;)])"
 )
 
 # Whole lines that are pure environment noise. Used only to decide whether a
-# stderr block is droppable; kept blocks are never edited line-by-line.
+# stderr block is droppable; kept blocks are never edited line-by-line. The
+# tqdm line is matched by its full ``TqdmWarning: IProgress not found`` text,
+# not a bare ``ipywidgets`` substring, so a genuine diagnostic that merely
+# names ipywidgets is not silently dropped.
 _NOISE_LINES = [
-    re.compile(r"(?m)^.*(?:TqdmWarning|IProgress not found|ipywidgets).*$"),
+    re.compile(r"(?m)^.*TqdmWarning: IProgress not found.*$"),
     re.compile(r"(?m)^\s*from \.autonotebook import tqdm as notebook_tqdm\s*$"),
     re.compile(r"(?m)^.*Kernel is running over TCP without encryption.*$"),
 ]
@@ -90,6 +117,22 @@ def _scrub_field(container: dict, key: str) -> int:
     return count
 
 
+def _scrub_traceback(output: dict) -> int:
+    """Scrub paths in an error output's traceback frames in place."""
+    frames = output.get("traceback")
+    if not isinstance(frames, list):
+        return 0
+    total = 0
+    scrubbed_frames = []
+    for frame in frames:
+        text, count = scrub_paths(frame)
+        total += count
+        scrubbed_frames.append(text)
+    if total:
+        output["traceback"] = scrubbed_frames
+    return total
+
+
 def process_notebook(nb: dict) -> tuple[int, int]:
     """Scrub and prune ``nb`` in place; return (paths scrubbed, blocks dropped)."""
     scrubbed = 0
@@ -112,6 +155,8 @@ def process_notebook(nb: dict) -> tuple[int, int]:
                 data = output.get("data", {})
                 if "text/plain" in data:
                     scrubbed += _scrub_field(data, "text/plain")
+            elif kind == "error":
+                scrubbed += _scrub_traceback(output)
             kept.append(output)
         if len(kept) != len(outputs):
             cell["outputs"] = kept
@@ -119,7 +164,7 @@ def process_notebook(nb: dict) -> tuple[int, int]:
 
 
 def _dumps(nb: dict) -> str:
-    r"""Serialize like the repo's notebooks: indent=1, unicode kept, trailing \\n."""
+    r"""Serialize like the repo's notebooks: indent=1, unicode kept, trailing \n."""
     return json.dumps(nb, indent=1, ensure_ascii=False) + "\n"
 
 
