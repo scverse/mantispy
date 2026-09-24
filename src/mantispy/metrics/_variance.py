@@ -84,23 +84,30 @@ def variance_carried(
     Raises:
         KeyError: ``obsm`` holds nothing under ``use_rep``.
         ValueError: The two objects share no ``obs_names``.
+        ValueError: ``adata`` or ``reference`` has non-unique ``obs_names``.
         ValueError: ``groupby`` is not ``None`` and not a column of ``reference.var``.
 
     Notes:
         The two blocks may hold the same wells in different row orders, so the rows are aligned on the shared ``obs_names`` before regressing; matching by position instead returns a near-zero R^2 for an informative block, which reads as a real negative result.
     """
+    from scipy.sparse import issparse
     from sklearn.linear_model import RidgeCV
     from sklearn.model_selection import KFold
 
     if groupby is not None and groupby not in as_frame(reference.var).columns:
         raise ValueError(f"groupby={groupby!r} is not a column of reference.var")
+    if not adata.obs_names.is_unique:
+        raise ValueError("adata.obs_names are not unique; call .obs_names_make_unique() first")
+    if not reference.obs_names.is_unique:
+        raise ValueError("reference.obs_names are not unique; call .obs_names_make_unique() first")
 
     shared = adata.obs_names[adata.obs_names.isin(reference.obs_names)]
     if len(shared) == 0:
         raise ValueError("adata and reference share no obs_names; the two blocks must hold the same wells")
 
     predictors = embedding(adata[shared], use_rep)
-    targets = np.asarray(reference[shared].X, dtype=np.float64)
+    block = reference[shared].X
+    targets = np.asarray(block.toarray() if issparse(block) else block, dtype=np.float64)
 
     splitter = KFold(n_splits=n_splits, shuffle=True, random_state=0)
     scores = np.full(targets.shape[1], np.nan)
@@ -123,7 +130,7 @@ def variance_carried(
     else:
         labels = as_frame(reference.var)[groupby].to_numpy()
         rows = []
-        for group in pd.unique(labels):
+        for group in pd.Series(labels).dropna().unique():
             members = labels == group
             rows.append(
                 {groupby: group, "variance_carried": float(np.nanmean(scores[members])), "n_features": int(members.sum())}

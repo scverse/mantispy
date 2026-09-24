@@ -621,6 +621,52 @@ def test_variance_carried_refuses_input_it_cannot_score():
         mt.metrics.variance_carried(adata, reference, use_rep="X_emb", groupby="nope")
 
 
+def test_variance_carried_densifies_sparse_reference():
+    """A sparse ``reference.X``, a normal CellProfiler block, scores the same as its dense form."""
+    import scipy.sparse as sp
+
+    adata, reference = _carried_pair()
+    dense = mt.metrics.variance_carried(adata, reference, use_rep="X_emb", groupby=None)
+
+    sparse_ref = reference.copy()
+    sparse_ref.X = sp.csr_matrix(np.asarray(reference.X))
+    got = mt.metrics.variance_carried(adata, sparse_ref, use_rep="X_emb", groupby=None)
+
+    pd.testing.assert_series_equal(
+        dense.set_index("feature")["variance_carried"].sort_index(),
+        got.set_index("feature")["variance_carried"].sort_index(),
+    )
+
+
+def test_variance_carried_excludes_features_with_a_nan_group_label():
+    """A NaN in the groupby column drops only those features: no NaN group, and n_features sums to the labelled ones."""
+    adata, reference = _carried_pair()
+    reference = reference.copy()
+    labels = reference.var["feature_group"].astype(object).to_numpy().copy()
+    labels[0] = np.nan  # one signal feature loses its label
+    reference.var["feature_group"] = labels
+
+    frame = mt.metrics.variance_carried(adata, reference, use_rep="X_emb", groupby="feature_group")
+    assert not frame["feature_group"].isna().any()
+    assert (frame["n_features"] >= 1).all()
+    assert frame["n_features"].sum() == 5  # six features, one now unlabelled
+
+
+def test_variance_carried_rejects_non_unique_obs_names():
+    """Duplicate obs_names raise an actionable error rather than an opaque pandas one."""
+    adata, reference = _carried_pair()
+
+    dup_reference = reference.copy()
+    dup_reference.obs_names = ["W0"] * dup_reference.n_obs
+    with pytest.raises(ValueError, match="not unique"):
+        mt.metrics.variance_carried(adata, dup_reference, use_rep="X_emb")
+
+    dup_adata = adata.copy()
+    dup_adata.obs_names = ["W0"] * dup_adata.n_obs
+    with pytest.raises(ValueError, match="not unique"):
+        mt.metrics.variance_carried(dup_adata, reference, use_rep="X_emb")
+
+
 def test_evaluate_correction_reports_a_covariate_nothing_else_would_catch(corrected):
     """A representation can be dominated by something that is neither the batch nor the label.
     On the learned embeddings of `ds.jump_lite` the cell count explains several times more of the

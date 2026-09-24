@@ -57,6 +57,18 @@ def group_rows(codes: np.ndarray, n_groups: int) -> list[np.ndarray]:
     return [order[offsets[group] : offsets[group + 1]] for group in range(n_groups)]
 
 
+def _obsm_source(adata: AnnData, use_rep: str, layer: str | None) -> np.ndarray:
+    """The 2-D ``obsm[use_rep]`` array, refusing a ``layer`` alongside it or a missing or non-2-D key."""
+    if layer is not None:
+        raise ValueError(f"use_rep={use_rep!r} and layer={layer!r} are mutually exclusive; pass only one")
+    if use_rep not in adata.obsm:
+        raise ValueError(f"no obsm {use_rep!r}; have {sorted(adata.obsm)}")
+    matrix = np.asarray(adata.obsm[use_rep])
+    if matrix.ndim != 2:
+        raise ValueError(f"obsm {use_rep!r} must be 2-D, got {matrix.ndim}-D")
+    return matrix
+
+
 def get_matrix(
     adata: AnnData, layer: str | None = None, rows: np.ndarray | None = None, *, use_rep: str | None = None
 ) -> np.ndarray:
@@ -71,13 +83,7 @@ def get_matrix(
     """
     matrix: Any
     if use_rep is not None:
-        if layer is not None:
-            raise ValueError(f"use_rep={use_rep!r} and layer={layer!r} are mutually exclusive; pass only one")
-        if use_rep not in adata.obsm:
-            raise ValueError(f"no obsm {use_rep!r}; have {sorted(adata.obsm)}")
-        matrix = np.asarray(adata.obsm[use_rep])
-        if matrix.ndim != 2:
-            raise ValueError(f"obsm {use_rep!r} must be 2-D, got {matrix.ndim}-D")
+        matrix = _obsm_source(adata, use_rep, layer)
     else:
         matrix = adata.X if layer is None else adata.layers[layer]
         if matrix is None:
@@ -237,13 +243,7 @@ def reduce_grouped(
     codes, keys = group_codes(adata, by)
     source: Any
     if use_rep is not None:
-        if layer is not None:
-            raise ValueError(f"use_rep={use_rep!r} and layer={layer!r} are mutually exclusive; pass only one")
-        if use_rep not in adata.obsm:
-            raise ValueError(f"no obsm {use_rep!r}; have {sorted(adata.obsm)}")
-        source = np.asarray(adata.obsm[use_rep])
-        if source.ndim != 2:
-            raise ValueError(f"obsm {use_rep!r} must be 2-D, got {source.ndim}-D")
+        source = _obsm_source(adata, use_rep, layer)
     else:
         source = adata.X if layer is None else adata.layers[layer]
     n_cols = source.shape[1] if use_rep is not None else adata.n_vars
