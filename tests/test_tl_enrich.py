@@ -150,6 +150,103 @@ def test_feature_sets_survives_an_annotation_no_row_completes():
     assert mt.tl.feature_sets(_object(var, n_obs=4), by=("feature_group", "channel")).empty
 
 
+@pytest.fixture
+def active():
+    """A small object with one genuinely active feature group and a feature_sets-style net.
+
+    The first half of the samples carry a constant added across the ACTIVE group's features,
+    so a working scorer must rank ACTIVE higher there than in the untouched second half.
+    The net has four groups of fifteen features each: enough sets and features for mlm to fit.
+    """
+    rng = np.random.default_rng(0)
+    names, sources = [], []
+    for group in ("ACTIVE", "G1", "G2", "G3"):
+        for index in range(15):
+            names.append(f"{group}_f{index}")
+            sources.append(group)
+    n_obs = 20
+    matrix = rng.standard_normal((n_obs, len(names))).astype(np.float32)
+    is_active_sample = np.zeros(n_obs, dtype=bool)
+    is_active_sample[: n_obs // 2] = True
+    is_active_col = np.array([source == "ACTIVE" for source in sources])
+    matrix[np.ix_(is_active_sample, is_active_col)] += 5.0
+
+    adata = ad.AnnData(
+        matrix,
+        obs=pd.DataFrame(
+            {"state": np.where(is_active_sample, "on", "off")}, index=[str(index) for index in range(n_obs)]
+        ),
+        var=pd.DataFrame(index=names),
+    )
+    net = pd.DataFrame({"source": sources, "target": names, "weight": 1.0})
+    return adata, net, is_active_sample
+
+
+_SINGLE_METHODS = ("ulm", "mlm", "ora", "aucell", "gsea", "gsva", "zscore", "waggr", "viper")
+#: The single methods that also write a padj frame; aucell and gsva write only a score.
+_WITH_PADJ = {"ulm", "mlm", "ora", "gsea", "zscore", "waggr", "viper"}
+
+
+@pytest.mark.parametrize(
+    "method",
+    [
+        pytest.param(
+            name,
+            marks=pytest.mark.xfail(
+                reason="decoupler's mlm cannot fit on this small synthetic net (few features per source); "
+                "mlm stays in METHODS and works on real-sized data",
+            ),
+        )
+        if name == "mlm"
+        else name
+        for name in _SINGLE_METHODS
+    ],
+)
+def test_enrich_runs_every_single_method(active, method):
+    adata, net, _ = active
+    mt.tl.enrich(adata, net=net, method=method, tmin=2)
+    assert adata.obsm[f"score_{method}"].shape[0] == adata.n_obs
+    assert (f"padj_{method}" in adata.obsm) == (method in _WITH_PADJ)
+
+
+@pytest.mark.parametrize("method", ["ulm", "zscore"])
+def test_active_group_scores_higher_where_it_is_active(active, method):
+    adata, net, is_active_sample = active
+    mt.tl.enrich(adata, net=net, method=method, tmin=2)
+    scores = np.asarray(adata.obsm[f"score_{method}"]["ACTIVE"], dtype=float)
+    assert scores[is_active_sample].mean() > scores[~is_active_sample].mean()
+
+
+def test_consensus_writes_a_consensus_score(active):
+    adata, net, is_active_sample = active
+    mt.tl.enrich(adata, net=net, method="consensus", tmin=2)
+    assert "score_consensus" in adata.obsm
+    assert "padj_consensus" in adata.obsm
+    scores = np.asarray(adata.obsm["score_consensus"]["ACTIVE"], dtype=float)
+    assert scores[is_active_sample].mean() > scores[~is_active_sample].mean()
+
+
+def test_consensus_uses_a_given_panel(active):
+    adata, net, _ = active
+    mt.tl.enrich(adata, net=net, method="consensus", methods=["ulm", "zscore"], tmin=2)
+    assert "score_consensus" in adata.obsm
+    assert "score_ulm" in adata.obsm and "score_zscore" in adata.obsm
+    # aucell is in the default panel but not in the one asked for, so decouple must not have run it.
+    assert "score_aucell" not in adata.obsm
+
+
+def test_methods_only_applies_to_consensus(active):
+    adata, net, _ = active
+    with pytest.raises(ValueError, match="method='consensus'"):
+        mt.tl.enrich(adata, net=net, method="ulm", methods=["ulm", "zscore"])
+
+
+def test_consensus_rejects_a_panel_entry_that_is_not_a_single_method(active):
+    adata, net, _ = active
+    with pytest.raises(ValueError, match="single methods"):
+        mt.tl.enrich(adata, net=net, method="consensus", methods=["ulm", "not_a_method"])
+
+
 def test_get_features_filters_a_column_that_is_legitimately_empty():
     """An AreaShape feature has no channel, and parse_feature_names correctly leaves it missing.
     Asking for a channel there matches nothing; it is not a broken annotation."""
