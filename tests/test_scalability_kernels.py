@@ -77,9 +77,7 @@ def test_corr_matrix_float32_is_close():
     """work_dtype=float32 matches the float64 result to ~1e-4."""
     rng = np.random.default_rng(9)
     X = rng.standard_normal((300, 10)).astype(np.float32)
-    np.testing.assert_allclose(
-        corr_matrix(X, work_dtype=np.float32), corr_matrix(X), atol=1e-4
-    )
+    np.testing.assert_allclose(corr_matrix(X, work_dtype=np.float32), corr_matrix(X), atol=1e-4)
 
 
 def test_windowed_pairs_equals_exact_when_window_covers_all():
