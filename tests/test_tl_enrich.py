@@ -1,5 +1,7 @@
 """Feature sets built from the parsed annotation, and enrichment over them."""
 
+import warnings
+
 import anndata as ad
 import numpy as np
 import pandas as pd
@@ -299,6 +301,61 @@ def test_consensus_does_not_mutate_the_callers_args(active):
     args = {"ora": {}}
     mt.tl.enrich(adata, net=net, method="consensus", methods=["ora", "zscore"], tmin=2, args=args)
     assert args == {"ora": {}}
+
+
+def test_n_permutations_zero_leaves_the_result_unchanged(active):
+    """The default n_permutations=0 must reproduce today's parametric result exactly."""
+    adata, net, _ = active
+    default = adata.copy()
+    mt.tl.enrich(default, net=net, method="ulm", tmin=2)
+    mt.tl.enrich(adata, net=net, method="ulm", tmin=2, n_permutations=0)
+    np.testing.assert_allclose(
+        np.asarray(adata.obsm["score_ulm"], dtype=float), np.asarray(default.obsm["score_ulm"], dtype=float)
+    )
+    np.testing.assert_allclose(
+        np.asarray(adata.obsm["padj_ulm"], dtype=float), np.asarray(default.obsm["padj_ulm"], dtype=float)
+    )
+
+
+def test_permutation_padj_is_calibrated(active):
+    """A positive n_permutations writes padj_<method> of the right shape, in [0, 1], and calls the
+    genuinely-active set with a smaller padj than an inert one where the activity is real."""
+    adata, net, is_active_sample = active
+    mt.tl.enrich(adata, net=net, method="ulm", tmin=2, n_permutations=50)
+    padj = adata.obsm["padj_ulm"]
+    assert padj.shape == (adata.n_obs, net["source"].nunique())
+    values = np.asarray(padj, dtype=float)
+    assert np.all((values >= 0.0) & (values <= 1.0))
+    active_padj = np.asarray(padj["ACTIVE"], dtype=float)[is_active_sample]
+    inert_padj = np.asarray(padj["G1"], dtype=float)[is_active_sample]
+    assert active_padj.mean() < inert_padj.mean()
+
+
+def test_consensus_rejects_permutations(active):
+    adata, net, _ = active
+    with pytest.raises(ValueError, match="n_permutations is not supported"):
+        mt.tl.enrich(adata, net=net, method="consensus", n_permutations=10)
+
+
+def test_collinearity_warns_on_near_duplicate_sets():
+    """Two sets over the same features are perfectly collinear, so enrichment cannot separate them;
+    the warning names them, and check_collinearity=False suppresses it."""
+    rng = np.random.default_rng(0)
+    names = [f"f{index}" for index in range(10)]
+    matrix = rng.standard_normal((8, len(names))).astype(np.float32)
+    adata = ad.AnnData(matrix, obs=pd.DataFrame(index=[str(index) for index in range(8)]), var=pd.DataFrame(index=names))
+    # A and B share their targets, so their scores are identical; C is independent.
+    net = pd.DataFrame(
+        {"source": ["A"] * 5 + ["B"] * 5 + ["C"] * 5, "target": names[:5] + names[:5] + names[5:], "weight": 1.0}
+    )
+
+    with pytest.warns(UserWarning, match="near-collinear"):
+        mt.tl.enrich(adata.copy(), net=net, method="ulm", tmin=2)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        mt.tl.enrich(adata.copy(), net=net, method="ulm", tmin=2, check_collinearity=False)
+    assert not any("near-collinear" in str(record.message) for record in caught)
 
 
 def test_get_features_filters_a_column_that_is_legitimately_empty():
