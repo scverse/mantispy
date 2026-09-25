@@ -125,11 +125,21 @@ def enrich(
         invalid = [name for name in panel if name not in singles]
         if invalid:
             raise ValueError(f"methods entries must each be one of the single methods {singles}, got {invalid}")
+        if not panel:
+            raise ValueError("methods must name at least one single method for method='consensus'")
         # decouple takes per-method kwargs in `args`; keep the ORA n_up default while letting the caller override it.
-        args = dict(decoupler_kwargs.pop("args", {}))
+        # Copy the inner dicts too, so setdefault does not write n_up into the caller's own mapping.
+        args = {name: dict(values) for name, values in decoupler_kwargs.pop("args", {}).items()}
         if "ora" in panel:
             args.setdefault("ora", {}).setdefault("n_up", _ora_n_up(adata, top_fraction))
-        dc.mt.decouple(adata, network, methods=list(panel), args=args, cons=True, **decoupler_kwargs)
+        # decouple with cons=True builds the consensus from every score_* already on obsm, so run it on a
+        # shallow scratch object with a fresh (empty) obsm. X is shared, as in rank_features, so memory is
+        # not doubled; the panel's scores and score_consensus/padj_consensus are then copied back.
+        scratch = ad.AnnData(X=get_matrix(adata), obs=as_frame(adata.obs)[[]].copy())
+        scratch.var_names = adata.var_names
+        dc.mt.decouple(scratch, network, methods=list(panel), args=args, cons=True, **decoupler_kwargs)
+        for key in scratch.obsm:
+            adata.obsm[key] = scratch.obsm[key]
         get_logger().info("enrich(consensus) scored %d set(s) with panel %s", network["source"].nunique(), panel)
         return None
 

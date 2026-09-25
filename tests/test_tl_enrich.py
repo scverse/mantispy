@@ -8,6 +8,7 @@ import pytest
 import mantispy as mt
 from mantispy._core.features import empty_annotation, parse_feature_names
 from mantispy._core.schema import stamp
+from mantispy.tl._enrich import METHODS
 
 
 @pytest.fixture
@@ -182,7 +183,7 @@ def active():
     return adata, net, is_active_sample
 
 
-_SINGLE_METHODS = ("ulm", "mlm", "ora", "aucell", "gsea", "gsva", "zscore", "waggr", "viper")
+_SINGLE_METHODS = tuple(m for m in METHODS if m != "consensus")
 #: The single methods that also write a padj frame; aucell and gsva write only a score.
 _WITH_PADJ = {"ulm", "mlm", "ora", "gsea", "zscore", "waggr", "viper"}
 
@@ -193,8 +194,9 @@ _WITH_PADJ = {"ulm", "mlm", "ora", "gsea", "zscore", "waggr", "viper"}
         pytest.param(
             name,
             marks=pytest.mark.xfail(
-                reason="decoupler's mlm cannot fit on this small synthetic net (few features per source); "
-                "mlm stays in METHODS and works on real-sized data",
+                reason="mlm can fail to fit decoupler's multivariate model when a set has few features; "
+                "it is kept in METHODS for parity with decoupler and is xfailed here only because the "
+                "synthetic net is small",
             ),
         )
         if name == "mlm"
@@ -245,6 +247,43 @@ def test_consensus_rejects_a_panel_entry_that_is_not_a_single_method(active):
     adata, net, _ = active
     with pytest.raises(ValueError, match="single methods"):
         mt.tl.enrich(adata, net=net, method="consensus", methods=["ulm", "not_a_method"])
+
+
+def test_consensus_is_idempotent(active):
+    """Re-running consensus must reproduce the same score, not fold the previous run's scores back in."""
+    adata, net, _ = active
+    mt.tl.enrich(adata, net=net, method="consensus", tmin=2)
+    first = np.asarray(adata.obsm["score_consensus"], dtype=float)
+    mt.tl.enrich(adata, net=net, method="consensus", tmin=2)
+    second = np.asarray(adata.obsm["score_consensus"], dtype=float)
+    np.testing.assert_allclose(first, second, equal_nan=True)
+
+
+def test_consensus_ignores_a_stale_score_of_a_different_width(active):
+    """A prior enrich may have left a score_* whose width differs from the net's; consensus must build
+    from only its panel, neither crashing on nor clobbering that stale frame."""
+    adata, net, _ = active
+    stale = pd.DataFrame(
+        np.zeros((adata.n_obs, 3), dtype=float), index=adata.obs_names, columns=["a", "b", "c"]
+    )
+    adata.obsm["score_ulm"] = stale
+    mt.tl.enrich(adata, net=net, method="consensus", methods=["zscore", "aucell"], tmin=2)
+    pd.testing.assert_frame_equal(adata.obsm["score_ulm"], stale)
+    assert adata.obsm["score_consensus"].shape[1] == net["source"].nunique()
+
+
+def test_consensus_rejects_an_empty_panel(active):
+    adata, net, _ = active
+    with pytest.raises(ValueError, match="at least one single method"):
+        mt.tl.enrich(adata, net=net, method="consensus", methods=[])
+
+
+def test_consensus_does_not_mutate_the_callers_args(active):
+    """The ORA n_up default is merged into a copy, so the caller's nested args dict is left untouched."""
+    adata, net, _ = active
+    args = {"ora": {}}
+    mt.tl.enrich(adata, net=net, method="consensus", methods=["ora", "zscore"], tmin=2, args=args)
+    assert args == {"ora": {}}
 
 
 def test_get_features_filters_a_column_that_is_legitimately_empty():
