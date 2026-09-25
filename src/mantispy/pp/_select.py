@@ -80,6 +80,18 @@ def _op_frequency_threshold(X: np.ndarray, freq_cut: float = 0.05, unique_cut: f
     return keep
 
 
+def _greedy_keep(pairs: np.ndarray, total: np.ndarray, n_vars: int) -> np.ndarray:
+    """Keep mask that drops the more-connected member of every over-threshold pair."""
+    ranking = np.argsort(total, kind="stable")
+    rank = np.empty(n_vars, dtype=np.int64)
+    rank[ranking] = np.arange(n_vars)
+    keep = np.ones(n_vars, dtype=bool)
+    if pairs.size:
+        first, second = pairs[:, 0], pairs[:, 1]
+        keep[np.where(rank[first] > rank[second], first, second)] = False
+    return keep
+
+
 def _op_correlation_threshold(
     X: np.ndarray,
     threshold: float = 0.9,
@@ -91,24 +103,26 @@ def _op_correlation_threshold(
 ) -> np.ndarray:
     """Drop one feature from every pair correlated above ``threshold``.
 
-    Each over-threshold pair is judged on its own against a ranking of total absolute correlation computed once from the full matrix; the member ranked as more correlated overall is dropped.
+    Each over-threshold pair is judged on its own against a ranking of total absolute correlation; the member ranked as more correlated overall is dropped.
     There is no iterative sweep, so a feature already dropped by one pair does not spare its partner in another.
 
-    ``window`` switches to the approximate windowed pass; see :func:`~mantispy._core._corr.correlated_pairs`.
+    Exact by default, over the whole matrix in one pass. ``window`` switches to a two-pass fast path: pass 1 is the windowed pre-filter (roughly linear in the feature count) that removes the easy within-window redundancy, then pass 2 runs the exact all-pairs comparison on the survivors only, a small set, so its quadratic cost is cheap and it catches the cross-family redundancy the windows could not see. See :func:`~mantispy._core._corr.correlated_pairs`.
     """
     n_vars = X.shape[1]
     # Signed correlation, as in pycytominer, which keeps a pair correlated at -1.0.
     # correlated_pairs never builds the full matrix, so this scales to tens of thousands of features.
+    if window is None:
+        pairs, total = correlated_pairs(X, threshold, method=method)
+        return _greedy_keep(pairs, total, n_vars)
+    # Pass 1: windowed pre-filter over the whole feature list (cheap, roughly linear).
     pairs, total = correlated_pairs(X, threshold, method=method, order=order, window=window, stride=stride)
-    # Rank features by how correlated they are with everything else, ascending.
-    ranking = np.argsort(total, kind="stable")
-    rank = np.empty(n_vars, dtype=np.int64)
-    rank[ranking] = np.arange(n_vars)
-
-    keep = np.ones(n_vars, dtype=bool)
-    if pairs.size:
-        first, second = pairs[:, 0], pairs[:, 1]
-        keep[np.where(rank[first] > rank[second], first, second)] = False
+    keep = _greedy_keep(pairs, total, n_vars)
+    survivors = np.flatnonzero(keep)
+    # Pass 2: exact all-pairs on the survivors only, so the quadratic step runs on a small set and
+    # catches the cross-family redundancy the windows could not see.
+    if survivors.size > 1:
+        sub_pairs, sub_total = correlated_pairs(X[:, survivors], threshold, method=method)
+        keep[survivors] = _greedy_keep(sub_pairs, sub_total, survivors.size)
     return keep
 
 
@@ -190,8 +204,8 @@ def feature_select(
         unique_cut: ``frequency_threshold``: drop a feature when its share of distinct values is below this.
         corr_threshold: ``correlation_threshold``: drop one member of every pair correlated above this.
         corr_method: ``correlation_threshold``: ``"pearson"`` or ``"spearman"``.
-        corr_window: ``correlation_threshold``: if set, approximate the operation by sorting features by name and correlating only within a sliding window of this many features. Much faster on large feature sets; may keep a few redundant pairs that sort into different windows.
-        corr_stride: ``correlation_threshold``: step between windows, defaulting to ``corr_window`` (no overlap). A stride smaller than the window overlaps consecutive windows so boundary pairs are still tested.
+        corr_window: ``correlation_threshold``: ``None`` runs the exact pass (the default, matching pycytominer). An int switches to the two-pass fast path (prune redundancy within name-sorted windows of that size, then run the exact pass on the survivors); 500 is a good default, several times faster on large screens. It keeps a different set of features (a different member of each correlated group) but preserves the information and the downstream signal.
+        corr_stride: ``correlation_threshold``: step between windows, default half the window.
         na_cutoff: ``drop_na_columns``: drop features missing in more than this fraction of rows.
         outlier_cutoff: ``drop_outliers``: drop features whose absolute value exceeds this.
         blocklist: ``blocklist``: ``"default"`` for the bundled list, or explicit names. Matched against the current names and against ``var["original_name"]``, so it works either side of :func:`~mantispy.pp.standardize_feature_names`.

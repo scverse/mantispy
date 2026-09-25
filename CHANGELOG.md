@@ -29,7 +29,7 @@ and this project adheres to [Semantic Versioning][].
 - `mantispy.pp`: `annotate_jump(kind="crispr")`, which also reads profiles that already carry `Metadata_JCP2022`, as JUMP's assembled profiles do
 - `mantispy.pl`: `hits` and `feature_volcano` write how many points sit above and below the significance line, next to it
 - `mantispy.pp`: `regress_out(reference=...)` fits the covariate on the reference rows, re-expresses each group at their mean and clips it to their range, so a cell count is regressed out where density varies for technical reasons only; without a reference it warns when a group never reaches the value it is re-expressed at
-- `mantispy.pp`: `feature_select`'s `corr_window` and `corr_stride`, an opt-in fast `correlation_threshold` that sorts features by name and correlates only within overlapping sliding windows in float32, cutting the 30k-feature pass from minutes to seconds. The exact all-pairs pass stays the default; the fast path removes the same amount of redundancy but may drop a different, equally correlated member of a pair.
+- `mantispy.pp`: `feature_select`'s `corr_window` and `corr_stride`, an opt-in fast `correlation_threshold` for large screens. It sorts features by name and prunes redundancy within sliding windows of `corr_window` features (a two-pass approximation: the windowed pre-filter whittles the list down, then the exact all-pairs pass runs on the survivors to catch cross-family redundancy). Exact stays the default; the fast path keeps a different set of features but preserves the information (reconstruction R2 near 1) and the downstream replicate signal, several times faster on screens with many thousands of features.
 
 ### Changed
 

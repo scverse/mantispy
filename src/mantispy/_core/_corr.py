@@ -222,7 +222,7 @@ def correlated_pairs(
             Used only when ``window`` is set. ``None`` walks the columns as given.
         window: If set, approximate the exact pass by correlating only within a sliding window of this many columns of ``order``.
             Pairs that sort more than one window apart are never tested, so slightly less redundancy is removed.
-        stride: Step between windows. ``None`` steps by ``window`` (no overlap); a smaller stride overlaps consecutive windows so boundary pairs are still tested.
+        stride: Step between windows. ``None`` steps by half the window, so consecutive windows overlap by half and boundary pairs are still tested; a smaller stride overlaps them further.
 
     Returns:
         ``(pairs, total)``, where ``pairs`` is a ``(k, 2)`` array of column indices holding each unordered pair once.
@@ -294,7 +294,8 @@ def _windowed_pairs(
     """
     n_vars = X.shape[1]
     order = np.arange(n_vars) if order is None else np.asarray(order)
-    stride = window if stride is None else stride
+    # Default the stride to half the window, so consecutive windows overlap by half and boundary pairs are still tested.
+    stride = max(window // 2, 1) if stride is None else stride
 
     pairs_list: list[np.ndarray] = []
     mag_list: list[np.ndarray] = []

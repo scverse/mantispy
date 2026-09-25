@@ -130,6 +130,30 @@ def test_windowed_misses_only_cross_window_pairs():
     assert (0, 8) not in _pair_set(windowed)
 
 
+def test_two_pass_matches_exact_on_cross_window_redundancy():
+    """The fast two-pass path recovers cross-window redundancy the windowed primitive alone misses.
+
+    A correlated pair placed far apart in the column order falls into different windows, so pass 1
+    never tests it; the exact pass 2 on the survivors does, and the final keep mask equals the exact
+    full pass. Exact duplicates give each pair's two members an identical total correlation, so the
+    greedy keep is decided by index alone, the same in the exact pass and in the two-pass refine.
+    """
+    from mantispy.pp._select import _op_correlation_threshold
+
+    rng = np.random.default_rng(12)
+    n_obs, n_vars = 800, 8
+    X = rng.standard_normal((n_obs, n_vars))
+    X[:, 3] = X[:, 2]  # within-window pair: adjacent, caught by pass 1
+    X[:, 7] = X[:, 0]  # cross-window pair: seven columns apart, missed by a small window
+
+    exact = _op_correlation_threshold(X, 0.9, window=None)
+    fast = _op_correlation_threshold(X, 0.9, window=3)
+    np.testing.assert_array_equal(fast, exact)
+    # The windowed primitive alone would leave column 7 in; pass 2 on the survivors is what drops it.
+    assert not exact[7] and not exact[3]
+    assert exact[0] and exact[2]
+
+
 def test_feature_select_corr_window_drops_one_of_a_pair():
     """The windowed correlation path actually drops a redundant feature and writes a boolean var column."""
     from anndata import AnnData
