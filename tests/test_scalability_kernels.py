@@ -118,6 +118,18 @@ def test_windowed_pairs_finds_adjacent_pairs():
     assert _pair_set(windowed) == {(0, 1), (2, 3)}
 
 
+def test_windowed_pairs_honours_absolute_like_the_exact_path():
+    """absolute must reach the windowed pre-filter, so an anti-correlated within-window pair is found."""
+    rng = np.random.default_rng(6)
+    base = rng.standard_normal((400, 4))
+    base[:, 1] = -base[:, 0] + rng.standard_normal(400) * 0.01  # r ~ -1, adjacent
+
+    signed, _ = correlated_pairs(base, 0.9, window=2, stride=1)
+    absolute, _ = correlated_pairs(base, 0.9, window=2, stride=1, absolute=True)
+    assert (0, 1) not in _pair_set(signed)
+    assert (0, 1) in _pair_set(absolute)
+
+
 def test_windowed_misses_only_cross_window_pairs():
     """Two correlated features placed far apart with no overlap fall in different windows and are missed."""
     rng = np.random.default_rng(6)

@@ -16,7 +16,7 @@ from collections.abc import Sequence
 import numpy as np
 from anndata import AnnData
 
-from mantispy._core._corr import _blockwise, correlated_pairs
+from mantispy._core._corr import _blockwise, correlated_pairs, rank_revealing_subset
 from mantispy._core._reduce import get_matrix, group_codes, group_offsets
 from mantispy._core._stats import nanvar
 from mantispy._core.features import blocklist_hits
@@ -97,32 +97,68 @@ def _op_correlation_threshold(
     threshold: float = 0.9,
     method: str = "pearson",
     *,
+    absolute: bool = False,
+    iterative: bool = False,
     order: np.ndarray | None = None,
     window: int | None = None,
     stride: int | None = None,
 ) -> np.ndarray:
     """Drop one feature from every pair correlated above ``threshold``.
 
-    Each over-threshold pair is judged on its own against a ranking of total absolute correlation; the member ranked as more correlated overall is dropped.
-    There is no iterative sweep, so a feature already dropped by one pair does not spare its partner in another.
+    With the defaults this matches pycytominer: each over-threshold pair is judged on its own against a
+    ranking of total absolute correlation, the member ranked as more correlated overall is dropped, the
+    comparison is on the signed correlation, and there is no re-sweep.
 
-    Exact by default, over the whole matrix in one pass. ``window`` switches to a two-pass fast path: pass 1 is the windowed pre-filter (roughly linear in the feature count) that removes the easy within-window redundancy, then pass 2 runs the exact all-pairs comparison on the survivors only, a small set, so its quadratic cost is cheap and it catches the cross-family redundancy the windows could not see. See :func:`~mantispy._core._corr.correlated_pairs`.
+    ``absolute`` thresholds ``|r|`` instead, so a strongly anti-correlated pair is also reduced.
+    ``iterative`` drops the most-connected feature one at a time, clearing every pair it belongs to
+    before looking again, which keeps at least as many features as the single pass. Together they
+    approximate cytominer's R path (``caret::findCorrelation``, absolute and iterative).
+
+    Exact by default, over the whole matrix in one pass. ``window`` switches to a two-pass fast path:
+    pass 1 is the windowed pre-filter (roughly linear in the feature count) that removes the easy
+    within-window redundancy, then pass 2 runs the exact all-pairs comparison on the survivors only, a
+    small set, so its quadratic cost is cheap and it catches the cross-family redundancy the windows
+    could not see. See :func:`~mantispy._core._corr.correlated_pairs`.
     """
     n_vars = X.shape[1]
-    # Signed correlation, as in pycytominer, which keeps a pair correlated at -1.0.
+    reduce = _iterative_correlation_drop if iterative else _greedy_keep
     # correlated_pairs never builds the full matrix, so this scales to tens of thousands of features.
     if window is None:
-        pairs, total = correlated_pairs(X, threshold, method=method)
-        return _greedy_keep(pairs, total, n_vars)
+        pairs, total = correlated_pairs(X, threshold, method=method, absolute=absolute)
+        return reduce(pairs, total, n_vars)
     # Pass 1: windowed pre-filter over the whole feature list (cheap, roughly linear).
-    pairs, total = correlated_pairs(X, threshold, method=method, order=order, window=window, stride=stride)
-    keep = _greedy_keep(pairs, total, n_vars)
+    pairs, total = correlated_pairs(
+        X, threshold, method=method, absolute=absolute, order=order, window=window, stride=stride
+    )
+    keep = reduce(pairs, total, n_vars)
     survivors = np.flatnonzero(keep)
     # Pass 2: exact all-pairs on the survivors only, so the quadratic step runs on a small set and
     # catches the cross-family redundancy the windows could not see.
     if survivors.size > 1:
-        sub_pairs, sub_total = correlated_pairs(X[:, survivors], threshold, method=method)
-        keep[survivors] = _greedy_keep(sub_pairs, sub_total, survivors.size)
+        sub_pairs, sub_total = correlated_pairs(X[:, survivors], threshold, method=method, absolute=absolute)
+        keep[survivors] = reduce(sub_pairs, sub_total, survivors.size)
+    return keep
+
+
+def _iterative_correlation_drop(pairs: np.ndarray, total: np.ndarray, n_vars: int) -> np.ndarray:
+    """Remove the most-connected feature until no over-threshold pair is left.
+
+    At each step the still-connected feature belonging to the most surviving pairs is dropped, ties
+    broken by the largest total ``|r|`` and then the lowest index, which clears every pair it is part
+    of at once. Dropping the shared feature of a chain, rather than one member of each of its pairs,
+    keeps at least as many features as the single pass, approximating ``caret::findCorrelation``.
+
+    Rescanning the surviving pairs each removal is ``O(drops * pairs)``; this is an opt-in path over the
+    already-thresholded pairs, so the set is small in practice.
+    """
+    keep = np.ones(n_vars, dtype=bool)
+    active = np.ones(len(pairs), dtype=bool)
+    while active.any():
+        connected, degree = np.unique(pairs[active].ravel(), return_counts=True)
+        # Highest degree first; ties by largest total, then lowest index (lexsort reads keys last-first).
+        worst = connected[np.lexsort((connected, -total[connected], -degree))[0]]
+        keep[worst] = False
+        active &= (pairs[:, 0] != worst) & (pairs[:, 1] != worst)
     return keep
 
 
@@ -191,6 +227,11 @@ def feature_select(
     blocklist: str | Sequence[str] = "default",
     noise_removal_perturb_groups: str = "Metadata_Perturbation",
     noise_removal_stdev_cutoff: float = 0.8,
+    corr_absolute: bool = False,
+    corr_iterative: bool = False,
+    decorrelate: bool = False,
+    decorr_threshold: float = 0.99,
+    decorr_method: str = "pearson",
     key_added: str = "selected",
     copy: bool = False,
 ) -> AnnData | None:
@@ -206,6 +247,11 @@ def feature_select(
         corr_method: ``correlation_threshold``: ``"pearson"`` or ``"spearman"``.
         corr_window: ``correlation_threshold``: ``None`` runs the exact pass (the default, matching pycytominer). An int switches to the two-pass fast path (prune redundancy within name-sorted windows of that size, then run the exact pass on the survivors); 500 is a good default, several times faster on large screens. It keeps a different set of features (a different member of each correlated group) but preserves the information and the downstream signal.
         corr_stride: ``correlation_threshold``: step between windows, default half the window.
+        corr_absolute: ``correlation_threshold``: threshold ``|r|`` rather than the signed correlation, so a strongly anti-correlated pair is also reduced. Off by default, matching pycytominer.
+        corr_iterative: ``correlation_threshold``: drop the most-connected feature one at a time until no pair is left, keeping at least as many features as the single pass. Off by default. With ``corr_absolute`` this approximates cytominer's R path (``caret::findCorrelation``).
+        decorrelate: Run an extra, experimental redundancy step after the operations, on the features they keep. Unlike ``correlation_threshold`` it removes features that are a linear combination of several others, not just pairwise duplicates, by a rank-revealing QR. Off by default, and not part of pycytominer.
+        decorr_threshold: ``decorrelate``: drop a feature once its multiple correlation with the kept set reaches this. The default 0.99 removes only near-collinear features, so the kept set spans almost the same space; lower it towards ``corr_threshold`` for a smaller, more aggressive set.
+        decorr_method: ``decorrelate``: ``"pearson"`` or ``"spearman"``.
         na_cutoff: ``drop_na_columns``: drop features missing in more than this fraction of rows.
         outlier_cutoff: ``drop_outliers``: drop features whose absolute value exceeds this.
         blocklist: ``blocklist``: ``"default"`` for the bundled list, or explicit names. Matched against the current names and against ``var["original_name"]``, so it works either side of :func:`~mantispy.pp.standardize_feature_names`.
@@ -225,6 +271,7 @@ def feature_select(
         ``drop_degenerate`` runs first, and the other operations judge only the features it keeps: a feature :func:`~mantispy.pp.normalize` could not scale can hold values large enough to decide the correlation ranking of every feature it is compared with.
         Every other operation judges that whole set, so each count in ``uns["mantispy"]["feature_select"]`` says what that operation alone would remove and is the same whatever order ``operations`` runs in.
         The counts therefore overlap: a feature that is both constant and mostly missing is counted by ``variance_threshold`` and by ``drop_na_columns``, and the counts sum to more than the number of features actually removed, which is ``n_vars`` minus ``var[key_added].sum()``.
+        ``decorrelate`` is the exception: it runs last, on the features the operations kept, so its count is what it removes from those survivors.
 
         ``correlation_threshold`` is the most expensive operation.
         pycytominer uses ``pandas.DataFrame.corr``, one Cython pass per column pair.
@@ -234,15 +281,14 @@ def feature_select(
     if unknown:
         raise ValueError(f"unknown operation(s) {sorted(unknown)}; choose from {OPERATIONS}")
 
-    X = get_matrix(adata)
+    full = get_matrix(adata)
     keep = np.ones(adata.n_vars, dtype=bool)
     removed: dict[str, int] = {}
     if "drop_degenerate" in operations:
         keep = _op_drop_degenerate(adata)
         removed["drop_degenerate"] = int((~keep).sum())
     judged = np.flatnonzero(keep)
-    if judged.size < adata.n_vars:
-        X = X[:, judged]
+    X = full[:, judged] if judged.size < adata.n_vars else full
 
     for operation in operations:
         if operation == "drop_degenerate":
@@ -258,7 +304,14 @@ def feature_select(
                 names = np.asarray(adata.var_names[judged], dtype=str)
                 order = np.argsort(names, kind="stable")
             mask = _op_correlation_threshold(
-                X, corr_threshold, corr_method, order=order, window=corr_window, stride=corr_stride
+                X,
+                corr_threshold,
+                corr_method,
+                absolute=corr_absolute,
+                iterative=corr_iterative,
+                order=order,
+                window=corr_window,
+                stride=corr_stride,
             )
         elif operation == "drop_na_columns":
             mask = _op_drop_na_columns(X, na_cutoff)
@@ -275,6 +328,13 @@ def feature_select(
         # Counted against every judged feature rather than against the features its predecessors left, so the count does not depend on where the operation sits in `operations`.
         removed[operation] = int((~mask).sum())
         keep[judged] &= mask
+
+    if decorrelate:
+        # A post step on the features the operations kept, so its count is what it removes from those.
+        survivors = np.flatnonzero(keep)
+        mask = rank_revealing_subset(full[:, survivors], decorr_threshold, decorr_method)
+        removed["decorrelate"] = int((~mask).sum())
+        keep[survivors[~mask]] = False
 
     if not keep.any() and adata.n_vars:
         # Selecting nothing is almost always a cutoff set against the wrong scale rather than a screen with

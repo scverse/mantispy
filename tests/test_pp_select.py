@@ -175,6 +175,130 @@ def test_selecting_nothing_warns_rather_than_emptying_the_object_silently(wells)
     assert wells.uns["mantispy"]["feature_select"]["noise_removal"] == wells.n_vars
 
 
+def _multiple_r(X: np.ndarray) -> np.ndarray:
+    """The multiple correlation of each column with all the others, for the redundancy invariant."""
+    Xs = (X - X.mean(0)) / X.std(0)
+    out = np.empty(Xs.shape[1])
+    for j in range(Xs.shape[1]):
+        others = np.delete(Xs, j, axis=1)
+        beta, *_ = np.linalg.lstsq(others, Xs[:, j], rcond=None)
+        out[j] = np.sqrt(max(1 - (Xs[:, j] - others @ beta).var() / Xs[:, j].var(), 0.0))
+    return out
+
+
+def _collinear_profiles():
+    """a, b, c independent, d = a + b + c (collinear with no large pairwise correlation), and an independent e."""
+    rng = np.random.default_rng(0)
+    n = 500
+    a, b, c, e = (rng.standard_normal(n) for _ in range(4))
+    d = a + b + c + 0.02 * rng.standard_normal(n)
+    names = [f"Cells_Intensity_{name}" for name in ("a", "b", "c", "d", "e")]
+    adata = ad.AnnData(np.column_stack([a, b, c, d, e]).astype(np.float64), var=pd.DataFrame(index=names))
+    return adata
+
+
+def test_decorrelate_removes_multivariate_redundancy_correlation_threshold_misses():
+    """Regression test for #131: d = a + b + c has no pairwise |r| > 0.9 with any single feature, so
+    correlation_threshold keeps it, but it carries no new information and decorrelate removes it."""
+    adata = _collinear_profiles()
+
+    kept_corr = adata.copy()
+    mt.pp.feature_select(kept_corr, operations=("correlation_threshold",), corr_threshold=0.9)
+    assert kept_corr.var["selected"].all(), "no pair exceeds 0.9, so correlation_threshold removes nothing"
+
+    kept_decorr = adata.copy()
+    mt.pp.feature_select(kept_decorr, operations=(), decorrelate=True, decorr_threshold=0.9)
+    selected = kept_decorr.var["selected"].to_numpy()
+    assert int((~selected).sum()) == 1, "exactly one of the four collinear features is redundant"
+    assert (_multiple_r(adata.X[:, selected]) < 0.9).all(), "a survivor is still predictable from the others"
+
+
+def test_absolute_correlation_threshold_reduces_an_anticorrelated_pair():
+    """correlation_threshold thresholds signed correlation, so r = -1 keeps both; corr_absolute drops one."""
+    rng = np.random.default_rng(1)
+    a = rng.standard_normal(400)
+    values = np.column_stack([a, -a + 1e-6 * rng.standard_normal(400), rng.standard_normal(400)])
+    adata = ad.AnnData(values.astype(np.float64), var=pd.DataFrame(index=[f"Cells_Intensity_{i}" for i in range(3)]))
+
+    signed = adata.copy()
+    mt.pp.feature_select(signed, operations=("correlation_threshold",), corr_threshold=0.9)
+    assert signed.var["selected"][:2].all(), "signed threshold keeps an anti-correlated pair"
+
+    absolute = adata.copy()
+    mt.pp.feature_select(absolute, operations=("correlation_threshold",), corr_threshold=0.9, corr_absolute=True)
+    assert int(absolute.var["selected"][:2].sum()) == 1, "absolute threshold drops one of the pair"
+
+
+def test_iterative_correlation_drop_removes_the_shared_feature():
+    """On the chain 0-1-2 the single-pass rule can drop both leaves; iterative drops the connector 1,
+    keeping the two features that are not correlated with each other."""
+    from mantispy.pp._select import _iterative_correlation_drop
+
+    pairs = np.array([[0, 1], [1, 2]])
+    total = np.array([10.0, 1.0, 10.0])  # leaves rank higher, so a by-total rule would drop them
+    keep = _iterative_correlation_drop(pairs, total, n_vars=3)
+    assert keep.tolist() == [True, False, True]
+
+
+def test_iterative_correlation_threshold_keeps_at_least_as_many_and_leaves_no_pair():
+    """On a correlated screen the iterative absolute path removes all over-threshold pairs and keeps at
+    least as many features as the single pass."""
+    from mantispy._core._corr import correlated_pairs
+
+    rng = np.random.default_rng(2)
+    latent = rng.standard_normal((300, 5))
+    blocks = [latent[:, k : k + 1] + 0.1 * rng.standard_normal((300, 3)) for k in range(5)]
+    values = np.column_stack(blocks + [rng.standard_normal((300, 4))])
+    adata = ad.AnnData(
+        values.astype(np.float64), var=pd.DataFrame(index=[f"Cells_f{i}" for i in range(values.shape[1])])
+    )
+
+    single, iterative = adata.copy(), adata.copy()
+    mt.pp.feature_select(single, operations=("correlation_threshold",), corr_threshold=0.9, corr_absolute=True)
+    mt.pp.feature_select(
+        iterative, operations=("correlation_threshold",), corr_threshold=0.9, corr_absolute=True, corr_iterative=True
+    )
+    assert int(iterative.var["selected"].sum()) >= int(single.var["selected"].sum())
+
+    kept = iterative.var["selected"].to_numpy()
+    remaining, _ = correlated_pairs(adata.X[:, kept], 0.9, absolute=True)
+    assert remaining.size == 0, "the iterative path left an over-threshold pair"
+
+
+def test_decorrelate_is_deterministic():
+    """The QR selection draws no random numbers, so the same input always gives the same mask.
+
+    (The kept set is not order-independent: column-pivoted QR breaks near-ties by column order.)
+    """
+    adata = _collinear_profiles()
+    masks = []
+    for _ in range(2):
+        trial = adata.copy()
+        mt.pp.feature_select(trial, operations=(), decorrelate=True)
+        masks.append(trial.var["selected"].to_numpy())
+    assert np.array_equal(*masks)
+
+
+def test_decorrelate_rejects_a_threshold_outside_the_unit_interval():
+    """A threshold >= 1 would make sqrt(1 - t**2) NaN and silently drop everything; reject it."""
+    adata = _collinear_profiles()
+    with pytest.raises(ValueError, match=r"\[0, 1\)"):
+        mt.pp.feature_select(adata, operations=(), decorrelate=True, decorr_threshold=1.0)
+
+
+def test_decorrelate_runs_as_a_post_step_and_only_removes(wells):
+    """decorrelate=True adds a count and can only shrink the set the operations already chose."""
+    without = wells.copy()
+    mt.pp.feature_select(without)
+    with_decorr = wells.copy()
+    mt.pp.feature_select(with_decorr, decorrelate=True)
+
+    assert "decorrelate" not in without.uns["mantispy"]["feature_select"]
+    assert "decorrelate" in with_decorr.uns["mantispy"]["feature_select"]
+    # A subset of what the operations kept: never adds a feature back.
+    assert set(with_decorr.var_names[with_decorr.var["selected"]]) <= set(without.var_names[without.var["selected"]])
+
+
 def test_features_normalize_could_not_scale_are_dropped_before_the_rest_are_judged():
     """drop_degenerate drops what normalize flagged, and the other operations never see it: judged alongside
     the rest, the flagged feature here would push a healthy one out through the correlation ranking."""
