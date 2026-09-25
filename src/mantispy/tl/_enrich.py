@@ -100,10 +100,10 @@ def enrich(
         net: A decoupler network with ``source``, ``target`` and ``weight``, for example prior-knowledge sets. Built from ``by`` when omitted.
         by: Passed to :func:`feature_sets` when ``net`` is not given.
         method: One of ``METHODS``. ``"ulm"`` fits a linear model per set and is the usual choice; ``"mlm"`` fits all sets jointly, which handles overlapping sets; ``"ora"`` is an over-representation test on the extremes; ``"aucell"``, ``"gsea"``, ``"gsva"``, ``"zscore"``, ``"waggr"`` and ``"viper"`` are the remaining decoupler scorers. ``"consensus"`` runs a panel of the single methods and combines their calls, decoupler's robustness feature.
-        methods: The panel for ``method="consensus"``, each entry one of the single methods (``METHODS`` without ``"consensus"``). Defaults to :data:`CONSENSUS_PANEL`. Only used with ``method="consensus"``.
+        methods: The panel for ``method="consensus"``, each entry one of the single methods (``METHODS`` without ``"consensus"``). Defaults to ``CONSENSUS_PANEL``. Only used with ``method="consensus"``.
         top_fraction: Fraction of features, ranked by value, that ORA counts as extreme, whether ``method="ora"`` or ``"ora"`` sits in a consensus panel. The default 0.05 tests the top twentieth against the rest. Ignored when ``n_up`` is passed, and by the methods that use every feature.
         copy: Return a modified copy instead of mutating in place.
-        decoupler_kwargs: Passed through to decoupler, e.g. ``tmin`` for the smallest usable set. For ``method="consensus"`` an ``args`` mapping of per-method keyword arguments (as :func:`decoupler.mt.decouple` takes) is merged with the computed ORA ``n_up``.
+        decoupler_kwargs: Passed through to decoupler, e.g. ``tmin`` for the smallest usable set. For ``method="consensus"`` an ``args`` mapping of per-method keyword arguments (as ``decoupler.mt.decouple`` takes) is merged with the computed ORA ``n_up``.
 
     Returns:
         ``None``, or the modified copy.
