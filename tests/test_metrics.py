@@ -667,6 +667,28 @@ def test_variance_carried_rejects_non_unique_obs_names():
         mt.metrics.variance_carried(dup_adata, reference, use_rep="X_emb")
 
 
+def test_variance_carried_all_nan_when_fewer_shared_than_splits():
+    """Fewer shared wells than n_splits yields all-NaN, not an opaque sklearn crash (issue #128)."""
+    adata, reference = _carried_pair()
+    few = adata[:3].copy()  # 3 shared wells, default n_splits=5
+
+    frame = mt.metrics.variance_carried(few, reference, use_rep="X_emb", groupby=None)
+    assert frame["variance_carried"].isna().all()
+
+
+def test_variance_carried_survives_an_inf_target():
+    """An inf in one target column drops only that row rather than aborting the run: neighbours still score (issue #128)."""
+    adata, reference = _carried_pair()
+    reference = reference.copy()
+    block = np.asarray(reference.X).copy()
+    block[0, 1] = np.inf  # a single non-finite entry in one signal feature
+    reference.X = block.astype(np.float32)
+
+    frame = mt.metrics.variance_carried(adata, reference, use_rep="X_emb", groupby=None)
+    carried = frame.set_index("feature")["variance_carried"]
+    assert carried["F0"] > 0.7  # a neighbouring signal feature still scores
+
+
 def test_evaluate_correction_reports_a_covariate_nothing_else_would_catch(corrected):
     """A representation can be dominated by something that is neither the batch nor the label.
     On the learned embeddings of `ds.jump_lite` the cell count explains several times more of the

@@ -111,15 +111,19 @@ def variance_carried(
     splitter = KFold(n_splits=n_splits, shuffle=True, random_state=0)
     # A column that drops no rows regresses on the whole predictor block, whose folds never change, so
     # the common all-finite case reuses one split and the unmasked block instead of copying per column.
-    full_split = list(splitter.split(predictors))
+    # The split is built lazily on the first such column, where the row-count guard below has already
+    # proved there are enough rows for it.
+    full_split = None
     scores = np.full(targets.shape[1], np.nan)
     for column in range(targets.shape[1]):
-        # Drop rows missing this target rather than impute; a per-feature mask is simpler and unbiased.
-        finite = ~np.isnan(targets[:, column])
+        # Drop rows whose target is missing or non-finite rather than impute; a per-feature mask is simpler and unbiased.
+        finite = np.isfinite(targets[:, column])
         target = targets[finite, column]
         if target.size < n_splits or target.min() == target.max():
             continue  # all-NaN, too few rows to cross-fit, or constant (SS_tot == 0): leave NaN
         if finite.all():
+            if full_split is None:
+                full_split = list(splitter.split(predictors))
             design, folds = predictors, full_split
         else:
             design = predictors[finite]

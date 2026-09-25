@@ -28,6 +28,7 @@ import numpy as np
 import pandas as pd
 
 from ._numba import MAD, MEAN, MEDIAN, QUANTILE, STD, group_counts, group_offsets, grouped_stat
+from .features import annotation
 from .frames import as_frame
 from .logging import get_logger
 
@@ -77,7 +78,7 @@ def reduced_var(adata: AnnData, use_rep: str | None, n_cols: int) -> pd.DataFram
     range index over ``n_cols``; otherwise the source ``var`` is carried over unchanged.
     """
     if use_rep is not None:
-        return pd.DataFrame(index=pd.Index([str(index) for index in range(n_cols)]))
+        return annotation(pd.Index([str(index) for index in range(n_cols)]))
     return as_frame(adata.var).copy()
 
 
@@ -150,7 +151,12 @@ def _warn_if_not_streamable(matrix: Any) -> None:
     anndata indexes a CSR dataset by row without leaving the file, which is what makes streaming work.
     On a CSC dataset the same index falls back to ``to_memory()``, so a loop over g groups reads and
     densifies the entire matrix g times rather than once, and the groups are where that is least visible.
+
+    An in-memory scipy CSC matrix also reports ``format == "csc"`` but never leaves memory, so the
+    on-disk check gates the warning here rather than at each call site.
     """
+    if not _reads_from_disk(matrix):
+        return
     if getattr(matrix, "format", None) == "csc":
         get_logger().warning(
             "the matrix on disk is stored column-major (CSC), which cannot be read row by row: every "
