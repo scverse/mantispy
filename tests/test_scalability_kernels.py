@@ -7,8 +7,8 @@ reference. float32 correlation only diverges near the threshold, which these tes
 import numpy as np
 import pandas as pd
 
-from mantispy._core._corr import corr_matrix, correlated_pairs
-from mantispy._core._stats import _column_block, nanvar
+from mantispy._core._corr import column_block, corr_matrix, correlated_pairs
+from mantispy._core._stats import nanvar
 from mantispy.pp._select import _op_drop_outliers
 
 
@@ -34,7 +34,7 @@ def test_nanvar_chunked_spans_multiple_blocks():
     """A shape whose feature count exceeds one block, so the loop runs more than once."""
     rng = np.random.default_rng(1)
     X = _scatter_nans(rng.standard_normal((20000, 4000)).astype(np.float32), rng)
-    assert _column_block(X.shape[0], X.dtype.itemsize) < X.shape[1]
+    assert column_block(X.shape[0], X.dtype.itemsize) < X.shape[1]
     np.testing.assert_allclose(nanvar(X, ddof=0), np.nanvar(X, axis=0, ddof=0), rtol=1e-6)
 
 
@@ -50,8 +50,19 @@ def test_drop_outliers_matches_reference():
     np.testing.assert_array_equal(_op_drop_outliers(X, cutoff), expected)
 
 
-def test_correlated_pairs_agree_for_float32_and_float64_far_from_threshold():
-    """float32 only matters near the threshold; well-separated pairs give the same set as float64."""
+def test_drop_outliers_spans_multiple_blocks():
+    """A shape whose feature count exceeds one block, so the chunk loop runs more than once."""
+    rng = np.random.default_rng(11)
+    X = rng.standard_normal((20000, 4000)).astype(np.float32)
+    X[:, 1234] = 1000.0  # an outlier column beyond the first block
+    assert column_block(X.shape[0], X.dtype.itemsize) < X.shape[1]
+    cutoff = 500.0
+    expected = ~(np.nan_to_num(np.nanmax(np.abs(X), axis=0), nan=0.0) > cutoff)
+    np.testing.assert_array_equal(_op_drop_outliers(X, cutoff), expected)
+
+
+def test_exact_correlated_pairs_are_dtype_invariant():
+    """The exact path upcasts to float64, so a float32 and a float64 input give the same pair set."""
     rng = np.random.default_rng(3)
     n_obs, n_vars = 800, 12
     base = rng.standard_normal((n_obs, n_vars))
@@ -119,9 +130,8 @@ def test_windowed_misses_only_cross_window_pairs():
     assert (0, 8) not in _pair_set(windowed)
 
 
-def test_feature_select_corr_window_smoke():
-    """feature_select runs the windowed correlation path and writes a boolean var column."""
-    import pandas as pd
+def test_feature_select_corr_window_drops_one_of_a_pair():
+    """The windowed correlation path actually drops a redundant feature and writes a boolean var column."""
     from anndata import AnnData
 
     import mantispy as mt
@@ -137,3 +147,5 @@ def test_feature_select_corr_window_smoke():
     selected = adata.var["selected"]
     assert selected.dtype == bool
     assert selected.shape == (6,)
+    assert int(selected.sum()) == 5  # one of the correlated pair is dropped
+    assert not (bool(selected.iloc[0]) and bool(selected.iloc[1]))  # not both members kept

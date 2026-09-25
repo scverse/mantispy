@@ -16,7 +16,7 @@ The peak is one block-by-p strip, capped by :data:`BLOCK_BYTES`, with the same a
 from __future__ import annotations
 
 import warnings
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import numpy as np
 import pandas as pd
@@ -39,6 +39,31 @@ def chunk_rows(n_vars: int) -> int:
 def block_columns(n_vars: int) -> int:
     """Columns per block so that one ``block x n_vars`` strip stays inside :data:`BLOCK_BYTES`."""
     return min(n_vars, max(int(BLOCK_BYTES / 8 / max(n_vars, 1)), 256))
+
+
+def column_block(n_obs: int, itemsize: int) -> int:
+    """Feature block width so one ``n_obs x block`` slice of the data stays inside :data:`BLOCK_BYTES`.
+
+    Unlike :func:`block_columns`, which sizes a ``block x n_vars`` correlation strip, this budgets a slice of
+    the data matrix itself and so takes the element size rather than assuming float64.
+    """
+    return max(int(BLOCK_BYTES / max(n_obs * itemsize, 1)), 1)
+
+
+def _blockwise(X: np.ndarray, reduce: Callable[[np.ndarray], np.ndarray], out_dtype: DTypeLike) -> np.ndarray:
+    """Apply a per-column ``reduce`` one feature block at a time, so the peak temporary is one block not ``X``.
+
+    ``reduce`` maps an ``n_obs x block`` slice to one value per column. RuntimeWarnings from empty or all-NaN
+    slices are silenced, which is what every caller here needs and what ``np.errstate`` cannot reach.
+    """
+    n_vars = X.shape[1]
+    block = column_block(X.shape[0], X.dtype.itemsize)
+    out = np.empty(n_vars, dtype=out_dtype)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        for start in range(0, n_vars, block):
+            out[start : start + block] = reduce(X[:, start : start + block])
+    return out
 
 
 #: Mask-pair budget above which pairwise-complete Spearman warns that it will be slow.
@@ -272,38 +297,33 @@ def _windowed_pairs(
     stride = window if stride is None else stride
 
     pairs_list: list[np.ndarray] = []
-    total = np.zeros(n_vars)
-    # Above-threshold pairs are sparse, so a set of the pairs already summed stays small and avoids an n_vars ** 2 array.
-    counted: set[tuple[int, int]] = set()
+    mag_list: list[np.ndarray] = []
     for start in range(0, n_vars, stride):
         cols = order[start : start + window]
-        if cols.size >= 2:
-            # corr_matrix carries the NaN-safe path, so constant or gappy columns come back as NaN and fail the signed test.
-            # The windowed pass is already approximate, so float32 correlation (good to ~1e-4) costs nothing extra in accuracy and halves the work.
-            corr = corr_matrix(X[:, cols], method=method, chunk_size=chunk_size, work_dtype=np.float32)
-            iu, ju = np.triu_indices(cols.size, k=1)
-            signed = corr[iu, ju]
-            hit = signed > threshold  # Signed, exactly as the exact path.
-            if hit.any():
-                a, b = cols[iu[hit]], cols[ju[hit]]
-                lo, hi = np.minimum(a, b), np.maximum(a, b)
-                pairs_list.append(np.column_stack([lo, hi]))
-                magnitude = np.abs(signed[hit])
-                for low, high, absr in zip(lo.tolist(), hi.tolist(), magnitude.tolist(), strict=True):
-                    if (low, high) in counted:
-                        continue
-                    counted.add((low, high))
-                    total[low] += absr
-                    total[high] += absr
+        if cols.size < 2:
+            continue
+        # corr_matrix carries the NaN-safe path, so constant or gappy columns come back as NaN and fail the signed test.
+        # The windowed pass is already approximate, so float32 correlation (good to ~1e-4) costs nothing extra in accuracy and halves the work.
+        corr = corr_matrix(X[:, cols], method=method, chunk_size=chunk_size, work_dtype=np.float32)
+        iu, ju = np.triu_indices(cols.size, k=1)
+        signed = corr[iu, ju]
+        hit = signed > threshold  # Signed, exactly as the exact path.
+        a, b = cols[iu[hit]], cols[ju[hit]]
+        pairs_list.append(np.column_stack([np.minimum(a, b), np.maximum(a, b)]))
+        mag_list.append(np.abs(signed[hit]))
         if start + window >= n_vars:
-            break
+            break  # Remaining windows only re-test the tail already covered here.
 
-    if pairs_list:
-        # The overlap tests some pairs in two windows; keep one row per unordered pair.
-        found = np.unique(np.concatenate(pairs_list), axis=0).astype(np.int64)
-    else:
-        found = np.empty((0, 2), dtype=np.int64)
-    return found, total
+    total = np.zeros(n_vars)
+    if not pairs_list:
+        return np.empty((0, 2), dtype=np.int64), total
+
+    # Overlapping windows test some pairs twice; one dedup keeps each unordered pair once and its total counts it once.
+    found, idx = np.unique(np.concatenate(pairs_list), axis=0, return_index=True)
+    magnitude = np.concatenate(mag_list)[idx]
+    np.add.at(total, found[:, 0], magnitude)
+    np.add.at(total, found[:, 1], magnitude)
+    return found.astype(np.int64), total
 
 
 def _iter_clean_blocks(
@@ -343,7 +363,7 @@ def _gram_corr(
     gram = np.zeros((n_vars, n_vars), dtype=np.float64)
     for start in range(0, n_obs, chunk_size):
         rows = slice(start, start + chunk_size)
-        block = (X[rows] if columns is None else X[rows][:, columns]).astype(work_dtype) - centre
+        block = (X[rows] if columns is None else X[rows][:, columns]).astype(work_dtype, copy=False) - centre
         total += block.sum(axis=0)
         gram += block.T @ block
 
@@ -406,7 +426,7 @@ def _pairwise_corr(
 
     for start in range(0, n_obs, chunk_size):
         rows = slice(start, start + chunk_size)
-        values = [X[rows][:, side].astype(work_dtype) - centre[side] for side in (left, right)]
+        values = [X[rows][:, side].astype(work_dtype, copy=False) - centre[side] for side in (left, right)]
         masks = [np.isfinite(block).astype(np.float64) for block in values]
         zeroed = [np.where(mask.astype(bool), block, 0.0) for block, mask in zip(values, masks, strict=True)]
         del values

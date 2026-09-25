@@ -6,9 +6,9 @@ Results from different metrics are compared routinely, and two FDR procedures wo
 
 from __future__ import annotations
 
-import warnings
-
 import numpy as np
+
+from mantispy._core._corr import _blockwise
 
 #: Scale factor that makes the median absolute deviation estimate the standard deviation of a normal distribution.
 #: Every robust z-score in the package uses this one value.
@@ -134,11 +134,6 @@ def split_reference(rows: np.ndarray, generator: np.random.Generator) -> tuple[n
     return np.sort(rows[order[:half]]), np.sort(rows[order[half:]])
 
 
-def _column_block(n_obs: int, itemsize: int) -> int:
-    """Feature block width so one block (``n_obs * block * itemsize`` bytes) stays around 256 MB."""
-    return max(int(256_000_000 / max(n_obs * itemsize, 1)), 1)
-
-
 def nanvar(X: np.ndarray, ddof: int = 0) -> np.ndarray:
     """Per-feature variance, ignoring missing values.
 
@@ -146,12 +141,5 @@ def nanvar(X: np.ndarray, ddof: int = 0) -> np.ndarray:
     for slice" through :mod:`warnings`, where ``np.errstate`` cannot reach it.
     ``ddof=0`` is the population variance, which is what sklearn's ``VarianceThreshold`` and pycytominer compare.
     """
-    n_obs, n_vars = X.shape
-    # One column block at a time, so the peak temporary is one block not the whole matrix.
-    block = _column_block(n_obs, X.dtype.itemsize)
-    out = np.empty(n_vars, dtype=X.dtype if np.issubdtype(X.dtype, np.inexact) else np.float64)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)
-        for start in range(0, n_vars, block):
-            out[start : start + block] = np.nanvar(X[:, start : start + block], axis=0, ddof=ddof)
-    return out
+    out_dtype = X.dtype if np.issubdtype(X.dtype, np.inexact) else np.float64
+    return _blockwise(X, lambda block: np.nanvar(block, axis=0, ddof=ddof), out_dtype)

@@ -16,9 +16,9 @@ from collections.abc import Sequence
 import numpy as np
 from anndata import AnnData
 
-from mantispy._core._corr import correlated_pairs
+from mantispy._core._corr import _blockwise, correlated_pairs
 from mantispy._core._reduce import get_matrix, group_codes, group_offsets
-from mantispy._core._stats import _column_block, nanvar
+from mantispy._core._stats import nanvar
 from mantispy._core.features import blocklist_hits
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
@@ -122,14 +122,8 @@ def _op_drop_outliers(X: np.ndarray, outlier_cutoff: float = 500.0) -> np.ndarra
 
     Ratios with a near-zero denominator blow up like this.
     """
-    n_obs, n_vars = X.shape
-    # One column block at a time, so np.abs never copies more than one block.
-    block = _column_block(n_obs, X.dtype.itemsize)
-    largest = np.empty(n_vars, dtype=np.float64)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)  # "All-NaN slice encountered"
-        for start in range(0, n_vars, block):
-            largest[start : start + block] = np.nanmax(np.abs(X[:, start : start + block]), axis=0)
+    # One column block at a time (in _blockwise), so np.abs never copies more than one block.
+    largest = _blockwise(X, lambda block: np.nanmax(np.abs(block), axis=0), np.float64)
     return ~(np.nan_to_num(largest, nan=0.0) > outlier_cutoff)
 
 
