@@ -21,6 +21,7 @@ from mantispy._core._reduce import get_matrix
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy._core.mutation import inplace_or_copy
+from mantispy.get import to_dataframe
 
 #: The single decoupler scorers, one call each.
 SINGLE_METHODS = ("ulm", "mlm", "ora", "aucell", "gsea", "gsva", "zscore", "waggr", "viper")
@@ -107,7 +108,7 @@ def enrich(
 
     Returns:
         ``None``, or the modified copy.
-        decoupler writes ``obsm["score_<method>"]``, and ``obsm["padj_<method>"]`` for the methods that produce one (all but ``"aucell"`` and ``"gsva"``, which write only the score). ``method="consensus"`` writes ``obsm["score_consensus"]`` and ``obsm["padj_consensus"]``. All are frames indexed by set name.
+        decoupler writes ``obsm["score_<method>"]``, and ``obsm["padj_<method>"]`` for the methods that produce one (all but ``"aucell"`` and ``"gsva"``, which write only the score). ``method="consensus"`` writes ``obsm["score_consensus"]`` and ``obsm["padj_consensus"]`` alongside each panel member's own ``score_<method>`` (and its ``padj_<method>``, except for the score-only ``"aucell"`` and ``"gsva"``). All are frames indexed by set name.
 
     Raises:
         ValueError: ``method`` is not one of ``METHODS``; ``methods`` is given with a non-consensus ``method``, or names an entry that is not a single method; no feature set could be built from ``by``; or ``top_fraction`` is outside (0, 1).
@@ -123,7 +124,12 @@ def enrich(
         raise ValueError(f"no feature sets built from by={by!r}: every feature's annotation is missing")
 
     if method == "consensus":
-        panel = tuple(methods) if methods is not None else CONSENSUS_PANEL
+        if methods is None:
+            panel = CONSENSUS_PANEL
+        elif isinstance(methods, str):
+            panel = (methods,)
+        else:
+            panel = tuple(methods)
         invalid = [name for name in panel if name not in SINGLE_METHODS]
         if invalid:
             raise ValueError(f"methods entries must each be one of the single methods {SINGLE_METHODS}, got {invalid}")
@@ -137,9 +143,11 @@ def enrich(
         # Handing decouple the matrix (not the AnnData) makes it return the panel's scores and build the
         # consensus from only those. A score_* left on obsm by an earlier enrich therefore cannot leak in,
         # which an AnnData input would allow, since cons=True consolidates every score_* it finds on obsm.
-        frame = pd.DataFrame(get_matrix(adata), index=adata.obs_names, columns=adata.var_names)
+        frame = to_dataframe(adata, metadata=False)
         scores = dc.mt.decouple(frame, network, methods=list(panel), args=args, cons=True, **decoupler_kwargs)
-        adata.obsm.update(scores)
+        # decouple returns None for a score-only method's padj (aucell, gsva); writing None into obsm
+        # corrupts the AnnData, so keep only the frames it actually produced.
+        adata.obsm.update({key: value for key, value in scores.items() if value is not None})
         get_logger().info("enrich(consensus) scored %d set(s) with panel %s", network["source"].nunique(), panel)
         return None
 

@@ -183,14 +183,14 @@ def active():
     return adata, net, is_active_sample
 
 
-#: The single methods that also write a padj frame; aucell and gsva write only a score.
-_WITH_PADJ = {"ulm", "mlm", "ora", "gsea", "zscore", "waggr", "viper"}
+#: The single methods that write only a score; every other one also writes a padj frame.
+_SCORE_ONLY = {"aucell", "gsva"}
 
 
-@pytest.mark.parametrize(
-    "method",
-    [
-        pytest.param(
+def _single_method_param(name: str):
+    """Parametrize entry for a single method; xfail only mlm, which the small synthetic net cannot fit."""
+    if name == "mlm":
+        return pytest.param(
             name,
             marks=pytest.mark.xfail(
                 reason="mlm can fail to fit decoupler's multivariate model when a set has few features; "
@@ -198,16 +198,15 @@ _WITH_PADJ = {"ulm", "mlm", "ora", "gsea", "zscore", "waggr", "viper"}
                 "synthetic net is small",
             ),
         )
-        if name == "mlm"
-        else name
-        for name in SINGLE_METHODS
-    ],
-)
+    return name
+
+
+@pytest.mark.parametrize("method", [_single_method_param(name) for name in SINGLE_METHODS])
 def test_enrich_runs_every_single_method(active, method):
     adata, net, _ = active
     mt.tl.enrich(adata, net=net, method=method, tmin=2)
     assert adata.obsm[f"score_{method}"].shape[0] == adata.n_obs
-    assert (f"padj_{method}" in adata.obsm) == (method in _WITH_PADJ)
+    assert (f"padj_{method}" in adata.obsm) == (method not in _SCORE_ONLY)
 
 
 @pytest.mark.parametrize("method", ["ulm", "zscore"])
@@ -273,6 +272,25 @@ def test_consensus_rejects_an_empty_panel(active):
     adata, net, _ = active
     with pytest.raises(ValueError, match="at least one single method"):
         mt.tl.enrich(adata, net=net, method="consensus", methods=[])
+
+
+def test_consensus_default_panel_never_writes_none_to_obsm(active):
+    """The default panel includes the score-only aucell, whose padj comes back None from decouple.
+    Writing None into obsm corrupts the AnnData, so it must be filtered out and adata.copy() must work."""
+    adata, net, _ = active
+    mt.tl.enrich(adata, net=net, method="consensus", tmin=2)
+    assert all(v is not None for v in adata.obsm.values())
+    score_keys = {key for key in adata.obsm if key.startswith("score_")}
+    assert {"score_consensus", "score_aucell"} <= score_keys
+    copied = adata.copy()
+    assert score_keys <= set(copied.obsm)
+
+
+def test_consensus_treats_a_string_methods_as_one_method(active):
+    """A single method passed as a string must not be split into per-character panel entries."""
+    adata, net, _ = active
+    mt.tl.enrich(adata, net=net, method="consensus", methods="ulm", tmin=2)
+    assert "score_ulm" in adata.obsm
 
 
 def test_consensus_does_not_mutate_the_callers_args(active):
