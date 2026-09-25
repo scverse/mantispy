@@ -230,6 +230,10 @@ def correlated_pairs(
         The windowed path returns the same contract, with ``total`` summed only over the pairs it tested.
     """
     if window is not None:
+        if window < 1:
+            raise ValueError(f"window must be a positive integer, got {window!r}")
+        if stride is not None and stride < 1:
+            raise ValueError(f"stride must be a positive integer, got {stride!r}")
         return _windowed_pairs(np.asarray(X), threshold, method, chunk_size, order, window, stride)
 
     raw = np.asarray(X)

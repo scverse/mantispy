@@ -6,6 +6,7 @@ reference. float32 correlation only diverges near the threshold, which these tes
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from mantispy._core._corr import column_block, corr_matrix, correlated_pairs
 from mantispy._core._stats import nanvar
@@ -152,6 +153,18 @@ def test_two_pass_matches_exact_on_cross_window_redundancy():
     # The windowed primitive alone would leave column 7 in; pass 2 on the survivors is what drops it.
     assert not exact[7] and not exact[3]
     assert exact[0] and exact[2]
+
+
+def test_windowed_rejects_bad_window_and_stride():
+    """The fast path validates its knobs: window and stride must be positive integers."""
+    rng = np.random.default_rng(13)
+    X = rng.standard_normal((50, 6))
+    for bad_window in (0, -1):
+        with pytest.raises(ValueError):
+            correlated_pairs(X, 0.9, window=bad_window)
+    for bad_stride in (0, -2):
+        with pytest.raises(ValueError):
+            correlated_pairs(X, 0.9, window=3, stride=bad_stride)
 
 
 def test_feature_select_corr_window_drops_one_of_a_pair():
