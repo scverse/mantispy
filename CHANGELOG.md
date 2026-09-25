@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning][].
 - `mantispy.pp`: `annotate_jump(kind="crispr")`, which also reads profiles that already carry `Metadata_JCP2022`, as JUMP's assembled profiles do
 - `mantispy.pl`: `hits` and `feature_volcano` write how many points sit above and below the significance line, next to it
 - `mantispy.pp`: `regress_out(reference=...)` fits the covariate on the reference rows, re-expresses each group at their mean and clips it to their range, so a cell count is regressed out where density varies for technical reasons only; without a reference it warns when a group never reaches the value it is re-expressed at
+- `mantispy.pp`: `feature_select`'s `corr_window` and `corr_stride`, an opt-in fast `correlation_threshold` for large screens. It sorts features by name and prunes redundancy within sliding windows of `corr_window` features (a two-pass approximation: the windowed pre-filter whittles the list down, then the exact all-pairs pass runs on the survivors to catch cross-family redundancy). Exact stays the default; the fast path keeps a different set of features but preserves the information (reconstruction R2 near 1) and the downstream replicate signal, several times faster on screens with many thousands of features.
 
 ### Changed
 
@@ -37,6 +38,7 @@ and this project adheres to [Semantic Versioning][].
 - `mantispy`: a backed read whose rows are already in increasing order, which is what every grouped path asks for, goes to h5py as it stands instead of being sorted and then gathered back into the order it was already in. That gather was a full-size copy of the block just read, 720 MB at JUMP well scale. Rows that form a run with no gaps, which is every group of a file stored in the grouping's own order and every row under `by=None`, are read as one block rather than selected point by point: 0.022 ms against 0.168 ms for a 200-row well on an uncompressed 20,000 x 200 file, and the same 7x at 10,000 rows
 - `mantispy`: `reduce_grouped` rejects a `mask` that does not hold one entry per row with one message on both the backed and the in-memory path, where each previously raised a different error from inside numpy
 - `mantispy`: a grouped reduction of a matrix stored column-major (CSC) on disk says that it cannot be read row by row, and names the two ways out. anndata falls back to reading the whole matrix for each group, so a loop over 50,000 wells reads the screen 50,000 times with nothing said
+- `mantispy.pp`: `variance_threshold` and `drop_outliers` reduce one column block at a time, so `feature_select` no longer builds a full-matrix copy and fits large screens on a commodity node.
 
 ### Fixed
 
