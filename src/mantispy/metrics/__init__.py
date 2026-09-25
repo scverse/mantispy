@@ -10,7 +10,7 @@ from mantispy.metrics._evaluate import evaluate_correction
 from mantispy.metrics._lisi import lisi
 from mantispy.metrics._relationships import known_relationships
 from mantispy.metrics._silhouette import silhouette_batch, silhouette_label
-from mantispy.metrics._variance import batch_variance_explained, pc_regression
+from mantispy.metrics._variance import batch_variance_explained, pc_regression, variance_carried
 
 __all__ = [
     "diagnose_testing",
@@ -21,4 +21,5 @@ __all__ = [
     "pc_regression",
     "silhouette_batch",
     "silhouette_label",
+    "variance_carried",
 ]
