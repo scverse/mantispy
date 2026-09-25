@@ -90,11 +90,20 @@ def feature_groups(adata: AnnData, key: str | None = None, ax: Axes | None = Non
     # A geometry feature has no channel; count it under "none" rather than let value_counts drop the NaN.
     annotation = as_frame(adata.var).loc[mask, ["feature_group", "channel"]].astype(object).fillna("none").astype(str)
     counts = annotation.value_counts().unstack(fill_value=0)
+    # Colocalization features carry a pipe-joined channel pair; on their own each pair is a separate
+    # legend entry, dozens in all. Collapse them into one "multiple" category.
+    combined = [channel for channel in counts.columns if "|" in channel]
+    if combined:
+        counts = counts.drop(columns=combined).assign(multiple=counts[combined].sum(axis=1))
+    order = [c for c in ["none"] if c in counts.columns]
+    order += sorted(c for c in counts.columns if c not in ("none", "multiple"))
+    order += [c for c in ["multiple"] if c in counts.columns]
+    counts = counts[order]
 
     ax = _axes(ax, (7, 4))
     counts.plot.bar(stacked=True, ax=ax)
     ax.set_ylabel("features")
     ax.set_xlabel("feature group")
-    ax.legend(title="channel", fontsize=6, title_fontsize=7)
+    ax.legend(title="channel", fontsize=7, title_fontsize=8, loc="upper left", bbox_to_anchor=(1.0, 1.0), frameon=False)
     ax.tick_params(axis="x", rotation=45)
     return ax

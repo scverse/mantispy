@@ -201,6 +201,7 @@ def correlated_pairs(
     chunk_size: int | None = None,
     block_size: int | None = None,
     *,
+    absolute: bool = False,
     order: np.ndarray | None = None,
     window: int | None = None,
     stride: int | None = None,
@@ -212,12 +213,13 @@ def correlated_pairs(
 
     Args:
         X: Observations by features.
-        threshold: Pairs whose signed correlation exceeds this are returned.
-            The comparison is signed, as in pycytominer's ``correlation_threshold``.
+        threshold: Pairs whose correlation exceeds this are returned.
         method: As :func:`corr_matrix`.
         chunk_size: As :func:`corr_matrix`.
         block_size: Columns per block.
             ``None`` picks one from :data:`BLOCK_BYTES`.
+        absolute: Threshold ``|r|`` rather than the signed correlation.
+            The default is signed, as in pycytominer's ``correlation_threshold``, which keeps a pair correlated at -1.0.
         order: Column order the sliding window walks, as returned by ``np.argsort``.
             Used only when ``window`` is set. ``None`` walks the columns as given.
         window: If set, approximate the exact pass by correlating only within a sliding window of this many columns of ``order``.
@@ -234,7 +236,7 @@ def correlated_pairs(
             raise ValueError(f"window must be a positive integer, got {window!r}")
         if stride is not None and stride < 1:
             raise ValueError(f"stride must be a positive integer, got {stride!r}")
-        return _windowed_pairs(np.asarray(X), threshold, method, chunk_size, order, window, stride)
+        return _windowed_pairs(np.asarray(X), threshold, method, chunk_size, order, window, stride, absolute)
 
     raw = np.asarray(X)
     X, dirty = _prepare(X, method)
@@ -249,7 +251,7 @@ def correlated_pairs(
         # Threshold the strip before overwriting it.
         # A comparison against NaN is False, and the strict lower triangle of the diagonal block holds each within-block pair once.
         # A mask avoids np.tril_indices, which would materialize every within-block pair.
-        above = strip > threshold
+        above = (np.abs(strip) > threshold) if absolute else (strip > threshold)
         above[:, start:] &= np.tril(np.ones((left.size, left.size), dtype=bool), k=-1)
         rows, columns = np.nonzero(above)
         if rows.size:
@@ -270,7 +272,8 @@ def correlated_pairs(
         # A dirty column's own row of the matrix, and its contribution to every clean column's, counted once each.
         total[dirty] += magnitude.sum(axis=1)
         total[against[~is_dirty[against]]] += magnitude[:, ~is_dirty[against]].sum(axis=0)
-        rows, columns = np.nonzero(np.nan_to_num(values, nan=0.0) > threshold)
+        signal = magnitude if absolute else np.nan_to_num(values, nan=0.0)
+        rows, columns = np.nonzero(signal > threshold)
         columns = against[columns]
         # A dirty-dirty pair appears in both orders; keep the one that is not the diagonal.
         keep = ~is_dirty[columns] | (columns > dirty[rows])
@@ -289,6 +292,7 @@ def _windowed_pairs(
     order: np.ndarray | None,
     window: int,
     stride: int | None,
+    absolute: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Approximate :func:`correlated_pairs` by correlating only within a sliding window of ``order``.
 
@@ -312,7 +316,7 @@ def _windowed_pairs(
         corr = corr_matrix(X[:, cols], method=method, chunk_size=chunk_size, work_dtype=np.float32)
         iu, ju = np.triu_indices(cols.size, k=1)
         signed = corr[iu, ju]
-        hit = signed > threshold  # Signed, exactly as the exact path.
+        hit = (np.abs(signed) > threshold) if absolute else (signed > threshold)  # As the exact path.
         a, b = cols[iu[hit]], cols[ju[hit]]
         pairs_list.append(np.column_stack([np.minimum(a, b), np.maximum(a, b)]))
         mag_list.append(np.abs(signed[hit]))
@@ -329,6 +333,61 @@ def _windowed_pairs(
     np.add.at(total, found[:, 0], magnitude)
     np.add.at(total, found[:, 1], magnitude)
     return found.astype(np.int64), total
+
+
+def rank_revealing_subset(X: np.ndarray, threshold: float, method: str = "pearson") -> np.ndarray:
+    """A non-redundant subset of the columns, by rank-revealing QR.
+
+    A pairwise correlation filter is blind to multivariate collinearity: a feature that is a linear
+    combination of several others has no single large pairwise correlation, yet carries no new
+    information. Column-pivoted QR removes it. It orders the columns so each pivot is the one least
+    explained by the pivots before it; on columns scaled to unit norm ``|R_kk|`` is ``sqrt(1 - R**2)``
+    for the multiple correlation ``R`` of that column with those earlier pivots. Keeping every pivot
+    whose residual exceeds ``sqrt(1 - threshold**2)`` drops a column once the features kept before it
+    predict it at multiple correlation ``threshold``, the multivariate generalization of a pairwise cut.
+
+    One decomposition does it, keeping original columns rather than components. It is deterministic, but
+    which representative of a near-tied group is kept depends on the column order.
+
+    Args:
+        X: Observations by features.
+        threshold: In ``[0, 1)``, on the scale of pycytominer's ``correlation_threshold``.
+        method: ``"pearson"``, or ``"spearman"`` to rank the columns first.
+
+    Returns:
+        A boolean keep mask over the columns. Constant columns are dropped; columns holding missing
+        values cannot be assessed and are kept, so run ``drop_na_columns`` first.
+
+    Raises:
+        ValueError: If ``threshold`` is not in ``[0, 1)``.
+    """
+    if not 0.0 <= threshold < 1.0:
+        raise ValueError(f"threshold must be in [0, 1), got {threshold}")
+    from scipy.linalg import qr
+
+    X, dirty = _prepare(X, method)
+    n_vars = X.shape[1]
+    keep = np.ones(n_vars, dtype=bool)
+    # Missing values leave a column unassessable; defer it to drop_na_columns rather than guess.
+    clean = np.setdiff1d(np.arange(n_vars), dirty, assume_unique=True)
+    if clean.size == 0:
+        return keep
+
+    standardized = _standardize(X if dirty.size == 0 else X[:, clean])
+    # A constant column standardizes to an all-NaN column (zero norm), so one row tells them apart; drop it.
+    constant = ~np.isfinite(standardized[0])
+    keep[clean[constant]] = False
+    usable = clean[~constant]
+    if usable.size == 0:
+        return keep
+
+    # mode="r" skips forming the discarded Q factor; only the diagonal and pivots are used.
+    r, pivots = qr(standardized if not constant.any() else standardized[:, ~constant], mode="r", pivoting=True)
+    # geqp3 orders the diagonal non-increasing, so the dropped columns are the tail of the pivot order.
+    residual = np.abs(np.diag(r))
+    n_keep = int(np.count_nonzero(residual > np.sqrt(1.0 - threshold**2)))
+    keep[usable[pivots[n_keep:]]] = False
+    return keep
 
 
 def _iter_clean_blocks(
