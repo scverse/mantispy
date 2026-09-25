@@ -20,6 +20,7 @@ from collections.abc import Iterator
 
 import numpy as np
 import pandas as pd
+from numpy.typing import DTypeLike
 
 #: Bytes a single float64 row chunk may occupy.
 #: The row count follows from the feature count, which sets the memory: 100 000 rows is 24 MB at 30 features and 3.2 GB at 4000.
@@ -58,7 +59,9 @@ def _prepare(X: np.ndarray, method: str) -> tuple[np.ndarray, np.ndarray]:
     return X, np.flatnonzero(~np.isfinite(X).all(axis=0))
 
 
-def corr_matrix(X: np.ndarray, method: str = "pearson", chunk_size: int | None = None) -> np.ndarray:
+def corr_matrix(
+    X: np.ndarray, method: str = "pearson", chunk_size: int | None = None, *, work_dtype: DTypeLike = np.float64
+) -> np.ndarray:
     """Correlation between the columns of ``X``.
 
     Args:
@@ -67,6 +70,7 @@ def corr_matrix(X: np.ndarray, method: str = "pearson", chunk_size: int | None =
             Spearman ranks the columns first and then runs the same code path.
         chunk_size: Rows per chunk in the moment accumulation.
             ``None`` picks a row count from the number of features so that one chunk stays around 256 MB.
+        work_dtype: dtype the block products run in; float64 (default) matches pandas exactly, float32 is faster and used by the windowed pass.
 
     Returns:
         A ``(n_vars, n_vars)`` float64 matrix.
@@ -80,15 +84,15 @@ def corr_matrix(X: np.ndarray, method: str = "pearson", chunk_size: int | None =
     X, dirty = _prepare(X, method)
     n_vars = X.shape[1]
     if dirty.size == 0:
-        return _gram_corr(X, chunk_size)
+        return _gram_corr(X, chunk_size, work_dtype=work_dtype)
 
     clean = np.setdiff1d(np.arange(n_vars), dirty, assume_unique=True)
     out = np.full((n_vars, n_vars), np.nan)
     if clean.size:
-        out[np.ix_(clean, clean)] = _gram_corr(X, chunk_size, columns=clean)
+        out[np.ix_(clean, clean)] = _gram_corr(X, chunk_size, columns=clean, work_dtype=work_dtype)
     # Every pair touching a missing value, in one batch of six matrix products.
     against = np.arange(n_vars)
-    values = _gappy_corr(raw, X, dirty, against, chunk_size, method)
+    values = _gappy_corr(raw, X, dirty, against, chunk_size, method, work_dtype=work_dtype)
     out[np.ix_(dirty, against)] = values
     out[np.ix_(against, dirty)] = values.T
     return out
@@ -103,7 +107,13 @@ def _pattern_groups(finite: np.ndarray, columns: np.ndarray) -> dict[bytes, list
 
 
 def _gappy_corr(
-    raw: np.ndarray, ranked: np.ndarray, left: np.ndarray, right: np.ndarray, chunk_size: int | None, method: str
+    raw: np.ndarray,
+    ranked: np.ndarray,
+    left: np.ndarray,
+    right: np.ndarray,
+    chunk_size: int | None,
+    method: str,
+    work_dtype: DTypeLike = np.float64,
 ) -> np.ndarray:
     """Pairwise-complete correlation of ``left`` against ``right``, re-ranking for Spearman.
 
@@ -118,7 +128,7 @@ def _gappy_corr(
     Where every column is complete, the single group spans everything and the ranks are the global ones.
     """
     if method != "spearman":
-        return _pairwise_corr(ranked, left, right, chunk_size)
+        return _pairwise_corr(ranked, left, right, chunk_size, work_dtype=work_dtype)
 
     finite = np.isfinite(raw)
     out = np.full((left.size, right.size), np.nan)
@@ -165,6 +175,10 @@ def correlated_pairs(
     method: str = "pearson",
     chunk_size: int | None = None,
     block_size: int | None = None,
+    *,
+    order: np.ndarray | None = None,
+    window: int | None = None,
+    stride: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Column pairs correlated above ``threshold``, and each column's total ``|r|``.
 
@@ -179,11 +193,20 @@ def correlated_pairs(
         chunk_size: As :func:`corr_matrix`.
         block_size: Columns per block.
             ``None`` picks one from :data:`BLOCK_BYTES`.
+        order: Column order the sliding window walks, as returned by ``np.argsort``.
+            Used only when ``window`` is set. ``None`` walks the columns as given.
+        window: If set, approximate the exact pass by correlating only within a sliding window of this many columns of ``order``.
+            Pairs that sort more than one window apart are never tested, so slightly less redundancy is removed.
+        stride: Step between windows. ``None`` steps by ``window`` (no overlap); a smaller stride overlaps consecutive windows so boundary pairs are still tested.
 
     Returns:
         ``(pairs, total)``, where ``pairs`` is a ``(k, 2)`` array of column indices holding each unordered pair once.
         ``total`` is ``sum(|r|)`` over each column of the full matrix, counting the diagonal and reading ``NaN`` as zero, which is the ranking pycytominer drops pairs by.
+        The windowed path returns the same contract, with ``total`` summed only over the pairs it tested.
     """
+    if window is not None:
+        return _windowed_pairs(np.asarray(X), threshold, method, chunk_size, order, window, stride)
+
     raw = np.asarray(X)
     X, dirty = _prepare(X, method)
     n_vars = X.shape[1]
@@ -229,6 +252,60 @@ def correlated_pairs(
     return found.astype(np.int64), total
 
 
+def _windowed_pairs(
+    X: np.ndarray,
+    threshold: float,
+    method: str,
+    chunk_size: int | None,
+    order: np.ndarray | None,
+    window: int,
+    stride: int | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Approximate :func:`correlated_pairs` by correlating only within a sliding window of ``order``.
+
+    CellProfiler names encode the feature family, so sorting by name groups correlated features together and a window catches most redundancy.
+    A stride below the window overlaps consecutive windows, so a pair straddling a boundary is still tested; the overlap makes some pairs turn up twice, and both the returned set and the per-feature total count each pair once.
+    Only within-window pairs are ever compared, so features that sort into different windows are never tested and slightly less redundancy is removed than by the exact pass.
+    """
+    n_vars = X.shape[1]
+    order = np.arange(n_vars) if order is None else np.asarray(order)
+    stride = window if stride is None else stride
+
+    pairs_list: list[np.ndarray] = []
+    total = np.zeros(n_vars)
+    # Above-threshold pairs are sparse, so a set of the pairs already summed stays small and avoids an n_vars ** 2 array.
+    counted: set[tuple[int, int]] = set()
+    for start in range(0, n_vars, stride):
+        cols = order[start : start + window]
+        if cols.size >= 2:
+            # corr_matrix carries the NaN-safe path, so constant or gappy columns come back as NaN and fail the signed test.
+            # The windowed pass is already approximate, so float32 correlation (good to ~1e-4) costs nothing extra in accuracy and halves the work.
+            corr = corr_matrix(X[:, cols], method=method, chunk_size=chunk_size, work_dtype=np.float32)
+            iu, ju = np.triu_indices(cols.size, k=1)
+            signed = corr[iu, ju]
+            hit = signed > threshold  # Signed, exactly as the exact path.
+            if hit.any():
+                a, b = cols[iu[hit]], cols[ju[hit]]
+                lo, hi = np.minimum(a, b), np.maximum(a, b)
+                pairs_list.append(np.column_stack([lo, hi]))
+                magnitude = np.abs(signed[hit])
+                for low, high, absr in zip(lo.tolist(), hi.tolist(), magnitude.tolist(), strict=True):
+                    if (low, high) in counted:
+                        continue
+                    counted.add((low, high))
+                    total[low] += absr
+                    total[high] += absr
+        if start + window >= n_vars:
+            break
+
+    if pairs_list:
+        # The overlap tests some pairs in two windows; keep one row per unordered pair.
+        found = np.unique(np.concatenate(pairs_list), axis=0).astype(np.int64)
+    else:
+        found = np.empty((0, 2), dtype=np.int64)
+    return found, total
+
+
 def _iter_clean_blocks(
     X: np.ndarray, clean: np.ndarray, block_size: int, chunk_size: int | None
 ) -> Iterator[tuple[int, np.ndarray, np.ndarray, np.ndarray]]:
@@ -246,7 +323,9 @@ def _iter_clean_blocks(
         yield start, left, earlier, _gram_block(X, left, clean[: start + left.size], chunk_size)
 
 
-def _gram_corr(X: np.ndarray, chunk_size: int | None, columns: np.ndarray | None = None) -> np.ndarray:
+def _gram_corr(
+    X: np.ndarray, chunk_size: int | None, columns: np.ndarray | None = None, work_dtype: DTypeLike = np.float64
+) -> np.ndarray:
     """Pearson correlation from chunk-accumulated sums and cross-products.
 
     ``columns`` restricts the computation to a subset without copying it out of ``X``.
@@ -259,12 +338,12 @@ def _gram_corr(X: np.ndarray, chunk_size: int | None, columns: np.ndarray | None
     n_obs = X.shape[0]
     n_vars = X.shape[1] if columns is None else columns.size
     chunk_size = chunk_rows(n_vars) if chunk_size is None else chunk_size
-    centre = _finite_mean(X, chunk_size, columns)
+    centre = _finite_mean(X, chunk_size, columns).astype(work_dtype)
     total = np.zeros(n_vars, dtype=np.float64)
     gram = np.zeros((n_vars, n_vars), dtype=np.float64)
     for start in range(0, n_obs, chunk_size):
         rows = slice(start, start + chunk_size)
-        block = (X[rows] if columns is None else X[rows][:, columns]).astype(np.float64) - centre
+        block = (X[rows] if columns is None else X[rows][:, columns]).astype(work_dtype) - centre
         total += block.sum(axis=0)
         gram += block.T @ block
 
@@ -304,7 +383,9 @@ def _gram_block(X: np.ndarray, left: np.ndarray, right: np.ndarray, chunk_size: 
     )
 
 
-def _pairwise_corr(X: np.ndarray, left: np.ndarray, right: np.ndarray, chunk_size: int | None) -> np.ndarray:
+def _pairwise_corr(
+    X: np.ndarray, left: np.ndarray, right: np.ndarray, chunk_size: int | None, work_dtype: DTypeLike = np.float64
+) -> np.ndarray:
     """Pairwise-complete correlation of ``left`` against ``right``, from six moments.
 
     Each pair uses the rows where both of its columns are finite, the deletion rule of ``pandas.DataFrame.corr``.
@@ -325,7 +406,7 @@ def _pairwise_corr(X: np.ndarray, left: np.ndarray, right: np.ndarray, chunk_siz
 
     for start in range(0, n_obs, chunk_size):
         rows = slice(start, start + chunk_size)
-        values = [X[rows][:, side].astype(np.float64) - centre[side] for side in (left, right)]
+        values = [X[rows][:, side].astype(work_dtype) - centre[side] for side in (left, right)]
         masks = [np.isfinite(block).astype(np.float64) for block in values]
         zeroed = [np.where(mask.astype(bool), block, 0.0) for block, mask in zip(values, masks, strict=True)]
         del values

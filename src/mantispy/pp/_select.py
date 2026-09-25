@@ -18,7 +18,7 @@ from anndata import AnnData
 
 from mantispy._core._corr import correlated_pairs
 from mantispy._core._reduce import get_matrix, group_codes, group_offsets
-from mantispy._core._stats import nanvar
+from mantispy._core._stats import _column_block, nanvar
 from mantispy._core.features import blocklist_hits
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
@@ -80,20 +80,30 @@ def _op_frequency_threshold(X: np.ndarray, freq_cut: float = 0.05, unique_cut: f
     return keep
 
 
-def _op_correlation_threshold(X: np.ndarray, threshold: float = 0.9, method: str = "pearson") -> np.ndarray:
+def _op_correlation_threshold(
+    X: np.ndarray,
+    threshold: float = 0.9,
+    method: str = "pearson",
+    *,
+    order: np.ndarray | None = None,
+    window: int | None = None,
+    stride: int | None = None,
+) -> np.ndarray:
     """Drop one feature from every pair correlated above ``threshold``.
 
     Each over-threshold pair is judged on its own against a ranking of total absolute correlation computed once from the full matrix; the member ranked as more correlated overall is dropped.
     There is no iterative sweep, so a feature already dropped by one pair does not spare its partner in another.
+
+    ``window`` switches to the approximate windowed pass; see :func:`~mantispy._core._corr.correlated_pairs`.
     """
     n_vars = X.shape[1]
     # Signed correlation, as in pycytominer, which keeps a pair correlated at -1.0.
     # correlated_pairs never builds the full matrix, so this scales to tens of thousands of features.
-    pairs, total = correlated_pairs(X, threshold, method=method)
+    pairs, total = correlated_pairs(X, threshold, method=method, order=order, window=window, stride=stride)
     # Rank features by how correlated they are with everything else, ascending.
-    order = np.argsort(total, kind="stable")
+    ranking = np.argsort(total, kind="stable")
     rank = np.empty(n_vars, dtype=np.int64)
-    rank[order] = np.arange(n_vars)
+    rank[ranking] = np.arange(n_vars)
 
     keep = np.ones(n_vars, dtype=bool)
     if pairs.size:
@@ -112,9 +122,14 @@ def _op_drop_outliers(X: np.ndarray, outlier_cutoff: float = 500.0) -> np.ndarra
 
     Ratios with a near-zero denominator blow up like this.
     """
+    n_obs, n_vars = X.shape
+    # One column block at a time, so np.abs never copies more than one block.
+    block = _column_block(n_obs, X.dtype.itemsize)
+    largest = np.empty(n_vars, dtype=np.float64)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)  # "All-NaN slice encountered"
-        largest = np.nanmax(np.abs(X), axis=0)
+        for start in range(0, n_vars, block):
+            largest[start : start + block] = np.nanmax(np.abs(X[:, start : start + block]), axis=0)
     return ~(np.nan_to_num(largest, nan=0.0) > outlier_cutoff)
 
 
@@ -161,6 +176,8 @@ def feature_select(
     unique_cut: float = 0.01,
     corr_threshold: float = 0.9,
     corr_method: str = "pearson",
+    corr_window: int | None = None,
+    corr_stride: int | None = None,
     na_cutoff: float = 0.05,
     outlier_cutoff: float = 500.0,
     blocklist: str | Sequence[str] = "default",
@@ -179,6 +196,8 @@ def feature_select(
         unique_cut: ``frequency_threshold``: drop a feature when its share of distinct values is below this.
         corr_threshold: ``correlation_threshold``: drop one member of every pair correlated above this.
         corr_method: ``correlation_threshold``: ``"pearson"`` or ``"spearman"``.
+        corr_window: ``correlation_threshold``: if set, approximate the operation by sorting features by name and correlating only within a sliding window of this many features. Much faster on large feature sets; may keep a few redundant pairs that sort into different windows.
+        corr_stride: ``correlation_threshold``: step between windows, defaulting to ``corr_window`` (no overlap). A stride smaller than the window overlaps consecutive windows so boundary pairs are still tested.
         na_cutoff: ``drop_na_columns``: drop features missing in more than this fraction of rows.
         outlier_cutoff: ``drop_outliers``: drop features whose absolute value exceeds this.
         blocklist: ``blocklist``: ``"default"`` for the bundled list, or explicit names. Matched against the current names and against ``var["original_name"]``, so it works either side of :func:`~mantispy.pp.standardize_feature_names`.
@@ -225,7 +244,14 @@ def feature_select(
         elif operation == "frequency_threshold":
             mask = _op_frequency_threshold(X, freq_cut, unique_cut)
         elif operation == "correlation_threshold":
-            mask = _op_correlation_threshold(X, corr_threshold, corr_method)
+            order = None
+            if corr_window is not None:
+                # Names of the columns of the sliced X, so order indexes X's columns 0..judged.size-1.
+                names = np.asarray(adata.var_names[judged], dtype=str)
+                order = np.argsort(names, kind="stable")
+            mask = _op_correlation_threshold(
+                X, corr_threshold, corr_method, order=order, window=corr_window, stride=corr_stride
+            )
         elif operation == "drop_na_columns":
             mask = _op_drop_na_columns(X, na_cutoff)
         elif operation == "blocklist":
