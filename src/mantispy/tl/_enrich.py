@@ -124,6 +124,7 @@ def enrich(
         raise ValueError(f"no feature sets built from by={by!r}: every feature's annotation is missing")
 
     if method == "consensus":
+        panel: tuple[str, ...]
         if methods is None:
             panel = CONSENSUS_PANEL
         elif isinstance(methods, str):
