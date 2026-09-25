@@ -8,7 +8,7 @@ import pytest
 import mantispy as mt
 from mantispy._core.features import empty_annotation, parse_feature_names
 from mantispy._core.schema import stamp
-from mantispy.tl._enrich import METHODS
+from mantispy.tl._enrich import SINGLE_METHODS
 
 
 @pytest.fixture
@@ -183,7 +183,6 @@ def active():
     return adata, net, is_active_sample
 
 
-_SINGLE_METHODS = tuple(m for m in METHODS if m != "consensus")
 #: The single methods that also write a padj frame; aucell and gsva write only a score.
 _WITH_PADJ = {"ulm", "mlm", "ora", "gsea", "zscore", "waggr", "viper"}
 
@@ -201,7 +200,7 @@ _WITH_PADJ = {"ulm", "mlm", "ora", "gsea", "zscore", "waggr", "viper"}
         )
         if name == "mlm"
         else name
-        for name in _SINGLE_METHODS
+        for name in SINGLE_METHODS
     ],
 )
 def test_enrich_runs_every_single_method(active, method):
@@ -263,9 +262,7 @@ def test_consensus_ignores_a_stale_score_of_a_different_width(active):
     """A prior enrich may have left a score_* whose width differs from the net's; consensus must build
     from only its panel, neither crashing on nor clobbering that stale frame."""
     adata, net, _ = active
-    stale = pd.DataFrame(
-        np.zeros((adata.n_obs, 3), dtype=float), index=adata.obs_names, columns=["a", "b", "c"]
-    )
+    stale = pd.DataFrame(np.zeros((adata.n_obs, 3), dtype=float), index=adata.obs_names, columns=["a", "b", "c"])
     adata.obsm["score_ulm"] = stale
     mt.tl.enrich(adata, net=net, method="consensus", methods=["zscore", "aucell"], tmin=2)
     pd.testing.assert_frame_equal(adata.obsm["score_ulm"], stale)
