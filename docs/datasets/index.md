@@ -1,7 +1,9 @@
 # Datasets
 
-{mod}`mantispy.ds` serves public screens from the
-[Cell Painting Gallery](https://github.com/broadinstitute/cellpainting-gallery) {cite:p}`Weisbart_2024`, each
+{mod}`mantispy.ds` serves public screens, most from the
+[Cell Painting Gallery](https://github.com/broadinstitute/cellpainting-gallery) {cite:p}`Weisbart_2024` and the
+optical pooled screens from their authors' own hosts ({func}`~mantispy.ds.scallops_arv471` from the
+`Genentech/scallops-manuscript` GitHub repository, {func}`~mantispy.ds.cp_posh` from insitro's S3 bucket), each
 downloaded from files pinned by sha256.
 The overview covers the well-level screens, and five have pages of their own: where each comes from, how every
 column mantispy adds was derived, and what the data looks like.

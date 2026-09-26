@@ -16,7 +16,7 @@ import pandas as pd
 from scverse_misc.datasets import fetch, parse_registry, register_loader
 
 from mantispy._core.features import empty_annotation
-from mantispy._core.frames import as_frame
+from mantispy._core.frames import as_frame, categorize_metadata
 from mantispy._core.logging import get_logger, report_drop
 from mantispy._core.schema import SCHEMA_VERSION, stamp
 from mantispy._settings import settings
@@ -770,8 +770,10 @@ def scallops_arv471(cache_dir: str | Path | None = None) -> AnnData:
 
         ``Metadata_Perturbation``: the guide, so each guide is its own perturbation.
 
-        ``Metadata_ControlClass``: the upstream ``type``, one of ``"target"`` (a screened gene), ``"ntc"`` (a
-        non-targeting guide) or ``"neg"`` (a guide against an olfactory-receptor gene, a targeting negative control).
+        ``Metadata_Control_Type``: the schema's reserved control-type column, carrying the upstream ``type``, one of
+        ``"target"`` (a screened gene), ``"ntc"`` (a non-targeting guide) or ``"neg"`` (a guide against an
+        olfactory-receptor gene, a targeting negative control). The raw classes are kept rather than folded onto the
+        reserved ``negcon``/``poscon``/``trt`` vocabulary, none of which fits the targeting negative cleanly.
 
         ``Metadata_Control``: ``True`` for the non-targeting guides, the reference :func:`~mantispy.tl.hit_calling`
         and normalization test against. The olfactory-receptor negatives are not flagged, so they can be scored as
@@ -803,13 +805,16 @@ def scallops_arv471(cache_dir: str | Path | None = None) -> AnnData:
     df = kept
 
     gene = df["gene_symbol"].astype(str).to_numpy()
+    guide = df["sgRNA_id"].astype(str).to_numpy()
     frame = df[list(_SCALLOPS_FEATURES)].reset_index(drop=True)
     # NTC is the non-targeting guide set; hit_calling and the control normalization read the "nontargeting" spelling.
     frame["Metadata_Gene"] = np.where(gene == "NTC", "nontargeting", gene)
-    frame["Metadata_sgRNA"] = df["sgRNA_id"].astype(str).to_numpy()
-    frame["Metadata_ControlClass"] = df["type"].astype(str).to_numpy()
+    frame["Metadata_sgRNA"] = guide
+    # The upstream "type" under the schema's reserved control-type column. None of the reserved values
+    # (negcon/poscon/trt) fits the olfactory-receptor targeting negative cleanly, so the raw classes are kept.
+    frame["Metadata_Control_Type"] = df["type"].astype(str).to_numpy()
     frame["Metadata_Control"] = gene == "NTC"
-    frame["Metadata_Perturbation"] = df["sgRNA_id"].astype(str).to_numpy()
+    frame["Metadata_Perturbation"] = guide
     frame["Metadata_Plate"] = df["plate"].astype(str).to_numpy()
     # The raw well is an integer the well vocabulary cannot parse; write it as a padded W<nn> token so validate passes.
     frame["Metadata_Well"] = [f"W{int(well):02d}" for well in df["well"].to_numpy()]
@@ -911,6 +916,7 @@ def cp_posh(cache_dir: str | Path | None = None) -> AnnData:
         },
         index=pd.Index(df["ID"].astype(str).to_numpy()),
     )
+    obs = categorize_metadata(obs)
     adata = ad.AnnData(X=df[features].to_numpy(dtype=np.float32), obs=obs, var=empty_annotation(features))
     stamp(adata, resolution="cell")
     adata.uns["mantispy"]["dataset"] = _DATASETS["cp_posh"].metadata["accession"]

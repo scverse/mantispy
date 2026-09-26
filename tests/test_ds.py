@@ -323,7 +323,8 @@ def _write_scallops_fixture(path):
     return clean
 
 
-def _patch_scallops_files(monkeypatch, path):
+def _patch_files(monkeypatch, path):
+    """Point the loaders' ``_files`` at a single local fixture, whatever dataset asks for it."""
     from mantispy.ds import _datasets
 
     monkeypatch.setattr(_datasets, "_files", lambda name, cache_dir, select=None: [path])
@@ -333,7 +334,7 @@ def test_scallops_arv471_loads_clean_cell_resolution(tmp_path, monkeypatch):
     """The loader keeps only the ARV-471 cells with a full feature vector and validates against the schema."""
     path = tmp_path / "fig3.pq"
     clean = _write_scallops_fixture(path)
-    _patch_scallops_files(monkeypatch, path)
+    _patch_files(monkeypatch, path)
 
     adata = mt.ds.scallops_arv471()
 
@@ -344,14 +345,14 @@ def test_scallops_arv471_loads_clean_cell_resolution(tmp_path, monkeypatch):
     assert adata.obs_names.is_unique
     # The condition filter, boundary drop and NaN drop leave nothing but the clean ARV-471 cells.
     assert "Condition" not in adata.obs
-    assert set(adata.obs["Metadata_ControlClass"].astype(str)) == {"ntc", "target", "neg"}
+    assert set(adata.obs["Metadata_Control_Type"].astype(str)) == {"ntc", "target", "neg"}
 
 
 def test_scallops_arv471_maps_controls_and_guides(tmp_path, monkeypatch):
     """NTC becomes the non-targeting control, and every other guide is a targeted perturbation."""
     path = tmp_path / "fig3.pq"
     _write_scallops_fixture(path)
-    _patch_scallops_files(monkeypatch, path)
+    _patch_files(monkeypatch, path)
 
     adata = mt.ds.scallops_arv471()
     obs = as_frame(adata.obs)
@@ -376,7 +377,7 @@ def test_scallops_arv471_runs_hit_calling(tmp_path, monkeypatch):
 
     path = tmp_path / "fig3.pq"
     _write_scallops_fixture(path)
-    _patch_scallops_files(monkeypatch, path)
+    _patch_files(monkeypatch, path)
 
     adata = mt.ds.scallops_arv471()
 
@@ -439,17 +440,11 @@ def _write_cp_posh_fixture(path):
     return len(frame), controls
 
 
-def _patch_cp_posh_files(monkeypatch, path):
-    from mantispy.ds import _datasets
-
-    monkeypatch.setattr(_datasets, "_files", lambda name, cache_dir, select=None: [path])
-
-
 def test_cp_posh_loads_clean_cell_resolution(tmp_path, monkeypatch):
     """Every cell keeps a full feature vector and the object validates against the schema at cell resolution."""
     path = tmp_path / "cp_posh.pq"
     cells, _ = _write_cp_posh_fixture(path)
-    _patch_cp_posh_files(monkeypatch, path)
+    _patch_files(monkeypatch, path)
 
     adata = mt.ds.cp_posh()
 
@@ -462,13 +457,15 @@ def test_cp_posh_loads_clean_cell_resolution(tmp_path, monkeypatch):
     # The upstream metadata columns become obs, not features, and none leak into X or var.
     assert set(adata.var_names) == set(_CP_POSH_FIXTURE_FEATURES)
     assert not adata.var["is_feature"].isna().any()
+    # obs is categorized like every other loader's, so string columns are not left as object on 163k rows.
+    assert adata.obs["Metadata_Gene"].dtype == "category"
 
 
 def test_cp_posh_maps_controls_and_guides(tmp_path, monkeypatch):
     """Both control classes and the targeted genes are present, with only the controls flagged."""
     path = tmp_path / "cp_posh.pq"
     _, controls = _write_cp_posh_fixture(path)
-    _patch_cp_posh_files(monkeypatch, path)
+    _patch_files(monkeypatch, path)
 
     adata = mt.ds.cp_posh()
     obs = as_frame(adata.obs)
@@ -494,7 +491,7 @@ def test_cp_posh_runs_hit_calling(tmp_path, monkeypatch):
     """The object drives hit_calling against the non-targeting and intergenic controls and returns a table of groups."""
     path = tmp_path / "cp_posh.pq"
     _write_cp_posh_fixture(path)
-    _patch_cp_posh_files(monkeypatch, path)
+    _patch_files(monkeypatch, path)
 
     adata = mt.ds.cp_posh()
 
@@ -503,4 +500,9 @@ def test_cp_posh_runs_hit_calling(tmp_path, monkeypatch):
     hits = result.uns["mantispy"]["hits"]
     assert isinstance(hits, pd.DataFrame)
     assert not hits.empty
-    assert {"group", "is_hit"} <= set(hits.columns)
+    assert {"group", "is_hit", "distance", "qvalue"} <= set(hits.columns)
+    # The fixture shifts KIF18A three sigma off the controls, the strongest planted signal, so it must be the single
+    # most distant group and rank below the median qvalue rather than merely landing some row in the table.
+    ranked = hits.set_index("group")
+    assert ranked["distance"].idxmax() == "KIF18A"
+    assert ranked.loc["KIF18A", "qvalue"] <= ranked["qvalue"].median()
