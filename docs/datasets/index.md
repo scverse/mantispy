@@ -22,6 +22,8 @@ different bytes.
 | | {func}`~mantispy.ds.agnp` | silver nanoparticles in Huh7 cells | |
 | genetic screens | {func}`~mantispy.ds.jump_crispr` | the JUMP CRISPR knockout arm | [CRISPR knockouts](../tutorials/genetics/crispr.ipynb) |
 | | {func}`~mantispy.ds.rohban` | ORF overexpression of pathway genes | [which measurements moved](../tutorials/phenotypes/which_features_moved.ipynb) |
+| optical pooled screens | {func}`~mantispy.ds.scallops_arv471` | single cells of a pooled CRISPR screen under the ER degrader ARV-471 | |
+| | {func}`~mantispy.ds.cp_posh` | single cells of a broad-morphology Cell Painting pooled CRISPR screen | |
 | variants | {func}`~mantispy.ds.luad` | lung adenocarcinoma alleles, mutant against wild type | |
 | | {func}`~mantispy.ds.pooled_rare` | rare variants in a pooled screen | |
 | cell models | {func}`~mantispy.ds.neuropainting` | astrocytes and neurons | |

@@ -8,6 +8,7 @@ from mantispy.ds._datasets import (
     bbbc021,
     chroma,
     corum,
+    cp_posh,
     jump_cells,
     jump_crispr,
     jump_export,
@@ -22,6 +23,7 @@ from mantispy.ds._datasets import (
     pki,
     pooled_rare,
     rohban,
+    scallops_arv471,
 )
 from mantispy.ds._synthetic import DEFAULT_CHANNELS, synthetic_plate
 
@@ -33,6 +35,7 @@ __all__ = [
     "blobs",
     "chroma",
     "corum",
+    "cp_posh",
     "jump_cells",
     "JUMP_LITE_MODELS",
     "jump_crispr",
@@ -48,5 +51,6 @@ __all__ = [
     "pki",
     "pooled_rare",
     "rohban",
+    "scallops_arv471",
     "synthetic_plate",
 ]
