@@ -714,6 +714,118 @@ def jump_crispr(annotate: bool = True, cache_dir: str | Path | None = None, **kw
     return adata
 
 
+#: The phenotype features :func:`scallops_arv471` keeps as ``X``: the ER stain and the two DAPI acquisitions
+#: (the DNA FISH round and the immunofluorescence round) as nuclear median intensities, and the ESR1, CCND1
+#: and GREB1 transcript spot counts in the nucleus and over the whole cell.
+_SCALLOPS_FEATURES = (
+    "Nuclei_Intensity_MedianIntensity_ER",
+    "Nuclei_Intensity_MedianIntensity_DAPI_IF",
+    "Nuclei_Intensity_MedianIntensity_DAPI_FISH",
+    "Nuclei_Spots_Count_ESR1",
+    "Cells_Spots_Count_ESR1",
+    "Nuclei_Spots_Count_CCND1",
+    "Cells_Spots_Count_CCND1",
+    "Nuclei_Spots_Count_GREB1",
+    "Cells_Spots_Count_GREB1",
+)
+
+#: The raw columns :func:`scallops_arv471` reads beside the features, to build ``obs`` and to filter on.
+_SCALLOPS_SOURCE = (
+    "gene_symbol",
+    "sgRNA_id",
+    "type",
+    "plate",
+    "well",
+    "Condition",
+    "Cells_Location_IntersectsBoundary_IF",
+)
+
+
+def scallops_arv471(cache_dir: str | Path | None = None) -> AnnData:
+    """SCALLOPS ARV-471, single cells of an optical pooled screen under an estrogen-receptor degrader.
+
+    The drug arm of a genome-scale optical pooled CRISPR screen from ``Genentech/scallops-manuscript``, its
+    Figure 3 table. Cells express a guide library and are treated with ARV-471 (vepdegestrant), a PROTAC that recruits
+    the CRL4-CRBN E3 ligase to the estrogen receptor and drives its degradation, then read by in-situ sequencing of
+    the guide barcodes and a phenotype round that stains DNA and the estrogen receptor and counts ESR1, CCND1 and
+    GREB1 transcripts. A guide that knocks out a gene the drug needs rescues the receptor, so cells carrying it keep
+    the phenotype of an untreated cell. The genes with that known mechanism are the members of the ligase the PROTAC
+    hijacks, ``CRBN``, ``DDB1``, ``CUL4A`` and ``CUL4B``, and ``ESR1`` itself, the drug's target.
+
+    This loads only the ARV-471 condition, at single-cell resolution, so a hit is a guide whose cells sit away from
+    the non-targeting cells in the phenotype space. The matched DMSO condition and the barcode-calling columns are
+    left in the upstream file. Downloads about 205 MB once, checked against a pinned sha256, and subsets it on read.
+
+    Args:
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
+
+    Returns:
+        Cells by nine phenotype features at cell resolution, with:
+
+        ``Metadata_Gene``: the gene the cell's guide targets, with the non-targeting guides written as
+        ``"nontargeting"`` (the upstream ``NTC``), the spelling the analysis functions read.
+
+        ``Metadata_sgRNA``: the guide identifier.
+
+        ``Metadata_Perturbation``: the guide, so each guide is its own perturbation.
+
+        ``Metadata_ControlClass``: the upstream ``type``, one of ``"target"`` (a screened gene), ``"ntc"`` (a
+        non-targeting guide) or ``"neg"`` (a guide against an olfactory-receptor gene, a targeting negative control).
+
+        ``Metadata_Control``: ``True`` for the non-targeting guides, the reference :func:`~mantispy.tl.hit_calling`
+        and normalization test against. The olfactory-receptor negatives are not flagged, so they can be scored as
+        perturbations that should not move.
+
+        ``Metadata_Plate``: the plate, ``A`` or ``B``.
+
+        ``Metadata_Well``: the physical well, written as ``W03``. The raw well is an integer that the well vocabulary
+        cannot parse, so it is padded and prefixed. The ARV-471 arm sits in one well per plate, so this is constant.
+
+        The nine features are the ER and the two DAPI median intensities and the ESR1, CCND1 and GREB1 spot counts in
+        the nucleus and the whole cell. The barcode, geometry (nucleus centers) and quality columns of the upstream
+        table are dropped.
+
+    Notes:
+        Cells whose segmentation touches the field boundary (``Cells_Location_IntersectsBoundary_IF``) are cut off, so
+        their intensities and spot counts undercount, and are dropped. Cells missing any phenotype feature are dropped
+        too, so every returned cell has a full feature vector.
+
+        A cell carries no count. Aggregate to a guide-level profile with
+        ``mt.tl.aggregate(adata, by=("Metadata_Gene", "Metadata_sgRNA"))``, which writes ``Metadata_CellCount``.
+    """
+    (path,) = _files("scallops_arv471", cache_dir)
+    df = pd.read_parquet(path, columns=[*_SCALLOPS_FEATURES, *_SCALLOPS_SOURCE])
+    df = df[df["Condition"].astype(str) == "ARV-471"]
+    df = df[~df["Cells_Location_IntersectsBoundary_IF"].astype(bool)]
+    kept = df.dropna(subset=list(_SCALLOPS_FEATURES))
+    report_drop("cell(s) with a missing phenotype feature", len(df) - len(kept), len(df))
+    df = kept
+
+    gene = df["gene_symbol"].astype(str).to_numpy()
+    frame = df[list(_SCALLOPS_FEATURES)].reset_index(drop=True)
+    # NTC is the non-targeting guide set; hit_calling and the control normalization read the "nontargeting" spelling.
+    frame["Metadata_Gene"] = np.where(gene == "NTC", "nontargeting", gene)
+    frame["Metadata_sgRNA"] = df["sgRNA_id"].astype(str).to_numpy()
+    frame["Metadata_ControlClass"] = df["type"].astype(str).to_numpy()
+    frame["Metadata_Control"] = gene == "NTC"
+    frame["Metadata_Perturbation"] = df["sgRNA_id"].astype(str).to_numpy()
+    frame["Metadata_Plate"] = df["plate"].astype(str).to_numpy()
+    # The raw well is an integer the well vocabulary cannot parse; write it as a padded W<nn> token so validate passes.
+    frame["Metadata_Well"] = [f"W{int(well):02d}" for well in df["well"].to_numpy()]
+
+    adata = from_dataframe(frame, resolution="cell")
+    adata.uns["mantispy"]["dataset"] = _DATASETS["scallops_arv471"].metadata["accession"]
+    get_logger().info(
+        "scallops_arv471: %d cells x %d features, %d gene(s) over %d guide(s)",
+        adata.n_obs,
+        adata.n_vars,
+        adata.obs["Metadata_Gene"].nunique(),
+        adata.obs["Metadata_sgRNA"].nunique(),
+    )
+    return adata
+
+
 def corum(cache_dir: str | Path | None = None) -> pd.DataFrame:
     """Human protein complexes from CORUM, one row per complex and member gene.
 

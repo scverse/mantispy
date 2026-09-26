@@ -22,6 +22,7 @@ from mantispy.ds._datasets import (
     pki,
     pooled_rare,
     rohban,
+    scallops_arv471,
 )
 from mantispy.ds._synthetic import DEFAULT_CHANNELS, synthetic_plate
 
@@ -48,5 +49,6 @@ __all__ = [
     "pki",
     "pooled_rare",
     "rohban",
+    "scallops_arv471",
     "synthetic_plate",
 ]

@@ -4736,3 +4736,13 @@ datasets:
     - name: jump_crispr_cell_counts.csv.gz
       url: https://raw.githubusercontent.com/broadinstitute/jump-profiling-recipe/e8b7f32244194bafc08219d9a66a8a528b0ff4ce/inputs/cell_counts/crispr_cell_counts.csv.gz
       sha256: 67a137376cfb0725c22e5d71ae2b2543cc38efd2ad435f4d24de0b5078b7cbb0
+
+  scallops_arv471:
+    type: mantispy
+    doc_header: SCALLOPS ARV-471, single cells of an optical pooled CRISPR screen under the ER degrader vepdegestrant.
+    accession: Genentech/scallops-manuscript
+    shape: [2021814, 9]
+    files:
+    - name: dataframe_fig3_clean.pq
+      url: https://github.com/Genentech/scallops-manuscript/raw/main/Figure3/Data/dataframe_fig3_clean.pq
+      sha256: e3988e2d8e1be1899b6e7136896e61d8a20ffedf2f2283d7fc15355c4a7068e7
