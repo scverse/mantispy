@@ -564,3 +564,103 @@ def test_hit_calling_warns_without_a_well_column_at_cell_resolution():
     del adata.obs["Metadata_Well"]
     with pytest.warns(UserWarning, match="not independent replicates"):
         mt.tl.hit_calling(adata, n_permutations=100, seed=0)
+
+
+def test_the_block_null_reference_group_is_not_systematically_called():
+    """Regression for #68: the reference group's well-block null must not degenerate to a constant.
+
+    hit_calling scores the controls against themselves too. When the fit and null halves are split by
+    cell, the reference group's tested cells span essentially every control well, so the null draws the
+    whole pool on every permutation and collapses to the two values {1/(n+1), 1.0}: about half the seeds
+    then call the control a hit. Splitting whole wells into the two halves makes the reference draw a
+    strict subset of the wells like any other group, so its p-value is a genuine draw from the null.
+    """
+    called = 0
+    pvalues = []
+    for seed in range(12):
+        adata = _well_effect_cells(seed=seed)
+        mt.tl.hit_calling(adata, n_permutations=400, seed=seed)
+        row = adata.uns["mantispy"]["hits"].set_index("group").loc["DMSO"]
+        called += int(bool(row["is_hit"]))
+        pvalues.append(float(row["pvalue"]))
+    assert called <= 2, f"the reference group was called on {called}/12 pure-null seeds, p={pvalues}"
+    # A constant null pins every p-value at 1/(n+1) or 1.0; a genuine draw sits away from both extremes.
+    assert 0.2 < float(np.mean(pvalues)) < 0.8, f"the reference p-values are not a draw from the null: {pvalues}"
+
+
+def _two_plate_cells(cells_per_well=150, n_features=12, seed=0):
+    """A cell-level screen on two plates that reuse the same well names, with a per-well random effect.
+
+    Sixteen control wells and eight treated wells per plate, the well names identical across the two
+    plates, so a block keyed on the bare well name would fold each pair of physically distinct wells
+    into one and halve the block count.
+    """
+    rng = np.random.default_rng(seed)
+    names = [f"{chr(65 + w // 24)}{w % 24 + 1:02d}" for w in range(24)]
+    offsets = rng.normal(0.0, 1.0, size=(2, 24, n_features))
+
+    values, plate, well, perturbation, control = [], [], [], [], []
+    for p in range(2):
+        for w in range(24):
+            values.append(offsets[p, w] + rng.normal(0.0, 1.0, size=(cells_per_well, n_features)))
+            well += [names[w]] * cells_per_well
+            plate += [f"P{p + 1}"] * cells_per_well
+            treated = w >= 16
+            perturbation += [f"g{(w - 16) // 2:02d}" if treated else "DMSO"] * cells_per_well
+            control += [not treated] * cells_per_well
+
+    obs = pd.DataFrame(
+        {
+            "Metadata_Plate": plate,
+            "Metadata_Well": well,
+            "Metadata_Perturbation": perturbation,
+            "Metadata_Control": control,
+        },
+        index=[str(i) for i in range(len(well))],
+    )
+    adata = ad.AnnData(
+        X=np.vstack(values).astype(np.float32),
+        obs=obs,
+        var=pd.DataFrame(index=[f"Cells_AreaShape_f{i}" for i in range(n_features)]),
+    )
+    stamp(adata, resolution="cell")
+    return adata
+
+
+def test_hit_calling_blocks_on_the_physical_well_across_plates():
+    """The default block is the (plate, well) pair, so the same well name on two plates is two blocks."""
+    from mantispy._core._reduce import group_codes
+
+    adata = _two_plate_cells(seed=0)
+    by_name = int(group_codes(adata, "Metadata_Well")[0].max()) + 1
+    physical = int(group_codes(adata, ["Metadata_Plate", "Metadata_Well"])[0].max()) + 1
+    assert (by_name, physical) == (24, 48), "the fixture must reuse well names across the two plates"
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        default = mt.tl.hit_calling(adata, n_permutations=200, seed=0, copy=True)
+        physical_block = mt.tl.hit_calling(
+            adata, block=["Metadata_Plate", "Metadata_Well"], n_permutations=200, seed=0, copy=True
+        )
+        by_name_block = mt.tl.hit_calling(adata, block="Metadata_Well", n_permutations=200, seed=0, copy=True)
+
+    pd.testing.assert_frame_equal(default.uns["mantispy"]["hits"], physical_block.uns["mantispy"]["hits"])
+    assert not default.uns["mantispy"]["hits"].equals(by_name_block.uns["mantispy"]["hits"]), (
+        "folding two plates' wells onto one name must change the null"
+    )
+
+
+def test_hit_calling_does_not_crash_on_missing_wells_at_cell_resolution():
+    """A gap in Metadata_Well must warn and run the cell path, not crash a default hit_calling(adata).
+
+    group_codes raises on a missing value, so auto-detecting the block off the well column would turn a
+    call that worked before #68 into a crash. The block is left off and the cell-shuffle null runs instead.
+    """
+    adata = _well_effect_cells(seed=0)
+    wells = adata.obs["Metadata_Well"].astype(object).to_numpy().copy()
+    wells[: 5 * 200] = np.nan  # the first few wells go missing, as an incomplete platemap leaves them
+    adata.obs["Metadata_Well"] = wells
+    with pytest.warns(UserWarning, match="not independent replicates"):
+        mt.tl.hit_calling(adata, n_permutations=100, seed=0)
+    table = adata.uns["mantispy"]["hits"].set_index("group")
+    assert np.isfinite(table.loc["DMSO", "pvalue"]), "every group is still scored on the cell path"
