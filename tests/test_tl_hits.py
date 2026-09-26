@@ -476,6 +476,26 @@ def test_a_robust_covariance_needs_more_control_rows_than_features():
         mt.tl.hit_calling(wells, covariance="robust", n_permutations=50)
 
 
+def _cell_adata(values, plate, well, perturbation, control, n_features):
+    """Assemble a stamped cell-resolution AnnData from the per-well row lists the fixtures below build."""
+    obs = pd.DataFrame(
+        {
+            "Metadata_Plate": plate,
+            "Metadata_Well": well,
+            "Metadata_Perturbation": perturbation,
+            "Metadata_Control": control,
+        },
+        index=[str(i) for i in range(len(well))],
+    )
+    adata = ad.AnnData(
+        X=np.vstack(values).astype(np.float32),
+        obs=obs,
+        var=pd.DataFrame(index=[f"Cells_AreaShape_f{i}" for i in range(n_features)]),
+    )
+    stamp(adata, resolution="cell")
+    return adata
+
+
 def _well_effect_cells(n_control_wells=32, n_groups=10, wells_per_group=2, cells_per_well=200, n_features=12, seed=0):
     """A cell-level screen with a real well random effect and no treatment effect at all.
 
@@ -499,22 +519,7 @@ def _well_effect_cells(n_control_wells=32, n_groups=10, wells_per_group=2, cells
         perturbation += [f"p{(w - n_control_wells) // wells_per_group:02d}" if treated else "DMSO"] * cells_per_well
         control += [not treated] * cells_per_well
 
-    obs = pd.DataFrame(
-        {
-            "Metadata_Plate": plate,
-            "Metadata_Well": well,
-            "Metadata_Perturbation": perturbation,
-            "Metadata_Control": control,
-        },
-        index=[str(i) for i in range(len(well))],
-    )
-    adata = ad.AnnData(
-        X=np.vstack(values).astype(np.float32),
-        obs=obs,
-        var=pd.DataFrame(index=[f"Cells_AreaShape_f{i}" for i in range(n_features)]),
-    )
-    stamp(adata, resolution="cell")
-    return adata
+    return _cell_adata(values, plate, well, perturbation, control, n_features)
 
 
 def test_hit_calling_block_null_fixes_cell_resolution_pseudoreplication():
@@ -609,22 +614,7 @@ def _two_plate_cells(cells_per_well=150, n_features=12, seed=0):
             perturbation += [f"g{(w - 16) // 2:02d}" if treated else "DMSO"] * cells_per_well
             control += [not treated] * cells_per_well
 
-    obs = pd.DataFrame(
-        {
-            "Metadata_Plate": plate,
-            "Metadata_Well": well,
-            "Metadata_Perturbation": perturbation,
-            "Metadata_Control": control,
-        },
-        index=[str(i) for i in range(len(well))],
-    )
-    adata = ad.AnnData(
-        X=np.vstack(values).astype(np.float32),
-        obs=obs,
-        var=pd.DataFrame(index=[f"Cells_AreaShape_f{i}" for i in range(n_features)]),
-    )
-    stamp(adata, resolution="cell")
-    return adata
+    return _cell_adata(values, plate, well, perturbation, control, n_features)
 
 
 def test_hit_calling_blocks_on_the_physical_well_across_plates():

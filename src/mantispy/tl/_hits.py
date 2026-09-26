@@ -82,14 +82,13 @@ def _block_null(
     pool_blocks = block_codes[pool]
     uniq = np.unique(pool_blocks)
     n_draw = int(np.unique(block_codes[tested]).size)
-    # The pool's rows grouped by block, so a draw is the concatenation of a few of these.
-    rows_by_block = [pool[pool_blocks == code] for code in uniq]
+    # The pool's control distances grouped by block, so a draw is the concatenation of a few of these.
+    dist_by_block = [to_control[pool[pool_blocks == code]] for code in uniq]
     generator = np.random.default_rng([seed, index])
     null = np.empty(n_permutations)
     for permutation in range(n_permutations):
         chosen = generator.choice(uniq.size, size=n_draw, replace=False)
-        drawn = np.concatenate([rows_by_block[position] for position in chosen])
-        null[permutation] = float(np.median(to_control[drawn]))
+        null[permutation] = float(np.median(np.concatenate([dist_by_block[position] for position in chosen])))
     return null
 
 
@@ -186,26 +185,30 @@ def hit_calling(
     # The exchangeable unit of a cell-resolution screen is the physical well, not the cell (see Notes).
     # Default the block to the (Metadata_Plate, Metadata_Well) pair the schema uses, but only when the
     # object is explicitly stamped cell resolution, so an unstamped well or consensus object keeps its old
-    # behaviour. A single cell per well is already well-level, so blocking would be a no-op and stays off.
-    # ks has no permutation null, so none of this machinery runs for it.
-    if block is None and method != "ks" and adata.uns.get("mantispy", {}).get("resolution") == "cell":
-        candidate = [column for column in REQUIRED_OBS["cell"] if column in adata.obs]
-        obs = as_frame(adata.obs)
-        if "Metadata_Well" not in adata.obs or bool(obs[candidate].isna().to_numpy().any()):
-            # No usable well column (missing, or with gaps that group_codes would reject): warn and fall
-            # back to the cell-shuffle null rather than crash a default hit_calling(adata) that once worked.
-            warnings.warn(
-                "the object is at cell resolution and no usable block was given, so the permutation null "
-                "draws single cells. Cells within a well are not independent replicates (they share the well, "
-                "its plate position, seeding and focus), so the null is anti-conservative. Pass block= a well "
-                "column, add a complete Metadata_Well, or aggregate to wells with mt.tl.aggregate.",
-                UserWarning,
-                stacklevel=3,
-            )
-        elif np.bincount(group_codes(adata, candidate)[0]).max() > 1:
-            block = candidate
-
-    block_codes = group_codes(adata, block)[0] if (block is not None and method != "ks") else None
+    # behaviour. ks has no permutation null, so none of this machinery runs for it.
+    block_codes = None
+    if method != "ks":
+        if block is not None:
+            block_codes = group_codes(adata, block)[0]
+        elif adata.uns.get("mantispy", {}).get("resolution") == "cell":
+            candidate = [column for column in REQUIRED_OBS["cell"] if column in adata.obs]
+            obs = as_frame(adata.obs)
+            if "Metadata_Well" not in adata.obs or bool(obs[candidate].isna().to_numpy().any()):
+                # No usable well column (missing, or with gaps that group_codes would reject): warn and fall
+                # back to the cell-shuffle null rather than crash a default hit_calling(adata) that once worked.
+                warnings.warn(
+                    "the object is at cell resolution and no usable block was given, so the permutation null "
+                    "draws single cells. Cells within a well are not independent replicates (they share the well, "
+                    "its plate position, seeding and focus), so the null is anti-conservative. Pass block= a well "
+                    "column, add a complete Metadata_Well, or aggregate to wells with mt.tl.aggregate.",
+                    UserWarning,
+                    stacklevel=3,
+                )
+            else:
+                # A single cell per well is already well-level, so blocking would be a no-op and stays off.
+                candidate_codes = group_codes(adata, candidate)[0]
+                if np.bincount(candidate_codes).max() > 1:
+                    block_codes = candidate_codes
 
     values = representation(adata, use_rep)
     is_control = reference_mask(adata, reference)
