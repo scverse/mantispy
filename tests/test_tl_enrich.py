@@ -198,6 +198,7 @@ def _single_method_param(name: str):
                 reason="mlm can fail to fit decoupler's multivariate model when a set has few features; "
                 "it is kept in METHODS for parity with decoupler and is xfailed here only because the "
                 "synthetic net is small",
+                strict=True,
             ),
         )
     return name
@@ -399,6 +400,54 @@ def test_collinearity_warns_on_near_duplicate_sets():
         warnings.simplefilter("always")
         mt.tl.enrich(adata.copy(), net=net, method="ulm", tmin=2, check_collinearity=False)
     assert not any("near-collinear" in str(record.message) for record in caught)
+
+
+def test_permutation_survives_an_overlapping_net_at_the_default_tmin():
+    """Regression: a shuffle can collapse an overlapping set's targets below tmin, so the null scores fewer
+    sets than the observed run. The permutation path must realign the null to the observed sets by column
+    rather than crash on the shape mismatch, and still write a padj_* of the right shape with sane values."""
+    rng = np.random.default_rng(1)
+    names = [f"F{index}" for index in range(40)]
+    matrix = rng.standard_normal((15, len(names))).astype(np.float32)
+    adata = ad.AnnData(
+        matrix,
+        obs=pd.DataFrame({"state": ["on"] * 15}, index=[str(index) for index in range(15)]),
+        var=pd.DataFrame(index=names),
+    )
+    # Size-5 sets (the decoupler default tmin) that overlap, so a shuffle duplicate can drop one below tmin.
+    sets = {f"P{k}": names[k * 3 : k * 3 + 5] for k in range(6)}
+    net = pd.DataFrame(
+        [(source, target, 1.0) for source, targets in sets.items() for target in targets],
+        columns=["source", "target", "weight"],
+    )
+    mt.tl.enrich(adata, net=net, method="ulm", n_permutations=200)  # default tmin=5
+    padj = adata.obsm["padj_ulm"]
+    assert padj.shape == (adata.n_obs, net["source"].nunique())
+    assert list(padj.columns) == sorted(sets)
+    values = np.asarray(padj, dtype=float)
+    assert np.all((values >= 0.0) & (values <= 1.0))
+
+
+def test_collinearity_is_checked_below_decouplers_default_tmin():
+    """Regression: net_corr's own default tmin=5 drops small sets and silently skips the check. enrich must
+    thread the scoring tmin through, so near-duplicate sets smaller than five still warn."""
+    rng = np.random.default_rng(0)
+    names = [f"f{index}" for index in range(9)]
+    matrix = rng.standard_normal((8, len(names))).astype(np.float32)
+    adata = ad.AnnData(
+        matrix, obs=pd.DataFrame(index=[str(index) for index in range(8)]), var=pd.DataFrame(index=names)
+    )
+    # A and B are size-3 sets over the same targets (perfectly collinear), below net_corr's default tmin; C
+    # is independent, so net_corr has more than the single pair its internal FDR needs.
+    net = pd.DataFrame(
+        {
+            "source": ["A"] * 3 + ["B"] * 3 + ["C"] * 3,
+            "target": names[:3] + names[:3] + names[3:6],
+            "weight": 1.0,
+        }
+    )
+    with pytest.warns(UserWarning, match="near-collinear"):
+        mt.tl.enrich(adata, net=net, method="ulm", tmin=3)
 
 
 def test_get_features_filters_a_column_that_is_legitimately_empty():

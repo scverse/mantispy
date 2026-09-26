@@ -83,18 +83,16 @@ def feature_sets(adata: AnnData, by: str | Sequence[str] = "feature_group") -> p
     )
 
 
-def _score(dc: Any, frame: pd.DataFrame, network: pd.DataFrame, method: str, **decoupler_kwargs: Any) -> np.ndarray:
-    """The (wells x sets) score array for one method, taken off the matrix so no obsm score can leak in.
+def _score(dc: Any, frame: pd.DataFrame, network: pd.DataFrame, method: str, **decoupler_kwargs: Any) -> pd.DataFrame:
+    """The (wells x sets) score frame for one method, off the matrix so no obsm score can leak in.
 
-    ``decouple`` takes per-method keyword arguments through ``args={method: {...}}``, not as loose kwargs, so
-    ``tmin`` and an ORA ``n_up`` reach the scorer only when threaded that way.
+    Keeps decouple's frame (index and source columns) so callers can align by set; ``decouple`` takes
+    per-method kwargs through ``args={method: {...}}``, so ``tmin`` and an ORA ``n_up`` reach the scorer only
+    when threaded that way.
     """
-    return np.asarray(
-        dc.mt.decouple(frame, network, methods=[method], args={method: dict(decoupler_kwargs)}, cons=False)[
-            f"score_{method}"
-        ],
-        dtype=float,
-    )
+    return dc.mt.decouple(frame, network, methods=[method], args={method: dict(decoupler_kwargs)}, cons=False)[
+        f"score_{method}"
+    ]
 
 
 def _permutation_padj(
@@ -102,18 +100,18 @@ def _permutation_padj(
     network: pd.DataFrame,
     method: str,
     n_permutations: int,
-    observed: np.ndarray,
+    observed: pd.DataFrame,
     **decoupler_kwargs: Any,
 ) -> np.ndarray:
     """Two-sided permutation p-values for a single method, BH-adjusted per well.
 
-    Takes the already-scored observed net, then scores the net with its set membership shuffled
-    ``n_permutations`` times, counting per (well, set) how often a shuffled score is at least as extreme as
-    the observed one. Only the running count is kept, so memory does not grow with ``n_permutations``. The
-    count feeds the two-sided empirical p ``(1 + count) / (n_permutations + 1)``, which is then adjusted
-    across the sets of each well, the same family decoupler's parametric padj corrects over. The shuffled
-    nets are scored with the same ``decoupler_kwargs`` as the observed one, so ``tmin`` and the ORA ``n_up``
-    hold across the null.
+    Scores the net with its set membership shuffled ``n_permutations`` times, counting per (well, set) how
+    often a shuffled score is at least as extreme as the observed one; only the running count is kept, so
+    memory does not grow with ``n_permutations``. Each shuffle is realigned to the observed sets by column, so
+    a set the shuffle drops (its targets collapsed below ``tmin``) becomes NaN and counts nothing rather than
+    misaligning the null. The empirical two-sided p ``(1 + count) / (n_permutations + 1)`` is BH-adjusted
+    across each well's sets, the family decoupler's parametric padj also corrects over. The same
+    ``decoupler_kwargs`` score the null, so ``tmin`` and the ORA ``n_up`` hold across it.
     """
     import decoupler as dc
 
@@ -125,28 +123,28 @@ def _permutation_padj(
             stacklevel=4,
         )
 
-    observed = np.abs(observed)
-    count = np.zeros(observed.shape, dtype=np.int64)
+    observed_abs = observed.abs().to_numpy()
+    count = np.zeros(observed_abs.shape, dtype=np.int64)
     for seed in range(n_permutations):
         shuffled = dc.pp.shuffle_net(network, seed=seed)
-        # `nan >= x` is False, so a set the null could not score adds nothing to the count.
-        count += np.abs(_score(dc, frame, shuffled, method, **decoupler_kwargs)) >= observed
+        # Align by source so a set the null could not score is NaN, not a shifted column; `nan >= x` is False.
+        scored = _score(dc, frame, shuffled, method, **decoupler_kwargs).reindex(columns=observed.columns)
+        count += np.abs(scored.to_numpy()) >= observed_abs
     # A set the observed run could not score has no p-value; leave it NaN rather than the smallest one.
-    pvalues = np.where(np.isnan(observed), np.nan, (1.0 + count) / (n_permutations + 1.0))
+    pvalues = np.where(np.isnan(observed_abs), np.nan, (1.0 + count) / (n_permutations + 1.0))
     return np.vstack([benjamini_hochberg(row) for row in pvalues])
 
 
-def _warn_if_collinear(dc: Any, network: pd.DataFrame) -> None:
+def _warn_if_collinear(dc: Any, network: pd.DataFrame, tmin: int) -> None:
     """Warn when two feature sets are near-collinear, so their enrichment scores cannot be told apart.
 
-    Reads the collinearity from the network structure alone: ``net_corr`` without ``data=`` correlates the
-    sources by their target membership, so the cheap structural check needs no dense obs x var frame. A
-    hygiene check only: if net_corr refuses an unusual net the check is skipped rather than allowed to break
-    scoring.
+    Reads the collinearity from the network structure alone (``net_corr`` without ``data=``), so it needs no
+    dense obs x var frame. Uses the scoring ``tmin`` so it checks exactly the sets scoring will keep, not
+    net_corr's own default; a hygiene check only, skipped if net_corr refuses an unusual net.
     """
     try:
-        corr = dc.pp.net_corr(network)
-    except Exception:
+        corr = dc.pp.net_corr(network, tmin=tmin)
+    except Exception:  # noqa: BLE001 - net_corr raises assorted errors on an unusual net; any means skip the check
         return
     strong = corr[np.abs(corr["corr"].to_numpy(dtype=float)) > 0.95]
     pairs = [f"{a} and {b}" for a, b in zip(strong["source_a"], strong["source_b"], strict=False)]
@@ -160,7 +158,13 @@ def _warn_if_collinear(dc: Any, network: pd.DataFrame) -> None:
 
 
 def _clear_enrich_obsm(adata: AnnData) -> None:
-    """Drop the ``score_*``/``padj_*`` namespace enrich owns, so a rerun leaves no earlier run's frames behind."""
+    """Drop EVERY ``score_*``/``padj_*`` frame, not only the method about to be written.
+
+    Deliberate: enrich owns that whole obsm namespace and resets it each run, so a rerun never mixes frames
+    from an earlier method or a wider panel (see ``test_enrich_clears_stale_scores_from_an_earlier_run``).
+    The cost is that chaining ``enrich(method="ulm"); enrich(method="mlm")`` keeps only the mlm frames; run
+    ``method="consensus"`` with a panel to hold several methods' scores side by side instead.
+    """
     for key in [key for key in adata.obsm if key.startswith("score_") or key.startswith("padj_")]:
         del adata.obsm[key]
 
@@ -195,6 +199,7 @@ def enrich(
     Returns:
         ``None``, or the modified copy.
         decoupler writes ``obsm["score_<method>"]``, and ``obsm["padj_<method>"]`` for the methods that produce one (all but ``"aucell"`` and ``"gsva"``, which write only the score). ``method="consensus"`` writes ``obsm["score_consensus"]`` and ``obsm["padj_consensus"]`` alongside each panel member's own ``score_<method>`` (and its ``padj_<method>``, except for the score-only ``"aucell"`` and ``"gsva"``). All are frames indexed by set name.
+        Each call first clears **every** ``score_*``/``padj_*`` frame in ``obsm``: enrich owns that namespace and resets it, so chaining two single methods keeps only the last. Use ``method="consensus"`` with a panel to hold several methods' scores at once.
 
     Raises:
         ValueError: ``method`` is not one of ``METHODS``; ``methods`` is given with a non-consensus ``method``, or names an entry that is not a single method; ``n_permutations`` is negative, or positive with ``method="consensus"``; no feature set could be built from ``by``; or ``top_fraction`` is outside (0, 1).
@@ -215,7 +220,7 @@ def enrich(
 
     # A structural check, off the network alone, so the common parametric path materializes no dense frame.
     if check_collinearity and network["source"].nunique() > 1:
-        _warn_if_collinear(dc, network)
+        _warn_if_collinear(dc, network, decoupler_kwargs.get("tmin", 5))
 
     if method == "consensus":
         panel: tuple[str, ...]
@@ -230,19 +235,16 @@ def enrich(
             raise ValueError(f"methods entries must each be one of the single methods {SINGLE_METHODS}, got {invalid}")
         if not panel:
             raise ValueError("methods must name at least one single method for method='consensus'")
-        # decouple takes per-method kwargs in `args`; keep the ORA n_up default while letting the caller override it.
-        # Copy the inner dicts too, so setdefault does not write n_up into the caller's own mapping.
-        # _ora_n_up validates top_fraction, so an invalid range is caught before the dense frame is built.
-        args = {name: dict(values) for name, values in decoupler_kwargs.pop("args", {}).items()}
+        # Copy the inner dicts so setdefault never writes n_up into the caller's own mapping; args=None (an
+        # explicit pass-through) coerces to {}. _ora_n_up validates top_fraction before the dense frame is built.
+        args = {name: dict(values) for name, values in (decoupler_kwargs.pop("args", None) or {}).items()}
         if "ora" in panel:
             args.setdefault("ora", {}).setdefault("n_up", _ora_n_up(adata, top_fraction))
-        # Handing decouple the matrix (not the AnnData) makes it return the panel's scores and build the
-        # consensus from only those. A score_* left on obsm by an earlier enrich therefore cannot leak in,
-        # which an AnnData input would allow, since cons=True consolidates every score_* it finds on obsm.
+        # Scoring the matrix, not the AnnData, builds the consensus from only the panel: cons=True would else
+        # consolidate every score_* an earlier enrich left on obsm.
         frame = pd.DataFrame(get_matrix(adata), index=adata.obs_names, columns=adata.var_names)
         scores = dc.mt.decouple(frame, network, methods=list(panel), args=args, cons=True, **decoupler_kwargs)
-        # decouple returns None for a score-only method's padj (aucell, gsva); writing None into obsm
-        # corrupts the AnnData, so keep only the frames it actually produced.
+        # decouple returns None for a score-only method's padj (aucell, gsva); None in obsm corrupts the AnnData.
         _clear_enrich_obsm(adata)
         adata.obsm.update({key: value for key, value in scores.items() if value is not None})
         get_logger().info("enrich(consensus) scored %d set(s) with panel %s", network["source"].nunique(), panel)
@@ -252,16 +254,10 @@ def enrich(
         # ORA needs the same top-tail n_up in the null as in the observed run, so set it before scoring either.
         if method == "ora":
             decoupler_kwargs.setdefault("n_up", _ora_n_up(adata, top_fraction))
-        # Score the observed net the stale-safe way, off the matrix, so the padj lines up with a score that
-        # cannot fold an earlier enrich's obsm back in. The same decoupler_kwargs (tmin, n_up) reach the
-        # scorer via decouple's per-method `args`. Then replace the parametric padj with the calibrated one.
+        # Score off the matrix (stale-safe), then replace the parametric padj with the calibrated one.
         frame = pd.DataFrame(get_matrix(adata), index=adata.obs_names, columns=adata.var_names)
-        observed = dc.mt.decouple(frame, network, methods=[method], args={method: dict(decoupler_kwargs)}, cons=False)[
-            f"score_{method}"
-        ]
-        padj = _permutation_padj(
-            frame, network, method, n_permutations, np.asarray(observed, dtype=float), **decoupler_kwargs
-        )
+        observed = _score(dc, frame, network, method, **decoupler_kwargs)
+        padj = _permutation_padj(frame, network, method, n_permutations, observed, **decoupler_kwargs)
         _clear_enrich_obsm(adata)
         adata.obsm[f"score_{method}"] = observed
         adata.obsm[f"padj_{method}"] = pd.DataFrame(padj, index=observed.index, columns=observed.columns)
@@ -275,8 +271,12 @@ def enrich(
 
     if method == "ora":
         decoupler_kwargs.setdefault("n_up", _ora_n_up(adata, top_fraction))
+    # Score off the matrix, then clear, so a scorer that raises leaves the earlier run's frames intact and no
+    # stale obsm score can leak in. decouple runs the same scorer as dc.mt.<method>, so the numbers match.
+    frame = pd.DataFrame(get_matrix(adata), index=adata.obs_names, columns=adata.var_names)
+    scored = dc.mt.decouple(frame, network, methods=[method], args={method: dict(decoupler_kwargs)}, cons=False)
     _clear_enrich_obsm(adata)
-    getattr(dc.mt, method)(adata, network, **decoupler_kwargs)
+    adata.obsm.update({key: value for key, value in scored.items() if value is not None})
     get_logger().info("enrich(%s) scored %d set(s)", method, network["source"].nunique())
     return None
 
