@@ -261,12 +261,13 @@ def test_consensus_is_idempotent(active):
 
 def test_consensus_ignores_a_stale_score_of_a_different_width(active):
     """A prior enrich may have left a score_* whose width differs from the net's; consensus must build
-    from only its panel, neither crashing on nor clobbering that stale frame."""
+    from only its panel, neither crashing on that stale frame nor folding it into the consensus. enrich owns
+    the score_*/padj_* namespace, so it also clears the stale key rather than leaving it behind."""
     adata, net, _ = active
     stale = pd.DataFrame(np.zeros((adata.n_obs, 3), dtype=float), index=adata.obs_names, columns=["a", "b", "c"])
     adata.obsm["score_ulm"] = stale
     mt.tl.enrich(adata, net=net, method="consensus", methods=["zscore", "aucell"], tmin=2)
-    pd.testing.assert_frame_equal(adata.obsm["score_ulm"], stale)
+    assert "score_ulm" not in adata.obsm
     assert adata.obsm["score_consensus"].shape[1] == net["source"].nunique()
 
 
@@ -335,6 +336,46 @@ def test_consensus_rejects_permutations(active):
     adata, net, _ = active
     with pytest.raises(ValueError, match="n_permutations is not supported"):
         mt.tl.enrich(adata, net=net, method="consensus", n_permutations=10)
+
+
+def test_enrich_rejects_a_negative_n_permutations(active):
+    adata, net, _ = active
+    with pytest.raises(ValueError, match="n_permutations must be >= 0"):
+        mt.tl.enrich(adata, net=net, method="ulm", n_permutations=-1)
+
+
+def test_permutation_ora_uses_the_top_tail(active):
+    """The permutation path must forward the ORA n_up default, so ORA scores the top top_fraction rather
+    than decoupler's bottom-95% tail. On data with a genuinely active set, ORA then calls it with a smaller
+    permutation padj than an inert set."""
+    adata, net, is_active_sample = active
+    mt.tl.enrich(adata, net=net, method="ora", tmin=2, n_permutations=30)
+    padj = adata.obsm["padj_ora"]
+    active_padj = np.asarray(padj["ACTIVE"], dtype=float)[is_active_sample]
+    inert_padj = np.asarray(padj["G1"], dtype=float)[is_active_sample]
+    assert np.nanmean(active_padj) < np.nanmean(inert_padj)
+
+
+def test_tmin_reaches_the_permutation_path(active):
+    """decoupler_kwargs (here tmin) must reach the permutation scorer via decouple's per-method args, so a
+    set smaller than tmin is dropped from the scored columns rather than scored anyway."""
+    adata, net, _ = active
+    tiny = pd.DataFrame({"source": ["TINY"], "target": [net["target"].iloc[0]], "weight": [1.0]})
+    net = pd.concat([net, tiny], ignore_index=True)
+    mt.tl.enrich(adata, net=net, method="ulm", tmin=5, n_permutations=10)
+    assert "TINY" not in adata.obsm["score_ulm"].columns
+    assert "TINY" not in adata.obsm["padj_ulm"].columns
+    assert "ACTIVE" in adata.obsm["score_ulm"].columns
+
+
+def test_enrich_clears_stale_scores_from_an_earlier_run(active):
+    """A second enrich with a narrower method set must not leave the earlier run's score_/padj_ behind."""
+    adata, net, _ = active
+    mt.tl.enrich(adata, net=net, method="consensus", tmin=2)
+    assert "score_zscore" in adata.obsm
+    mt.tl.enrich(adata, net=net, method="ulm", tmin=2)
+    keys = {key for key in adata.obsm if key.startswith("score_") or key.startswith("padj_")}
+    assert keys == {"score_ulm", "padj_ulm"}
 
 
 def test_collinearity_warns_on_near_duplicate_sets():
