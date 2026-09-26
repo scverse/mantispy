@@ -343,7 +343,9 @@ def test_collinearity_warns_on_near_duplicate_sets():
     rng = np.random.default_rng(0)
     names = [f"f{index}" for index in range(10)]
     matrix = rng.standard_normal((8, len(names))).astype(np.float32)
-    adata = ad.AnnData(matrix, obs=pd.DataFrame(index=[str(index) for index in range(8)]), var=pd.DataFrame(index=names))
+    adata = ad.AnnData(
+        matrix, obs=pd.DataFrame(index=[str(index) for index in range(8)]), var=pd.DataFrame(index=names)
+    )
     # A and B share their targets, so their scores are identical; C is independent.
     net = pd.DataFrame(
         {"source": ["A"] * 5 + ["B"] * 5 + ["C"] * 5, "target": names[:5] + names[:5] + names[5:], "weight": 1.0}

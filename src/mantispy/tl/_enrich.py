@@ -226,7 +226,10 @@ def enrich(
         padj = _permutation_padj(frame, network, method, n_permutations)
         adata.obsm[f"padj_{method}"] = pd.DataFrame(padj, index=observed.index, columns=observed.columns)
         get_logger().info(
-            "enrich(%s) scored %d set(s) with %d-permutation p-values", method, network["source"].nunique(), n_permutations
+            "enrich(%s) scored %d set(s) with %d-permutation p-values",
+            method,
+            network["source"].nunique(),
+            n_permutations,
         )
         return None
 
