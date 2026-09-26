@@ -826,6 +826,104 @@ def scallops_arv471(cache_dir: str | Path | None = None) -> AnnData:
     return adata
 
 
+#: The upstream columns :func:`cp_posh` reads into ``obs``. They are the pandas MultiIndex of the parquet, so
+#: they come back with ``reset_index``; every other column is a CellStats morphology feature and goes to ``X``.
+_CP_POSH_METADATA = ("barcode", "gene_id", "treatment", "plate_well", "plate", "ID")
+
+#: The ``gene_id`` values that mark a control guide rather than a targeted gene: the non-targeting guides and the
+#: guides that cut an intergenic region. Both are the reference :func:`~mantispy.tl.hit_calling` scores against.
+_CP_POSH_CONTROLS = ("nontargeting", "intergenic")
+
+
+def cp_posh(cache_dir: str | Path | None = None) -> AnnData:
+    """Single cells of insitro cp-POSH, a broad-morphology pooled CRISPR Cell Painting screen.
+
+    The 124-gene proof-of-concept dataset from ``insitro/cp-posh``: A549 cells carrying a pooled CRISPR-knockout
+    library, stained with a six-channel Cell Painting panel (WGA, a mitochondrial probe, phalloidin, concanavalin A,
+    DAPI and a marker round) and read by in-situ sequencing of the guide barcodes. Each cell gets a broad, untargeted
+    morphology profile of about 1,278 CellStats features rather than the handful of hand-picked readouts a targeted
+    screen keeps, so it is the broad-morphology complement to :func:`scallops_arv471`.
+
+    The features are already well-normalized by the authors, so :func:`~mantispy.pp.normalize` is not needed before
+    analysis; a per-plate control normalization would re-do work already done. Downloads about 1.6 GB once, checked
+    against a pinned sha256.
+
+    Args:
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
+
+    Returns:
+        Cells by about 1,278 CellStats morphology features at cell resolution, indexed by the upstream cell ``ID``,
+        with:
+
+        ``Metadata_Gene``: the gene the cell's guide targets, taken from the upstream ``gene_id``. The two control
+        classes keep their upstream spellings, ``"nontargeting"`` (the non-targeting guides) and ``"intergenic"``
+        (guides against intergenic regions); ``"nontargeting"`` is the spelling the analysis functions read.
+
+        ``Metadata_sgRNA``: the guide, the upstream ``barcode``.
+
+        ``Metadata_Perturbation``: the guide again, so each guide is its own perturbation, matching
+        :func:`scallops_arv471`.
+
+        ``Metadata_Plate``: the plate, the upstream ``plate`` (``"EL37"``).
+
+        ``Metadata_Well``: the physical well, such as ``"B04"``, taken from the upstream ``plate_well`` (``"EL37_B04"``)
+        by dropping the plate prefix so the well vocabulary can parse it.
+
+        ``Metadata_Control``: ``True`` for the non-targeting and intergenic guides, the reference
+        :func:`~mantispy.tl.hit_calling` and the control normalization test against.
+
+        The upstream ``treatment`` column is a constant (no small molecule) and is dropped, and the ``ID`` becomes the
+        observation index. The known-mechanism genes, whose knockout moves cells away from the controls, are
+        ``KIF18A``, the proteasome (``PSMB1``, ``PSMD4``), the mitochondrial ribosome (``MRPL43``, ``MRPS5``), the
+        ARP2/3 complex (``ARPC4``, ``ACTR6``) and COPI (``COPE``, ``ARCN1``), scored against ``nontargeting`` and
+        ``intergenic``.
+
+    Notes:
+        The CellStats feature names are insitro's own, not CellProfiler's ``<Object>_<Group>_<Feature>_<Channel>``, so
+        the annotation columns of ``var`` are supplied empty rather than parsed. Left to the parser, a name such as
+        ``nucleus_mask_height`` would read as the ``mask`` feature group of a ``nucleus`` object and invent feature
+        families that are not there, the same reason the learned embeddings of :func:`jump_lite` carry an empty
+        annotation. Anything that reads ``var["feature_group"]`` or ``var["channel"]`` has nothing to work with here.
+
+        A cell carries no count. Aggregate to a guide-level profile with
+        ``mt.tl.aggregate(adata, by=("Metadata_Gene", "Metadata_sgRNA"))``, which writes ``Metadata_CellCount``.
+    """
+    import anndata as ad
+
+    (path,) = _files("cp_posh", cache_dir)
+    df = pd.read_parquet(path).reset_index()
+    features = [column for column in df.columns if column not in _CP_POSH_METADATA]
+
+    gene = df["gene_id"].astype(str).to_numpy()
+    plate = df["plate"].astype(str)
+    guide = df["barcode"].astype(str).to_numpy()
+    # plate_well is "<plate>_<well>", e.g. "EL37_B04"; drop the plate prefix so the well vocabulary can parse "B04".
+    well = [pw[len(pl) + 1 :] for pw, pl in zip(df["plate_well"].astype(str), plate, strict=True)]
+    obs = pd.DataFrame(
+        {
+            "Metadata_Gene": gene,
+            "Metadata_sgRNA": guide,
+            "Metadata_Perturbation": guide,
+            "Metadata_Plate": plate.to_numpy(),
+            "Metadata_Well": well,
+            "Metadata_Control": np.isin(gene, _CP_POSH_CONTROLS),
+        },
+        index=pd.Index(df["ID"].astype(str).to_numpy()),
+    )
+    adata = ad.AnnData(X=df[features].to_numpy(dtype=np.float32), obs=obs, var=empty_annotation(features))
+    stamp(adata, resolution="cell")
+    adata.uns["mantispy"]["dataset"] = _DATASETS["cp_posh"].metadata["accession"]
+    get_logger().info(
+        "cp_posh: %d cells x %d features, %d gene(s) over %d guide(s)",
+        adata.n_obs,
+        adata.n_vars,
+        adata.obs["Metadata_Gene"].nunique(),
+        adata.obs["Metadata_sgRNA"].nunique(),
+    )
+    return adata
+
+
 def corum(cache_dir: str | Path | None = None) -> pd.DataFrame:
     """Human protein complexes from CORUM, one row per complex and member gene.
 
