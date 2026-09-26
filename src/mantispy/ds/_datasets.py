@@ -714,6 +714,20 @@ def jump_crispr(annotate: bool = True, cache_dir: str | Path | None = None, **kw
     return adata
 
 
+def _finish_guide_screen(adata: AnnData, name: str) -> AnnData:
+    """Record the accession and log the shape shared by the single-cell guide screens."""
+    adata.uns["mantispy"]["dataset"] = _DATASETS[name].metadata["accession"]
+    get_logger().info(
+        "%s: %d cells x %d features, %d gene(s) over %d guide(s)",
+        name,
+        adata.n_obs,
+        adata.n_vars,
+        adata.obs["Metadata_Gene"].nunique(),
+        adata.obs["Metadata_sgRNA"].nunique(),
+    )
+    return adata
+
+
 #: The phenotype features :func:`scallops_arv471` keeps as ``X``: the ER stain and the two DAPI acquisitions
 #: (the DNA FISH round and the immunofluorescence round) as nuclear median intensities, and the ESR1, CCND1
 #: and GREB1 transcript spot counts in the nucleus and over the whole cell.
@@ -800,35 +814,28 @@ def scallops_arv471(cache_dir: str | Path | None = None) -> AnnData:
     df = pd.read_parquet(path, columns=[*_SCALLOPS_FEATURES, *_SCALLOPS_SOURCE])
     df = df[df["Condition"].astype(str) == "ARV-471"]
     df = df[~df["Cells_Location_IntersectsBoundary_IF"].astype(bool)]
-    kept = df.dropna(subset=list(_SCALLOPS_FEATURES))
-    report_drop("cell(s) with a missing phenotype feature", len(df) - len(kept), len(df))
-    df = kept
+    before = len(df)
+    df = df.dropna(subset=list(_SCALLOPS_FEATURES))
+    report_drop("cell(s) with a missing phenotype feature", before - len(df), before)
 
     gene = df["gene_symbol"].astype(str).to_numpy()
     guide = df["sgRNA_id"].astype(str).to_numpy()
+    is_ntc = gene == "NTC"
     frame = df[list(_SCALLOPS_FEATURES)].reset_index(drop=True)
     # NTC is the non-targeting guide set; hit_calling and the control normalization read the "nontargeting" spelling.
-    frame["Metadata_Gene"] = np.where(gene == "NTC", "nontargeting", gene)
+    frame["Metadata_Gene"] = np.where(is_ntc, "nontargeting", gene)
     frame["Metadata_sgRNA"] = guide
     # The upstream "type" under the schema's reserved control-type column. None of the reserved values
     # (negcon/poscon/trt) fits the olfactory-receptor targeting negative cleanly, so the raw classes are kept.
     frame["Metadata_Control_Type"] = df["type"].astype(str).to_numpy()
-    frame["Metadata_Control"] = gene == "NTC"
+    frame["Metadata_Control"] = is_ntc
     frame["Metadata_Perturbation"] = guide
     frame["Metadata_Plate"] = df["plate"].astype(str).to_numpy()
-    # The raw well is an integer the well vocabulary cannot parse; write it as a padded W<nn> token so validate passes.
-    frame["Metadata_Well"] = [f"W{int(well):02d}" for well in df["well"].to_numpy()]
+    # The raw well is a rowless integer; prefix a synthetic row letter so from_dataframe's normalize_well can pad it.
+    frame["Metadata_Well"] = ("W" + df["well"].astype(int).astype(str)).to_numpy()
 
     adata = from_dataframe(frame, resolution="cell")
-    adata.uns["mantispy"]["dataset"] = _DATASETS["scallops_arv471"].metadata["accession"]
-    get_logger().info(
-        "scallops_arv471: %d cells x %d features, %d gene(s) over %d guide(s)",
-        adata.n_obs,
-        adata.n_vars,
-        adata.obs["Metadata_Gene"].nunique(),
-        adata.obs["Metadata_sgRNA"].nunique(),
-    )
-    return adata
+    return _finish_guide_screen(adata, "scallops_arv471")
 
 
 #: The upstream columns :func:`cp_posh` reads into ``obs``. They are the pandas MultiIndex of the parquet, so
@@ -901,16 +908,15 @@ def cp_posh(cache_dir: str | Path | None = None) -> AnnData:
     features = [column for column in df.columns if column not in _CP_POSH_METADATA]
 
     gene = df["gene_id"].astype(str).to_numpy()
-    plate = df["plate"].astype(str)
     guide = df["barcode"].astype(str).to_numpy()
-    # plate_well is "<plate>_<well>", e.g. "EL37_B04"; drop the plate prefix so the well vocabulary can parse "B04".
-    well = [pw[len(pl) + 1 :] for pw, pl in zip(df["plate_well"].astype(str), plate, strict=True)]
+    # plate_well is "<plate>_<well>", e.g. "EL37_B04"; the well is the segment after the last "_" (wells carry none).
+    well = df["plate_well"].astype(str).str.rsplit("_", n=1).str[-1].to_numpy()
     obs = pd.DataFrame(
         {
             "Metadata_Gene": gene,
             "Metadata_sgRNA": guide,
             "Metadata_Perturbation": guide,
-            "Metadata_Plate": plate.to_numpy(),
+            "Metadata_Plate": df["plate"].astype(str).to_numpy(),
             "Metadata_Well": well,
             "Metadata_Control": np.isin(gene, _CP_POSH_CONTROLS),
         },
@@ -919,15 +925,7 @@ def cp_posh(cache_dir: str | Path | None = None) -> AnnData:
     obs = categorize_metadata(obs)
     adata = ad.AnnData(X=df[features].to_numpy(dtype=np.float32), obs=obs, var=empty_annotation(features))
     stamp(adata, resolution="cell")
-    adata.uns["mantispy"]["dataset"] = _DATASETS["cp_posh"].metadata["accession"]
-    get_logger().info(
-        "cp_posh: %d cells x %d features, %d gene(s) over %d guide(s)",
-        adata.n_obs,
-        adata.n_vars,
-        adata.obs["Metadata_Gene"].nunique(),
-        adata.obs["Metadata_sgRNA"].nunique(),
-    )
-    return adata
+    return _finish_guide_screen(adata, "cp_posh")
 
 
 def corum(cache_dir: str | Path | None = None) -> pd.DataFrame:
