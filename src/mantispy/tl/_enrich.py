@@ -22,6 +22,7 @@ from mantispy._core._stats import benjamini_hochberg
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy._core.mutation import inplace_or_copy
+from mantispy.get._accessors import to_dataframe
 
 #: The single decoupler scorers, one call each.
 SINGLE_METHODS = ("ulm", "mlm", "ora", "aucell", "gsea", "gsva", "zscore", "waggr", "viper")
@@ -169,6 +170,16 @@ def _clear_enrich_obsm(adata: AnnData) -> None:
         del adata.obsm[key]
 
 
+def _write_scores(adata: AnnData, results: dict[str, pd.DataFrame | None]) -> None:
+    """Reset enrich's obsm namespace, then publish only the frames decouple produced.
+
+    decouple returns None for a score-only method's padj (aucell, gsva); a None value in obsm corrupts the
+    AnnData, so it is dropped rather than stored.
+    """
+    _clear_enrich_obsm(adata)
+    adata.obsm.update({key: value for key, value in results.items() if value is not None})
+
+
 @inplace_or_copy()
 def enrich(
     adata: AnnData,
@@ -242,11 +253,9 @@ def enrich(
             args.setdefault("ora", {}).setdefault("n_up", _ora_n_up(adata, top_fraction))
         # Scoring the matrix, not the AnnData, builds the consensus from only the panel: cons=True would else
         # consolidate every score_* an earlier enrich left on obsm.
-        frame = pd.DataFrame(get_matrix(adata), index=adata.obs_names, columns=adata.var_names)
+        frame = to_dataframe(adata, metadata=False)
         scores = dc.mt.decouple(frame, network, methods=list(panel), args=args, cons=True, **decoupler_kwargs)
-        # decouple returns None for a score-only method's padj (aucell, gsva); None in obsm corrupts the AnnData.
-        _clear_enrich_obsm(adata)
-        adata.obsm.update({key: value for key, value in scores.items() if value is not None})
+        _write_scores(adata, scores)
         get_logger().info("enrich(consensus) scored %d set(s) with panel %s", network["source"].nunique(), panel)
         return None
 
@@ -255,7 +264,7 @@ def enrich(
         if method == "ora":
             decoupler_kwargs.setdefault("n_up", _ora_n_up(adata, top_fraction))
         # Score off the matrix (stale-safe), then replace the parametric padj with the calibrated one.
-        frame = pd.DataFrame(get_matrix(adata), index=adata.obs_names, columns=adata.var_names)
+        frame = to_dataframe(adata, metadata=False)
         observed = _score(dc, frame, network, method, **decoupler_kwargs)
         padj = _permutation_padj(frame, network, method, n_permutations, observed, **decoupler_kwargs)
         _clear_enrich_obsm(adata)
@@ -273,10 +282,9 @@ def enrich(
         decoupler_kwargs.setdefault("n_up", _ora_n_up(adata, top_fraction))
     # Score off the matrix, then clear, so a scorer that raises leaves the earlier run's frames intact and no
     # stale obsm score can leak in. decouple runs the same scorer as dc.mt.<method>, so the numbers match.
-    frame = pd.DataFrame(get_matrix(adata), index=adata.obs_names, columns=adata.var_names)
+    frame = to_dataframe(adata, metadata=False)
     scored = dc.mt.decouple(frame, network, methods=[method], args={method: dict(decoupler_kwargs)}, cons=False)
-    _clear_enrich_obsm(adata)
-    adata.obsm.update({key: value for key, value in scored.items() if value is not None})
+    _write_scores(adata, scored)
     get_logger().info("enrich(%s) scored %d set(s)", method, network["source"].nunique())
     return None
 
