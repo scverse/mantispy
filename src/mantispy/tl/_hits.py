@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import warnings
+from collections.abc import Sequence
 
 import numpy as np
 import pandas as pd
@@ -15,11 +16,16 @@ from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy._core.masks import reference_mask
 from mantispy._core.mutation import inplace_or_copy
+from mantispy._core.schema import REQUIRED_OBS
 
 METHODS = ("mahalanobis", "ks")
 
 #: Scatter estimators :func:`hit_calling` can measure the Mahalanobis distance in.
 COVARIANCES = ("empirical", "robust")
+
+#: Blocks (wells) needed on either side of the split before a well-level permutation null can
+#: calibrate finely rather than run coarse and conservative. Below this :func:`hit_calling` warns.
+_BLOCK_MIN = 16
 
 
 def ks_statistic(samples: np.ndarray, reference: np.ndarray) -> np.ndarray:
@@ -58,6 +64,35 @@ def _statistic(distances: np.ndarray, control_distances: np.ndarray, method: str
     return ks_statistic(distances, control_distances)
 
 
+def _block_null(
+    to_control: np.ndarray,
+    block_codes: np.ndarray,
+    pool: np.ndarray,
+    tested: np.ndarray,
+    n_permutations: int,
+    seed: int,
+    index: int,
+) -> np.ndarray:
+    """Permutation null that resamples whole blocks (wells) rather than cells (see ``hit_calling`` Notes, issue #68).
+
+    The pool is the blocks the tested group and the held-out controls span; each permutation draws as many
+    whole blocks as the tested group spans, without replacement, and takes all of the pool's rows in them.
+    Only ``method="mahalanobis"`` reaches here, so the statistic is the median distance.
+    """
+    pool_blocks = block_codes[pool]
+    uniq = np.unique(pool_blocks)
+    n_draw = int(np.unique(block_codes[tested]).size)
+    # The pool's rows grouped by block, so a draw is the concatenation of a few of these.
+    rows_by_block = [pool[pool_blocks == code] for code in uniq]
+    generator = np.random.default_rng([seed, index])
+    null = np.empty(n_permutations)
+    for permutation in range(n_permutations):
+        chosen = generator.choice(uniq.size, size=n_draw, replace=False)
+        drawn = np.concatenate([rows_by_block[position] for position in chosen])
+        null[permutation] = float(np.median(to_control[drawn]))
+    return null
+
+
 @inplace_or_copy()
 def hit_calling(
     adata: AnnData,
@@ -66,6 +101,7 @@ def hit_calling(
     method: str = "mahalanobis",
     covariance: str = "empirical",
     use_rep: str | None = None,
+    block: str | Sequence[str] | None = None,
     n_permutations: int = 1000,
     threshold: float = 0.05,
     seed: int = 0,
@@ -97,6 +133,7 @@ def hit_calling(
         method: ``"mahalanobis"`` scores the median distance of the group's rows from the control centroid, measured in the controls' covariance so that directions the controls already vary in count for less. ``"ks"`` scores the Kolmogorov-Smirnov statistic between the group's and the controls' distance distributions, which detects a shifted subpopulation that leaves the median unchanged. Use it at cell resolution. Its p-value comes from ``scipy.stats.ks_2samp``, so ``n_permutations`` does not apply.
         covariance: Scatter the Mahalanobis distance is measured in. ``"empirical"`` uses every fitting control row. ``"robust"`` uses the minimum covariance determinant subset, so a few stray control wells stop widening the covariance in their own direction and masking real hits there; it needs more control rows than features, so pair it with ``use_rep``.
         use_rep: Score ``obsm[use_rep]`` instead of ``X``. When the covariance-fitting half of the controls has no more rows than there are features, the covariance is singular and a warning suggests a PCA representation.
+        block: ``obs`` column, or sequence of columns, whose groups are the design's exchangeable unit, normally the well. The permutation null then draws whole blocks rather than cells, since cells within a well are not independent replicates (see Notes). Left ``None``, it defaults to the physical well, the ``(Metadata_Plate, Metadata_Well)`` pair, on an object explicitly stamped cell resolution that has replicated wells; a same well name on two plates is then two blocks, not one. It stays off when the object is not stamped cell resolution, when it has no complete well column (in which case the cell path warns), and under ``method="ks"``, which has no permutation null.
         n_permutations: Size of the permutation null. Applies to ``method="mahalanobis"`` only.
         threshold: q-value below which a group is called a hit in ``is_hit``.
         seed: Seed for the control split and the permutation null.
@@ -135,6 +172,8 @@ def hit_calling(
         Neither figure is a bound for another screen, and both were measured with ``method="mahalanobis"``.
         Under ``method="ks"`` there is no permutation null; each group's distances are compared with those of the null half by ``scipy.stats.ks_2samp``.
 
+        At cell resolution the calibration above assumes a null unit that matches the design. Cells within a well share the well, its plate position, seeding and focus, so they are not independent replicates: the exchangeable unit is the well, and a null that shuffles cells shrinks the statistic's spread by the cell count rather than the well count and calls pure noise far above nominal (issue #68). ``block`` fixes this by drawing whole wells. The controls are then split into whole wells too, one half fitting the centroid and covariance and the other forming the null, so every well in the null pool is complete and the reference group draws whole wells like any other group. ``block`` defaults to the physical well, the ``(Metadata_Plate, Metadata_Well)`` pair, on an object explicitly stamped cell resolution with replicated wells; it warns and leaves the cell-shuffle null in place when no complete well column is present. With fewer than about sixteen wells in the null half the well-level null is coarse and runs conservative rather than anti-conservative; for an exact well-level test, aggregate with :func:`~mantispy.tl.aggregate` first.
+
         To check the rate on your own screen, :func:`~mantispy.metrics.diagnose_testing` relabels control wells as pseudo-treatments of your group sizes and reports the fraction called.
     """
     from scipy.stats import ks_2samp
@@ -143,6 +182,30 @@ def hit_calling(
         raise ValueError(f"method must be one of {METHODS}, got {method!r}")
     if covariance not in COVARIANCES:
         raise ValueError(f"covariance must be one of {COVARIANCES}, got {covariance!r}")
+
+    # The exchangeable unit of a cell-resolution screen is the physical well, not the cell (see Notes).
+    # Default the block to the (Metadata_Plate, Metadata_Well) pair the schema uses, but only when the
+    # object is explicitly stamped cell resolution, so an unstamped well or consensus object keeps its old
+    # behaviour. A single cell per well is already well-level, so blocking would be a no-op and stays off.
+    # ks has no permutation null, so none of this machinery runs for it.
+    if block is None and method != "ks" and adata.uns.get("mantispy", {}).get("resolution") == "cell":
+        candidate = [column for column in REQUIRED_OBS["cell"] if column in adata.obs]
+        obs = as_frame(adata.obs)
+        if "Metadata_Well" not in adata.obs or bool(obs[candidate].isna().to_numpy().any()):
+            # No usable well column (missing, or with gaps that group_codes would reject): warn and fall
+            # back to the cell-shuffle null rather than crash a default hit_calling(adata) that once worked.
+            warnings.warn(
+                "the object is at cell resolution and no usable block was given, so the permutation null "
+                "draws single cells. Cells within a well are not independent replicates (they share the well, "
+                "its plate position, seeding and focus), so the null is anti-conservative. Pass block= a well "
+                "column, add a complete Metadata_Well, or aggregate to wells with mt.tl.aggregate.",
+                UserWarning,
+                stacklevel=3,
+            )
+        elif np.bincount(group_codes(adata, candidate)[0]).max() > 1:
+            block = candidate
+
+    block_codes = group_codes(adata, block)[0] if (block is not None and method != "ks") else None
 
     values = representation(adata, use_rep)
     is_control = reference_mask(adata, reference)
@@ -155,7 +218,18 @@ def hit_calling(
         )
 
     generator = np.random.default_rng(seed)
-    fit_rows, null_rows = split_reference(np.flatnonzero(is_control), generator)
+    control_rows = np.flatnonzero(is_control)
+    control_blocks = np.unique(block_codes[control_rows]) if block_codes is not None else np.empty(0, dtype=int)
+    if block_codes is not None and control_blocks.size >= 4:
+        # Split whole wells (blocks), not cells: the held-out null half is then made of complete wells, so
+        # the reference group draws whole wells like any other group instead of collapsing to a constant null.
+        fit_blocks = split_reference(control_blocks, generator)[0]
+        in_fit = np.isin(block_codes[control_rows], fit_blocks)
+        fit_rows, null_rows = control_rows[in_fit], control_rows[~in_fit]
+    else:
+        # No block, or too few control wells to halve into whole-well pools: split cells as before.
+        fit_rows, null_rows = split_reference(control_rows, generator)
+        block_codes = None
     if fit_rows.size <= values.shape[1]:
         warnings.warn(
             f"the covariance is estimated from {fit_rows.size} of {n_control} reference rows (half the "
@@ -175,6 +249,18 @@ def hit_calling(
     # The split partitions the control rows, so the held-out half is the controls that did not fit.
     held_out = is_control & ~fitted
 
+    if block_codes is not None:
+        # Only the null half enters the permutation pool, so it alone sets how finely the null calibrates.
+        null_blocks = np.unique(block_codes[null_rows]).size
+        if null_blocks < _BLOCK_MIN:
+            warnings.warn(
+                f"the well-block null draws from {null_blocks} block(s) in the null half, too few to calibrate "
+                "finely, so the test there is conservative rather than anti-conservative. For an exact "
+                "well-level test, aggregate to wells with mt.tl.aggregate before testing.",
+                UserWarning,
+                stacklevel=3,
+            )
+
     codes, keys = group_codes(adata, groupby)
 
     observed = np.empty(len(keys))
@@ -187,9 +273,17 @@ def hit_calling(
         # A row that fitted the centroid and the covariance sits closer to the centroid than one that did not, so it stays off the tested side of every group.
         keep = ~fitted[rows]
         # The controls carry a perturbation label of their own, so one group is the reference against itself.
-        # Half of its held-out rows are the sample and half are what it is tested against, drawn at random because the rows are ordered by plate and well.
+        # Half of its held-out rows are the sample and half are what it is tested against, drawn at random
+        # because the rows are ordered by plate and well. When blocking, halve whole wells rather than cells,
+        # so the reference draws wells like every other group (see Notes, issue #68).
         shared = np.flatnonzero(held_out[rows])
-        keep[generator.permutation(shared)[: shared.size // 2]] = False
+        if block_codes is not None:
+            shared_blocks = block_codes[rows[shared]]
+            uniq_blocks = np.unique(shared_blocks)
+            drop_blocks = generator.permutation(uniq_blocks)[: uniq_blocks.size // 2]
+            keep[shared[np.isin(shared_blocks, drop_blocks)]] = False
+        else:
+            keep[generator.permutation(shared)[: shared.size // 2]] = False
         tested = rows[keep]
         # A row is never on both sides: the reference group's sample comes out of the held-out rows, so it is tested against the rest of them, and every other group is tested against all of them.
         in_sample = np.zeros(adata.n_obs, dtype=bool)
@@ -207,6 +301,10 @@ def hit_calling(
         # Bootstrapping the controls alone instead centres the null on that sample's own median rather than the population's, and leaves the error in that centre out of the spread, so the observed lands in the tail more often than it should: the rate goes as the one-sided tail of z / sqrt(1 + tested/held-out), which called 9 to 11% of pure noise at 24 rows against 48 held-out controls.
         # Drawing without replacement from the controls alone is worse still, since it narrows the null further.
         pool = np.concatenate([tested, against_rows])
+        if block_codes is not None:
+            # Cells within a well are pseudoreplicates, so the null resamples whole wells (issue #68).
+            null[index] = _block_null(to_control, block_codes, pool, tested, n_permutations, seed, index)
+            continue
         spread = np.random.default_rng([seed, index]).random((n_permutations, pool.size))
         draws = pool[np.argsort(spread, axis=1)[:, : max(tested.size, 1)]]
         null[index] = _statistic(to_control[draws], against, method)
