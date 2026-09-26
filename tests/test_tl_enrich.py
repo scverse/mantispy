@@ -1,5 +1,7 @@
 """Feature sets built from the parsed annotation, and enrichment over them."""
 
+import warnings
+
 import anndata as ad
 import numpy as np
 import pandas as pd
@@ -8,6 +10,7 @@ import pytest
 import mantispy as mt
 from mantispy._core.features import empty_annotation, parse_feature_names
 from mantispy._core.schema import stamp
+from mantispy.tl._enrich import SINGLE_METHODS
 
 
 @pytest.fixture
@@ -148,6 +151,254 @@ def test_feature_sets_survives_an_annotation_no_row_completes():
     var["feature_group"] = pd.Categorical(["AreaShape", None])
     var["channel"] = pd.Categorical([None, "DNA"])
     assert mt.tl.feature_sets(_object(var, n_obs=4), by=("feature_group", "channel")).empty
+
+
+@pytest.fixture
+def active():
+    """A small object with one genuinely active feature group and a feature_sets-style net.
+
+    The first half of the samples carry a constant added across the ACTIVE group's features,
+    so a working scorer must rank ACTIVE higher there than in the untouched second half.
+    The net has four groups of fifteen features each: enough sets and features for mlm to fit.
+    """
+    rng = np.random.default_rng(0)
+    names, sources = [], []
+    for group in ("ACTIVE", "G1", "G2", "G3"):
+        for index in range(15):
+            names.append(f"{group}_f{index}")
+            sources.append(group)
+    n_obs = 20
+    matrix = rng.standard_normal((n_obs, len(names))).astype(np.float32)
+    is_active_sample = np.zeros(n_obs, dtype=bool)
+    is_active_sample[: n_obs // 2] = True
+    is_active_col = np.array([source == "ACTIVE" for source in sources])
+    matrix[np.ix_(is_active_sample, is_active_col)] += 5.0
+
+    adata = ad.AnnData(
+        matrix,
+        obs=pd.DataFrame(
+            {"state": np.where(is_active_sample, "on", "off")}, index=[str(index) for index in range(n_obs)]
+        ),
+        var=pd.DataFrame(index=names),
+    )
+    net = pd.DataFrame({"source": sources, "target": names, "weight": 1.0})
+    return adata, net, is_active_sample
+
+
+#: The single methods that write only a score; every other one also writes a padj frame.
+_SCORE_ONLY = {"aucell", "gsva"}
+
+
+def _single_method_param(name: str):
+    """Parametrize entry for a single method; xfail only mlm, which the small synthetic net cannot fit."""
+    if name == "mlm":
+        return pytest.param(
+            name,
+            marks=pytest.mark.xfail(
+                reason="mlm can fail to fit decoupler's multivariate model when a set has few features; "
+                "it is kept in METHODS for parity with decoupler and is xfailed here only because the "
+                "synthetic net is small",
+            ),
+        )
+    return name
+
+
+@pytest.mark.parametrize("method", [_single_method_param(name) for name in SINGLE_METHODS])
+def test_enrich_runs_every_single_method(active, method):
+    adata, net, _ = active
+    mt.tl.enrich(adata, net=net, method=method, tmin=2)
+    assert adata.obsm[f"score_{method}"].shape[0] == adata.n_obs
+    assert (f"padj_{method}" in adata.obsm) == (method not in _SCORE_ONLY)
+
+
+@pytest.mark.parametrize("method", ["ulm", "zscore"])
+def test_active_group_scores_higher_where_it_is_active(active, method):
+    adata, net, is_active_sample = active
+    mt.tl.enrich(adata, net=net, method=method, tmin=2)
+    scores = np.asarray(adata.obsm[f"score_{method}"]["ACTIVE"], dtype=float)
+    assert scores[is_active_sample].mean() > scores[~is_active_sample].mean()
+
+
+def test_consensus_writes_a_consensus_score(active):
+    adata, net, is_active_sample = active
+    mt.tl.enrich(adata, net=net, method="consensus", tmin=2)
+    assert "score_consensus" in adata.obsm
+    assert "padj_consensus" in adata.obsm
+    scores = np.asarray(adata.obsm["score_consensus"]["ACTIVE"], dtype=float)
+    assert scores[is_active_sample].mean() > scores[~is_active_sample].mean()
+
+
+def test_consensus_uses_a_given_panel(active):
+    adata, net, _ = active
+    mt.tl.enrich(adata, net=net, method="consensus", methods=["ulm", "zscore"], tmin=2)
+    assert "score_consensus" in adata.obsm
+    assert "score_ulm" in adata.obsm and "score_zscore" in adata.obsm
+    # aucell is in the default panel but not in the one asked for, so decouple must not have run it.
+    assert "score_aucell" not in adata.obsm
+
+
+def test_methods_only_applies_to_consensus(active):
+    adata, net, _ = active
+    with pytest.raises(ValueError, match="method='consensus'"):
+        mt.tl.enrich(adata, net=net, method="ulm", methods=["ulm", "zscore"])
+
+
+def test_consensus_rejects_a_panel_entry_that_is_not_a_single_method(active):
+    adata, net, _ = active
+    with pytest.raises(ValueError, match="single methods"):
+        mt.tl.enrich(adata, net=net, method="consensus", methods=["ulm", "not_a_method"])
+
+
+def test_consensus_is_idempotent(active):
+    """Re-running consensus must reproduce the same score, not fold the previous run's scores back in."""
+    adata, net, _ = active
+    mt.tl.enrich(adata, net=net, method="consensus", tmin=2)
+    first = np.asarray(adata.obsm["score_consensus"], dtype=float)
+    mt.tl.enrich(adata, net=net, method="consensus", tmin=2)
+    second = np.asarray(adata.obsm["score_consensus"], dtype=float)
+    np.testing.assert_allclose(first, second, equal_nan=True)
+
+
+def test_consensus_ignores_a_stale_score_of_a_different_width(active):
+    """A prior enrich may have left a score_* whose width differs from the net's; consensus must build
+    from only its panel, neither crashing on that stale frame nor folding it into the consensus. enrich owns
+    the score_*/padj_* namespace, so it also clears the stale key rather than leaving it behind."""
+    adata, net, _ = active
+    stale = pd.DataFrame(np.zeros((adata.n_obs, 3), dtype=float), index=adata.obs_names, columns=["a", "b", "c"])
+    adata.obsm["score_ulm"] = stale
+    mt.tl.enrich(adata, net=net, method="consensus", methods=["zscore", "aucell"], tmin=2)
+    assert "score_ulm" not in adata.obsm
+    assert adata.obsm["score_consensus"].shape[1] == net["source"].nunique()
+
+
+def test_consensus_rejects_an_empty_panel(active):
+    adata, net, _ = active
+    with pytest.raises(ValueError, match="at least one single method"):
+        mt.tl.enrich(adata, net=net, method="consensus", methods=[])
+
+
+def test_consensus_default_panel_never_writes_none_to_obsm(active):
+    """The default panel includes the score-only aucell, whose padj comes back None from decouple.
+    Writing None into obsm corrupts the AnnData, so it must be filtered out and adata.copy() must work."""
+    adata, net, _ = active
+    mt.tl.enrich(adata, net=net, method="consensus", tmin=2)
+    assert all(v is not None for v in adata.obsm.values())
+    score_keys = {key for key in adata.obsm if key.startswith("score_")}
+    assert {"score_consensus", "score_aucell"} <= score_keys
+    copied = adata.copy()
+    assert score_keys <= set(copied.obsm)
+
+
+def test_consensus_treats_a_string_methods_as_one_method(active):
+    """A single method passed as a string must not be split into per-character panel entries."""
+    adata, net, _ = active
+    mt.tl.enrich(adata, net=net, method="consensus", methods="ulm", tmin=2)
+    assert "score_ulm" in adata.obsm
+
+
+def test_consensus_does_not_mutate_the_callers_args(active):
+    """The ORA n_up default is merged into a copy, so the caller's nested args dict is left untouched."""
+    adata, net, _ = active
+    args = {"ora": {}}
+    mt.tl.enrich(adata, net=net, method="consensus", methods=["ora", "zscore"], tmin=2, args=args)
+    assert args == {"ora": {}}
+
+
+def test_n_permutations_zero_leaves_the_result_unchanged(active):
+    """The default n_permutations=0 must reproduce today's parametric result exactly."""
+    adata, net, _ = active
+    default = adata.copy()
+    mt.tl.enrich(default, net=net, method="ulm", tmin=2)
+    mt.tl.enrich(adata, net=net, method="ulm", tmin=2, n_permutations=0)
+    np.testing.assert_allclose(
+        np.asarray(adata.obsm["score_ulm"], dtype=float), np.asarray(default.obsm["score_ulm"], dtype=float)
+    )
+    np.testing.assert_allclose(
+        np.asarray(adata.obsm["padj_ulm"], dtype=float), np.asarray(default.obsm["padj_ulm"], dtype=float)
+    )
+
+
+def test_permutation_padj_is_calibrated(active):
+    """A positive n_permutations writes padj_<method> of the right shape, in [0, 1], and calls the
+    genuinely-active set with a smaller padj than an inert one where the activity is real."""
+    adata, net, is_active_sample = active
+    mt.tl.enrich(adata, net=net, method="ulm", tmin=2, n_permutations=50)
+    padj = adata.obsm["padj_ulm"]
+    assert padj.shape == (adata.n_obs, net["source"].nunique())
+    values = np.asarray(padj, dtype=float)
+    assert np.all((values >= 0.0) & (values <= 1.0))
+    active_padj = np.asarray(padj["ACTIVE"], dtype=float)[is_active_sample]
+    inert_padj = np.asarray(padj["G1"], dtype=float)[is_active_sample]
+    assert active_padj.mean() < inert_padj.mean()
+
+
+def test_consensus_rejects_permutations(active):
+    adata, net, _ = active
+    with pytest.raises(ValueError, match="n_permutations is not supported"):
+        mt.tl.enrich(adata, net=net, method="consensus", n_permutations=10)
+
+
+def test_enrich_rejects_a_negative_n_permutations(active):
+    adata, net, _ = active
+    with pytest.raises(ValueError, match="n_permutations must be >= 0"):
+        mt.tl.enrich(adata, net=net, method="ulm", n_permutations=-1)
+
+
+def test_permutation_ora_uses_the_top_tail(active):
+    """The permutation path must forward the ORA n_up default, so ORA scores the top top_fraction rather
+    than decoupler's bottom-95% tail. On data with a genuinely active set, ORA then calls it with a smaller
+    permutation padj than an inert set."""
+    adata, net, is_active_sample = active
+    mt.tl.enrich(adata, net=net, method="ora", tmin=2, n_permutations=30)
+    padj = adata.obsm["padj_ora"]
+    active_padj = np.asarray(padj["ACTIVE"], dtype=float)[is_active_sample]
+    inert_padj = np.asarray(padj["G1"], dtype=float)[is_active_sample]
+    assert np.nanmean(active_padj) < np.nanmean(inert_padj)
+
+
+def test_tmin_reaches_the_permutation_path(active):
+    """decoupler_kwargs (here tmin) must reach the permutation scorer via decouple's per-method args, so a
+    set smaller than tmin is dropped from the scored columns rather than scored anyway."""
+    adata, net, _ = active
+    tiny = pd.DataFrame({"source": ["TINY"], "target": [net["target"].iloc[0]], "weight": [1.0]})
+    net = pd.concat([net, tiny], ignore_index=True)
+    mt.tl.enrich(adata, net=net, method="ulm", tmin=5, n_permutations=10)
+    assert "TINY" not in adata.obsm["score_ulm"].columns
+    assert "TINY" not in adata.obsm["padj_ulm"].columns
+    assert "ACTIVE" in adata.obsm["score_ulm"].columns
+
+
+def test_enrich_clears_stale_scores_from_an_earlier_run(active):
+    """A second enrich with a narrower method set must not leave the earlier run's score_/padj_ behind."""
+    adata, net, _ = active
+    mt.tl.enrich(adata, net=net, method="consensus", tmin=2)
+    assert "score_zscore" in adata.obsm
+    mt.tl.enrich(adata, net=net, method="ulm", tmin=2)
+    keys = {key for key in adata.obsm if key.startswith("score_") or key.startswith("padj_")}
+    assert keys == {"score_ulm", "padj_ulm"}
+
+
+def test_collinearity_warns_on_near_duplicate_sets():
+    """Two sets over the same features are perfectly collinear, so enrichment cannot separate them;
+    the warning names them, and check_collinearity=False suppresses it."""
+    rng = np.random.default_rng(0)
+    names = [f"f{index}" for index in range(10)]
+    matrix = rng.standard_normal((8, len(names))).astype(np.float32)
+    adata = ad.AnnData(
+        matrix, obs=pd.DataFrame(index=[str(index) for index in range(8)]), var=pd.DataFrame(index=names)
+    )
+    # A and B share their targets, so their scores are identical; C is independent.
+    net = pd.DataFrame(
+        {"source": ["A"] * 5 + ["B"] * 5 + ["C"] * 5, "target": names[:5] + names[:5] + names[5:], "weight": 1.0}
+    )
+
+    with pytest.warns(UserWarning, match="near-collinear"):
+        mt.tl.enrich(adata.copy(), net=net, method="ulm", tmin=2)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        mt.tl.enrich(adata.copy(), net=net, method="ulm", tmin=2, check_collinearity=False)
+    assert not any("near-collinear" in str(record.message) for record in caught)
 
 
 def test_get_features_filters_a_column_that_is_legitimately_empty():
