@@ -256,9 +256,9 @@ def enrich(
         # cannot fold an earlier enrich's obsm back in. The same decoupler_kwargs (tmin, n_up) reach the
         # scorer via decouple's per-method `args`. Then replace the parametric padj with the calibrated one.
         frame = pd.DataFrame(get_matrix(adata), index=adata.obs_names, columns=adata.var_names)
-        observed = dc.mt.decouple(
-            frame, network, methods=[method], args={method: dict(decoupler_kwargs)}, cons=False
-        )[f"score_{method}"]
+        observed = dc.mt.decouple(frame, network, methods=[method], args={method: dict(decoupler_kwargs)}, cons=False)[
+            f"score_{method}"
+        ]
         padj = _permutation_padj(
             frame, network, method, n_permutations, np.asarray(observed, dtype=float), **decoupler_kwargs
         )
