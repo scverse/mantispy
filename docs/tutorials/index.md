@@ -30,6 +30,7 @@ profiles/screen_quality
 
 compounds/hits
 compounds/mechanism_of_action
+compounds/enrichment
 compounds/dose_response
 ```
 
