@@ -86,10 +86,7 @@ def _stability_cut(
     if window is not None:
         w_lo, w_hi = max(lo, float(window[0])), min(hi, float(window[1]))
         if not w_hi > w_lo:
-            raise ValueError(
-                f"stability_window {window} does not overlap the tree height range "
-                f"[{lo:.3g}, {hi:.3g}]"
-            )
+            raise ValueError(f"stability_window {window} does not overlap the tree height range [{lo:.3g}, {hi:.3g}]")
         lo, hi = w_lo, w_hi
     if not hi > lo:
         return np.ones(n_obs, dtype=np.int64), float("nan"), float("nan")
