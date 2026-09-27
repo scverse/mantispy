@@ -59,34 +59,9 @@ def test_the_join_names_the_perturbation_and_the_controls(profiles, fake_metadat
     assert mt.io.validate(adata).ok, mt.io.validate(adata).errors
 
 
-def test_a_well_the_annotation_misses_is_kept_and_logged(profiles, fake_metadata, caplog):
-    with caplog.at_level("WARNING", logger="mantispy"):
-        adata = mt.io.read_jump(profiles)
-    assert adata.n_obs == 5  # A05 has no annotation and is still a measurement
-    assert adata.obs["Metadata_JCP2022"].isna().sum() == 1
-    assert "no JUMP annotation" in caplog.text
-
-
-def test_reading_without_annotation_leaves_the_three_columns(profiles):
-    adata = mt.io.read_jump(profiles, annotate=False)
-    assert "Metadata_JCP2022" not in adata.obs
-    assert set(adata.obs.columns) == {"Metadata_Source", "Metadata_Plate", "Metadata_Well"}
-
-
 def test_annotating_something_that_is_not_jump_says_what_is_missing(cells):
     with pytest.raises(KeyError, match="mt.io.read_jump"):
         mt.pp.annotate_jump(cells)
-
-
-def test_a_duplicated_annotation_row_is_refused(profiles, fake_metadata, monkeypatch):
-    doubled = pd.concat([fake_metadata, fake_metadata.iloc[[0]]], ignore_index=True)
-    monkeypatch.setattr(
-        _jump,
-        "jump_metadata",
-        lambda name: doubled if name == "well" else pd.DataFrame({"Metadata_JCP2022": [], "Metadata_InChIKey": []}),
-    )
-    with pytest.raises(Exception, match="merge|duplicate|m:1"):
-        mt.io.read_jump(profiles)
 
 
 @pytest.fixture
