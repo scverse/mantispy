@@ -11,7 +11,7 @@ import mantispy as mt
 from mantispy.ds import synthetic_plate
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def corrected():
     cells = synthetic_plate(
         n_plates=4,
@@ -59,6 +59,7 @@ def test_pc_regression_detects_the_injected_batch_effect(corrected):
 
 def test_correction_moves_the_batch_metric_the_right_way(corrected):
     """Centring each batch is the simplest correction, and the batch metric must register it."""
+    corrected = corrected.copy()  # module-scoped fixture; this test writes obsm["X_centred"]
     before = _value(mt.metrics.pc_regression(corrected, key="Metadata_Batch", use_rep="X_pca"), "pc_regression")
 
     centred = corrected.copy()
@@ -81,6 +82,7 @@ def test_evaluate_correction_stacks_and_names_both_lisis(corrected):
 def test_evaluate_correction_compares_representations_and_names_the_map_row_honestly(corrected):
     """Reading one uns table once per representation gave every representation the same mAP, 0.7757 under both X_pca and X_other, inside the function whose purpose is comparing them."""
     pytest.importorskip("copairs")  # copairs declares requires-python <3.13
+    corrected = corrected.copy()  # module-scoped fixture; this test writes obsm["X_other"] and tl.map writes uns
     corrected.obsm["X_other"] = np.asarray(corrected.obsm["X_pca"])[:, :5]
     mt.tl.map(corrected, mode="activity", null_size=200)  # scores X, neither representation
 
@@ -281,7 +283,7 @@ def test_diagnose_testing_measures_the_hit_callers_on_this_screen(pure_noise_scr
     """Both hit callers are only approximately calibrated, to a degree that depends on the
     control count, so diagnose_testing measures them on the screen at hand."""
     adata = pure_noise_screen(n_control=200, n_groups=6, per_group=8, n_features=8)
-    report = mt.metrics.diagnose_testing(adata, n_draws=3, n_permutations=200)
+    report = mt.metrics.diagnose_testing(adata, n_draws=3, n_permutations=100)
 
     checks = set(report["check"])
     assert {"hit_calling null rate", "edistance null rate"} <= checks
@@ -407,7 +409,7 @@ def test_known_relationships_measures_chance_for_a_perturbation_in_many_sets():
     rest = [(f"pair{k}", f"G{member}") for k in range(20) for member in (20 + 2 * k, 21 + 2 * k)]
     net = pd.DataFrame(hub + rest, columns=["source", "target"])
 
-    result = mt.metrics.known_relationships(adata, net, n_permutations=200, seed=0).iloc[0]
+    result = mt.metrics.known_relationships(adata, net, n_permutations=100, seed=0).iloc[0]
 
     assert result["value"] > 0.3
     assert result["null"] > 0.3

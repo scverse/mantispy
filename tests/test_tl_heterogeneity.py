@@ -13,7 +13,7 @@ import mantispy as mt
 from mantispy._core.schema import stamp
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def clustered():
     cells = mt.ds.synthetic_plate(n_wells=48, n_cells=40, n_features=20, n_perturbations=3, effect_size=4.0, seed=0)
     mt.pp.normalize(cells, by="Metadata_Plate", reference="negcon")
@@ -35,6 +35,7 @@ def test_composition_rows_are_wells_and_sum_to_one(clustered):
 def test_a_cell_with_no_cluster_is_left_out_rather_than_made_into_one(clustered, caplog):
     """The label an unassigned cell contributed either crashed sorted(), on pandas 3, where NaN cannot be
     ordered against the cluster names, or became a cluster literally called "nan" on pandas 2."""
+    clustered = clustered.copy()  # module-scoped fixture; this test rewrites obs["leiden"]
     clusters = clustered.obs["leiden"].astype(str)
     unassigned = np.zeros(clustered.n_obs, dtype=bool)
     unassigned[:5] = True
@@ -57,6 +58,7 @@ def test_a_cell_with_no_cluster_is_left_out_rather_than_made_into_one(clustered,
 
 
 def test_composition_carries_metadata_and_tests_against_the_controls(clustered):
+    clustered = clustered.copy()  # module-scoped fixture; this test writes obs["state"]
     values = np.asarray(clustered.X, dtype=float)
     is_control = clustered.obs["Metadata_Control"].to_numpy(dtype=bool)
     # At effect_size=4 leiden gives one cluster per perturbation, so the controls occupy one of
@@ -94,6 +96,7 @@ def test_controls_confined_to_one_cluster_warn_rather_than_return_a_table_of_nan
 
 
 def test_cell_cycle_splits_a_bimodal_dna_content(clustered):
+    clustered = clustered.copy()  # module-scoped fixture; this test overwrites X and writes obs
     rng = np.random.default_rng(0)
     values = clustered.X.copy()
     doubled = rng.random(clustered.n_obs) < 0.4
@@ -116,6 +119,7 @@ def test_cell_cycle_refuses_normalized_values(clustered):
 
 def test_subpopulation_hits_finds_an_effect_inside_a_shared_state(clustered):
     """Clusters have to mix the perturbations for there to be anything to compare."""
+    clustered = clustered.copy()  # module-scoped fixture; this test writes obs["state"] and uns
     clustered.obs["state"] = np.where(np.random.default_rng(0).random(clustered.n_obs) < 0.5, "a", "b")
     mt.tl.subpopulation_hits(clustered, cluster_key="state")
 
@@ -129,6 +133,7 @@ def test_a_clustering_that_separates_the_perturbations_has_nothing_to_test(clust
     """At effect_size=4 leiden gives one cluster per perturbation, so no cluster holds
     both controls and treated cells. An empty table without a warning would read as
     'no subpopulation effects'."""
+    clustered = clustered.copy()  # module-scoped fixture; subpopulation_hits writes uns
     with pytest.warns(UserWarning, match="no shared cell state"):
         mt.tl.subpopulation_hits(clustered)
     table = clustered.uns["mantispy"]["subpopulation_hits"]
@@ -136,6 +141,7 @@ def test_a_clustering_that_separates_the_perturbations_has_nothing_to_test(clust
 
 
 def test_local_density_is_computed_within_a_field(clustered):
+    clustered = clustered.copy()  # module-scoped fixture; this test writes obs coordinates and density
     rng = np.random.default_rng(0)
     clustered.obs["Metadata_Center_X"] = rng.uniform(0, 1000, clustered.n_obs)
     clustered.obs["Metadata_Center_Y"] = rng.uniform(0, 1000, clustered.n_obs)
@@ -432,6 +438,7 @@ def test_the_cell_count_covers_every_cell_not_only_the_clustered_ones(clustered)
     """Metadata_CellCount is tl.cytotoxicity's default count_key, and validate warns that without it
     cytotoxicity cannot separate a hit from cell loss. Summing the fractions' counts made it the number
     of *clustered* cells, so a well the clustering merely left cells out of read as cell loss."""
+    clustered = clustered.copy()  # module-scoped fixture; this test rewrites obs["leiden"]
     clusters = clustered.obs["leiden"].astype(str)
     unassigned = np.zeros(clustered.n_obs, dtype=bool)
     unassigned[::10] = True
@@ -448,6 +455,7 @@ def test_a_well_with_no_assigned_cell_is_left_out(clustered):
     """Zero in every cluster said the well was measured and found empty everywhere; NaN said it was
     unknown, and tl.map refuses an object with missing values although the Returns clause promises
     tl.map accepts it. A well with nothing to measure is dropped, like any other empty group."""
+    clustered = clustered.copy()  # module-scoped fixture; this test rewrites obs["leiden"]
     clusters = clustered.obs["leiden"].astype(str)
     wells = clustered.obs["Metadata_Well"].to_numpy()
     blanked = wells == wells[0]
@@ -464,6 +472,7 @@ def test_a_well_with_no_assigned_cell_is_left_out(clustered):
 def test_the_drop_is_reported_only_when_something_is_dropped(clustered, caplog):
     """report_drop ran before the no-cluster refusal, so an unclustered object was told its cells
     were 'left out of the fractions' immediately before being told there are no fractions."""
+    clustered = clustered.copy()  # module-scoped fixture; this test rewrites obs["leiden"]
     clustered.obs["leiden"] = pd.Categorical([None] * clustered.n_obs)
     with caplog.at_level(logging.INFO, logger="mantispy"), pytest.raises(ValueError, match="no cell"):
         mt.tl.cluster_composition(clustered)
