@@ -24,7 +24,14 @@ def pki():
 def test_rohban_loads_with_genes_controls_and_counts(rohban):
     assert rohban.shape == (1918, 3634)
     assert mt.io.validate(rohban).ok, mt.io.validate(rohban).errors
-    assert rohban.obs["Metadata_Perturbation"].nunique() == 194
+    # The replication unit is the ORF construct, not the gene: 323 broad_sample constructs, plus the three
+    # control ORFs (by pert_name) and the one untreated group. The gene stays in its own column.
+    assert rohban.obs["Metadata_Perturbation"].nunique() == 327
+    assert rohban.obs["Metadata_Gene"].nunique() == 194
+    assert set(rohban.obs["Metadata_Perturbation_Type"].astype(str)) == {"orf", "untreated"}
+    empty = rohban.obs["Metadata_gene_name"].astype(str) == "EMPTY"
+    assert set(rohban.obs.loc[empty, "Metadata_Perturbation"].astype(str)) == {"untreated"}
+    assert set(rohban.obs.loc[empty, "Metadata_Perturbation_Type"].astype(str)) == {"untreated"}
     # The control ORFs only: the untreated EMPTY wells were never transfected.
     assert int(rohban.obs["Metadata_Control"].sum()) == 120
     assert set(rohban.obs.loc[rohban.obs["Metadata_Control"], "Metadata_gene_name"]) == {

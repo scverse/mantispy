@@ -189,7 +189,7 @@ def _bbbc021_counts(paths: Sequence[Path]) -> pd.DataFrame:
 def rohban(plates: Sequence[str] | None = None, cache_dir: str | Path | None = None) -> AnnData:
     """An ORF overexpression screen, with the genes and cell counts that BBBC021 lacks.
 
-    ``cpg0017-rohban-pathways``: U2OS cells, one gene overexpressed per well, roughly ten replicate wells per gene over five plates.
+    ``cpg0017-rohban-pathways``: U2OS cells, one ORF construct overexpressed per well, roughly ten replicate wells per construct over five plates.
     Downloads about 27 MB for all five.
 
     Args:
@@ -198,28 +198,57 @@ def rohban(plates: Sequence[str] | None = None, cache_dir: str | Path | None = N
             Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Returns:
-        Wells by features at well resolution, with ``Metadata_Perturbation`` (the gene), ``Metadata_Control``, ``Metadata_CellCount``, ``Metadata_SiteCount`` and the screen's own ``Metadata_gene_name``, ``Metadata_GeneID`` and ``Metadata_ASSAY_WELL_ROLE``.
+        Wells by features at well resolution, with:
+
+        ``Metadata_Perturbation``: the ORF construct (``Metadata_broad_sample``, ~323 of them), the unit the screen varied and what replicate wells share. Several constructs can overexpress the same gene, so this is finer than the gene; the paper's active set is construct-level. The control ORFs read as their ``Metadata_pert_name`` (``Luciferase_CTRL``, ``LacZ_CTRL``, ``eGFP_CTRL``) and the untreated EMPTY wells as ``"untreated"``.
+
+        ``Metadata_Perturbation_Type``: ``"orf"`` for the overexpression constructs and controls, ``"untreated"`` for the EMPTY wells.
+
+        ``Metadata_Gene`` (the overexpressed gene, 194 of them, so ``tl.pathway_coherence`` and ``tl.enrich_hits`` group by it), ``Metadata_Construct`` (the ``broad_sample``, missing on the controls and EMPTY wells) and ``Metadata_Allele`` (the human-readable ``pert_name``, which separates allele variants).
+
+        ``Metadata_Control``, ``Metadata_CellCount``, ``Metadata_SiteCount`` and the screen's own ``Metadata_gene_name``, ``Metadata_GeneID`` and ``Metadata_ASSAY_WELL_ROLE``.
 
     Raises:
         KeyError: A plate is not one of the five.
 
     Notes:
         ``Metadata_Control`` marks the wells transfected with a control ORF (Luciferase, LacZ and eGFP), the reference for normalization.
-        The untreated wells (``Metadata_gene_name == "EMPTY"``) were never transfected and are not flagged; drop them if a gene-level analysis should not see them.
+        The untreated wells (``Metadata_gene_name == "EMPTY"``) were never transfected and are not flagged; they carry ``Metadata_Perturbation == "untreated"``, so drop them if a gene-level analysis should not see them.
+        Regroup replicates to the gene with ``groupby="Metadata_Gene"`` or ``tl.consensus(by="Metadata_Gene")``; the gene is never smeared into the perturbation id.
 
     References:
         :cite:t:`Rohban_2017`.
     """
     adata = _augmented("rohban", plates, cache_dir)
     obs = as_frame(adata.obs)
-    obs["Metadata_Control"] = (obs["Metadata_ASSAY_WELL_ROLE"].astype(str) == "CTRL").to_numpy()
-    obs["Metadata_Perturbation"] = obs["Metadata_gene_name"].astype(str).astype("category")
+    role = obs["Metadata_ASSAY_WELL_ROLE"].astype(str)
+    obs["Metadata_Control"] = (role == "CTRL").to_numpy()
+
+    # The unit the screen varied is the ORF construct (Metadata_broad_sample), ~323 of them: the paper's
+    # active set is construct-level, and several constructs can overexpress the same gene. The untreated
+    # EMPTY wells carry no construct and form one "untreated" group; the control ORFs (Luciferase, LacZ,
+    # eGFP) also carry no broad_sample, so they fall back to their human-readable Metadata_pert_name.
+    construct = obs["Metadata_broad_sample"]
+    gene = obs["Metadata_gene_name"].astype(str)
+    allele = obs["Metadata_pert_name"].astype(str)
+    untreated = (gene == "EMPTY").to_numpy()
+    perturbation = np.where(
+        construct.notna().to_numpy(),
+        construct.astype(str).to_numpy(),
+        np.where(untreated, "untreated", allele.to_numpy()),
+    )
+    obs["Metadata_Perturbation"] = pd.Categorical(perturbation)
+    obs["Metadata_Perturbation_Type"] = pd.Categorical(np.where(untreated, "untreated", "orf"))
+    obs["Metadata_Gene"] = gene.astype("category")
+    obs["Metadata_Construct"] = construct
+    obs["Metadata_Allele"] = allele.astype("category")
     adata.uns["mantispy"]["dataset"] = "cpg0017-rohban-pathways"
     get_logger().info(
-        "rohban: %d wells x %d features, %d genes",
+        "rohban: %d wells x %d features, %d ORF constructs over %d genes",
         adata.n_obs,
         adata.n_vars,
-        adata.obs["Metadata_Perturbation"].nunique(),
+        int(construct.nunique()),
+        int(gene.nunique()),
     )
     return adata
 
