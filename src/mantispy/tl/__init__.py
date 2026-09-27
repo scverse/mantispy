@@ -1,6 +1,7 @@
 """Tools."""
 
 from mantispy.tl._aggregate import aggregate
+from mantispy.tl._cluster import cluster
 from mantispy.tl._consensus import consensus
 from mantispy.tl._design import cytotoxicity, replicate_saturation
 from mantispy.tl._differential import differential_features
@@ -25,6 +26,7 @@ from mantispy.tl._transport import transport
 __all__ = [
     "aggregate",
     "cell_cycle_phase",
+    "cluster",
     "cluster_composition",
     "consensus",
     "cytotoxicity",
