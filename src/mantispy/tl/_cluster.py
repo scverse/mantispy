@@ -4,9 +4,7 @@ One consensus profile per perturbation is the usual input (:func:`~mantispy.tl.c
 group of perturbations with a shared phenotype. The linkage tree is stored so :func:`~mantispy.pl.dendrogram`
 can draw it and :func:`~mantispy.tl.ora` can test each cluster's genes against prior knowledge.
 
-The granularity is chosen automatically by default: the tree is cut at several depths and the cut whose labels
-score best by silhouette is kept, so a screen does not need a cluster count picked in advance. Pass
-``n_clusters`` or ``distance_cut`` to set it explicitly.
+The granularity is chosen automatically by default; see :func:`cluster` for how, and to set it explicitly.
 """
 
 from __future__ import annotations
@@ -22,14 +20,12 @@ from mantispy._core.mutation import inplace_or_copy
 METHODS = ("hierarchical", "leiden")
 
 
-def _auto_cut(
-    linkage_matrix: np.ndarray, distances: np.ndarray, max_clusters: int
-) -> tuple[np.ndarray, int, float, float]:
+def _auto_cut(linkage_matrix: np.ndarray, distances: np.ndarray, max_clusters: int) -> tuple[np.ndarray, float, float]:
     """The fcluster labels whose silhouette is best over the candidate cluster counts.
 
     Sweeps ``k`` from 2 to ``max_clusters``, scoring each cut's labels against the precomputed distances, and
-    returns the winning labels with the chosen count, the height the tree is cut at for that count, and the
-    silhouette that won. A single observation, or distances with no spread, has no cut to make.
+    returns the winning labels, the height the tree is cut at for that count, and the silhouette that won. A
+    single observation, or distances with no spread, has no cut to make.
     """
     from scipy.cluster.hierarchy import fcluster
     from scipy.spatial.distance import squareform
@@ -46,14 +42,14 @@ def _auto_cut(
             continue
         score = float(silhouette_score(square, labels, metric="precomputed"))
         if np.isnan(best_score) or score > best_score:
-            best_labels, best_k, best_score = labels, int(len(set(labels))), score
+            best_labels, best_k, best_score = labels, len(set(labels)), score
 
     # The height that separates best_k clusters sits between the last merge kept and the first merge cut.
     cut = float("nan")
     if best_k >= 2:
         below, above = n_obs - best_k - 1, n_obs - best_k
-        cut = float((heights[below] + heights[above]) / 2) if below >= 0 else float(heights[above])
-    return best_labels, best_k, cut, best_score
+        cut = float((heights[below] + heights[above]) / 2)
+    return best_labels, cut, best_score
 
 
 @inplace_or_copy(expects="perturbation")
@@ -86,7 +82,7 @@ def cluster(
     Returns:
         ``None``, or the modified copy.
         Writes categorical cluster labels to ``obs[key_added]``. For ``method="hierarchical"`` it also writes the
-        linkage matrix to ``uns["mantispy"]["cluster_linkage"]`` and, to ``uns["mantispy"][key_added]``, a summary
+        linkage matrix to ``uns["mantispy"][key_added + "_linkage"]`` and, to ``uns["mantispy"][key_added]``, a summary
         with ``n_clusters``, ``distance_cut``, ``metric``, ``linkage``, ``silhouette`` and the ``labels`` the tree's
         leaves carry, in the object's row order, so :func:`~mantispy.pl.dendrogram` can label them.
 
@@ -136,17 +132,17 @@ def cluster(
     silhouette = float("nan")
     if n_clusters is not None:
         labels = fcluster(linkage_matrix, n_clusters, criterion="maxclust")
-        chosen, cut = int(len(set(labels))), float("nan")
+        cut = float("nan")
     elif distance_cut is not None:
         labels = fcluster(linkage_matrix, distance_cut, criterion="distance")
-        chosen, cut = int(len(set(labels))), float(distance_cut)
+        cut = float(distance_cut)
     else:
-        max_clusters = min(adata.n_obs - 1, 25)
-        labels, chosen, cut, silhouette = _auto_cut(linkage_matrix, distances, max_clusters)
+        labels, cut, silhouette = _auto_cut(linkage_matrix, distances, min(adata.n_obs - 1, 25))
+    chosen = int(len(set(labels)))
 
     adata.obs[key_added] = pd.Categorical([str(label) for label in labels])
     store = adata.uns.setdefault("mantispy", {})
-    store["cluster_linkage"] = np.asarray(linkage_matrix, dtype=float)
+    store[f"{key_added}_linkage"] = np.asarray(linkage_matrix, dtype=float)
     store[key_added] = {
         "n_clusters": chosen,
         "distance_cut": cut,

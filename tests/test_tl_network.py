@@ -54,6 +54,16 @@ def test_shuffled_genes_are_not_enriched(edges):
     assert adata.uns["mantispy"]["network_enrichment"]["pvalue"] > 0.05
 
 
+def test_a_profile_with_no_gene_is_dropped_from_the_pairs(edges):
+    adata = _screen([f"G{i}" for i in range(20)], edges)
+    genes = adata.obs["Metadata_Gene"].tolist()
+    genes[0] = None  # a control with no gene leaves the universe with its pairs
+    adata.obs["Metadata_Gene"] = genes
+    mt.tl.network_enrichment(adata, edges=edges, top_quantile=0.9)
+    # 20 profiles make 190 pairs; dropping one profile removes the 19 pairs it was in.
+    assert adata.uns["mantispy"]["network_enrichment"]["n_pairs"] == 190 - 19
+
+
 def test_similarity_must_be_computed_first(edges):
     adata = ad.AnnData(
         X=np.zeros((4, 3), dtype=np.float32),

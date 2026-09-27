@@ -174,7 +174,7 @@ Writing to a layer suffixes the column, so `key_added="sphered"` flags `var["deg
 | `tl.percent_replicating` | `uns["mantispy"][key_added]` and `..._summary` |
 | `tl.grit` | `obs[key_added]`, `uns["mantispy"][key_added]` |
 | `tl.consensus` | returns a new object at `"perturbation"` resolution; `obs["Metadata_ReplicateCount"]`, `uns["mantispy"]["consensus_weights"]` |
-| `tl.cluster` | `obs[key_added]` (categorical labels); for `method="hierarchical"` also `uns["mantispy"]["cluster_linkage"]` (the tree) and `uns["mantispy"][key_added]` (chosen cut and leaf labels) |
+| `tl.cluster` | `obs[key_added]` (categorical labels); for `method="hierarchical"` also `uns["mantispy"][key_added + "_linkage"]` (the tree) and `uns["mantispy"][key_added]` (chosen cut and leaf labels) |
 | `tl.effect_size` | `varm[key_added]`, `uns["mantispy"][key_added]` and `..._groups` |
 | `tl.wasserstein_features` | `varm[key_added]`, `uns["mantispy"][key_added]` and `..._groups` |
 | `tl.hit_calling` | `uns["mantispy"][key_added]`, `obs[key_added + "_distance"]`, `obs[key_added + "_row_distance"]`, `obs[key_added + "_qvalue"]`, `obs[key_added + "_reference_held_out"]` |

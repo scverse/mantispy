@@ -77,11 +77,12 @@ def network_enrichment(
     matrix = np.asarray(adata.obsp[similarity_key], dtype=np.float64)
     upper = np.triu_indices(matrix.shape[0], k=1)
     genes = obs[gene_key].astype(str).to_numpy()
+    # Controls carry no gene; drop a pair with a missing gene on either side from the universe rather than
+    # count it as a true negative. notna catches every null kind (NaN, None, pd.NA), and "" a blank symbol.
+    present = obs[gene_key].notna().to_numpy() & (genes != "")
     gene_a, gene_b = genes[upper[0]], genes[upper[1]]
 
-    # Controls carry no gene; a pair with a missing gene on either side cannot be a known interaction and is
-    # dropped from the universe rather than counted as a true negative.
-    valid = (gene_a != "nan") & (gene_b != "nan") & (gene_a != "") & (gene_b != "")
+    valid = present[upper[0]] & present[upper[1]]
     if valid.sum() < 1:
         raise ValueError("fewer than two annotated profiles to pair; check gene_key")
 

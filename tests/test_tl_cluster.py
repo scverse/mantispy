@@ -59,6 +59,34 @@ def test_leiden_path_writes_labels_but_no_tree(planted):
     assert planted.obs["leiden"].dtype.name == "category"
 
 
+def test_distance_cut_sets_the_granularity(planted):
+    mt.tl.cluster(planted, use_rep=None, distance_cut=0.5, key_added="dc")
+    summary = planted.uns["mantispy"]["dc"]
+    assert summary["distance_cut"] == 0.5
+    assert summary["n_clusters"] == planted.obs["dc"].nunique()
+
+
+def test_two_runs_keep_separate_linkage_trees(planted):
+    mt.tl.cluster(planted, use_rep=None, key_added="a")
+    mt.tl.cluster(planted, use_rep=None, metric="euclidean", linkage="ward", key_added="b")
+    store = planted.uns["mantispy"]
+    # Each run's tree is kept under its own key, so the second does not overwrite the first.
+    assert "a_linkage" in store and "b_linkage" in store
+    assert not np.allclose(store["a_linkage"], store["b_linkage"])
+
+
+def test_two_rows_collapse_to_one_cluster(planted):
+    two = planted[:2].copy()
+    mt.tl.cluster(two, use_rep=None)  # no 2-way silhouette exists at n=2
+    assert two.obs["cluster"].nunique() == 1
+
+
+def test_a_degenerate_profile_is_reported(planted):
+    planted.X[0] = 0.0  # a constant profile has an undefined correlation distance
+    with pytest.raises(ValueError, match="not finite"):
+        mt.tl.cluster(planted, use_rep=None)
+
+
 def test_copy_leaves_the_input_alone(planted):
     result = mt.tl.cluster(planted, use_rep=None, copy=True)
     assert "cluster" in result.obs

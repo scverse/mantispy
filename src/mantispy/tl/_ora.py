@@ -5,9 +5,9 @@ tested against a gene-set network with an over-representation test, so a cluster
 pathways or complexes its genes fall into. This is the discrete counterpart to :func:`~mantispy.tl.enrich`,
 which scores continuous profiles.
 
-The test is run with :func:`decoupler.mt.ora`, and the universe is the set of genes measured in the object
-(the perturbed set), not every gene in the network, so enrichment is judged against what the screen could have
-found.
+Each set is tested with a two-tailed Fisher exact test, and the universe is the set of genes measured in the
+object (the perturbed set), not every gene in the network, so enrichment is judged against what the screen
+could have found.
 """
 
 from __future__ import annotations
@@ -43,15 +43,15 @@ def ora(
         gene_key: ``obs`` column holding the gene symbol.
         source: Column of ``net`` naming the set. Renamed to ``source`` internally.
         target: Column of ``net`` naming the gene. Renamed to ``target`` internally.
-        tmin: Smallest number of a set's genes that must be in the universe for the set to be tested, passed to decoupler.
+        tmin: Smallest number of a set's genes that must be in the universe for the set to be tested.
         key_added: Name for the output table.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
         ``None``, or the modified copy.
         Writes ``uns["mantispy"][key_added]`` with ``group``, ``source`` (the set), ``n`` (the group's genes in
-        that set), ``odds_ratio`` (decoupler's Haldane-Anscombe log odds ratio), ``pvalue`` (a two-tailed
-        Fisher exact test) and ``qvalue`` (Benjamini-Hochberg across every tested group and set), sorted by q.
+        that set), ``odds_ratio`` (the Haldane-Anscombe log odds ratio), ``pvalue`` (a two-tailed Fisher exact
+        test) and ``qvalue`` (Benjamini-Hochberg across every tested group and set), sorted by q.
 
     Raises:
         KeyError: ``obs`` has no ``groupby`` or no ``gene_key``.
@@ -59,12 +59,10 @@ def ora(
 
     Notes:
         The universe is the set of distinct genes in ``obs[gene_key]``, so a set is tested only on its genes
-        that the screen measured. decoupler's ORA returns p-values already Benjamini-Hochberg adjusted across a
-        group's sets, so the raw two-tailed Fisher p is recomputed here from the same contingency table and one
-        Benjamini-Hochberg correction is then applied across the whole table, keeping ``pvalue`` and ``qvalue``
-        on one consistent footing.
+        that the screen measured, and sets with fewer than ``tmin`` measured genes are skipped. Each group and
+        set is tested with a two-tailed Fisher exact test over that universe, and one Benjamini-Hochberg
+        correction is applied across the whole table.
     """
-    import decoupler as dc
     from scipy.stats import fisher_exact
 
     obs = as_frame(adata.obs)
@@ -77,41 +75,39 @@ def ora(
     if not {"source", "target"} <= set(network.columns):
         raise ValueError(f"net must have columns {source!r} and {target!r}")
 
-    genes = obs[gene_key].dropna().astype(str)
-    universe = sorted(set(genes))
+    gene_names = obs[gene_key].astype(str).to_numpy()
+    present = obs[gene_key].notna().to_numpy() & (gene_names != "")
+    universe = sorted(set(gene_names[present]))
     n_bg = len(universe)
     in_universe = set(universe)
 
-    # Restrict the net to measured genes so the universe is the perturbed set, then index each set's genes.
+    # Restrict the net to measured genes, then keep only sets with at least tmin of them to test.
     network = network.astype({"source": str, "target": str})
     network = network[network["target"].isin(in_universe)]
     set_genes = {name: set(block["target"]) for name, block in network.groupby("source", observed=True)}
+    set_genes = {name: targets for name, targets in set_genes.items() if len(targets) >= tmin}
 
-    group_labels = obs[groupby].astype(str)
+    group_labels = obs[groupby].astype(str).to_numpy()
     records = []
     for group in pd.unique(group_labels):
-        members = sorted(set(genes[group_labels.to_numpy() == group]) & in_universe)
+        members = set(gene_names[(group_labels == group) & present]) & in_universe
         k = len(members)
         if k == 0 or k == n_bg:
             continue
-        # A single row over the universe, members ranked on top; decoupler keeps features ranked above n_up,
-        # so n_up = n_bg - k selects exactly the k member genes (see tl/_enrich.py::_ora_n_up).
-        row = pd.DataFrame([np.isin(universe, members).astype(float)], index=[group], columns=universe)
-        es, _ = dc.mt.ora(row, network, tmin=tmin, n_up=n_bg - k, n_bg=n_bg, empty=False, verbose=False)
-        member_set = set(members)
-        for name in es.columns:
-            targets = set_genes.get(name, set())
-            a = len(member_set & targets)
+        for name, targets in set_genes.items():
+            a = len(members & targets)
             n_s = len(targets)
-            # 2x2: rows are member/non-member genes, columns in-set/out-of-set, over the measured universe.
-            contingency = [[a, k - a], [n_s - a, n_bg - k - (n_s - a)]]
+            # 2x2: rows member/non-member genes, columns in-set/out-of-set, over the measured universe.
+            b, c = k - a, n_s - a
+            d = n_bg - k - c
             records.append(
                 {
                     "group": group,
                     "source": str(name),
                     "n": a,
-                    "odds_ratio": float(es[name].iloc[0]),
-                    "pvalue": float(fisher_exact(contingency, alternative="two-sided")[1]),
+                    # Haldane-Anscombe log odds ratio: +0.5 per cell keeps it finite when a cell is zero.
+                    "odds_ratio": float(np.log(((a + 0.5) * (d + 0.5)) / ((b + 0.5) * (c + 0.5)))),
+                    "pvalue": float(fisher_exact([[a, b], [c, d]], alternative="two-sided")[1]),
                 }
             )
 
@@ -119,5 +115,5 @@ def ora(
     table["qvalue"] = benjamini_hochberg(table["pvalue"].to_numpy()) if len(table) else []
     table = table.sort_values("qvalue").reset_index(drop=True)
     adata.uns.setdefault("mantispy", {})[key_added] = table
-    get_logger().info("ora: %d test(s) over %d group(s)", len(table), group_labels.nunique())
+    get_logger().info("ora: %d test(s) over %d group(s)", len(table), len(pd.unique(group_labels)))
     return None

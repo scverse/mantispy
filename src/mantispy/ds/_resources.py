@@ -45,6 +45,10 @@ def _cached(cache_key: str, builder, cache_dir: str | Path | None) -> pd.DataFra
     if path.exists():
         return pd.read_parquet(path)
     frame = builder()
+    # An empty resource is always a bad name or a failed fetch, never a real result; caching it would pin the
+    # emptiness for every later call, so refuse it here instead.
+    if frame.empty:
+        raise ValueError(f"resource {cache_key!r} came back empty; check the name, and do not pin the result")
     frame.to_parquet(path, index=False)
     return frame
 

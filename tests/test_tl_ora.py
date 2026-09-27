@@ -55,6 +55,29 @@ def test_a_set_the_group_avoids_is_depleted_not_over_represented(screen, net):
     assert other["odds_ratio"] < 0
 
 
+def test_ora_handles_a_control_with_no_gene(net):
+    # A control well carries no gene; ora must skip it, not crash on the shorter, dropna'd gene Series.
+    genes = [f"g{i}" for i in range(30)] + [None]
+    clusters = ["1"] * 10 + ["2"] * 10 + ["3"] * 10 + ["ctrl"]
+    adata = ad.AnnData(
+        X=np.zeros((31, 3), dtype=np.float32),
+        obs=pd.DataFrame({"Metadata_Gene": genes, "cluster": clusters}, index=[str(i) for i in range(31)]),
+        var=pd.DataFrame(index=["a", "b", "c"]),
+    )
+    adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "perturbation"}
+    mt.tl.ora(adata, groupby="cluster", net=net, tmin=1)
+    table = adata.uns["mantispy"]["ora"]
+    assert "ctrl" not in set(table["group"])  # no gene, so no tests
+    assert table[table["group"] == "1"].sort_values("pvalue").iloc[0]["source"] == "A"
+
+
+def test_sets_below_tmin_are_skipped_without_crashing(screen):
+    # Sets with fewer than tmin measured genes must be dropped, not sent to a test that would assert.
+    small_net = pd.DataFrame({"source": ["A", "A", "B", "B"], "target": ["g0", "g1", "g2", "g3"]})
+    mt.tl.ora(screen, groupby="cluster", net=small_net)  # default tmin=5, every set has 2 genes
+    assert len(screen.uns["mantispy"]["ora"]) == 0
+
+
 def test_net_is_required(screen):
     with pytest.raises(ValueError, match="net is required"):
         mt.tl.ora(screen, groupby="cluster")

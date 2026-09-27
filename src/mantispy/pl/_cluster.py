@@ -28,16 +28,17 @@ def dendrogram(
         The axes drawn on, holding the tree with the profiles as leaves and merge height on the y axis.
 
     Raises:
-        KeyError: ``uns["mantispy"]`` holds no ``cluster_linkage`` (the run used ``method="leiden"``, or none ran).
+        KeyError: ``uns["mantispy"]`` holds no ``key + "_linkage"`` (the run used ``method="leiden"``, or none ran).
     """
     from scipy.cluster.hierarchy import dendrogram as scipy_dendrogram
 
     store = adata.uns.get("mantispy", {})
-    if "cluster_linkage" not in store:
+    linkage_key = f"{key}_linkage"
+    if linkage_key not in store:
         raise KeyError(
-            "uns['mantispy']['cluster_linkage'] is missing; run mt.tl.cluster with method='hierarchical' first"
+            f"uns['mantispy'][{linkage_key!r}] is missing; run mt.tl.cluster with method='hierarchical' first"
         )
-    linkage_matrix = np.asarray(store["cluster_linkage"], dtype=float)
+    linkage_matrix = np.asarray(store[linkage_key], dtype=float)
     summary = store.get(key, {})
     labels = list(summary.get("labels", [str(name) for name in adata.obs_names]))
 
