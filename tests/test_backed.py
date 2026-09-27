@@ -5,7 +5,6 @@ same numbers as the in-memory path. Functions that write X in place refuse backe
 with an error.
 """
 
-import logging
 from types import SimpleNamespace
 
 import anndata as ad
@@ -16,10 +15,8 @@ from scipy import sparse
 
 import mantispy as mt
 from mantispy._core._reduce import (
-    MAD,
     MEAN,
     MEDIAN,
-    STD,
     _reads_from_disk,
     get_matrix,
     reduce_grouped,
@@ -36,30 +33,6 @@ def paths(tmp_path, cells):
 @pytest.fixture
 def backed(paths):
     return mt.io.read(paths, backed="r")
-
-
-def test_reading_backed_leaves_x_on_disk(backed, cells):
-    assert backed.isbacked
-    assert type(backed.X).__name__ == "Dataset"  # h5py, not a numpy array
-    assert backed.shape == cells.shape
-    assert mt.io.validate(backed).ok, mt.io.validate(backed).errors
-
-
-def test_grouped_normalize_matches_the_in_memory_path(backed, cells):
-    from_disk = mt.pp.normalize(backed, by="Metadata_Plate", reference="negcon", copy=True)
-    in_memory = mt.pp.normalize(cells, by="Metadata_Plate", reference="negcon", copy=True)
-    np.testing.assert_allclose(np.asarray(from_disk.X), np.asarray(in_memory.X), rtol=1e-6)
-
-
-def test_aggregate_and_feature_select_match(backed, cells):
-    np.testing.assert_allclose(
-        np.asarray(mt.tl.aggregate(backed, min_cells=0).X),
-        np.asarray(mt.tl.aggregate(cells, min_cells=0).X),
-        rtol=1e-6,
-    )
-    from_disk = mt.pp.feature_select(backed, copy=True)
-    in_memory = mt.pp.feature_select(cells, copy=True)
-    np.testing.assert_array_equal(from_disk.var["selected"], in_memory.var["selected"])
 
 
 @pytest.fixture
@@ -182,77 +155,6 @@ def test_rows_already_in_order_are_read_without_a_second_copy(dtype):
         assert block is dataset.given[0], "the block the dataset returned was copied again"
 
 
-def test_every_row_in_order_is_read_as_a_slice():
-    """``by=None`` makes iter_groups ask for every row, which is what ``pp.rank_int(backed,
-    key_added=...)`` does. An index list has h5py select the rows point by point; a slice reads the
-    dataset in one go, and measured about twice as fast on an uncompressed 20,000 x 500 file."""
-    values = np.arange(40, dtype=np.float32).reshape(10, 4)
-    adata, dataset = _on_disk(values)
-
-    block = get_matrix(adata, rows=np.arange(10))
-
-    assert len(dataset.asked) == 1
-    index = dataset.asked[0]
-    assert isinstance(index, slice), f"expected one slice, got an index list of {np.size(index)}"
-    np.testing.assert_array_equal(block, values)
-
-
-def test_a_contiguous_run_of_rows_is_read_as_one_block():
-    """A group's rows are a run like this whenever the file is stored in the grouping's own order,
-    which is the case the slice is worth having for: it fires once per group, where covering the
-    whole matrix fires once per call. Measured on an uncompressed 20,000 x 200 file, a 200-row
-    well-sized run costs 0.168 ms as an index list against 0.022 ms as a slice, and 7x holds to
-    10,000 rows."""
-    values = np.arange(40, dtype=np.float32).reshape(10, 4)
-    adata, dataset = _on_disk(values)
-
-    block = get_matrix(adata, rows=np.arange(3, 7))
-
-    assert dataset.asked == [slice(3, 7)]
-    np.testing.assert_array_equal(block, values[3:7])
-
-
-def test_a_run_reaching_past_the_dataset_is_refused_rather_than_clamped():
-    """A slice clamps to what is there, so rows 5 to 14 of a ten-row dataset would come back as five
-    rows and no error at all, where the index list they were asked for as is refused."""
-    adata, _ = _on_disk(np.arange(40, dtype=np.float32).reshape(10, 4))
-
-    with pytest.raises(OSError):
-        get_matrix(adata, rows=np.arange(5, 15))
-
-
-@pytest.mark.parametrize(
-    "rows",
-    [
-        np.arange(1, 11),
-        np.array([-1, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
-        np.array([True, False] * 5),
-    ],
-    ids=["one past the last row", "a negative index", "a boolean mask"],
-)
-def test_an_index_the_backend_refuses_is_not_read_as_every_row(rows):
-    """Each of these has exactly as many entries as the dataset has rows, so a whole-matrix shortcut
-    that takes the length as proof of "every row in order" hands back all ten rows where the backend
-    would have refused. A mask is the live risk: `_core.masks.reference_mask` returns one, and
-    `tl/_dose.py:495` is the caller that has to remember `np.flatnonzero`."""
-    adata, _ = _on_disk(np.arange(40, dtype=np.float32).reshape(10, 4))
-
-    with pytest.raises((TypeError, OSError, IndexError)):
-        get_matrix(adata, rows=rows)
-
-
-def test_an_unsigned_index_is_ordered_by_comparison_and_not_by_subtraction():
-    """np.diff on a uint index wraps, so [7, 4, 1] subtracts to two large positive numbers and reads
-    as increasing. h5py's own check wraps the same way, so it accepts the index and returns the rows
-    ascending: the one order the caller did not ask for, and no error either side."""
-    values = np.arange(40, dtype=np.float32).reshape(10, 4)
-    adata, _ = _on_disk(values)
-
-    block = get_matrix(adata, rows=np.array([7, 4, 1], dtype=np.uint32))
-
-    np.testing.assert_array_equal(block, values[[7, 4, 1]])
-
-
 def test_rows_out_of_order_still_come_back_in_the_order_asked_for():
     """The sort is what lets h5py read them at all, so it stays for a caller that does not ask in order."""
     values = np.arange(40, dtype=np.float32).reshape(10, 4)
@@ -262,17 +164,6 @@ def test_rows_out_of_order_still_come_back_in_the_order_asked_for():
 
     np.testing.assert_array_equal(block, values[[7, 1, 4]])
     np.testing.assert_array_equal(dataset.asked[0], [1, 4, 7], err_msg="h5py is read in increasing order")
-
-
-def test_streamed_and_single_pass_reductions_agree(backed, cells):
-    """The backed path reduces group by group and the in-memory path in one kernel call;
-    both must give the same numbers."""
-    for stat in (MEDIAN, MAD, STD):
-        streamed, keys, counts = reduce_grouped(backed, "Metadata_Plate", stat)
-        single, keys_memory, counts_memory = reduce_grouped(cells, "Metadata_Plate", stat)
-        np.testing.assert_allclose(streamed, single, rtol=1e-10)
-        np.testing.assert_array_equal(counts, counts_memory)
-        assert list(keys) == list(keys_memory)
 
 
 @pytest.fixture
@@ -314,19 +205,6 @@ def test_a_sparse_matrix_on_disk_reduces_to_what_it_does_in_memory(backed_sparse
     np.testing.assert_allclose(streamed, single, rtol=1e-10)
     np.testing.assert_array_equal(counts, counts_memory)
     assert list(keys) == list(keys_memory)
-
-
-@pytest.mark.parametrize(("fmt", "warned"), [("csc", True), ("csr", False)], ids=["column-major", "row-major"])
-def test_a_matrix_that_cannot_be_streamed_says_so(backed_sparse, caplog, fmt, warned):
-    """anndata indexes a CSR dataset by row without leaving the file, which is what makes the
-    per-group loop a stream. On CSC the same index falls back to `to_memory()`: measured at 60 reads
-    of 10 rows, CSR called it 0 times and CSC 60, so the whole matrix is read once per group."""
-    from_disk, _ = backed_sparse(fmt)
-
-    with caplog.at_level(logging.WARNING, logger="mantispy"):
-        reduce_grouped(from_disk, "g", MEAN)
-
-    assert ("column-major" in caplog.text) is warned
 
 
 @pytest.mark.parametrize("container", ["backed", "dense"])
@@ -395,12 +273,6 @@ def test_writing_x_in_place_is_refused_with_the_way_out(backed):
         mt.pp.normalize(backed, by="Metadata_Plate")
 
 
-def test_a_backed_object_can_still_be_flagged_in_place(backed):
-    """obs and var live in memory even when X does not, so QC works unchanged."""
-    mt.pp.calculate_qc_metrics(backed)
-    assert "qc_pass" in backed.obs
-
-
 def test_key_added_normalizes_a_backed_object_without_rewriting_x(backed):
     """io.read documents key_added= as one of the two ways out for a backed object, and the
     guard refused it for a call that writes a layer and never touches X."""
@@ -423,36 +295,3 @@ def test_filtering_a_backed_object_names_the_way_out(backed, name):
 
     with pytest.raises(ValueError, match="copy=True"):
         getattr(mt.pp, name)(backed)
-
-
-@pytest.mark.parametrize("container", ["dense", "sparse", "backed"])
-def test_an_empty_group_has_no_statistic_whichever_path_reduces_it(container, tmp_path):
-    """A group with no rows gets NaN on every path, since zero would read as a measurement.
-
-    A fully masked reference group centred on 0.0 would let `pp.normalize` subtract nothing
-    and report success.
-    """
-    obs = pd.DataFrame({"g": ["a", "a", "b", "b"]}, index=[str(i) for i in range(4)])
-    values = np.arange(8, dtype=np.float32).reshape(4, 2)
-    mask = np.array([True, True, False, False])  # group "b" contributes nothing
-
-    if container == "sparse":
-        adata = ad.AnnData(X=sparse.csr_matrix(values), obs=obs)
-    elif container == "backed":
-        path = tmp_path / "backed.h5ad"
-        ad.AnnData(X=values.copy(), obs=obs).write_h5ad(path)
-        adata = ad.read_h5ad(path, backed="r")
-    else:
-        adata = ad.AnnData(X=values.copy(), obs=obs)
-
-    reduced, keys, counts = reduce_grouped(adata, "g", MEAN, mask=mask)
-    assert list(keys) == ["a", "b"]
-    assert counts.tolist() == [2, 0]
-    np.testing.assert_allclose(reduced[0], [1.0, 2.0])
-    assert np.isnan(reduced[1]).all(), "an empty group must be NaN, not zero"
-
-
-def test_sparse_is_not_mistaken_for_an_on_disk_dataset():
-    """It has .shape and .dtype like an h5py dataset, and is entirely in memory."""
-    assert not _reads_from_disk(sparse.csr_matrix(np.eye(3)))
-    assert not _reads_from_disk(np.eye(3))

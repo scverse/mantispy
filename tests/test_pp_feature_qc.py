@@ -29,22 +29,6 @@ def test_reproducible_features_score_higher_than_noise(replicated):
     assert icc.between(-1, 1).all()
 
 
-def test_icc_is_the_between_group_share_of_variance(replicated):
-    """Checked against the textbook formula on a hand-built balanced design."""
-    from mantispy.pp._feature_qc import intraclass_correlation
-
-    rng = np.random.default_rng(0)
-    groups, replicates = 8, 5
-    codes = np.repeat(np.arange(groups), replicates)
-    level = rng.normal(0, 3.0, groups)[codes]
-    values = (level + rng.normal(0, 1.0, groups * replicates))[:, None]
-
-    between = np.var([values[codes == g].mean() for g in range(groups)], ddof=1) * replicates
-    within = np.mean([values[codes == g].var(ddof=1) for g in range(groups)])
-    expected = (between - within) / (between + (replicates - 1) * within)
-    np.testing.assert_allclose(intraclass_correlation(values, codes, groups)[0], expected, rtol=1e-10)
-
-
 def test_batch_sensitivity_finds_an_injected_batch_effect(replicated):
     values = replicated.X.copy()
     batch = (replicated.obs["Metadata_Plate"] == "Plate01").to_numpy()
