@@ -87,6 +87,41 @@ def test_a_degenerate_profile_is_reported(planted):
         mt.tl.cluster(planted, use_rep=None)
 
 
+def test_stability_criterion_recovers_the_planted_groups(planted):
+    truth = np.repeat([0, 1, 2], 8)
+    mt.tl.cluster(planted, use_rep=None, criterion="stability")
+
+    summary = planted.uns["mantispy"]["cluster"]
+    assert summary["n_clusters"] == 3
+    assert adjusted_rand_score(truth, planted.obs["cluster"].to_numpy()) == pytest.approx(1.0)
+    assert np.isfinite(summary["distance_cut"])
+    assert np.isfinite(summary["stability"])
+
+    with pytest.raises(ValueError, match="criterion must be"):
+        mt.tl.cluster(planted, use_rep=None, criterion="bogus", key_added="bad")
+
+
+def test_stability_criterion_does_not_over_segment_moderate_groups():
+    """Three planted groups at a modest separation: the old count-weighted score over-segmented here."""
+    rng = np.random.default_rng(7)
+    centers = rng.normal(size=(3, 12))  # centers roughly a unit apart, so groups are clear but not trivial
+    values = np.repeat(centers, 8, axis=0) + rng.normal(scale=0.35, size=(24, 12))
+    adata = ad.AnnData(
+        X=values.astype(np.float32),
+        obs=pd.DataFrame({"Metadata_Perturbation": [f"p{i}" for i in range(24)]}, index=[str(i) for i in range(24)]),
+        var=pd.DataFrame(index=[f"f{i}" for i in range(12)]),
+    )
+    adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "perturbation"}
+
+    truth = np.repeat([0, 1, 2], 8)
+    mt.tl.cluster(adata, use_rep=None, criterion="stability")
+
+    summary = adata.uns["mantispy"]["cluster"]
+    assert summary["n_clusters"] == 3
+    assert adjusted_rand_score(truth, adata.obs["cluster"].to_numpy()) > 0.95
+    assert 0.0 <= summary["stability"] <= 1.0
+
+
 def test_copy_leaves_the_input_alone(planted):
     result = mt.tl.cluster(planted, use_rep=None, copy=True)
     assert "cluster" in result.obs
