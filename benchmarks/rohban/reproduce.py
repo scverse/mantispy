@@ -237,3 +237,18 @@ n_enriched_nominal = len(enriched_nominal)
 print(f"  mt.tl.ora ({len(ora)} tests, one global BH): multi-gene clusters enriched at q<0.05 = "
       f"{n_enriched_q}/{n_multigene}; at nominal p<0.05 = {n_enriched_nominal}/{n_multigene}")
 
+# =============================================================================================
+# Step 10: correlation threshold + interaction enrichment of top pairs via mt.tl.network_enrichment [G9, G10]
+# =============================================================================================
+banner("Step 10: interaction enrichment of the top-correlated pairs [G9, G10]")
+edges = mt.ds.interactions("CORUM")
+mt.tl.network_enrichment(cons, similarity_key="similarity", edges=edges, gene_key="Metadata_Gene", top_quantile=0.95)
+ne = cons.uns["mantispy"]["network_enrichment"]
+(a11, a10), (a01, a00) = ne["table"]
+top_rate = a11 / max(a11 + a10, 1)
+bg_rate = a01 / max(a01 + a00, 1)
+threshold = float(ne["threshold"])
+print(f"  top-5% correlation cut (network_enrichment threshold): {threshold:.3f} (paper: 0.43)")
+print(f"  top pairs: {a11}/{a11 + a10} share a CORUM complex = {100 * top_rate:.1f}% vs {100 * bg_rate:.1f}% "
+      f"for the rest; odds ratio {ne['odds_ratio']:.2f}, one-sided Fisher p={ne['pvalue']:.3g} (paper: 9% vs 5%, p=0.04)")
+
