@@ -88,7 +88,7 @@ def cluster(
         leaves carry, in the object's row order, so :func:`~mantispy.pl.dendrogram` can label them.
 
     Raises:
-        ValueError: ``method`` is not one of :data:`METHODS`, both ``distance_cut`` and ``n_clusters`` are given, or the object has fewer than two rows to cluster.
+        ValueError: ``method`` is not one of ``METHODS``, both ``distance_cut`` and ``n_clusters`` are given, or the object has fewer than two rows to cluster.
 
     Notes:
         With neither ``distance_cut`` nor ``n_clusters`` the granularity is chosen automatically: the tree is cut

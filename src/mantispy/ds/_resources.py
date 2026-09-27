@@ -80,7 +80,7 @@ def gene_sets(name: str = "hallmark", organism: str = "human", cache_dir: str | 
 
     Args:
         name: A friendly shortcut (``"hallmark"``, ``"GO_BP"``, ``"Reactome"``, ``"CORUM"``) or any OmniPath
-            resource name that :func:`decoupler.op.show_resources` lists (for example ``"MSigDB"``, ``"KEGG"``).
+            resource name that ``decoupler.op.show_resources`` lists (for example ``"MSigDB"``, ``"KEGG"``).
         organism: The organism the resource is fetched for. ``"CORUM"`` is human only.
         cache_dir: Where the snapshot is kept.
             Defaults to :attr:`mantispy.settings.cache_dir`.
