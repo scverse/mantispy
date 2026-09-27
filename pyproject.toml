@@ -210,7 +210,7 @@ overrides = [
 
 [tool.pytest]
 addopts = [
-  "--import-mode=importlib", # allow using test files with same name
+  "--import-mode=importlib",  # allow using test files with same name
   # the network tests download a few hundred MB; the slow tests are the long
   # calibration and fuzz loops. Run them with -m network / -m slow.
   "-m",
