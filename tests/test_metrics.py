@@ -11,7 +11,7 @@ import mantispy as mt
 from mantispy.ds import synthetic_plate
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def corrected():
     cells = synthetic_plate(
         n_plates=4,
@@ -59,6 +59,7 @@ def test_pc_regression_detects_the_injected_batch_effect(corrected):
 
 def test_correction_moves_the_batch_metric_the_right_way(corrected):
     """Centring each batch is the simplest correction, and the batch metric must register it."""
+    corrected = corrected.copy()  # module-scoped fixture; this test writes obsm["X_centred"]
     before = _value(mt.metrics.pc_regression(corrected, key="Metadata_Batch", use_rep="X_pca"), "pc_regression")
 
     centred = corrected.copy()
@@ -81,6 +82,7 @@ def test_evaluate_correction_stacks_and_names_both_lisis(corrected):
 def test_evaluate_correction_compares_representations_and_names_the_map_row_honestly(corrected):
     """Reading one uns table once per representation gave every representation the same mAP, 0.7757 under both X_pca and X_other, inside the function whose purpose is comparing them."""
     pytest.importorskip("copairs")  # copairs declares requires-python <3.13
+    corrected = corrected.copy()  # module-scoped fixture; this test writes obsm["X_other"] and tl.map writes uns
     corrected.obsm["X_other"] = np.asarray(corrected.obsm["X_pca"])[:, :5]
     mt.tl.map(corrected, mode="activity", null_size=200)  # scores X, neither representation
 
