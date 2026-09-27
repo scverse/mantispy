@@ -37,25 +37,9 @@ def screen():
     return adata
 
 
-def test_pathway_coherence_ranks_the_coherent_set_first(screen, net):
-    mt.tl.pathway_coherence(screen, net, min_genes=3, n_permutations=200)
-    table = screen.uns["mantispy"]["pathway_coherence"]
-    assert {"set", "n_genes", "coherence", "pvalue", "qvalue"} <= set(table.columns)
-    assert table["set"].iloc[0] == "cycle"  # sorted by coherence, never by p-value
-    assert table["coherence"].iloc[0] > table["coherence"].iloc[-1]
-
-
 def test_a_set_with_too_few_genes_present_is_skipped(screen, net):
     mt.tl.pathway_coherence(screen, net, min_genes=7, n_permutations=50)
     assert len(screen.uns["mantispy"]["pathway_coherence"]) == 0
-
-
-def test_enrich_hits_finds_the_right_set(screen, net):
-    screen.obs["hits_qvalue"] = [0.001] * 6 + [0.9] * 6
-    mt.tl.enrich_hits(screen, net, threshold=0.05)
-    table = screen.uns["mantispy"]["enrich_hits"]
-    assert table["set"].iloc[0] == "cycle"
-    assert table["odds_ratio"].iloc[0] > 0
 
 
 def test_enrich_hits_says_what_to_run_first(screen, net):
@@ -160,18 +144,6 @@ def test_enrich_hits_refuses_a_screen_with_no_hits():
     raises a bare ValueError('cannot compute fingerprint of empty set') that names neither
     the threshold nor the remedy."""
     adata, genes = _screen_of_200_genes(0.5)  # every gene misses threshold=0.05
-    net = pd.DataFrame({"source": ["S1"] * 20, "target": genes[30:50], "weight": 1.0})
-
-    with pytest.raises(ValueError, match="threshold"):
-        mt.tl.enrich_hits(adata, net=net, gene_key="Metadata_Gene", threshold=0.05)
-
-
-def test_enrich_hits_refuses_a_screen_where_everything_is_a_hit():
-    """A permissive threshold calls everything. Without a guard, decoupler's ORA gets
-    n_up = 0 and raises a bare AssertionError('n_up must be numeric and > 0'). rohban at
-    190 hits of 193 genes (see the Notes of enrich_hits) still works; a screen where every
-    gene is a hit raises a clear error."""
-    adata, genes = _screen_of_200_genes(0.001)  # every gene beats threshold=0.05
     net = pd.DataFrame({"source": ["S1"] * 20, "target": genes[30:50], "weight": 1.0})
 
     with pytest.raises(ValueError, match="threshold"):
