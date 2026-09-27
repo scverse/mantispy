@@ -107,6 +107,7 @@ tutorials = [
   "igraph",
   "ipykernel",
   "leidenalg",
+  "mantispy[interactive]",
 ]
 typecheck = [
   "mypy",
