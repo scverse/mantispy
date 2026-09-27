@@ -19,6 +19,7 @@ from mantispy.tl._hits import hit_calling
 from mantispy.tl._knowledge import enrich_hits, gene_sets, pathway_coherence
 from mantispy.tl._map import map
 from mantispy.tl._moa import moa_enrichment, nn_moa_classify
+from mantispy.tl._network import network_enrichment
 from mantispy.tl._ora import ora
 from mantispy.tl._signature import feature_signature
 from mantispy.tl._similarity import grit, percent_replicating, similarity
@@ -48,6 +49,7 @@ __all__ = [
     "map",
     "moa_enrichment",
     "neighbors_local_density",
+    "network_enrichment",
     "nn_moa_classify",
     "ora",
     "pathway_coherence",
