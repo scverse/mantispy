@@ -152,8 +152,10 @@ lit_thr, med_rep, active_literal, rep_pairs, non_rep_pairs = literal_rohban_acti
     np.asarray(screen.X)[non_ctrl], codes[non_ctrl].to_numpy()
 )
 frac_literal = len(active_literal) / med_rep.size
-print(f"  (a) literal Rohban C5 (per-pair 95th-pct null, selected features): "
-      f"threshold={lit_thr:.3f}, active {len(active_literal)}/{med_rep.size} = {100 * frac_literal:.1f}%")
+print(
+    f"  (a) literal Rohban C5 (per-pair 95th-pct null, selected features): "
+    f"threshold={lit_thr:.3f}, active {len(active_literal)}/{med_rep.size} = {100 * frac_literal:.1f}%"
+)
 
 # (b) mantispy-native percent_replicating: the modern "percent replicating" (Way et al.) matched
 #     null (95th pct of the median of k non-replicate pairs), on the 99%-variance PCA space.
@@ -164,21 +166,34 @@ pr = screen.uns["mantispy"]["percent_replicating"]
 pr_genes = pr[~pr["group"].isin(CONTROL_GENES)]
 frac_pr = float(pr_genes["is_replicating"].mean())
 n_pr = int(pr_genes["is_replicating"].sum())
-print(f"  (b) mt.tl.percent_replicating (matched-median null, X_pca): active {n_pr}/{len(pr_genes)} = {100 * frac_pr:.1f}%")
+print(
+    f"  (b) mt.tl.percent_replicating (matched-median null, X_pca): active {n_pr}/{len(pr_genes)} = {100 * frac_pr:.1f}%"
+)
 
 # (c) mantispy hit_calling: calibrated permutation null vs the controls (reported, not graded).
 mt.tl.hit_calling(
-    screen, groupby="Metadata_Perturbation", reference="negcon", method="mahalanobis", covariance="empirical",
-    use_rep="X_pca", n_permutations=1000, threshold=0.05, seed=RNG_SEED,
+    screen,
+    groupby="Metadata_Perturbation",
+    reference="negcon",
+    method="mahalanobis",
+    covariance="empirical",
+    use_rep="X_pca",
+    n_permutations=1000,
+    threshold=0.05,
+    seed=RNG_SEED,
 )
 hc = screen.uns["mantispy"]["hits"]
 n_hc = int(hc[~hc["group"].isin(CONTROL_GENES)]["is_hit"].sum())
-print(f"  (c) mt.tl.hit_calling (permutation null, X_pca): {n_hc}/{n_real_genes} hits "
-      f"(conservative on the pilot subset; the plan's expected ~190/193 over-call is not seen at 36 PCs)")
+print(
+    f"  (c) mt.tl.hit_calling (permutation null, X_pca): {n_hc}/{n_real_genes} hits "
+    f"(conservative on the pilot subset; the plan's expected ~190/193 over-call is not seen at 36 PCs)"
+)
 
 bracketed = frac_literal <= 0.50 <= frac_pr
-print(f"  --> paper's 50% is bracketed by the two faithful mantispy nulls: "
-      f"[{100 * frac_literal:.0f}%, {100 * frac_pr:.0f}%] contains 50%: {bracketed}")
+print(
+    f"  --> paper's 50% is bracketed by the two faithful mantispy nulls: "
+    f"[{100 * frac_literal:.0f}%, {100 * frac_pr:.0f}%] contains 50%: {bracketed}"
+)
 
 # =============================================================================================
 # Step 6-8: modz consensus per gene + Pearson similarity + average-linkage clustering [G4-G7]
@@ -231,7 +246,8 @@ casc_counts = casc_labels.value_counts()
 casc_co = bool((casc_counts >= 2).any())
 ras_group = (
     sorted([g for g in casc_present if casc_labels[g] == casc_counts.index[0]])
-    if len(casc_counts) and casc_counts.iloc[0] >= 2 else []
+    if len(casc_counts) and casc_counts.iloc[0] >= 2
+    else []
 )
 print(f"  RAS cascade present={casc_present}; >=2 co-clustered: {casc_co}; group={ras_group}")
 
@@ -242,12 +258,14 @@ if ctraf is None:
     ctraf = pd.Series({g: cluster_of(g) for g in present_nf}).value_counts().index[0] if present_nf else None
 yap_nfkb = mean_between(members(cy), members(ctraf))
 multi = [int(x) for x in sizes[sizes >= 2].index]
-inter = [mean_between(members(la), members(lb)) for i, la in enumerate(multi) for lb in multi[i + 1:]]
+inter = [mean_between(members(la), members(lb)) for i, la in enumerate(multi) for lb in multi[i + 1 :]]
 inter = np.array([x for x in inter if np.isfinite(x)])
 pctile = float((inter < yap_nfkb).mean() * 100) if inter.size else float("nan")
 anti_corr = bool(np.isfinite(yap_nfkb) and yap_nfkb < 0 and pctile <= 25)
-print(f"  YAP cluster {cy} vs NF-kB/TRAF2 cluster {ctraf}: mean Pearson={yap_nfkb:.3f} "
-      f"({pctile:.0f}th pct of inter-cluster means); anti-corr: {anti_corr}")
+print(
+    f"  YAP cluster {cy} vs NF-kB/TRAF2 cluster {ctraf}: mean Pearson={yap_nfkb:.3f} "
+    f"({pctile:.0f}th pct of inter-cluster means); anti-corr: {anti_corr}"
+)
 
 # =============================================================================================
 # Step 9: GO enrichment per multi-gene cluster (one-tailed Fisher) [G8] + pathway_coherence bonus
@@ -318,12 +336,15 @@ if go is not None:
 # Bonus: mantispy-native coherence over hallmark programs (permutation null), on the same profiles.
 try:
     net = mt.tl.gene_sets(source="hallmark")
-    mt.tl.pathway_coherence(clu, net=net, gene_key="Metadata_gene_name", metric="pearson",
-                            min_genes=3, n_permutations=1000, seed=RNG_SEED)
+    mt.tl.pathway_coherence(
+        clu, net=net, gene_key="Metadata_gene_name", metric="pearson", min_genes=3, n_permutations=1000, seed=RNG_SEED
+    )
     pc = clu.uns["mantispy"]["pathway_coherence"]
     top = pc.sort_values("coherence", ascending=False).head(3)
-    print(f"  [bonus] pathway_coherence: {int((pc['qvalue'] < 0.05).sum())}/{len(pc)} hallmark programs coherent (q<0.05); "
-          f"top: {', '.join(top['set'].str.replace('HALLMARK_', '').tolist())}")
+    print(
+        f"  [bonus] pathway_coherence: {int((pc['qvalue'] < 0.05).sum())}/{len(pc)} hallmark programs coherent (q<0.05); "
+        f"top: {', '.join(top['set'].str.replace('HALLMARK_', '').tolist())}"
+    )
 except Exception as exc:  # noqa: BLE001
     print(f"  [bonus] pathway_coherence skipped ({exc})")
 
@@ -349,8 +370,10 @@ print(f"  top-5% / 95th-pct non-replicate cut={lit_thr:.3f} (right-tail PDF cros
 
 def load_biogrid_edges(genes):
     cache = DATA / "biogrid_human_physical.tsv"
-    url = ("https://downloads.thebiogrid.org/Download/BioGRID/Release-Archive/"
-           "BIOGRID-4.4.226/BIOGRID-ORGANISM-4.4.226.tab3.zip")
+    url = (
+        "https://downloads.thebiogrid.org/Download/BioGRID/Release-Archive/"
+        "BIOGRID-4.4.226/BIOGRID-ORGANISM-4.4.226.tab3.zip"
+    )
     try:
         if not cache.exists():
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (mantispy benchmark)"})
@@ -358,8 +381,16 @@ def load_biogrid_edges(genes):
                 zf = zipfile.ZipFile(io.BytesIO(resp.read()))
             name = next(n for n in zf.namelist() if "Homo_sapiens" in n and n.endswith(".tab3.txt"))
             with zf.open(name) as fh:
-                df = pd.read_csv(fh, sep="\t", low_memory=False, usecols=[
-                    "Official Symbol Interactor A", "Official Symbol Interactor B", "Experimental System Type"])
+                df = pd.read_csv(
+                    fh,
+                    sep="\t",
+                    low_memory=False,
+                    usecols=[
+                        "Official Symbol Interactor A",
+                        "Official Symbol Interactor B",
+                        "Experimental System Type",
+                    ],
+                )
             df = df[df["Experimental System Type"] == "physical"]
             df.iloc[:, :2].to_csv(cache, sep="\t", index=False)
         df = pd.read_csv(cache, sep="\t")
@@ -384,11 +415,20 @@ if edges is not None:
     a01, a00 = int((~top & is_edge).sum()), int((~top & ~is_edge).sum())
     _, p = fisher_exact([[a11, a10], [a01, a00]], alternative="greater")
     top_rate, bg_rate = a11 / max(a11 + a10, 1), a01 / max(a01 + a00, 1)
-    g9 = {"available": True, "n_edges": len(edges), "top_pairs": a11 + a10, "top_hits": a11,
-          "top_rate": top_rate, "bg_rate": bg_rate, "p": float(p)}
+    g9 = {
+        "available": True,
+        "n_edges": len(edges),
+        "top_pairs": a11 + a10,
+        "top_hits": a11,
+        "top_rate": top_rate,
+        "bg_rate": bg_rate,
+        "p": float(p),
+    }
     print(f"  BioGRID physical edges among the {len(gu)} screen genes: {len(edges)}")
-    print(f"  top pairs (r>=0.43): {a11}/{a11 + a10} are interactions = {100 * top_rate:.1f}% vs "
-          f"{100 * bg_rate:.1f}% for the rest; Fisher one-sided p={p:.3g} (paper: 9% vs 5%, p=0.04)")
+    print(
+        f"  top pairs (r>=0.43): {a11}/{a11 + a10} are interactions = {100 * top_rate:.1f}% vs "
+        f"{100 * bg_rate:.1f}% for the rest; Fisher one-sided p={p:.3g} (paper: 9% vs 5%, p=0.04)"
+    )
 
 # =============================================================================================
 # Grade + write REPRODUCTION.md
@@ -396,40 +436,86 @@ if edges is not None:
 banner("Grading")
 
 g1_pass = 0.40 <= frac_pr <= 0.60
-row("G1", "active fraction", "50% (110/220)",
-    f"{100 * frac_pr:.1f}% (percent_replicating); {100 * frac_literal:.1f}% (literal Rohban)", g1_pass,
+row(
+    "G1",
+    "active fraction",
+    "50% (110/220)",
+    f"{100 * frac_pr:.1f}% (percent_replicating); {100 * frac_literal:.1f}% (literal Rohban)",
+    g1_pass,
     f"paper's 50% is bracketed by the two faithful nulls [{100 * frac_literal:.0f}%, {100 * frac_pr:.0f}%]; "
-    "mantispy's matched-null percent_replicating over-calls, the literal per-pair criterion under-calls on the pilot subset")
-row("G2", "active count", "110",
-    f"{n_pr} (percent_replicating) / {len(active_literal)} (literal) of {n_real_genes}", 88 <= n_pr <= 132,
-    "only 5 pilot plates ship (190 genes vs 220); grade the fraction (G1)")
-row("G3", "active criterion reproduced", "median rep Pearson > 95th-pct non-rep", "implemented exactly", True,
-    "literal_rohban_activity() reproduces C5; mt.tl.percent_replicating uses the modern matched-median null")
+    "mantispy's matched-null percent_replicating over-calls, the literal per-pair criterion under-calls on the pilot subset",
+)
+row(
+    "G2",
+    "active count",
+    "110",
+    f"{n_pr} (percent_replicating) / {len(active_literal)} (literal) of {n_real_genes}",
+    88 <= n_pr <= 132,
+    "only 5 pilot plates ship (190 genes vs 220); grade the fraction (G1)",
+)
+row(
+    "G3",
+    "active criterion reproduced",
+    "median rep Pearson > 95th-pct non-rep",
+    "implemented exactly",
+    True,
+    "literal_rohban_activity() reproduces C5; mt.tl.percent_replicating uses the modern matched-median null",
+)
 g4_pass = 18 <= n_clusters_ge2 <= 32
-row("G4", "# clusters (>=2 constructs)", "25", f"{n_clusters_ge2}", g4_pass,
-    "average linkage, 1-Pearson on selected-feature consensus, cut 0.522")
+row(
+    "G4",
+    "# clusters (>=2 constructs)",
+    "25",
+    f"{n_clusters_ge2}",
+    g4_pass,
+    "average linkage, 1-Pearson on selected-feature consensus, cut 0.522",
+)
 row("G5", "Hippo/YAP co-cluster", "YAP1+WWTR1 (cluster 20)", f"YAP1 & WWTR1 in cluster {cy}: {hippo_co}", hippo_co, "")
 row("G6", "RAS-RAF-MEK-ERK co-cluster", ">=2 cascade genes", f"{ras_group}", casc_co, "gene-level")
-row("G7", "NF-kB(TRAF2) vs YAP anti-corr", "strong negative", f"mean r={yap_nfkb:.3f} ({pctile:.0f}th pct)",
-    anti_corr, "cluster 11 vs 20; among the most negative inter-cluster means")
+row(
+    "G7",
+    "NF-kB(TRAF2) vs YAP anti-corr",
+    "strong negative",
+    f"mean r={yap_nfkb:.3f} ({pctile:.0f}th pct)",
+    anti_corr,
+    "cluster 11 vs 20; among the most negative inter-cluster means",
+)
 
 if go_result["available"]:
     frac_go = go_result["enriched"] / max(go_result["n_multi"], 1)
     g8_pass = frac_go >= (15 / 22)
-    row("G8", "GO/complex-enriched clusters", "19/22", f"{go_result['enriched']}/{go_result['n_multi']}", g8_pass,
-        "one-tailed Fisher, BH per cluster; GO-BP + CORUM + Reactome (Enrichr)")
+    row(
+        "G8",
+        "GO/complex-enriched clusters",
+        "19/22",
+        f"{go_result['enriched']}/{go_result['n_multi']}",
+        g8_pass,
+        "one-tailed Fisher, BH per cluster; GO-BP + CORUM + Reactome (Enrichr)",
+    )
 else:
     g8_pass = None
     row("G8", "GO-enriched clusters", "19/22", "n/a", None, "GO source unreachable")
 
 g10_pass = abs(thr_report - 0.43) <= 0.1
-row("G10", "correlation threshold", "Pearson 0.43", f"{thr_report:.3f}", g10_pass,
-    "top-5% / 95th-pct non-replicate cut on well-level correlations (~top 5% of pairs)")
+row(
+    "G10",
+    "correlation threshold",
+    "Pearson 0.43",
+    f"{thr_report:.3f}",
+    g10_pass,
+    "top-5% / 95th-pct non-replicate cut on well-level correlations (~top 5% of pairs)",
+)
 
 if g9["available"]:
     g9_pass = g9["top_rate"] > g9["bg_rate"] and g9["p"] < 0.10
-    row("G9", "BioGRID PPI enrichment", "9% vs 5%, p=0.04",
-        f"{100 * g9['top_rate']:.1f}% vs {100 * g9['bg_rate']:.1f}%, p={g9['p']:.3g}", g9_pass, "Fisher one-sided")
+    row(
+        "G9",
+        "BioGRID PPI enrichment",
+        "9% vs 5%, p=0.04",
+        f"{100 * g9['top_rate']:.1f}% vs {100 * g9['bg_rate']:.1f}%, p={g9['p']:.3g}",
+        g9_pass,
+        "Fisher one-sided",
+    )
 else:
     g9_pass = None
     row("G9", "BioGRID PPI enrichment", "9% vs 5%, p=0.04", "n/a", None, "BioGRID unreachable")
@@ -466,15 +552,22 @@ md += [
     f"Hippo co-cluster (G5), RAS-RAF-MEK-ERK co-clustering ({', '.join(ras_group)}) (G6), and the "
     f"NF-kB/TRAF2 vs YAP anti-correlation (mean Pearson {yap_nfkb:.2f}, G7). The top-5% non-replicate "
     f"correlation cut lands at {thr_report:.2f}, matching the paper's 0.43 (G10)"
-    + (f", and top-correlated pairs are enriched for BioGRID interactions ({100 * g9['top_rate']:.0f}% vs "
-       f"{100 * g9['bg_rate']:.0f}%, p={g9['p']:.2g}, G9)." if g9["available"] else " (G9 flagged).")
+    + (
+        f", and top-correlated pairs are enriched for BioGRID interactions ({100 * g9['top_rate']:.0f}% vs "
+        f"{100 * g9['bg_rate']:.0f}%, p={g9['p']:.2g}, G9)."
+        if g9["available"]
+        else " (G9 flagged)."
+    )
     + "",
     "",
-    f"- **Partially reproduced:** GO/complex enrichment (G8) covers "
-    + (f"{go_result['enriched']}/{go_result['n_multi']} multi-gene clusters vs the paper's 19/22. Our "
-       "clustering of all 190 screened genes produces more, smaller clusters (many gene pairs) than the "
-       "paper's clustering of its 110 active genes, and small clusters clear a per-cluster FDR less often."
-       if go_result["available"] else "was flagged (gene-set source unreachable)."),
+    "- **Partially reproduced:** GO/complex enrichment (G8) covers "
+    + (
+        f"{go_result['enriched']}/{go_result['n_multi']} multi-gene clusters vs the paper's 19/22. Our "
+        "clustering of all 190 screened genes produces more, smaller clusters (many gene pairs) than the "
+        "paper's clustering of its 110 active genes, and small clusters clear a per-cluster FDR less often."
+        if go_result["available"]
+        else "was flagged (gene-set source unreachable)."
+    ),
     "",
     f"- **Did not reproduce exactly:** the 50% active-fraction headline (G1/G2). The paper's value is "
     f"*bracketed* by the two faithful mantispy nulls on this 5-plate pilot: the literal Rohban per-pair "
@@ -489,7 +582,7 @@ md += [
     "PCA space over-compresses the between-gene structure and clustering runs on the selected-feature "
     "profiles instead; (3) `gene_sets` has no GO/KEGG (GO-BP supplied via Enrichr); (4) no PPI/BioGRID "
     "primitive - raw `scipy.stats.fisher_exact`; (5) the loader emits `Metadata_gene_name` but the "
-    "knowledge functions default `gene_key=\"Metadata_Gene\"`, so `gene_key` must be passed explicitly; "
+    'knowledge functions default `gene_key="Metadata_Gene"`, so `gene_key` must be passed explicitly; '
     "(6) no median-polish plate detrending (paper step 4).",
     "",
     "- **Where mantispy improves on the original:** one seeded, deterministic AnnData script replaces the "
