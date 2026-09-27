@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 from functools import cache
 from importlib.util import find_spec
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pandas as pd
 
@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     import numpy as np
     from anndata import AnnData
     from matplotlib.axes import Axes
+    from matplotlib.figure import Figure
 
 # Marks a figure that :func:`axes` created, so :func:`maybe_interactive` only closes
 # figures this plot owns and never a subplot grid the caller passed in.
@@ -168,5 +169,6 @@ def maybe_interactive(
     if ax is not None and getattr(ax.figure, _OWNED, False):
         import matplotlib.pyplot as plt
 
-        plt.close(ax.figure)
+        # _OWNED is only set on a top-level Figure that axes() made, never a SubFigure.
+        plt.close(cast("Figure", ax.figure))
     return True

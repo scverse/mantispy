@@ -200,6 +200,7 @@ overrides = [
     "harmonypy.*",
     "imageio.*",
     "numba.*",
+    "plotly.*",
     "pooch.*",
     "pycytominer.*",
     "pyod.*",
