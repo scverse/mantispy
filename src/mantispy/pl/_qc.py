@@ -6,11 +6,13 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 import numpy as np
+import pandas as pd
 
 from mantispy._core._reduce import get_matrix, group_codes
 from mantispy._core.frames import as_frame
 from mantispy._core.schema import get_resolution
 from mantispy.pl._common import axes as _axes
+from mantispy.pl._common import maybe_interactive as _maybe_interactive
 from mantispy.pl._common import table as _table
 
 if TYPE_CHECKING:
@@ -52,9 +54,17 @@ def cell_counts(
     groups, names = labels.factorize(use_na_sentinel=False)
     known = np.isfinite(counts)
     ax.boxplot([counts[known & (groups == i)] for i in range(len(names))], tick_labels=[str(name) for name in names])
-    ax.set_ylabel("cells per well" if cells else count_key)
+    ylabel = "cells per well" if cells else count_key
+    ax.set_ylabel(ylabel)
     ax.set_xlabel(groupby)
     ax.tick_params(axis="x", rotation=45)
+
+    label_of = np.array([str(name) for name in names])
+    tidy = pd.DataFrame({groupby: label_of[groups[known]], ylabel: counts[known]})
+    if _maybe_interactive("box", data=tidy, x=groupby, y=ylabel, title="cell counts"):
+        import matplotlib.pyplot as plt
+
+        plt.close(ax.figure)
     return ax
 
 
@@ -81,6 +91,7 @@ def feature_distributions(
     Raises:
         ValueError: ``kind`` is not one of the three accepted values.
     """
+    # Multi-panel (layers by features); the single-figure interactive shim does not fit it. Interactive twin is a later PR.
     import matplotlib.pyplot as plt
 
     if kind not in {"ecdf", "hist", "ridge"}:
@@ -140,11 +151,24 @@ def nan_matrix(adata: AnnData, max_features: int = 200, ax: Axes | None = None) 
     codes, keys = group_codes(adata, "Metadata_Plate")
     fractions = np.stack([missing[codes == index].mean(axis=0) for index in range(len(keys))])
 
-    image = ax.imshow(fractions[:, :max_features], aspect="auto", cmap="magma", vmin=0, vmax=1)
+    shown = fractions[:, :max_features]
+    image = ax.imshow(shown, aspect="auto", cmap="magma", vmin=0, vmax=1)
     ax.set_yticks(range(len(keys)))
     ax.set_yticklabels([str(key) for key in keys], fontsize=7)
     ax.set_xlabel("feature")
     ax.figure.colorbar(image, ax=ax, label="NaN fraction")
+
+    if _maybe_interactive(
+        "heatmap",
+        matrix=shown,
+        rows=[str(key) for key in keys],
+        columns=[str(name) for name in adata.var_names[:max_features]],
+        value_label="NaN fraction",
+        title="missing values",
+    ):
+        import matplotlib.pyplot as plt
+
+        plt.close(ax.figure)
     return ax
 
 
@@ -160,6 +184,7 @@ def qc(adata: AnnData, figsize: tuple[float, float] = (12, 8)) -> np.ndarray:
     Returns:
         The two-by-two array of axes.
     """
+    # Multi-panel dashboard; the single-figure interactive shim does not fit it. Interactive twin is a later PR.
     import matplotlib.pyplot as plt
 
     figure, axes = plt.subplots(2, 2, figsize=figsize)
@@ -211,6 +236,25 @@ def replicate_saturation(adata: AnnData, key: str = "replicate_saturation", ax: 
     ax.set_xticks(table["n_replicates"].to_numpy())
     ax.set_xlabel("replicates per perturbation")
     ax.set_ylabel("signature agreement")
+
+    tidy = pd.DataFrame(
+        {
+            "replicates per perturbation": table["n_replicates"].to_numpy(dtype=float),
+            "signature agreement": table["mean"].to_numpy(dtype=float),
+            "std": table["std"].to_numpy(dtype=float),
+        }
+    )
+    if _maybe_interactive(
+        "line",
+        data=tidy,
+        x="replicates per perturbation",
+        y="signature agreement",
+        hover=["std"],
+        title="replicate saturation",
+    ):
+        import matplotlib.pyplot as plt
+
+        plt.close(ax.figure)
     return ax
 
 
@@ -246,4 +290,25 @@ def cytotoxicity(adata: AnnData, key: str = "cytotoxicity", label_top: int = 8, 
     ax.set_xlabel("viability, relative to the controls")
     ax.set_ylabel("distance from the controls")
     ax.legend(fontsize=7)
+
+    tidy = pd.DataFrame(
+        {
+            "group": table["group"].astype(str).to_numpy(),
+            "viability, relative to the controls": table["viability"].to_numpy(dtype=float),
+            "distance from the controls": table["distance"].to_numpy(dtype=float),
+            "status": np.where(suspect, "suspect", "ok"),
+        }
+    )
+    if _maybe_interactive(
+        "scatter",
+        data=tidy,
+        x="viability, relative to the controls",
+        y="distance from the controls",
+        color="status",
+        hover=["group"],
+        title="cytotoxicity",
+    ):
+        import matplotlib.pyplot as plt
+
+        plt.close(ax.figure)
     return ax
