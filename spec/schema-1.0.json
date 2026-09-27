@@ -19,6 +19,7 @@
         "Metadata_ImageNumber",
         "Metadata_ObjectNumber",
         "Metadata_Perturbation",
+        "Metadata_Perturbation_Type",
         "Metadata_Compound",
         "Metadata_Concentration",
         "Metadata_ConcentrationRecorded",
@@ -39,6 +40,8 @@
         "Metadata_Barcode",
         "Metadata_Gene",
         "Metadata_sgRNA",
+        "Metadata_Construct",
+        "Metadata_Allele",
         "Metadata_BarcodeQuality"
     ],
     "required_var": [
