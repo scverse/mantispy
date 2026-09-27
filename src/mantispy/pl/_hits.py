@@ -106,18 +106,16 @@ def hits(adata: AnnData, key: str = "hits", label_top: int = 10, ax: Axes | None
             "called": np.where(called, "hit", "not called"),
         }
     )
-    if _maybe_interactive(
+    _maybe_interactive(
         "scatter",
+        ax=ax,
         data=tidy,
         x="distance from the controls",
         y="-log10 q",
         color="called",
         hover=["group"],
         title="hits",
-    ):
-        import matplotlib.pyplot as plt
-
-        plt.close(ax.figure)
+    )
     return ax
 
 
@@ -193,15 +191,15 @@ def effect_sizes(adata: AnnData, group: str, key: str = "effect", top: int = 30,
     )
     if family_of is not None:
         tidy["family"] = family_of
-    if _maybe_interactive(
+    _maybe_interactive(
         "barh",
+        ax=ax,
         data=tidy,
         x="effect size",
         y="feature",
         color="family" if family_of is not None else None,
         title=str(group),
-    ):
-        plt.close(ax.figure)
+    )
     return ax
 
 
@@ -262,16 +260,16 @@ def feature_volcano(
     )
     if family_of is not None:
         tidy["family"] = family_of
-    if _maybe_interactive(
+    _maybe_interactive(
         "scatter",
+        ax=ax,
         data=tidy,
         x="effect size",
         y="-log10 q",
         color="family" if family_of is not None else None,
         hover=["feature"],
         title=str(group),
-    ):
-        plt.close(ax.figure)
+    )
     return ax
 
 
@@ -343,10 +341,8 @@ def dose_response(
     ax.legend(fontsize=7)
 
     tidy = pd.DataFrame({dose_label: doses[usable], response: values[usable]})
-    if usable.any() and _maybe_interactive("scatter", data=tidy, x=dose_label, y=response, title=str(compound)):
-        import matplotlib.pyplot as plt
-
-        plt.close(ax.figure)
+    if usable.any():
+        _maybe_interactive("scatter", ax=ax, data=tidy, x=dose_label, y=response, title=str(compound))
     return ax
 
 
@@ -438,10 +434,7 @@ def dose_direction(
         ],
         ignore_index=True,
     )
-    if _maybe_interactive(
-        "line", data=tidy, x="concentration", y="MADs per feature", color="series", title=str(compound)
-    ):
-        import matplotlib.pyplot as plt
-
-        plt.close(ax.figure)
+    _maybe_interactive(
+        "line", ax=ax, data=tidy, x="concentration", y="MADs per feature", color="series", title=str(compound)
+    )
     return ax

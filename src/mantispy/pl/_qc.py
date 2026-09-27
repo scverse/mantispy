@@ -61,10 +61,7 @@ def cell_counts(
 
     label_of = np.array([str(name) for name in names])
     tidy = pd.DataFrame({groupby: label_of[groups[known]], ylabel: counts[known]})
-    if _maybe_interactive("box", data=tidy, x=groupby, y=ylabel, title="cell counts"):
-        import matplotlib.pyplot as plt
-
-        plt.close(ax.figure)
+    _maybe_interactive("box", ax=ax, data=tidy, x=groupby, y=ylabel, title="cell counts")
     return ax
 
 
@@ -91,7 +88,7 @@ def feature_distributions(
     Raises:
         ValueError: ``kind`` is not one of the three accepted values.
     """
-    # Multi-panel (layers by features); the single-figure interactive shim does not fit it. Interactive twin is a later PR.
+    # Multi-panel (layers by features); interactive twin deferred.
     import matplotlib.pyplot as plt
 
     if kind not in {"ecdf", "hist", "ridge"}:
@@ -158,17 +155,15 @@ def nan_matrix(adata: AnnData, max_features: int = 200, ax: Axes | None = None) 
     ax.set_xlabel("feature")
     ax.figure.colorbar(image, ax=ax, label="NaN fraction")
 
-    if _maybe_interactive(
+    _maybe_interactive(
         "heatmap",
+        ax=ax,
         matrix=shown,
         rows=[str(key) for key in keys],
         columns=[str(name) for name in adata.var_names[:max_features]],
         value_label="NaN fraction",
         title="missing values",
-    ):
-        import matplotlib.pyplot as plt
-
-        plt.close(ax.figure)
+    )
     return ax
 
 
@@ -184,7 +179,7 @@ def qc(adata: AnnData, figsize: tuple[float, float] = (12, 8)) -> np.ndarray:
     Returns:
         The two-by-two array of axes.
     """
-    # Multi-panel dashboard; the single-figure interactive shim does not fit it. Interactive twin is a later PR.
+    # Multi-panel dashboard; interactive twin deferred.
     import matplotlib.pyplot as plt
 
     figure, axes = plt.subplots(2, 2, figsize=figsize)
@@ -244,17 +239,15 @@ def replicate_saturation(adata: AnnData, key: str = "replicate_saturation", ax: 
             "std": table["std"].to_numpy(dtype=float),
         }
     )
-    if _maybe_interactive(
+    _maybe_interactive(
         "line",
+        ax=ax,
         data=tidy,
         x="replicates per perturbation",
         y="signature agreement",
         hover=["std"],
         title="replicate saturation",
-    ):
-        import matplotlib.pyplot as plt
-
-        plt.close(ax.figure)
+    )
     return ax
 
 
@@ -299,16 +292,14 @@ def cytotoxicity(adata: AnnData, key: str = "cytotoxicity", label_top: int = 8, 
             "status": np.where(suspect, "suspect", "ok"),
         }
     )
-    if _maybe_interactive(
+    _maybe_interactive(
         "scatter",
+        ax=ax,
         data=tidy,
         x="viability, relative to the controls",
         y="distance from the controls",
         color="status",
         hover=["group"],
         title="cytotoxicity",
-    ):
-        import matplotlib.pyplot as plt
-
-        plt.close(ax.figure)
+    )
     return ax

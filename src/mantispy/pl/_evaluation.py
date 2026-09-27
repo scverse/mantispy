@@ -65,17 +65,15 @@ def map(adata: AnnData, key: str = "map", label_top: int = 10, ax: Axes | None =
             "-log10 corrected p": significance,
         }
     )
-    if _maybe_interactive(
+    _maybe_interactive(
         "scatter",
+        ax=ax,
         data=tidy,
         x="mean average precision",
         y="-log10 corrected p",
         hover=[group_column],
         title="mean average precision",
-    ):
-        import matplotlib.pyplot as plt
-
-        plt.close(ax.figure)
+    )
     return ax
 
 
@@ -127,18 +125,16 @@ def replicate_correlation(adata: AnnData, key: str = "percent_replicating", ax: 
             "replicating": np.where(replicating, "yes", "no"),
         }
     )
-    if _maybe_interactive(
+    _maybe_interactive(
         "scatter",
+        ax=ax,
         data=tidy,
         x="null threshold",
         y="median replicate correlation",
         color="replicating",
         hover=[group_column],
         title="replicate correlation",
-    ):
-        import matplotlib.pyplot as plt
-
-        plt.close(ax.figure)
+    )
     return ax
 
 
@@ -185,18 +181,16 @@ def batch_variance(
     ax.set_ylim(0, 1)
     ax.legend(fontsize=7)
 
-    tidy = pd.concat(records, ignore_index=True)
-    if _maybe_interactive(
-        "line",
-        data=tidy,
-        x="principal component",
-        y="variance explained (R²)",
-        color="covariate",
-        title="variance explained per component",
-    ):
-        import matplotlib.pyplot as plt
-
-        plt.close(ax.figure)
+    if records:
+        _maybe_interactive(
+            "line",
+            ax=ax,
+            data=pd.concat(records, ignore_index=True),
+            x="principal component",
+            y="variance explained (R²)",
+            color="covariate",
+            title="variance explained per component",
+        )
     return ax
 
 
@@ -234,10 +228,16 @@ def metrics(table: pd.DataFrame, ax: Axes | None = None) -> Axes:
     ax.legend(fontsize=7)
 
     tidy = pivot.reset_index().melt(id_vars="metric", var_name="representation", value_name="value")
-    if _maybe_interactive("barh", data=tidy, x="value", y="metric", color="representation", title="correction metrics"):
-        import matplotlib.pyplot as plt
-
-        plt.close(ax.figure)
+    _maybe_interactive(
+        "barh",
+        ax=ax,
+        data=tidy,
+        x="value",
+        y="metric",
+        color="representation",
+        barmode="group",
+        title="correction metrics",
+    )
     return ax
 
 
@@ -287,15 +287,13 @@ def similarity(
     ax.figure.colorbar(image, ax=ax, fraction=0.045, label="similarity")
 
     profiles = adata.obs_names[order].astype(str).tolist()
-    if _maybe_interactive(
+    _maybe_interactive(
         "heatmap",
+        ax=ax,
         matrix=ordered,
         rows=profiles,
         columns=profiles,
         value_label="similarity",
         title=f"{key} ({order.size} profiles)",
-    ):
-        import matplotlib.pyplot as plt
-
-        plt.close(ax.figure)
+    )
     return ax

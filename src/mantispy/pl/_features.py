@@ -71,17 +71,15 @@ def feature_correlation(
     ax.figure.colorbar(image, ax=ax, fraction=0.04, label="correlation")
 
     features = [str(name) for name in order]
-    if _maybe_interactive(
+    _maybe_interactive(
         "heatmap",
+        ax=ax,
         matrix=display,
         rows=features,
         columns=features,
         value_label="correlation",
         title=f"feature correlation ({len(order)} features)",
-    ):
-        import matplotlib.pyplot as plt
-
-        plt.close(ax.figure)
+    )
     return ax
 
 
@@ -123,8 +121,7 @@ def feature_groups(adata: AnnData, key: str | None = None, ax: Axes | None = Non
     ax.tick_params(axis="x", rotation=45)
 
     tidy = counts.reset_index().melt(id_vars="feature_group", var_name="channel", value_name="features")
-    if _maybe_interactive("barh", data=tidy, x="features", y="feature_group", color="channel", title="feature groups"):
-        import matplotlib.pyplot as plt
-
-        plt.close(ax.figure)
+    _maybe_interactive(
+        "barh", ax=ax, data=tidy, x="features", y="feature_group", color="channel", title="feature groups"
+    )
     return ax

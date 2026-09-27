@@ -67,10 +67,7 @@ def transport(
             "reproduces": np.where(shown["transports"].to_numpy(dtype=bool), "yes", "no"),
         }
     )
-    if _maybe_interactive("barh", data=tidy, x=xlabel, y="group", color="reproduces", title=title):
-        import matplotlib.pyplot as plt
-
-        plt.close(ax.figure)
+    _maybe_interactive("barh", ax=ax, data=tidy, x=xlabel, y="group", color="reproduces", title=title)
     return ax
 
 
@@ -138,15 +135,13 @@ def setting_agreement(
             ax.axhline(position - 0.5, color="white", lw=1.2)
             ax.axvline(position - 0.5, color="white", lw=1.2)
 
-    if _maybe_interactive(
+    _maybe_interactive(
         "heatmap",
+        ax=ax,
         matrix=matrix.to_numpy(dtype=float),
         rows=labels,
         columns=labels,
         value_label="effect agreement",
         title="setting agreement",
-    ):
-        import matplotlib.pyplot as plt
-
-        plt.close(ax.figure)
+    )
     return ax

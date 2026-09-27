@@ -76,17 +76,15 @@ def moa_confusion(adata: AnnData, key: str = "moa", normalize: bool = True, ax: 
     title = f"{summary.get('scheme', '')} accuracy {float(summary.get('accuracy', float('nan'))):.1%}"
     ax.set_title(title, fontsize=9)
 
-    if _maybe_interactive(
+    _maybe_interactive(
         "heatmap",
+        ax=ax,
         matrix=counts,
         rows=labels,
         columns=labels,
         value_label="fraction" if normalize else "count",
         title=title,
-    ):
-        import matplotlib.pyplot as plt
-
-        plt.close(ax.figure)
+    )
     return ax
 
 
@@ -114,24 +112,18 @@ def moa_enrichment(
         raise KeyError(f"no group {group!r} in uns['mantispy'][{key!r}]")
 
     best = selected.nsmallest(top, "pvalue")[::-1]
+    labels = [f"{moa}  ({n})" for moa, n in zip(best["moa"], best["n_neighbours"], strict=True)]
+    neg_log_q = -np.log10(np.clip(best["qvalue"].to_numpy(dtype=float), 1e-12, None))
     ax = _axes(ax, (5.5, 0.3 * len(best) + 1.5))
-    ax.barh(np.arange(len(best)), -np.log10(np.clip(best["qvalue"].to_numpy(dtype=float), 1e-12, None)))
+    ax.barh(np.arange(len(best)), neg_log_q)
     ax.set_yticks(np.arange(len(best)))
-    ax.set_yticklabels([f"{moa}  ({n})" for moa, n in zip(best["moa"], best["n_neighbours"], strict=True)], fontsize=6)
+    ax.set_yticklabels(labels, fontsize=6)
     ax.axvline(-np.log10(0.05), color="grey", ls="--", lw=1)
     ax.set_xlabel("-log10 q")
     ax.set_title(str(group), fontsize=9)
 
-    tidy = pd.DataFrame(
-        {
-            "mechanism": [f"{moa}  ({n})" for moa, n in zip(best["moa"], best["n_neighbours"], strict=True)],
-            "-log10 q": -np.log10(np.clip(best["qvalue"].to_numpy(dtype=float), 1e-12, None)),
-        }
-    )
-    if _maybe_interactive("barh", data=tidy, x="-log10 q", y="mechanism", title=str(group)):
-        import matplotlib.pyplot as plt
-
-        plt.close(ax.figure)
+    tidy = pd.DataFrame({"mechanism": labels, "-log10 q": neg_log_q})
+    _maybe_interactive("barh", ax=ax, data=tidy, x="-log10 q", y="mechanism", title=str(group))
     return ax
 
 
@@ -175,17 +167,15 @@ def distance_heatmap(
             ax.axhline(position - 0.5, color="white", lw=0.8)
             ax.axvline(position - 0.5, color="white", lw=0.8)
 
-    if _maybe_interactive(
+    _maybe_interactive(
         "heatmap",
+        ax=ax,
         matrix=matrix.to_numpy(dtype=float),
         rows=labels,
         columns=labels,
         value_label="energy distance",
         title="distance heatmap",
-    ):
-        import matplotlib.pyplot as plt
-
-        plt.close(ax.figure)
+    )
     return ax
 
 
@@ -224,17 +214,15 @@ def sets_heatmap(
     ax = _axes(ax, (0.3 * len(keep) + 3, 0.28 * len(labels) + 2))
     _heatmap(ax, means[:, keep], labels, kept_names, "coolwarm", "mean score")
 
-    if _maybe_interactive(
+    _maybe_interactive(
         "heatmap",
+        ax=ax,
         matrix=means[:, keep],
         rows=labels,
         columns=kept_names,
         value_label="mean score",
         title="feature-set scores",
-    ):
-        import matplotlib.pyplot as plt
-
-        plt.close(ax.figure)
+    )
     return ax
 
 
@@ -262,10 +250,11 @@ def pathway_coherence(adata: AnnData, key: str = "pathway_coherence", top: int =
     table = _table(adata, key, "mt.tl.pathway_coherence", "no set had enough of its genes in the screen")
     best = table.nlargest(min(top, len(table)), "coherence")[::-1]
     significant = best["qvalue"].to_numpy(dtype=float) < 0.05
+    labels = [f"{name}  ({n})" for name, n in zip(best["set"], best["n_genes"], strict=True)]
     ax = _axes(ax, (6, 0.3 * len(best) + 1.5))
     ax.barh(np.arange(len(best)), best["coherence"], color=np.where(significant, "crimson", "lightgrey"))
     ax.set_yticks(np.arange(len(best)))
-    ax.set_yticklabels([f"{name}  ({n})" for name, n in zip(best["set"], best["n_genes"], strict=True)], fontsize=6)
+    ax.set_yticklabels(labels, fontsize=6)
     ax.set_xlabel("mean similarity among the set's genes")
     ax.legend(
         handles=[
@@ -278,11 +267,10 @@ def pathway_coherence(adata: AnnData, key: str = "pathway_coherence", top: int =
 
     tidy = pd.DataFrame(
         {
-            "set": [f"{name}  ({n})" for name, n in zip(best["set"], best["n_genes"], strict=True)],
+            "set": labels,
             "coherence": best["coherence"].to_numpy(dtype=float),
             "significant": np.where(significant, "q < 0.05", "not significant"),
         }
     )
-    if _maybe_interactive("barh", data=tidy, x="coherence", y="set", color="significant", title="pathway coherence"):
-        plt.close(ax.figure)
+    _maybe_interactive("barh", ax=ax, data=tidy, x="coherence", y="set", color="significant", title="pathway coherence")
     return ax

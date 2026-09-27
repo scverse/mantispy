@@ -61,10 +61,9 @@ def cluster_composition(composition: AnnData, groupby: str = "Metadata_Perturbat
 
     tidy = pd.DataFrame(means, index=pd.Index(labels, name="group"), columns=[str(c) for c in composition.var_names])
     tidy = tidy.reset_index().melt(id_vars="group", var_name="cluster", value_name="fraction of cells")
-    if _maybe_interactive(
-        "barh", data=tidy, x="fraction of cells", y="group", color="cluster", title="cluster composition"
-    ):
-        plt.close(ax.figure)
+    _maybe_interactive(
+        "barh", ax=ax, data=tidy, x="fraction of cells", y="group", color="cluster", title="cluster composition"
+    )
     return ax
 
 
@@ -93,7 +92,7 @@ def cell_cycle(
         KeyError: ``obs`` has no ``key`` column, or ``dna_feature`` is not one of ``var_names``.
         ValueError: The object has no layer named ``layer``.
     """
-    # Multi-panel (one histogram per group); the single-figure interactive shim does not fit it. Interactive twin is a later PR.
+    # Multi-panel (one histogram per group); interactive twin deferred.
     import matplotlib.pyplot as plt
 
     if key not in adata.obs:
@@ -150,17 +149,15 @@ def subpopulation_hits(adata: AnnData, key: str = "subpopulation_hits", top: int
     ax.set_ylabel("cluster")
     ax.figure.colorbar(image, ax=ax, label="-log10 q")
 
-    if _maybe_interactive(
+    _maybe_interactive(
         "heatmap",
+        ax=ax,
         matrix=grid.to_numpy(dtype=float),
         rows=[str(index) for index in grid.index],
         columns=[str(column) for column in grid.columns],
         value_label="-log10 q",
         title="subpopulation hits",
-    ):
-        import matplotlib.pyplot as plt
-
-        plt.close(ax.figure)
+    )
     return ax
 
 
@@ -217,15 +214,14 @@ def density(
     ax.set_ylabel(feature)
     ax.legend(fontsize=6)
 
-    if records and _maybe_interactive(
-        "scatter",
-        data=pd.concat(records, ignore_index=True),
-        x="density",
-        y=feature,
-        color=groupby,
-        title=f"{feature} against density",
-    ):
-        import matplotlib.pyplot as plt
-
-        plt.close(ax.figure)
+    if records:
+        _maybe_interactive(
+            "scatter",
+            ax=ax,
+            data=pd.concat(records, ignore_index=True),
+            x="density",
+            y=feature,
+            color=groupby,
+            title=f"{feature} against density",
+        )
     return ax

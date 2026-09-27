@@ -6,7 +6,6 @@ They create axes when the caller passes none, and fetch a result table with an e
 from __future__ import annotations
 
 import os
-from contextlib import contextmanager
 from functools import cache
 from importlib.util import find_spec
 from typing import TYPE_CHECKING
@@ -14,11 +13,15 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Sequence
+    from collections.abc import Sequence
 
     import numpy as np
     from anndata import AnnData
     from matplotlib.axes import Axes
+
+# Marks a figure that :func:`axes` created, so :func:`maybe_interactive` only closes
+# figures this plot owns and never a subplot grid the caller passed in.
+_OWNED = "_mantispy_owned"
 
 
 def axes(ax: Axes | None, figsize: tuple[float, float]) -> Axes:
@@ -31,9 +34,13 @@ def axes(ax: Axes | None, figsize: tuple[float, float]) -> Axes:
     Returns:
         The axes to draw on.
     """
+    if ax is not None:
+        return ax
     import matplotlib.pyplot as plt
 
-    return ax if ax is not None else plt.subplots(figsize=figsize)[1]
+    ax = plt.subplots(figsize=figsize)[1]
+    setattr(ax.figure, _OWNED, True)
+    return ax
 
 
 def table(adata: AnnData, key: str, produced_by: str, when_empty: str | None = None) -> pd.DataFrame:
@@ -86,12 +93,14 @@ def interactive_available() -> bool:
 def maybe_interactive(
     kind: str,
     *,
+    ax: Axes | None = None,
     data: pd.DataFrame | None = None,
     x: str | None = None,
     y: str | None = None,
     color: str | None = None,
     hover: Sequence[str] | None = None,
     text: str | None = None,
+    barmode: str | None = None,
     matrix: np.ndarray | None = None,
     rows: Sequence[str] | None = None,
     columns: Sequence[str] | None = None,
@@ -105,14 +114,20 @@ def maybe_interactive(
     with its ``rows`` and ``columns`` labels. Every twin carries hover tooltips, so the
     identities the static plot can only label for its top few are readable on every mark.
 
+    When a twin fires it closes ``ax``'s figure so the notebook does not also show the
+    static PNG, but only when :func:`axes` created that figure; a caller-supplied subplot
+    grid is left intact.
+
     Args:
         kind: One of ``"scatter"``, ``"heatmap"``, ``"barh"``, ``"line"``, ``"histogram"``, ``"box"``.
+        ax: The static plot's axes, closed when its figure is owned and a twin fires.
         data: Tidy frame for every kind but ``"heatmap"``.
         x: Column drawn on the x axis, or the value column for ``"barh"``.
         y: Column drawn on the y axis, or the category column for ``"barh"``.
         color: Column that colors the marks, or ``None`` for one color.
         hover: Extra columns to add to the tooltip.
         text: Column whose values are drawn beside the marks.
+        barmode: ``"group"`` for side-by-side ``"barh"`` bars, or ``None`` for plotly's stacked default.
         matrix: The 2-D array for ``"heatmap"``.
         rows: Row labels of ``matrix``.
         columns: Column labels of ``matrix``.
@@ -120,16 +135,13 @@ def maybe_interactive(
         title: Figure title, or ``None`` for none.
 
     Returns:
-        Whether a twin was displayed; the caller then closes its matplotlib figure so
-        the notebook does not also show the static PNG.
+        Whether a twin was displayed.
     """
     if not interactive_available():
         return False
     import plotly.express as px
-    import plotly.io as pio
     from IPython.display import display
 
-    pio.renderers.default = "plotly_mimetype+notebook_connected"
     figure = _build_interactive(
         px,
         kind,
@@ -139,6 +151,7 @@ def maybe_interactive(
         color=color,
         hover=hover,
         text=text,
+        barmode=barmode,
         matrix=matrix,
         rows=rows,
         columns=columns,
@@ -146,6 +159,10 @@ def maybe_interactive(
         title=title,
     )
     display(figure)
+    if ax is not None and getattr(ax.figure, _OWNED, False):
+        import matplotlib.pyplot as plt
+
+        plt.close(ax.figure)
     return True
 
 
@@ -159,6 +176,7 @@ def _build_interactive(
     color: str | None,
     hover: Sequence[str] | None,
     text: str | None,
+    barmode: str | None,
     matrix: np.ndarray | None,
     rows: Sequence[str] | None,
     columns: Sequence[str] | None,
@@ -172,7 +190,7 @@ def _build_interactive(
     if kind == "line":
         return px.line(data, x=x, y=y, color=color, hover_data=hover_list, markers=True, title=title)
     if kind == "barh":
-        return px.bar(data, x=x, y=y, color=color, hover_data=hover_list, orientation="h", title=title)
+        return px.bar(data, x=x, y=y, color=color, hover_data=hover_list, orientation="h", barmode=barmode, title=title)
     if kind == "histogram":
         return px.histogram(data, x=x, color=color, hover_data=hover_list, title=title)
     if kind == "box":
@@ -187,26 +205,3 @@ def _build_interactive(
             title=title,
         )
     raise ValueError(f"unknown interactive kind {kind!r}")
-
-
-@contextmanager
-def needs_plotly(feature: str) -> Iterator[None]:
-    """Turn a missing-plotly ImportError into one that names the extra to install.
-
-    Args:
-        feature: The call to name in the message, for example ``"mt.pl.plate interactive"``.
-
-    Yields:
-        Nothing; the body runs inside the guard.
-
-    Raises:
-        ImportError: Plotly is missing, re-raised with the install instructions.
-    """
-    try:
-        yield
-    except ImportError as e:
-        if (e.name or "").split(".")[0] != "plotly":
-            raise
-        raise ImportError(
-            f"{feature} needs mantispy's interactive extra. Install it with: pip install 'mantispy[interactive]'"
-        ) from e

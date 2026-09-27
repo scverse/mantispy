@@ -46,7 +46,7 @@ def plate_effects(adata: AnnData, feature: str | None = None, axes: np.ndarray |
     Raises:
         KeyError: ``feature`` is not one of ``var_names``, or ``obs`` has no ``Metadata_Plate`` or ``Metadata_Well`` column.
     """
-    # Multi-panel (row and column marginals per plate); the single-figure interactive shim does not fit it. Interactive twin is a later PR.
+    # Multi-panel (row and column marginals per plate); interactive twin deferred.
     import matplotlib.pyplot as plt
 
     values = _feature_values(adata, feature)
@@ -102,12 +102,16 @@ def image_qc(adata: AnnData, ax: Axes | None = None) -> Axes:
 
     tidy = table.assign(image=positions, status=np.where(failed, "flagged", "pass"))
     hover = [column for column in table.columns if column.startswith("Metadata_")]
-    if _maybe_interactive(
-        "scatter", data=tidy, x="image", y="qc_image_score", color="status", hover=hover or None, title="image quality"
-    ):
-        import matplotlib.pyplot as plt
-
-        plt.close(ax.figure)
+    _maybe_interactive(
+        "scatter",
+        ax=ax,
+        data=tidy,
+        x="image",
+        y="qc_image_score",
+        color="status",
+        hover=hover or None,
+        title="image quality",
+    )
     return ax
 
 
@@ -156,10 +160,9 @@ def control_drift(
     ax.legend(title=groupby, fontsize=6, title_fontsize=7)
 
     tidy = pd.DataFrame({"control PC1": embedding[:, 0], "control PC2": embedding[:, 1], groupby: labels})
-    if _maybe_interactive("scatter", data=tidy, x="control PC1", y="control PC2", color=groupby, title="control drift"):
-        import matplotlib.pyplot as plt
-
-        plt.close(ax.figure)
+    _maybe_interactive(
+        "scatter", ax=ax, data=tidy, x="control PC1", y="control PC2", color=groupby, title="control drift"
+    )
     return ax
 
 
@@ -180,7 +183,7 @@ def outliers(
     Raises:
         KeyError: ``obs`` has no ``key`` column.
     """
-    # Multi-panel (histogram plus per-group bars); the single-figure interactive shim does not fit it. Interactive twin is a later PR.
+    # Multi-panel (histogram plus per-group bars); interactive twin deferred.
     import matplotlib.pyplot as plt
 
     if key not in adata.obs:
