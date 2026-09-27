@@ -372,7 +372,7 @@ change it). Nine of them carry the annotations the analysis functions need:
 | dataset | download | perturbations | carries |
 |---|---|---|---|
 | `bbbc021` | ~10 MB | 39 compounds | MOA labels, the classic retrieval benchmark |
-| `rohban` | ~27 MB | 194 overexpressed genes | cell counts, ~10 replicates per gene |
+| `rohban` | ~27 MB | 323 overexpressed ORF constructs (194 genes) | cell counts, ~10 replicates per construct, `Metadata_Gene` to regroup |
 | `pki` | ~71 MB | 15 kinase inhibitors x 7 doses | cell counts, MOA labels, 32-64 replicates |
 | `jump_target2` | ~0.7 GB | 302 compounds, one shared plate map | the same plate run at eleven sites, so any difference between them is technical |
 | `jump_crispr` | ~180 MB | about 8,000 knocked-out genes | gene symbols, controls and chromosome arms; `corum` gives the protein complexes the genes form |
