@@ -27,7 +27,7 @@ def scored():
     wells.obs["Metadata_MOA"] = wells.obs["Metadata_Perturbation"].astype(str).to_numpy()
     wells.obs["Metadata_Concentration"] = np.tile([0.1, 1.0, 10.0, 100.0], wells.n_obs)[: wells.n_obs]
 
-    mt.tl.hit_calling(wells, n_permutations=100)
+    mt.tl.hit_calling(wells, n_permutations=15)  # plot fixture: the tests draw and check non-mutation, not a p-value
     mt.tl.effect_size(wells)
     mt.tl.enrich(wells, by="feature_group", tmin=2)
     mt.tl.nn_moa_classify(wells, scheme="nn")
@@ -79,7 +79,7 @@ def test_the_hits_plot_draws_the_threshold_that_colored_the_points():
         n_plates=1, n_wells=96, n_cells=6, n_features=8, n_perturbations=3, effect_size=3.0, seed=0
     )
     wells = mt.tl.aggregate(cells, min_cells=0)
-    mt.tl.hit_calling(wells, n_permutations=200, threshold=0.25)
+    mt.tl.hit_calling(wells, n_permutations=15, threshold=0.25)  # the plot marks the threshold; not a p-value assertion
 
     ax = mt.pl.hits(wells)
     line = next(drawn for drawn in ax.get_lines() if str(drawn.get_label()).startswith("q ="))

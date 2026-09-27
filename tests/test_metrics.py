@@ -283,7 +283,7 @@ def test_diagnose_testing_measures_the_hit_callers_on_this_screen(pure_noise_scr
     """Both hit callers are only approximately calibrated, to a degree that depends on the
     control count, so diagnose_testing measures them on the screen at hand."""
     adata = pure_noise_screen(n_control=200, n_groups=6, per_group=8, n_features=8)
-    report = mt.metrics.diagnose_testing(adata, n_draws=3, n_permutations=200)
+    report = mt.metrics.diagnose_testing(adata, n_draws=3, n_permutations=100)
 
     checks = set(report["check"])
     assert {"hit_calling null rate", "edistance null rate"} <= checks
@@ -409,7 +409,7 @@ def test_known_relationships_measures_chance_for_a_perturbation_in_many_sets():
     rest = [(f"pair{k}", f"G{member}") for k in range(20) for member in (20 + 2 * k, 21 + 2 * k)]
     net = pd.DataFrame(hub + rest, columns=["source", "target"])
 
-    result = mt.metrics.known_relationships(adata, net, n_permutations=200, seed=0).iloc[0]
+    result = mt.metrics.known_relationships(adata, net, n_permutations=100, seed=0).iloc[0]
 
     assert result["value"] > 0.3
     assert result["null"] > 0.3

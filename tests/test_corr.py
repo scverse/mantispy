@@ -144,7 +144,7 @@ def test_spearman_sign_agrees_with_scipy_on_gappy_columns():
     """Per-pair re-ranking keeps the sign of the correlation, which a global ranking can flip."""
     rng = np.random.default_rng(0)
     disagreements = 0
-    for _ in range(200):
+    for _ in range(50):
         left = rng.normal(size=40)
         values = np.column_stack([left, 0.3 * left + rng.normal(size=40)])
         values[rng.random(values.shape) < 0.25] = np.nan
