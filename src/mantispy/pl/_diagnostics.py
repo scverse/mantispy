@@ -15,6 +15,7 @@ from mantispy._core.frames import as_frame
 from mantispy._core.masks import reference_mask
 from mantispy._core.plate import well_col, well_row
 from mantispy.pl._common import axes as _axes
+from mantispy.pl._common import maybe_interactive as _maybe_interactive
 from mantispy.pl._common import table as _table
 
 if TYPE_CHECKING:
@@ -45,6 +46,7 @@ def plate_effects(adata: AnnData, feature: str | None = None, axes: np.ndarray |
     Raises:
         KeyError: ``feature`` is not one of ``var_names``, or ``obs`` has no ``Metadata_Plate`` or ``Metadata_Well`` column.
     """
+    # Multi-panel (row and column marginals per plate); the single-figure interactive shim does not fit it. Interactive twin is a later PR.
     import matplotlib.pyplot as plt
 
     values = _feature_values(adata, feature)
@@ -97,6 +99,15 @@ def image_qc(adata: AnnData, ax: Axes | None = None) -> Axes:
     ax.set_xlabel("image")
     ax.set_ylabel("quality score")
     ax.legend(fontsize=7)
+
+    tidy = table.assign(image=positions, status=np.where(failed, "flagged", "pass"))
+    hover = [column for column in table.columns if column.startswith("Metadata_")]
+    if _maybe_interactive(
+        "scatter", data=tidy, x="image", y="qc_image_score", color="status", hover=hover or None, title="image quality"
+    ):
+        import matplotlib.pyplot as plt
+
+        plt.close(ax.figure)
     return ax
 
 
@@ -143,6 +154,12 @@ def control_drift(
     ax.set_xlabel("control PC1")
     ax.set_ylabel("control PC2")
     ax.legend(title=groupby, fontsize=6, title_fontsize=7)
+
+    tidy = pd.DataFrame({"control PC1": embedding[:, 0], "control PC2": embedding[:, 1], groupby: labels})
+    if _maybe_interactive("scatter", data=tidy, x="control PC1", y="control PC2", color=groupby, title="control drift"):
+        import matplotlib.pyplot as plt
+
+        plt.close(ax.figure)
     return ax
 
 
@@ -163,6 +180,7 @@ def outliers(
     Raises:
         KeyError: ``obs`` has no ``key`` column.
     """
+    # Multi-panel (histogram plus per-group bars); the single-figure interactive shim does not fit it. Interactive twin is a later PR.
     import matplotlib.pyplot as plt
 
     if key not in adata.obs:
