@@ -12,6 +12,8 @@ could have found.
 
 from __future__ import annotations
 
+from typing import Literal
+
 import numpy as np
 import pandas as pd
 from anndata import AnnData
@@ -31,6 +33,7 @@ def ora(
     source: str = "source",
     target: str = "target",
     tmin: int = 5,
+    padj_by: Literal["all", "group"] = "all",
     key_added: str = "ora",
     copy: bool = False,
 ) -> AnnData | None:
@@ -44,6 +47,7 @@ def ora(
         source: Column of ``net`` naming the set. Renamed to ``source`` internally.
         target: Column of ``net`` naming the gene. Renamed to ``target`` internally.
         tmin: Smallest number of a set's genes that must be in the universe for the set to be tested.
+        padj_by: Scope of the Benjamini-Hochberg correction. ``"all"`` (default) corrects once across every group and set. ``"group"`` corrects within each group's tests, so a group's modest enrichment is not penalized by unrelated groups (use this when many groups are tested at once).
         key_added: Name for the output table.
         copy: Return a modified copy instead of mutating in place.
 
@@ -51,7 +55,7 @@ def ora(
         ``None``, or the modified copy.
         Writes ``uns["mantispy"][key_added]`` with ``group``, ``source`` (the set), ``n`` (the group's genes in
         that set), ``odds_ratio`` (the Haldane-Anscombe log odds ratio), ``pvalue`` (a two-tailed Fisher exact
-        test) and ``qvalue`` (Benjamini-Hochberg across every tested group and set), sorted by q.
+        test) and ``qvalue`` (Benjamini-Hochberg, whose scope is set by ``padj_by``), sorted by q.
 
     Raises:
         KeyError: ``obs`` has no ``groupby`` or no ``gene_key``.
@@ -60,8 +64,9 @@ def ora(
     Notes:
         The universe is the set of distinct genes in ``obs[gene_key]``, so a set is tested only on its genes
         that the screen measured, and sets with fewer than ``tmin`` measured genes are skipped. Each group and
-        set is tested with a two-tailed Fisher exact test over that universe, and one Benjamini-Hochberg
-        correction is applied across the whole table.
+        set is tested with a two-tailed Fisher exact test over that universe. The Benjamini-Hochberg
+        correction is applied at the scope ``padj_by`` selects: once across the whole table for ``"all"``,
+        or within each group's own tests for ``"group"``.
     """
     from scipy.stats import fisher_exact
 
@@ -112,7 +117,16 @@ def ora(
             )
 
     table = pd.DataFrame(records, columns=["group", "source", "n", "odds_ratio", "pvalue"])
-    table["qvalue"] = benjamini_hochberg(table["pvalue"].to_numpy()) if len(table) else []
+    if padj_by not in ("all", "group"):
+        raise ValueError(f"padj_by must be 'all' or 'group', got {padj_by!r}")
+    if len(table) == 0:
+        table["qvalue"] = []
+    elif padj_by == "group":
+        table["qvalue"] = table.groupby("group", observed=True, sort=False)["pvalue"].transform(
+            lambda p: benjamini_hochberg(p.to_numpy())
+        )
+    else:
+        table["qvalue"] = benjamini_hochberg(table["pvalue"].to_numpy())
     table = table.sort_values("qvalue").reset_index(drop=True)
     adata.uns.setdefault("mantispy", {})[key_added] = table
     get_logger().info("ora: %d test(s) over %d group(s)", len(table), len(groups))
