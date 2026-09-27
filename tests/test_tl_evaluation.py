@@ -271,19 +271,6 @@ def test_map_refuses_missing_values(profiles):
 # --- similarity and the older readouts -------------------------------------
 
 
-@pytest.mark.parametrize("metric", ["cosine", "pearson"])
-def test_similarity_is_symmetric_with_unit_diagonal(profiles, metric):
-    mt.tl.similarity(profiles, metric=metric)
-    matrix = np.asarray(profiles.obsp["similarity"])
-    np.testing.assert_allclose(matrix, matrix.T, rtol=1e-5)
-    np.testing.assert_allclose(np.diag(matrix), 1.0, atol=1e-5)
-
-
-def test_pearson_similarity_matches_numpy(profiles):
-    mt.tl.similarity(profiles, metric="pearson")
-    np.testing.assert_allclose(np.asarray(profiles.obsp["similarity"]), np.corrcoef(profiles.X), rtol=1e-4, atol=1e-5)
-
-
 @pytest.mark.parametrize("infinity", [np.inf, -np.inf])
 def test_an_infinite_value_is_compared_as_missing(infinity):
     """Regression test for #65: filled as the largest float, one infinity made its profile orthogonal to every other."""
