@@ -5,14 +5,15 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+import pandas as pd
 
 from mantispy._core.frames import as_frame
 from mantispy.pl._common import axes as _axes
+from mantispy.pl._common import maybe_interactive as _maybe_interactive
 from mantispy.pl._common import table as _table
 from mantispy.tl._dose import DOSE_PHASES
 
 if TYPE_CHECKING:
-    import pandas as pd
     from anndata import AnnData
     from matplotlib.axes import Axes
 
@@ -96,6 +97,27 @@ def hits(adata: AnnData, key: str = "hits", label_top: int = 10, ax: Axes | None
     ax.set_xlabel("distance from the controls")
     ax.set_ylabel("-log10 q")
     ax.legend(fontsize=7)
+
+    tidy = pd.DataFrame(
+        {
+            "group": table["group"].astype(str).to_numpy(),
+            "distance from the controls": table["distance"].to_numpy(dtype=float),
+            "-log10 q": significance,
+            "called": np.where(called, "hit", "not called"),
+        }
+    )
+    if _maybe_interactive(
+        "scatter",
+        data=tidy,
+        x="distance from the controls",
+        y="-log10 q",
+        color="called",
+        hover=["group"],
+        title="hits",
+    ):
+        import matplotlib.pyplot as plt
+
+        plt.close(ax.figure)
     return ax
 
 
@@ -161,6 +183,25 @@ def effect_sizes(adata: AnnData, group: str, key: str = "effect", top: int = 30,
             fontsize=6,
             loc="lower right",
         )
+
+    family_of = None if families is None else [str(families.get(name, "unknown")) for name in strongest["feature"]]
+    tidy = pd.DataFrame(
+        {
+            "feature": strongest["feature"].astype(str).to_numpy(),
+            "effect size": strongest["effect"].to_numpy(dtype=float),
+        }
+    )
+    if family_of is not None:
+        tidy["family"] = family_of
+    if _maybe_interactive(
+        "barh",
+        data=tidy,
+        x="effect size",
+        y="feature",
+        color="family" if family_of is not None else None,
+        title=str(group),
+    ):
+        plt.close(ax.figure)
     return ax
 
 
@@ -210,6 +251,27 @@ def feature_volcano(
             fontsize=5,
             loc="upper left",
         )
+
+    family_of = None if families is None else [str(families.get(name, "unknown")) for name in selected["feature"]]
+    tidy = pd.DataFrame(
+        {
+            "feature": selected["feature"].astype(str).to_numpy(),
+            "effect size": selected["effect"].to_numpy(dtype=float),
+            "-log10 q": significance,
+        }
+    )
+    if family_of is not None:
+        tidy["family"] = family_of
+    if _maybe_interactive(
+        "scatter",
+        data=tidy,
+        x="effect size",
+        y="-log10 q",
+        color="family" if family_of is not None else None,
+        hover=["feature"],
+        title=str(group),
+    ):
+        plt.close(ax.figure)
     return ax
 
 
@@ -274,10 +336,17 @@ def dose_response(
         )
         ax.plot(10.0**grid, curve, color="crimson", lw=1.5, label=f"EC50 = {float(fitted['ec50']):.3g}")
 
-    ax.set_xlabel(dose_key.replace("Metadata_", ""))
+    dose_label = dose_key.replace("Metadata_", "")
+    ax.set_xlabel(dose_label)
     ax.set_ylabel(response)
     ax.set_title(f"{compound}  (spearman {float(fitted['spearman']):.2f})", fontsize=9)
     ax.legend(fontsize=7)
+
+    tidy = pd.DataFrame({dose_label: doses[usable], response: values[usable]})
+    if usable.any() and _maybe_interactive("scatter", data=tidy, x=dose_label, y=response, title=str(compound)):
+        import matplotlib.pyplot as plt
+
+        plt.close(ax.figure)
     return ax
 
 
@@ -349,4 +418,30 @@ def dose_direction(
     ax.set_ylabel("MADs per feature")
     ax.set_title(str(compound), fontsize=10)
     ax.legend(fontsize=7, frameon=False, loc="upper left")
+
+    tidy = pd.concat(
+        [
+            pd.DataFrame(
+                {
+                    "concentration": doses,
+                    "MADs per feature": block["amplitude"].to_numpy(dtype=float),
+                    "series": "distance from controls",
+                }
+            ),
+            pd.DataFrame(
+                {
+                    "concentration": doses,
+                    "MADs per feature": block["step_amplitude"].to_numpy(dtype=float),
+                    "series": "moved since the last",
+                }
+            ),
+        ],
+        ignore_index=True,
+    )
+    if _maybe_interactive(
+        "line", data=tidy, x="concentration", y="MADs per feature", color="series", title=str(compound)
+    ):
+        import matplotlib.pyplot as plt
+
+        plt.close(ax.figure)
     return ax
