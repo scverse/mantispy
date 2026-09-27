@@ -32,4 +32,19 @@ Branch `feat/interpretation-layer`. Reuse decoupler/scipy/scanpy only; add no de
 - Never duck-type classes. No em-dashes in prose. Conventional commits, no attribution lines. Commit per component.
 
 ## Review
-(to fill in after implementation)
+
+All five components implemented and wired, commits per component:
+- `tl.cluster` (`tl/_cluster.py`): hierarchical + auto silhouette cut + optional leiden. 6 tests.
+- `ds.gene_sets`/`ds.interactions` (`ds/_resources.py`): cached omnipath wrappers. 3 offline + 1 network test.
+- `tl.ora` (`tl/_ora.py`): per-group ORA over `dc.mt.ora`, universe = measured genes. 4 tests.
+- `tl.network_enrichment` (`tl/_network.py`): one-sided Fisher of top pairs vs edges. 3 tests.
+- `pl.dendrogram` (`pl/_cluster.py`): static scipy dendrogram; interactive twin deferred. 2 tests.
+
+Checks: `pytest -k "cluster or ora or network or resources or dendrogram"` -> 32 passed.
+ruff clean, mypy clean on the five new files (remaining mypy notes are pre-existing env stub gaps in
+untouched files). No new dependency added. Docs (`docs/api.md`) updated with autosummary + Stores rows.
+
+Design note: decoupler ORA returns BH-adjusted p (per group, across sets) and uses inverted `n_up`
+(`n_bg - k`), so `tl.ora` recomputes the raw two-tailed Fisher p from the same 2x2 and applies one BH
+across the whole table, keeping pvalue/qvalue consistent. `interactions("CORUM")` reuses the packaged,
+pinned `ds.corum()` complexes, so the default reference is offline-reproducible.

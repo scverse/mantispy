@@ -121,7 +121,9 @@ def cluster(
     from scipy.spatial.distance import pdist
 
     values = representation(adata, use_rep)
-    distances = pdist(values, metric=metric)
+    # metric and linkage are validated by scipy at call time; the stubs type them as Literals, so a runtime str
+    # cannot be narrowed to them here.
+    distances = pdist(values, metric=metric)  # type: ignore[call-overload]
     # A profile that is constant, or shares a gap pattern, makes a NaN correlation distance; the tree cannot
     # be built over it, so fail with a message rather than let scipy raise deep in the linkage.
     if not np.all(np.isfinite(distances)):
@@ -129,7 +131,7 @@ def cluster(
             f"the {metric!r} distance is not finite for every pair (a constant or degenerate profile); "
             "drop such profiles, or choose another metric."
         )
-    linkage_matrix = scipy_linkage(distances, method=linkage)
+    linkage_matrix = scipy_linkage(distances, method=linkage)  # type: ignore[arg-type]
 
     silhouette = float("nan")
     if n_clusters is not None:

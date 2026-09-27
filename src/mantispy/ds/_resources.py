@@ -136,7 +136,7 @@ def interactions(source: str = "CORUM", organism: str = "human", cache_dir: str 
 
     def build() -> pd.DataFrame:
         complexes = gene_sets(source, organism=organism, cache_dir=cache_dir)
-        edges = set()
+        edges: set[tuple[str, str]] = set()
         for _, block in complexes.groupby("source", observed=True):
             members = sorted(set(block["target"].astype(str)))
             edges.update(combinations(members, 2))

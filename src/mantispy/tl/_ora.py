@@ -104,14 +104,14 @@ def ora(
             a = len(member_set & targets)
             n_s = len(targets)
             # 2x2: rows are member/non-member genes, columns in-set/out-of-set, over the measured universe.
-            table = [[a, k - a], [n_s - a, n_bg - k - (n_s - a)]]
+            contingency = [[a, k - a], [n_s - a, n_bg - k - (n_s - a)]]
             records.append(
                 {
                     "group": group,
                     "source": str(name),
                     "n": a,
                     "odds_ratio": float(es[name].iloc[0]),
-                    "pvalue": float(fisher_exact(table, alternative="two-sided")[1]),
+                    "pvalue": float(fisher_exact(contingency, alternative="two-sided")[1]),
                 }
             )
 
