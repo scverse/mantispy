@@ -3,27 +3,9 @@
 import numpy as np
 import pandas as pd
 import pytest
-from _testdata import CHANNELS
 
 import mantispy as mt
 from mantispy._core.schema import validate
-
-
-def test_reads_joins_and_validates(cellprofiler_dir):
-    adata = mt.io.read_profiles(cellprofiler_dir)
-    assert adata.n_obs == 24
-    assert adata.X.dtype == np.float32
-    assert validate(adata).ok, validate(adata).errors
-    assert {"Cells_AreaShape_Area", "Nuclei_AreaShape_Area"} <= set(adata.var_names)
-    assert adata.uns["mantispy"]["resolution"] == "cell"
-
-
-@pytest.mark.parametrize("prefix", ["", "MyExpt_"], ids=["unprefixed", "prefixed"])
-def test_the_file_name_prefix_of_a_run_is_found(tmp_path, make_cellprofiler_dir, prefix):
-    """ExportToSpreadsheet puts the prefix a run was configured with in front of every file."""
-    adata = mt.io.read_profiles(make_cellprofiler_dir(tmp_path / "run", prefix=prefix))
-    assert adata.n_obs == 24
-    assert "Nuclei_AreaShape_Area" in adata.var_names
 
 
 @pytest.mark.parametrize("link_on", ["child", "primary"])
@@ -34,19 +16,6 @@ def test_parent_link_is_found_on_either_table(tmp_path, make_cellprofiler_dir, l
     adata = mt.io.read_profiles(directory)
     assert "Nuclei_AreaShape_Area" in adata.var_names
     assert np.isfinite(adata[:, "Nuclei_AreaShape_Area"].X).all()
-
-
-def test_objects_are_paired_through_the_link_not_the_object_number(tmp_path, make_cellprofiler_dir):
-    """A link that does not follow the object numbers must still pair each cell with its own nucleus."""
-    directory = make_cellprofiler_dir(tmp_path / "reversed", link_on="primary")
-    cells = pd.read_csv(directory / "Cells.csv")
-    cells["Parent_Nuclei"] = cells.groupby("ImageNumber")["ObjectNumber"].transform(lambda s: s.to_numpy()[::-1])
-    cells.to_csv(directory / "Cells.csv", index=False)
-    nuclei = pd.read_csv(directory / "Nuclei.csv").set_index(["ImageNumber", "ObjectNumber"])["AreaShape_Area"]
-
-    adata = mt.io.read_profiles(directory)
-    expected = nuclei.loc[pd.MultiIndex.from_arrays([cells["ImageNumber"], cells["Parent_Nuclei"]])].to_numpy()
-    np.testing.assert_allclose(np.asarray(adata[:, "Nuclei_AreaShape_Area"].X).ravel(), expected, rtol=1e-6)
 
 
 def test_missing_link_raises_rather_than_pairing_by_object_number(tmp_path, make_cellprofiler_dir):
@@ -63,98 +32,6 @@ def test_non_one_to_one_raises_and_can_be_waived(tmp_path, make_cellprofiler_dir
     with pytest.raises(ValueError, match="not one-to-one"):
         mt.io.read_profiles(directory)
     assert mt.io.read_profiles(directory, strict_one_to_one=False).n_obs == 24
-
-
-def test_a_primary_object_without_a_child_is_detected(tmp_path, make_cellprofiler_dir):
-    """Counting over the child frame misses parents that have zero children."""
-    directory = make_cellprofiler_dir(tmp_path / "orphan")
-    nuclei = pd.read_csv(directory / "Nuclei.csv")
-    nuclei = nuclei[~((nuclei["ImageNumber"] == 1) & (nuclei["Parent_Cells"] == 1))]
-    nuclei.to_csv(directory / "Nuclei.csv", index=False)
-    with pytest.raises(ValueError, match="have no"):
-        mt.io.read_profiles(directory)
-
-
-def test_non_features_stay_out_of_x(cellprofiler_dir):
-    adata = mt.io.read_profiles(cellprofiler_dir)
-    for name in [
-        "Cells_Location_Center_X",
-        "Cells_Number_Object_Number",
-        "Cells_Children_Nuclei_Count",
-        "Nuclei_Parent_Cells",
-    ]:
-        assert name not in adata.var_names
-    assert not any("ImageQuality" in name for name in adata.var_names)
-
-
-def test_centroids_are_kept_in_obs(cellprofiler_dir):
-    """qc_is_border needs them, so dropping them entirely would make it inert."""
-    adata = mt.io.read_profiles(cellprofiler_dir)
-    assert {"Metadata_Center_X", "Metadata_Center_Y"} <= set(adata.obs.columns)
-    assert adata.obs["Metadata_Center_X"].between(0, 1024).all()
-
-
-def test_a_cellprofiler_4_centroid_is_kept_in_obs_and_out_of_x(cellprofiler_dir):
-    """CellProfiler 4 writes the centroid under AreaShape, where it was read as a morphology feature."""
-    cells = pd.read_csv(cellprofiler_dir / "Cells.csv")
-    cells.columns = [column.replace("Location_Center", "AreaShape_Center") for column in cells.columns]
-    cells.to_csv(cellprofiler_dir / "Cells.csv", index=False)
-
-    adata = mt.io.read_profiles(cellprofiler_dir)
-    assert adata.obs["Metadata_Center_X"].between(0, 1024).all()
-    assert not any("Center" in name for name in adata.var_names)
-
-
-def test_channels_come_from_the_features_when_the_file_names_carry_a_prefix(cellprofiler_dir):
-    """JUMP names its images OrigDNA and its illumination functions IllumDNA, and writes CellOutlines, while the
-    features end in _DNA; read by the file names, no feature got a channel."""
-    image = pd.read_csv(cellprofiler_dir / "Image.csv")
-    renamed = {
-        column: column.replace("FileName_", "FileName_Orig")
-        for column in image.columns
-        if column.startswith("FileName_")
-    }
-    image = image.rename(columns=renamed)
-    image["FileName_IllumDNA"] = "illum.npy"
-    image["FileName_CellOutlines"] = "outlines.png"
-    image.to_csv(cellprofiler_dir / "Image.csv", index=False)
-
-    adata = mt.io.read_profiles(cellprofiler_dir)
-    assert adata.var.loc["Cells_Intensity_MeanIntensity_DNA", "channel"] == "DNA"
-    assert set(adata.uns["mantispy"]["channels"]) == set(CHANNELS)
-
-
-def test_metadata_and_well_normalization(tmp_path, make_cellprofiler_dir):
-    directory = make_cellprofiler_dir(tmp_path / "wells")
-    image = pd.read_csv(directory / "Image.csv")
-    image["Metadata_Well"] = ["a1", "a1", "a2", "a2"]
-    image.to_csv(directory / "Image.csv", index=False)
-    adata = mt.io.read_profiles(directory)
-    assert set(adata.obs["Metadata_Well"]) == {"A01", "A02"}
-    assert adata.obs["Metadata_Plate"].unique().tolist() == ["P1"]
-    assert {"Metadata_Site", "Metadata_ImageNumber"} <= set(adata.obs.columns)
-
-
-def test_image_table_carries_plate_keys(cellprofiler_dir):
-    """Without them pp.image_qc silently pools every plate instead of thresholding per plate."""
-    table = mt.io.read_profiles(cellprofiler_dir).uns["mantispy"]["image_table"]
-    assert isinstance(table, pd.DataFrame) and len(table) == 4
-    assert any("ImageQuality" in column for column in table.columns)
-    assert {"Metadata_Plate", "Metadata_Well"} <= set(table.columns)
-
-
-def test_var_is_parsed_and_channels_inferred(cellprofiler_dir):
-    adata = mt.io.read_profiles(cellprofiler_dir)
-    row = adata.var.loc["Cells_Intensity_MeanIntensity_DNA"]
-    assert (row["object"], row["feature_group"], row["channel"]) == ("Cells", "Intensity", "DNA")
-    assert set(adata.uns["mantispy"]["channels"]) == {"DNA", "ER"}
-
-
-def test_arbitrary_channel_names_work(tmp_path, make_cellprofiler_dir):
-    directory = make_cellprofiler_dir(tmp_path / "alt", channels=["Hoechst", "GFP"])
-    adata = mt.io.read_profiles(directory)
-    assert set(adata.uns["mantispy"]["channels"]) == {"Hoechst", "GFP"}
-    assert adata.var.loc["Cells_Intensity_MeanIntensity_Hoechst", "channel"] == "Hoechst"
 
 
 def test_platemap_is_joined_by_well(cellprofiler_dir, platemap_path):

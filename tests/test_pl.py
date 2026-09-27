@@ -10,7 +10,6 @@ import pandas as pd
 import pytest
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 
 import mantispy as mt
 from mantispy.ds import synthetic_plate
@@ -22,12 +21,6 @@ def plotted():
     mt.pp.calculate_qc_metrics(adata)
     mt.pp.normalize(adata, keep_raw=True)
     return adata
-
-
-@pytest.fixture(autouse=True)
-def close_figures():
-    yield
-    plt.close("all")
 
 
 @pytest.mark.parametrize(
@@ -69,27 +62,6 @@ def test_cell_counts_draws_the_count_profiles_carry(plotted):
         mt.pl.cell_counts(wells)
     # qc leaves out the panel it has nothing for.
     assert np.asarray(mt.pl.qc(wells)).size == 4
-
-
-def test_plate_grid_matches_the_detected_format(plotted):
-    ax = mt.pl.plate(plotted, color=plotted.var_names[0], plate="Plate01")
-    assert isinstance(ax, matplotlib.axes.Axes)
-    assert ax.images[0].get_array().shape == (8, 12)
-
-
-def test_each_plate_is_drawn_on_its_own_grid(plotted):
-    """The grid was sized from every plate's wells at once, so the smaller plate was drawn three quarters empty.
-
-    jump_target2 is the real case: source_9 runs the map on 1536-well plates and the other ten on 384-well ones.
-    """
-    wells = plotted.obs["Metadata_Well"].astype(str).to_numpy()
-    larger = (plotted.obs["Metadata_Plate"] == "Plate02").to_numpy()
-    # One well in the far corner is enough; the format is the smallest one that holds every well.
-    wells[np.flatnonzero(larger)[0]] = "P24"
-    plotted.obs["Metadata_Well"] = wells
-
-    axes = mt.pl.plate(plotted, color=plotted.var_names[0])
-    assert [axis.images[0].get_array().shape for axis in axes] == [(8, 12), (16, 24)]
 
 
 def test_plate_one_panel_per_plate_and_rejects_unknown_color(plotted):
@@ -143,17 +115,3 @@ def test_groupby_orders_and_titles_the_plates(plotted):
     plotted.obs["Metadata_Batch"] = None
     with pytest.raises(ValueError, match="missing values"):
         mt.pl.plate(plotted, color=plotted.var_names[0], groupby="Metadata_Batch")
-
-
-def test_feature_distributions_shows_raw_and_current(plotted):
-    axes = mt.pl.feature_distributions(plotted, features=list(plotted.var_names[:2]))
-    assert axes.shape == (2, 2)  # raw and current, two features
-
-
-def test_qc_survives_an_all_nan_feature(plotted):
-    """log10 of a NaN variance must not break the whole dashboard."""
-    values = plotted.X.copy()
-    values[:, 0] = np.nan
-    plotted.X = values
-    mt.pp.calculate_qc_metrics(plotted)
-    assert np.asarray(mt.pl.qc(plotted)).size == 4

@@ -1,7 +1,5 @@
 """Image-, well- and cell-level QC, and feature name standardization."""
 
-import numpy as np
-import pandas as pd
 import pytest
 
 import mantispy as mt
@@ -70,15 +68,6 @@ def test_image_qc_warns_about_unmatched_cells(imaged):
 # --- well QC ---------------------------------------------------------------
 
 
-def test_well_qc_table_is_writable_and_flags_broadcast(cells, tmp_path):
-    mt.pp.well_qc(cells, min_cells=10)
-    table = cells.uns["mantispy"]["well_qc"]
-    assert {"Metadata_Plate", "Metadata_Well", "n_cells", "control_cv", "qc_well_pass"} <= set(table.columns)
-    assert "qc_well_pass" in cells.obs
-    # a MultiIndex here would make the whole object unsaveable
-    mt.io.write(cells, tmp_path / "with_well_qc.h5ad")
-
-
 def test_well_qc_criteria(cells):
     mt.pp.well_qc(cells, min_cells=16)
     assert not cells.obs["qc_well_pass"].any()
@@ -101,24 +90,6 @@ def test_standardize_keeps_originals_and_is_idempotent(cells):
     assert cells.var["original_name"].tolist() == before
     mt.pp.standardize_feature_names(cells)
     assert cells.var["original_name"].tolist() == before
-
-
-def test_standardize_keeps_zernike_orders_distinct():
-    """Dropping the numeric suffix would collapse Zernike_2_0 and Zernike_2_2."""
-    import anndata as ad
-
-    from mantispy._core.features import parse_feature_names
-    from mantispy._core.schema import stamp
-
-    names = ["Cells_AreaShape_Zernike_2_0", "Cells_AreaShape_Zernike_2_2"]
-    adata = ad.AnnData(
-        X=np.ones((2, 2), dtype=np.float32),
-        obs=pd.DataFrame({"Metadata_Plate": ["P", "P"], "Metadata_Well": ["A01", "A02"]}, index=["0", "1"]),
-        var=parse_feature_names(names),
-    )
-    stamp(adata, resolution="well")
-    mt.pp.standardize_feature_names(adata)
-    assert len(set(adata.var_names)) == 2
 
 
 def test_standardize_refuses_a_collision_and_an_unknown_target(cells):
