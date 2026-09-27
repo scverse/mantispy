@@ -106,6 +106,7 @@ def test_the_fitted_asymptotes_are_kept():
     assert ec50 == pytest.approx(1.0, rel=0.2)
 
 
+@pytest.mark.slow
 def test_fit_ok_refuses_a_curve_that_only_the_optimiser_believes():
     """Four parameters converge on almost any six points, so convergence is not a verdict."""
     from mantispy.tl._dose import _fit_curve
@@ -138,6 +139,7 @@ def test_the_hit_call_separates_a_real_curve_from_a_noisy_one(dosed):
     assert table.loc["flat", "hitcall"] < 0.9
 
 
+@pytest.mark.slow
 def test_pure_noise_does_not_reach_the_hit_call_threshold():
     """On noise alone the optimiser still converges; 12 of 200 such fits passed fit_ok."""
     rng = np.random.default_rng(0)
