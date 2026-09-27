@@ -137,6 +137,8 @@ def test_stability_window_restricts_the_sweep_to_a_height_band():
     )
     adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "perturbation"}
 
+    truth = np.repeat(np.arange(6), 8)  # six planted sub-groups of eight
+
     unbounded = adata.copy()
     mt.tl.cluster(unbounded, use_rep=None, criterion="stability")
     n_unbounded = unbounded.uns["mantispy"]["cluster"]["n_clusters"]
@@ -146,12 +148,22 @@ def test_stability_window_restricts_the_sweep_to_a_height_band():
     mt.tl.cluster(windowed, use_rep=None, criterion="stability", stability_window=(lo, hi))
     summary = windowed.uns["mantispy"]["cluster"]
     # The coarse plateau near the top is the most stable overall, so unbounded collapses to a couple of clusters;
-    # restricting the sweep to the finer band below it recovers more clusters, and the cut sits inside the window.
+    # restricting the sweep to the finer band below it recovers the exact planted sub-structure inside the window.
+    assert summary["n_clusters"] == 6
     assert summary["n_clusters"] > n_unbounded
+    assert adjusted_rand_score(truth, windowed.obs["cluster"].to_numpy()) == pytest.approx(1.0)
     assert lo <= summary["distance_cut"] <= hi
 
     with pytest.raises(ValueError, match="stability_window"):
         mt.tl.cluster(adata, use_rep=None, criterion="stability", stability_window=(0.6, 0.3), key_added="bad")
+    # A window entirely above every merge height overlaps nothing, so the sweep has no cut to make.
+    with pytest.raises(ValueError, match="does not overlap"):
+        mt.tl.cluster(adata, use_rep=None, criterion="stability", stability_window=(100.0, 200.0), key_added="bad")
+    # A non-numeric or non-pair window is rejected up front, not left to fail downstream.
+    with pytest.raises(ValueError, match="stability_window"):
+        mt.tl.cluster(adata, use_rep=None, criterion="stability", stability_window=("a", "b"), key_added="bad")
+    with pytest.raises(ValueError, match="stability_window"):
+        mt.tl.cluster(adata, use_rep=None, criterion="stability", stability_window=0.5, key_added="bad")
 
 
 def test_copy_leaves_the_input_alone(planted):
