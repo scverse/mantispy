@@ -107,6 +107,7 @@ tutorials = [
   "igraph",
   "ipykernel",
   "leidenalg",
+  "mantispy[interactive]",
 ]
 typecheck = [
   "mypy",
@@ -215,10 +216,11 @@ overrides = [
 
 [tool.pytest]
 addopts = [
-  "--import-mode=importlib", # allow using test files with same name
-  # the network tests download a few hundred MB; run them with -m network
+  "--import-mode=importlib",  # allow using test files with same name
+  # the network tests download a few hundred MB; the slow tests are the long
+  # calibration and fuzz loops. Run them with -m network / -m slow.
   "-m",
-  "not network",
+  "not network and not slow",
 ]
 markers = [
   "network: requires network access (deselect with -m 'not network')",

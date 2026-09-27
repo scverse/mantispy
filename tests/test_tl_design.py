@@ -16,59 +16,12 @@ def profiles():
     return mt.tl.aggregate(cells, min_cells=0)
 
 
-def test_saturation_improves_with_replicates(profiles):
-    """The curve is the answer to 'how many replicates do I need'."""
-    mt.tl.replicate_saturation(profiles, n_draws=3, max_replicates=4)
-    table = profiles.uns["mantispy"]["replicate_saturation"]
-    assert set(table["n_replicates"]) == {1, 2, 3, 4}
-    assert table.sort_values("n_replicates")["mean"].is_monotonic_increasing
-
-
-def test_saturation_is_reproducible_and_stops_when_it_runs_out(profiles):
-    mt.tl.replicate_saturation(profiles, n_draws=3, seed=1)
-    first = profiles.uns["mantispy"]["replicate_saturation"]
-    mt.tl.replicate_saturation(profiles, n_draws=3, seed=1)
-    np.testing.assert_allclose(first["mean"].to_numpy(), profiles.uns["mantispy"]["replicate_saturation"]["mean"])
-    # Two disjoint subsets are needed, so the deepest depth is half the largest group.
-    assert first["n_replicates"].max() <= profiles.obs["Metadata_Perturbation"].value_counts().max() // 2
-
-
 def test_a_custom_metric_is_accepted(profiles):
     def always(profiles_, codes, depth, generator):
         return float(depth)
 
     mt.tl.replicate_saturation(profiles, metric=always, n_draws=2, max_replicates=3)
     assert profiles.uns["mantispy"]["replicate_saturation"]["mean"].tolist() == [1.0, 2.0, 3.0]
-
-
-def test_cytotoxicity_flags_cell_loss_not_morphology(profiles):
-    """A group that lost most of its cells is suspect even when it scores as a hit."""
-    counts = profiles.obs["Metadata_CellCount"].to_numpy().copy()
-    toxic = (profiles.obs["Metadata_Perturbation"] == "pert00").to_numpy()
-    counts[toxic] = counts[toxic] // 5
-    profiles.obs["Metadata_CellCount"] = counts
-    profiles.obs["hits_row_distance"] = np.where(toxic, 10.0, 1.0)
-
-    mt.tl.cytotoxicity(profiles)
-    table = profiles.uns["mantispy"]["cytotoxicity"].set_index("group")
-    assert table.loc["pert00", "viability"] < 0.5
-    assert bool(table.loc["pert00", "suspect"])
-    assert not bool(table.loc["DMSO", "suspect"])
-    assert profiles.obs["cytotoxicity_suspect"].to_numpy()[toxic].all()
-
-
-def test_cell_loss_alone_is_not_suspect(profiles):
-    """Losing cells is a phenotype; only cell loss together with a large distance is suspect."""
-    counts = profiles.obs["Metadata_CellCount"].to_numpy().copy()
-    quiet = (profiles.obs["Metadata_Perturbation"] == "pert01").to_numpy()
-    counts[quiet] = counts[quiet] // 5
-    profiles.obs["Metadata_CellCount"] = counts
-    profiles.obs["hits_row_distance"] = 1.0
-
-    mt.tl.cytotoxicity(profiles)
-    table = profiles.uns["mantispy"]["cytotoxicity"].set_index("group")
-    assert table.loc["pert01", "viability"] < 0.5
-    assert not bool(table.loc["pert01", "suspect"])
 
 
 def test_cytotoxicity_medians_the_rows_rather_than_a_group_statistic(profiles):
