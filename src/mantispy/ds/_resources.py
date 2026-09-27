@@ -1,6 +1,6 @@
 """Cached prior-knowledge resources, so a screen can be tested against known biology offline.
 
-decoupler's :mod:`decoupler.op` layer fetches gene sets and complexes from the OmniPath web service on
+decoupler's ``decoupler.op`` layer fetches gene sets and complexes from the OmniPath web service on
 every call, which is slow and needs the network. These wrappers fetch once, pin the result to a parquet
 snapshot under :attr:`mantispy.settings.cache_dir`, and read the snapshot afterwards, so repeat runs, CI and
 offline use never refetch. The frames are the ``source``/``target`` gene-set nets that
