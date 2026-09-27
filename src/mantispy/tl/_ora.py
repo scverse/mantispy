@@ -12,6 +12,8 @@ could have found.
 
 from __future__ import annotations
 
+from typing import Literal
+
 import numpy as np
 import pandas as pd
 from anndata import AnnData
@@ -33,6 +35,8 @@ def ora(
     tmin: int = 5,
     key_added: str = "ora",
     copy: bool = False,
+    *,
+    padj_by: Literal["all", "group"] = "all",
 ) -> AnnData | None:
     """Test each group's genes for over-representation of gene sets.
 
@@ -46,12 +50,13 @@ def ora(
         tmin: Smallest number of a set's genes that must be in the universe for the set to be tested.
         key_added: Name for the output table.
         copy: Return a modified copy instead of mutating in place.
+        padj_by: Scope of the Benjamini-Hochberg correction. ``"all"`` (default) corrects once across every group and set. ``"group"`` corrects within each group's tests, so a group's modest enrichment is not penalized by unrelated groups (use this when many groups are tested at once). Because the scope is chosen per call, q-values from an ``"all"`` run and a ``"group"`` run are not directly comparable, so keep one scope within a single comparison.
 
     Returns:
         ``None``, or the modified copy.
         Writes ``uns["mantispy"][key_added]`` with ``group``, ``source`` (the set), ``n`` (the group's genes in
         that set), ``odds_ratio`` (the Haldane-Anscombe log odds ratio), ``pvalue`` (a two-tailed Fisher exact
-        test) and ``qvalue`` (Benjamini-Hochberg across every tested group and set), sorted by q.
+        test) and ``qvalue`` (Benjamini-Hochberg corrected), sorted by q.
 
     Raises:
         KeyError: ``obs`` has no ``groupby`` or no ``gene_key``.
@@ -60,11 +65,12 @@ def ora(
     Notes:
         The universe is the set of distinct genes in ``obs[gene_key]``, so a set is tested only on its genes
         that the screen measured, and sets with fewer than ``tmin`` measured genes are skipped. Each group and
-        set is tested with a two-tailed Fisher exact test over that universe, and one Benjamini-Hochberg
-        correction is applied across the whole table.
+        set is tested with a two-tailed Fisher exact test over that universe.
     """
     from scipy.stats import fisher_exact
 
+    if padj_by not in ("all", "group"):
+        raise ValueError(f"padj_by must be 'all' or 'group', got {padj_by!r}")
     obs = as_frame(adata.obs)
     for column in (groupby, gene_key):
         if column not in obs:
@@ -112,7 +118,12 @@ def ora(
             )
 
     table = pd.DataFrame(records, columns=["group", "source", "n", "odds_ratio", "pvalue"])
-    table["qvalue"] = benjamini_hochberg(table["pvalue"].to_numpy()) if len(table) else []
+    if padj_by == "group":
+        table["qvalue"] = table.groupby("group", observed=True, sort=False)["pvalue"].transform(
+            lambda p: benjamini_hochberg(p.to_numpy())
+        )
+    else:
+        table["qvalue"] = benjamini_hochberg(table["pvalue"].to_numpy())
     table = table.sort_values("qvalue").reset_index(drop=True)
     adata.uns.setdefault("mantispy", {})[key_added] = table
     get_logger().info("ora: %d test(s) over %d group(s)", len(table), len(groups))
