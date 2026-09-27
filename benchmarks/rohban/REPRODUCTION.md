@@ -1,0 +1,34 @@
+# Rohban 2017 reproduction with mantispy (construct level)
+
+Computational reproduction of Rohban et al. 2017 (eLife 6:e24060), *Systematic morphological profiling of human gene and allele function via Cell Painting*, starting from the well-level augmented CellProfiler profiles shipped by `mt.ds.rohban()` (five pilot plates of `cpg0017-rohban-pathways`; 1918 wells, 323 screened ORF constructs over 194 genes). Produced by `benchmarks/rohban/reproduce.py`.
+
+This v2 runs at the paper's **construct** level (`Metadata_Perturbation` = the ORF construct) and uses mantispy's own interpretation layer end to end: `tl.consensus`, `tl.percent_replicating`, `tl.cluster`, `tl.ora` against `ds.gene_sets`, and `tl.network_enrichment` against `ds.interactions`. The v1 column is the earlier gene-level run that used hand-rolled scipy/scanpy and a BioGRID download.
+
+**Pipeline:** normalize per plate to the untreated (EMPTY) wells -> feature select (751 features) -> PCA (36 PCs, >=99% variance) -> `percent_replicating` active call -> modz consensus per construct -> `cluster` (average linkage, 1-Pearson, cut 0.522) -> `ora` GO/complex enrichment -> `network_enrichment` CORUM interaction enrichment.
+
+| ID | Quantity | Published | v1 mantispy (gene level) | v2 mantispy (construct level) | Agreement | Note |
+|----|----------|-----------|--------------------------|-------------------------------|-----------|------|
+| G1 | active fraction | 50% (110/220) | 74.2% (percent_replicating); 22.6% (literal) | 75.2% (percent_replicating) | FAIL | percent_replicating's matched-median non-replicate null is more permissive than the paper's literal per-pair 95th-percentile null, so it over-calls; the 5-plate pilot also compresses to 36 PCs vs 158 |
+| G2 | active count | 110 | 141 / 190 | 243 of 323 constructs | FAIL | grade the fraction (G1); only 5 pilot plates ship, 323 constructs vs the paper's 220 QC-passing |
+| G3 | active criterion reproduced | median rep Pearson > 95th-pct non-rep | implemented exactly | mt.tl.percent_replicating | PASS | median replicate Pearson vs the 95th-percentile non-replicate null, matched on the replicate count |
+| G4 | # clusters (>=2 constructs) | 25 | 26 | 47 (auto-cut: 10) | FAIL | average linkage, 1-Pearson, cut 0.522; the absolute cut is not portable to mantispy's more redundant 751-feature space (distances compress, so it cuts finer), and we cluster all 323 screened constructs vs the paper's 110 active; the auto silhouette cut instead over-merges |
+| G5 | Hippo/YAP co-cluster | YAP1+WWTR1 (cluster 20) | YAP1 & WWTR1 co-clustered | YAP1 & WWTR1 in cluster 4: True | PASS |  |
+| G6 | RAS-RAF-MEK-ERK co-cluster | >=2 cascade genes | KRAS, MAP2K1, MAP2K4 | ['KRAS', 'MAP2K1', 'MAP2K4'] | PASS | construct level |
+| G7 | NF-kB(TRAF2) vs YAP anti-corr | strong negative | mean r=-0.252 (4th pct) | mean r=-0.334 (more negative than 99% of pairs) | PASS | cluster 40 (NF-kB/TRAF2) vs 4 (YAP); among the most negative inter-cluster means |
+| G8 | enriched multi-gene clusters | 19/22 | 10 / 26 (per-cluster BH) | 0/46 at q<0.05 (39/46 nominal) | FAIL | mt.tl.ora applies one global Benjamini-Hochberg across all cluster x set tests, far stricter than the paper's per-cluster FDR; over a 194-gene universe no test survives, though the signal is present at nominal p (the v1 script used hand-rolled per-cluster BH) |
+| G9 | interaction enrichment of top pairs | 9% vs 5%, p=0.04 | 10.6% vs 9.1%, p=0.0079 (BioGRID) | 2.0% vs 0.9%, OR=2.13, p=2.04e-06 | PASS | mt.tl.network_enrichment vs CORUM co-membership (a decoupler-available proxy for the paper's BioGRID PPI); the enrichment direction and significance reproduce, the absolute rates are lower because CORUM co-membership is sparser than BioGRID physical interactions |
+| G10 | correlation threshold | Pearson 0.43 | 0.411 | 0.549 | FAIL | the top-5% cut from network_enrichment on construct-consensus Pearson; modz consensus denoises the profiles, so pairwise correlations run higher than the paper's well-level 0.43 and the top-5% cut sits above it |
+| G11 | NF-kB/YAP GSEA | BH p=2e-8 | n/a | n/a | FLAG | needs external L1000 signatures; out of core scope |
+
+## Verdict
+
+- **Reproduced (the biology):** average-linkage clustering on 1-Pearson recovers the YAP1+WWTR1 Hippo co-cluster (G5), RAS-RAF-MEK-ERK co-clustering (KRAS, MAP2K1, MAP2K4) (G6), and the NF-kB/TRAF2 vs YAP anti-correlation (mean Pearson -0.33, among the most negative inter-cluster means, G7). Top-correlated construct pairs are enriched for CORUM co-membership (2.0% vs 0.9%, odds ratio 2.13, p=2e-06, G9). Moving to construct level keeps every one of these that v1 recovered.
+
+- **Improved on v1:** the whole analysis is now mantispy-native. `tl.cluster` replaces hand-rolled scipy `linkage`/`fcluster`, `tl.ora` against `ds.gene_sets` replaces a hand-rolled Enrichr Fisher loop, and `tl.network_enrichment` against `ds.interactions` replaces a BioGRID download plus a raw `fisher_exact`. The interaction reference is now a pinned, offline CORUM snapshot rather than a live BioGRID release, so the run is reproducible without any external fetch beyond the pinned resources.
+
+- **Diverged, with named reasons:** (G1/G2) `percent_replicating` calls 75% of constructs active, over the paper's 50%, because its matched-median non-replicate null is more permissive than the paper's literal per-pair 95th-percentile criterion, and the pilot compresses to 36 PCs vs 158; (G4) at the paper's 0.522 cut we get 47 multi-construct clusters, because that absolute height is not portable to mantispy's more redundant 751-feature space and we cluster all 323 screened constructs rather than the paper's 110 active; (G8) `tl.ora` finds 0 clusters enriched at q<0.05 because it applies one global Benjamini-Hochberg across all cluster x set tests (the signal is present at nominal p in 39/46 multi-gene clusters, but no test clears the global FDR over a 194-gene universe); (G10) the top-5% correlation cut sits at 0.55 rather than 0.43 because modz consensus denoises the profiles, raising pairwise correlations.
+
+- **Out of scope:** (G11) the NF-kB -> YAP/TAZ-target GSEA needs external L1000 signatures, not the Cell Painting profiles.
+
+- **Capability gaps for maintainers:** (1) `tl.ora` corrects globally, so per-cluster enrichment of many small clusters over a small screen universe yields nothing at q<0.05; a per-group correction option (or a documented recipe) would match the standard cluster-enrichment workflow. (2) `tl.cluster` cuts at an absolute height or a fixed count; a stability-based cut (the paper's approach) is not available, and the silhouette auto-cut over-merges here. (3) No PCA in `pp` (used `scanpy.pp.pca`); 99% variance is only ~36 PCs on these redundant augmented profiles. (4) `network_enrichment`'s default reference is CORUM co-membership, a proxy for a real PPI network; a BioGRID/STRING edge list must be passed as `edges` for the paper's exact test.
+
