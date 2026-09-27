@@ -44,6 +44,9 @@ RESERVED_OBS: tuple[str, ...] = (
     "Metadata_ImageNumber",
     "Metadata_ObjectNumber",
     "Metadata_Perturbation",
+    # What the perturbation is, one of "compound", "orf", "crispr" or "untreated". Control-ness stays in
+    # Metadata_Control / Metadata_Control_Type, which are orthogonal to the kind of perturbation.
+    "Metadata_Perturbation_Type",
     "Metadata_Compound",
     "Metadata_Concentration",
     # The dose as the plate map wrote it, where Metadata_Concentration holds the one the well was meant to get.
@@ -64,10 +67,13 @@ RESERVED_OBS: tuple[str, ...] = (
     "Metadata_JCP2022",
     "Metadata_InChIKey",
     "Metadata_PlateType",
-    # Reserved for optical pooled screening in 0.8, except Metadata_Gene, which pp.annotate_jump(kind="crispr") writes.
+    # Genetic-perturbation annotation written by the ORF, CRISPR and variant loaders and, for Metadata_Gene, by
+    # pp.annotate_jump(kind="crispr"); the barcode fields stay reserved for optical pooled screening in 0.8.
     "Metadata_Barcode",
     "Metadata_Gene",
     "Metadata_sgRNA",
+    "Metadata_Construct",
+    "Metadata_Allele",
     "Metadata_BarcodeQuality",
 )
 
