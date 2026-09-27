@@ -1,7 +1,9 @@
 # Datasets
 
-{mod}`mantispy.ds` serves public screens from the
-[Cell Painting Gallery](https://github.com/broadinstitute/cellpainting-gallery) {cite:p}`Weisbart_2024`, each
+{mod}`mantispy.ds` serves public screens, most from the
+[Cell Painting Gallery](https://github.com/broadinstitute/cellpainting-gallery) {cite:p}`Weisbart_2024` and the
+optical pooled screens from their authors' own hosts ({func}`~mantispy.ds.scallops_arv471` from the
+`Genentech/scallops-manuscript` GitHub repository, {func}`~mantispy.ds.cp_posh` from insitro's S3 bucket), each
 downloaded from files pinned by sha256.
 The overview covers the well-level screens, and five have pages of their own: where each comes from, how every
 column mantispy adds was derived, and what the data looks like.
@@ -22,6 +24,8 @@ different bytes.
 | | {func}`~mantispy.ds.agnp` | silver nanoparticles in Huh7 cells | |
 | genetic screens | {func}`~mantispy.ds.jump_crispr` | the JUMP CRISPR knockout arm | [CRISPR knockouts](../tutorials/genetics/crispr.ipynb) |
 | | {func}`~mantispy.ds.rohban` | ORF overexpression of pathway genes | [which measurements moved](../tutorials/phenotypes/which_features_moved.ipynb) |
+| optical pooled screens | {func}`~mantispy.ds.scallops_arv471` | single cells of a pooled CRISPR screen under the ER degrader ARV-471 | |
+| | {func}`~mantispy.ds.cp_posh` | single cells of a broad-morphology Cell Painting pooled CRISPR screen | |
 | variants | {func}`~mantispy.ds.luad` | lung adenocarcinoma alleles, mutant against wild type | |
 | | {func}`~mantispy.ds.pooled_rare` | rare variants in a pooled screen | |
 | cell models | {func}`~mantispy.ds.neuropainting` | astrocytes and neurons | |
