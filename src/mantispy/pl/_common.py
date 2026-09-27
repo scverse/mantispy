@@ -139,7 +139,6 @@ def maybe_interactive(
     if not interactive_available():
         return False
     import plotly.express as px
-    from IPython.display import display
 
     hover_list = list(hover) if hover is not None else None
     if kind == "scatter":
@@ -165,7 +164,9 @@ def maybe_interactive(
         )
     else:
         raise ValueError(f"unknown interactive kind {kind!r}")
-    display(figure)
+    # Render with notebook_connected per call (loads plotly.js from CDN) so the twin
+    # embeds in exported HTML docs, without mutating the process-global renderer.
+    figure.show(renderer="notebook_connected")
     if ax is not None and getattr(ax.figure, _OWNED, False):
         import matplotlib.pyplot as plt
 
