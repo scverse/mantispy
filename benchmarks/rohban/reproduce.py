@@ -216,3 +216,24 @@ anti_corr = bool(np.isfinite(yap_nfkb) and yap_nfkb < 0 and pctile <= 25)
 print(f"  YAP cluster {yap_cluster} vs NF-kB/{nfkb_gene} cluster {nfkb_cluster}: mean Pearson={yap_nfkb:.3f} "
       f"(more negative than {100 - pctile:.0f}% of inter-cluster means); anti-corr: {anti_corr}")
 
+# =============================================================================================
+# Step 9: GO / complex / pathway enrichment per cluster via mt.tl.ora [G8]
+# =============================================================================================
+banner("Step 9: over-representation per cluster (mt.tl.ora vs gene_sets) [G8]")
+nets = []
+for name, prefix in [("GO_BP", "GO"), ("CORUM", "CORUM"), ("Reactome", "REACTOME")]:
+    part = mt.ds.gene_sets(name)[["source", "target"]].copy()
+    part["source"] = f"{prefix}:" + part["source"].astype(str)
+    nets.append(part)
+net = pd.concat(nets, ignore_index=True)
+print(f"  gene-set network: {net['source'].nunique()} sets over {len(net)} edges (GO-BP + CORUM + Reactome)")
+
+mt.tl.ora(cons, groupby="cluster", net=net, gene_key="Metadata_Gene", tmin=5)
+ora = cons.uns["mantispy"]["ora"]
+enriched_q = set(ora.loc[ora["qvalue"] < 0.05, "group"].astype(str)) & multigene
+enriched_nominal = set(ora.loc[ora["pvalue"] < 0.05, "group"].astype(str)) & multigene
+n_enriched_q = len(enriched_q)
+n_enriched_nominal = len(enriched_nominal)
+print(f"  mt.tl.ora ({len(ora)} tests, one global BH): multi-gene clusters enriched at q<0.05 = "
+      f"{n_enriched_q}/{n_multigene}; at nominal p<0.05 = {n_enriched_nominal}/{n_multigene}")
+
