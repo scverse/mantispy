@@ -9,6 +9,7 @@ import pandas as pd
 
 from mantispy._core.frames import as_frame
 from mantispy.pl._common import axes as _axes
+from mantispy.pl._common import maybe_interactive as _maybe_interactive
 from mantispy.pl._common import table as _table
 
 if TYPE_CHECKING:
@@ -72,7 +73,20 @@ def moa_confusion(adata: AnnData, key: str = "moa", normalize: bool = True, ax: 
     ax.set_xlabel("predicted")
     ax.set_ylabel("true")
     summary = adata.uns.get("mantispy", {}).get(key, {})
-    ax.set_title(f"{summary.get('scheme', '')} accuracy {float(summary.get('accuracy', float('nan'))):.1%}", fontsize=9)
+    title = f"{summary.get('scheme', '')} accuracy {float(summary.get('accuracy', float('nan'))):.1%}"
+    ax.set_title(title, fontsize=9)
+
+    if _maybe_interactive(
+        "heatmap",
+        matrix=counts,
+        rows=labels,
+        columns=labels,
+        value_label="fraction" if normalize else "count",
+        title=title,
+    ):
+        import matplotlib.pyplot as plt
+
+        plt.close(ax.figure)
     return ax
 
 
@@ -107,6 +121,17 @@ def moa_enrichment(
     ax.axvline(-np.log10(0.05), color="grey", ls="--", lw=1)
     ax.set_xlabel("-log10 q")
     ax.set_title(str(group), fontsize=9)
+
+    tidy = pd.DataFrame(
+        {
+            "mechanism": [f"{moa}  ({n})" for moa, n in zip(best["moa"], best["n_neighbours"], strict=True)],
+            "-log10 q": -np.log10(np.clip(best["qvalue"].to_numpy(dtype=float), 1e-12, None)),
+        }
+    )
+    if _maybe_interactive("barh", data=tidy, x="-log10 q", y="mechanism", title=str(group)):
+        import matplotlib.pyplot as plt
+
+        plt.close(ax.figure)
     return ax
 
 
@@ -149,6 +174,18 @@ def distance_heatmap(
         for position in np.flatnonzero(np.asarray(annotation[1:]) != np.asarray(annotation[:-1])) + 1:
             ax.axhline(position - 0.5, color="white", lw=0.8)
             ax.axvline(position - 0.5, color="white", lw=0.8)
+
+    if _maybe_interactive(
+        "heatmap",
+        matrix=matrix.to_numpy(dtype=float),
+        rows=labels,
+        columns=labels,
+        value_label="energy distance",
+        title="distance heatmap",
+    ):
+        import matplotlib.pyplot as plt
+
+        plt.close(ax.figure)
     return ax
 
 
@@ -183,8 +220,21 @@ def sets_heatmap(
     keep = np.argsort(-np.nanmax(np.abs(means), axis=0))[:top]
     keep = keep[np.argsort([names[index] for index in keep])]
 
+    kept_names = [names[index] for index in keep]
     ax = _axes(ax, (0.3 * len(keep) + 3, 0.28 * len(labels) + 2))
-    _heatmap(ax, means[:, keep], labels, [names[index] for index in keep], "coolwarm", "mean score")
+    _heatmap(ax, means[:, keep], labels, kept_names, "coolwarm", "mean score")
+
+    if _maybe_interactive(
+        "heatmap",
+        matrix=means[:, keep],
+        rows=labels,
+        columns=kept_names,
+        value_label="mean score",
+        title="feature-set scores",
+    ):
+        import matplotlib.pyplot as plt
+
+        plt.close(ax.figure)
     return ax
 
 
@@ -225,4 +275,14 @@ def pathway_coherence(adata: AnnData, key: str = "pathway_coherence", top: int =
         fontsize=6,
         loc="lower right",
     )
+
+    tidy = pd.DataFrame(
+        {
+            "set": [f"{name}  ({n})" for name, n in zip(best["set"], best["n_genes"], strict=True)],
+            "coherence": best["coherence"].to_numpy(dtype=float),
+            "significant": np.where(significant, "q < 0.05", "not significant"),
+        }
+    )
+    if _maybe_interactive("barh", data=tidy, x="coherence", y="set", color="significant", title="pathway coherence"):
+        plt.close(ax.figure)
     return ax
