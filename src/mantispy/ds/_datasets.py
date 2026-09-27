@@ -120,7 +120,7 @@ def bbbc021(cache_dir: str | Path | None = None) -> AnnData:
             Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Returns:
-        Wells by features at well resolution, with ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Compound``, ``Metadata_Concentration``, ``Metadata_MOA``, ``Metadata_Perturbation`` (compound at concentration), ``Metadata_Control``, and ``Metadata_CellCount`` over the ``Metadata_SiteCount`` fields, of four imaged, that contributed cells.
+        Wells by features at well resolution, with ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Compound``, ``Metadata_Concentration``, ``Metadata_MOA``, ``Metadata_Perturbation`` (compound at concentration), ``Metadata_Perturbation_Type`` (``"compound"``), ``Metadata_Control``, and ``Metadata_CellCount`` over the ``Metadata_SiteCount`` fields, of four imaged, that contributed cells.
 
     References:
         :cite:t:`Caie_2010`, the image set.
@@ -168,6 +168,7 @@ def bbbc021(cache_dir: str | Path | None = None) -> AnnData:
     obs["Metadata_Perturbation"] = pd.Categorical(
         obs["Metadata_Compound"].astype(str) + "@" + obs["Metadata_Concentration"].astype(str)
     )
+    obs["Metadata_Perturbation_Type"] = pd.Series("compound", index=obs.index, dtype="category")
     adata.uns["mantispy"]["dataset"] = "BBBC021"
     get_logger().info("BBBC021: %d wells x %d features", adata.n_obs, adata.n_vars)
     return adata
@@ -261,7 +262,7 @@ def pki(plates: Sequence[str] | None = None, cache_dir: str | Path | None = None
             Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Returns:
-        Wells by features at well resolution, with ``Metadata_Perturbation`` (compound at concentration), ``Metadata_Compound``, ``Metadata_Concentration`` (the platemap's ``mmoles_per_liter``), ``Metadata_MOA``, ``Metadata_Control``, ``Metadata_CellCount`` and ``Metadata_SiteCount``.
+        Wells by features at well resolution, with ``Metadata_Perturbation`` (compound at concentration), ``Metadata_Perturbation_Type`` (``"compound"``), ``Metadata_Compound``, ``Metadata_Concentration`` (the platemap's ``mmoles_per_liter``), ``Metadata_MOA``, ``Metadata_Control``, ``Metadata_CellCount`` and ``Metadata_SiteCount``.
 
     Raises:
         KeyError: A plate is not one of the eight.
@@ -282,6 +283,7 @@ def pki(plates: Sequence[str] | None = None, cache_dir: str | Path | None = None
     obs["Metadata_MOA"] = obs.pop("Metadata_moa")
     label = np.where(control, "DMSO", np.char.add(np.char.add(compound.astype(str), "@"), dose.astype(str)))
     obs["Metadata_Perturbation"] = pd.Categorical(label)
+    obs["Metadata_Perturbation_Type"] = pd.Series("compound", index=obs.index, dtype="category")
     adata.uns["mantispy"]["dataset"] = "cpg0008-pki"
     get_logger().info(
         "pki: %d wells x %d features, %d compounds x %d doses",
@@ -312,7 +314,7 @@ def jump_target2(
             Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Returns:
-        One row per well at well resolution, carrying ``Metadata_Source``, ``Metadata_Batch``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_CellCount``, ``Metadata_SiteCount`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_InChIKey`` and ``Metadata_Control`` (the DMSO wells).
+        One row per well at well resolution, carrying ``Metadata_Source``, ``Metadata_Batch``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_CellCount``, ``Metadata_SiteCount`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_Perturbation_Type`` (``"compound"``), ``Metadata_InChIKey`` and ``Metadata_Control`` (the DMSO wells).
 
     Raises:
         KeyError: A plate is not one of the 141.
@@ -518,7 +520,7 @@ def oasis_pilot(annotate: bool = True, cache_dir: str | Path | None = None, **kw
     It is the dose-response dataset of the package: 28 of those compounds carry six or more concentrations in both U2OS and HepaRG.
 
     Args:
-        annotate: Join the plate maps, which supply ``Metadata_Compound``, ``Metadata_Concentration``, ``Metadata_CellLine``, ``Metadata_Control`` (the DMSO wells) and ``Metadata_Perturbation``.
+        annotate: Join the plate maps, which supply ``Metadata_Compound``, ``Metadata_Concentration``, ``Metadata_CellLine``, ``Metadata_Control`` (the DMSO wells), ``Metadata_Perturbation`` and ``Metadata_Perturbation_Type`` (``"compound"``).
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
         kwargs: Passed to :func:`mantispy.io.read_profiles`.
@@ -559,6 +561,7 @@ def oasis_pilot(annotate: bool = True, cache_dir: str | Path | None = None, **kw
             merged["Metadata_Compound"].astype(str) + "@" + merged["Metadata_Concentration"].astype(str),
         )
     )
+    adata.obs["Metadata_Perturbation_Type"] = pd.Series("compound", index=adata.obs_names, dtype="category")
     get_logger().info(
         "OASIS pilot: %d wells x %d features, %d compounds over %d concentrations, %d control wells",
         adata.n_obs,
@@ -612,7 +615,7 @@ def jump_lite(
         kwargs: Passed to :func:`mantispy.io.read_profiles`.
 
     Returns:
-        Wells by features at well resolution, indexed by plate and well, with ``Metadata_Source``, ``Metadata_Batch``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_CellCount`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_InChIKey`` and ``Metadata_Control``.
+        Wells by features at well resolution, indexed by plate and well, with ``Metadata_Source``, ``Metadata_Batch``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_CellCount`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_Perturbation_Type`` (``"compound"``), ``Metadata_InChIKey`` and ``Metadata_Control``.
 
     Raises:
         ValueError: ``model`` is not one of ``ds.JUMP_LITE_MODELS``.
@@ -709,7 +712,7 @@ def jump_crispr(annotate: bool = True, cache_dir: str | Path | None = None, **kw
         kwargs: Passed to :func:`mantispy.io.read_profiles`.
 
     Returns:
-        Wells by features, indexed by plate and well, with ``Metadata_JCP2022`` and ``Metadata_CellCount`` and, when annotated, ``Metadata_Gene`` and ``Metadata_Perturbation`` (the gene symbol), ``Metadata_Control_Type`` (``"negcon"``, ``"poscon"`` or ``"trt"``), ``Metadata_Control`` (the no-guide and non-targeting wells) and ``Metadata_ChromosomeArm``.
+        Wells by features, indexed by plate and well, with ``Metadata_JCP2022`` and ``Metadata_CellCount`` and, when annotated, ``Metadata_Gene`` and ``Metadata_Perturbation`` (the gene symbol; its guides are the replicates), ``Metadata_Perturbation_Type`` (``"crispr"``), ``Metadata_Control_Type`` (``"negcon"``, ``"poscon"`` or ``"trt"``), ``Metadata_Control`` (the no-guide and non-targeting wells) and ``Metadata_ChromosomeArm``.
 
     References:
         :cite:t:`Chandrasekaran_2023`.
@@ -724,7 +727,9 @@ def jump_crispr(annotate: bool = True, cache_dir: str | Path | None = None, **kw
 
 
 def _finish_guide_screen(adata: AnnData, name: str) -> AnnData:
-    """Record the accession and log the shape shared by the single-cell guide screens."""
+    """Record the accession, mark the perturbation type and log the shape shared by the single-cell guide screens."""
+    # These are CRISPR guide screens: Metadata_Perturbation is the guide, set by each loader.
+    adata.obs["Metadata_Perturbation_Type"] = pd.Series("crispr", index=adata.obs_names, dtype="category")
     adata.uns["mantispy"]["dataset"] = _DATASETS[name].metadata["accession"]
     get_logger().info(
         "%s: %d cells x %d features, %d gene(s) over %d guide(s)",
@@ -785,6 +790,8 @@ def scallops_arv471(cache_dir: str | Path | None = None) -> AnnData:
         ``Metadata_sgRNA``: the guide identifier.
 
         ``Metadata_Perturbation``: the guide, so each guide is its own perturbation.
+
+        ``Metadata_Perturbation_Type``: ``"crispr"``, the kind of screen this is.
 
         ``Metadata_Control_Type``: the schema's reserved control-type column, carrying the upstream ``type``, one of ``"target"`` (a screened gene), ``"ntc"`` (a non-targeting guide) or ``"neg"`` (a guide against an olfactory-receptor gene, a targeting negative control).
         The raw classes are kept rather than folded onto the reserved ``negcon``/``poscon``/``trt`` vocabulary, none of which fits the targeting negative cleanly.
@@ -862,6 +869,8 @@ def cp_posh(cache_dir: str | Path | None = None) -> AnnData:
         ``Metadata_sgRNA``: the guide, the upstream ``barcode``.
 
         ``Metadata_Perturbation``: the guide again, so each guide is its own perturbation, matching :func:`scallops_arv471`.
+
+        ``Metadata_Perturbation_Type``: ``"crispr"``, the kind of screen this is.
 
         ``Metadata_Plate``: the plate, the upstream ``plate`` (``"EL37"``).
 
@@ -1063,7 +1072,7 @@ def jump_cells(annotate: bool = True, selected: bool = False, cache_dir: str | P
         KeyError: `selected` was asked for without `annotate`, so there are no controls to select against.
 
     Returns:
-        Cells by features at cell resolution, carrying ``Metadata_Source``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Site`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_InChIKey`` and ``Metadata_Control``.
+        Cells by features at cell resolution, carrying ``Metadata_Source``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Site`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_Perturbation_Type`` (``"compound"``), ``Metadata_InChIKey`` and ``Metadata_Control``.
         When annotated, ``var["selected"]`` marks the features feature selection keeps, so the object can be reduced with ``adata[:, adata.var["selected"]]`` the way scanpy's ``highly_variable`` is used.
         A cell carries no count.
         :func:`mantispy.tl.aggregate` writes ``Metadata_CellCount`` over the four fields read and a ``Metadata_SiteCount`` of four, so a well counts about four ninths of the cells :func:`jump_target2` gives it over all nine.
