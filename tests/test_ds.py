@@ -78,6 +78,13 @@ def test_the_downloads_read_back_at_the_shape_the_registry_claims(name: str) -> 
 
     assert list(adata.shape) == _DATASETS[name].metadata["shape"]
     assert adata.obs_names.is_unique
+    # A loader that names the perturbation unit also says what kind it is, from the fixed vocabulary, with a
+    # sane cardinality. neuropainting and amish set neither: they vary a design factor, not a reagent.
+    if name in ("neuropainting", "amish"):
+        assert "Metadata_Perturbation" not in adata.obs
+    else:
+        assert adata.obs["Metadata_Perturbation"].nunique() >= 2
+        assert set(adata.obs["Metadata_Perturbation_Type"].astype(str)) <= {"compound", "orf", "crispr", "untreated"}
     if name == "bbbc021":
         assert adata.obs["Metadata_MOA"].notna().all()
         assert adata.obs["Metadata_Control"].sum() == 330
