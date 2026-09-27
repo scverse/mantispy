@@ -139,3 +139,80 @@ cons = mt.tl.consensus(screen, by="Metadata_Perturbation", method="modz", correl
 cons.X = np.nan_to_num(np.asarray(cons.X, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
 print(f"  consensus profiles: {cons.n_obs} constructs x {cons.n_vars} features")
 
+# =============================================================================================
+# Step 7: hierarchical clustering via mt.tl.cluster + Pearson similarity [G4]
+# =============================================================================================
+banner("Step 7: average-linkage clustering (1-Pearson) + Pearson similarity [G4]")
+mt.tl.cluster(cons, use_rep=None, method="hierarchical", linkage="average", metric="correlation", distance_cut=PAPER_CUT)
+mt.tl.similarity(cons, metric="pearson", use_rep=None)
+
+lab = cons.obs["cluster"].astype(str)
+gene = cons.obs["Metadata_Gene"].astype(str)
+sizes = lab.value_counts()
+n_clusters_ge2 = int((sizes >= 2).sum())
+genes_per_cluster = gene.groupby(lab, observed=True).nunique()
+multigene = set(genes_per_cluster[genes_per_cluster >= 2].index)
+n_multigene = len(multigene)
+
+# The mantispy-native default cut (silhouette sweep), reported alongside the paper's fixed cut.
+auto = cons.copy()
+mt.tl.cluster(auto, use_rep=None, method="hierarchical", linkage="average", metric="correlation")
+n_auto = int(auto.obs["cluster"].nunique())
+print(f"  cut {PAPER_CUT}: {n_clusters_ge2} clusters with >=2 constructs, {n_multigene} multi-gene (paper: 25, 22)")
+print(f"  auto-cut (silhouette): {n_auto} clusters at height {auto.uns['mantispy']['cluster']['distance_cut']:.3f}")
+
+# =============================================================================================
+# Step 8: pathway biology from the cluster labels + similarity [G5-G7]
+# =============================================================================================
+banner("Step 8: pathway co-clusters + anti-correlation [G5-G7]")
+S = np.asarray(cons.obsp["similarity"], dtype=np.float64)
+pos = {name: i for i, name in enumerate(cons.obs_names)}
+lab_by_name = lab.to_dict()
+
+
+def clusters_of(g: str) -> set[str]:
+    return set(lab[gene == g])
+
+
+def members(cluster: str) -> list[int]:
+    return [pos[name] for name in cons.obs_names if lab_by_name[name] == cluster]
+
+
+def mean_between(a: list[int], b: list[int]) -> float:
+    return float(np.mean(S[np.ix_(a, b)])) if a and b else float("nan")
+
+
+# G5: Hippo/YAP -- a YAP1 construct and a WWTR1 construct share a cluster.
+yap_clusters, taz_clusters = clusters_of("YAP1"), clusters_of("WWTR1")
+hippo_shared = yap_clusters & taz_clusters
+hippo_co = bool(hippo_shared)
+yap_cluster = sorted(hippo_shared)[0] if hippo_shared else (sorted(yap_clusters)[0] if yap_clusters else None)
+print(f"  YAP1 clusters={sorted(yap_clusters)}, WWTR1 clusters={sorted(taz_clusters)} -> Hippo co-cluster: {hippo_co}")
+
+# G6: RAS-RAF-MEK-ERK -- a cluster holding >=2 distinct cascade genes.
+cascade_present = sorted(g for g in RAS_CASCADE if (gene == g).any())
+cascade_by_cluster: dict[str, set[str]] = {}
+for g in cascade_present:
+    for c in clusters_of(g):
+        cascade_by_cluster.setdefault(c, set()).add(g)
+ras_group = max((genes for genes in cascade_by_cluster.values() if len(genes) >= 2), key=len, default=set())
+ras_co = bool(ras_group)
+print(f"  RAS cascade present={cascade_present}; >=2 co-clustered: {ras_co}; group={sorted(ras_group)}")
+
+# G7: the NF-kB/TRAF2 cluster anti-correlates with the YAP cluster.
+nfkb_gene = next((g for g in NFKB_GENES if (gene == g).any() and clusters_of(g)), None)
+nfkb_clusters = clusters_of(nfkb_gene) if nfkb_gene else set()
+# Pick the NF-kB cluster that is not the YAP cluster, so the anti-correlation is between two modules.
+nfkb_cluster = next((c for c in sorted(nfkb_clusters) if c != yap_cluster), None)
+yap_nfkb = mean_between(members(yap_cluster), members(nfkb_cluster)) if (yap_cluster and nfkb_cluster) else float("nan")
+multi = sorted(multigene)
+inter = np.array(
+    [mean_between(members(a), members(b)) for i, a in enumerate(multi) for b in multi[i + 1:]],
+    dtype=np.float64,
+)
+inter = inter[np.isfinite(inter)]
+pctile = float((inter < yap_nfkb).mean() * 100) if inter.size else float("nan")
+anti_corr = bool(np.isfinite(yap_nfkb) and yap_nfkb < 0 and pctile <= 25)
+print(f"  YAP cluster {yap_cluster} vs NF-kB/{nfkb_gene} cluster {nfkb_cluster}: mean Pearson={yap_nfkb:.3f} "
+      f"(more negative than {100 - pctile:.0f}% of inter-cluster means); anti-corr: {anti_corr}")
+
