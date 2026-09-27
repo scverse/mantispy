@@ -77,9 +77,8 @@ def ora(
 
     gene_names = obs[gene_key].astype(str).to_numpy()
     present = obs[gene_key].notna().to_numpy() & (gene_names != "")
-    universe = sorted(set(gene_names[present]))
-    n_bg = len(universe)
-    in_universe = set(universe)
+    in_universe = set(gene_names[present])
+    n_bg = len(in_universe)
 
     # Restrict the net to measured genes, then keep only sets with at least tmin of them to test.
     network = network.astype({"source": str, "target": str})
@@ -88,8 +87,9 @@ def ora(
     set_genes = {name: targets for name, targets in set_genes.items() if len(targets) >= tmin}
 
     group_labels = obs[groupby].astype(str).to_numpy()
+    groups = pd.unique(group_labels)
     records = []
-    for group in pd.unique(group_labels):
+    for group in groups:
         members = set(gene_names[(group_labels == group) & present]) & in_universe
         k = len(members)
         if k == 0 or k == n_bg:
@@ -115,5 +115,5 @@ def ora(
     table["qvalue"] = benjamini_hochberg(table["pvalue"].to_numpy()) if len(table) else []
     table = table.sort_values("qvalue").reset_index(drop=True)
     adata.uns.setdefault("mantispy", {})[key_added] = table
-    get_logger().info("ora: %d test(s) over %d group(s)", len(table), len(pd.unique(group_labels)))
+    get_logger().info("ora: %d test(s) over %d group(s)", len(table), len(groups))
     return None

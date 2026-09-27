@@ -74,7 +74,7 @@ def network_enrichment(
     edge_columns = list(edges.columns)[:2]
     reference = {tuple(sorted(pair)) for pair in edges[edge_columns].astype(str).to_numpy()}
 
-    matrix = np.asarray(adata.obsp[similarity_key], dtype=np.float64)
+    matrix = np.asarray(adata.obsp[similarity_key])
     upper = np.triu_indices(matrix.shape[0], k=1)
     genes = obs[gene_key].astype(str).to_numpy()
     # Controls carry no gene; drop a pair with a missing gene on either side from the universe rather than
@@ -83,14 +83,21 @@ def network_enrichment(
     gene_a, gene_b = genes[upper[0]], genes[upper[1]]
 
     valid = present[upper[0]] & present[upper[1]]
-    if valid.sum() < 1:
+    n_pairs = int(valid.sum())
+    if n_pairs < 1:
         raise ValueError("fewer than two annotated profiles to pair; check gene_key")
 
-    similarity = matrix[upper][valid]
+    similarity = matrix[upper][valid].astype(np.float64, copy=False)
     gene_a, gene_b = gene_a[valid], gene_b[valid]
     threshold = float(np.quantile(similarity, top_quantile))
     is_top = similarity >= threshold
-    is_known = np.array([tuple(sorted(pair)) in reference for pair in zip(gene_a, gene_b, strict=True)])
+    # Order each pair once (two elements, so min/max beats sorted) and skip the intermediate list np.array builds.
+    is_known = np.fromiter(
+        (((a, b) if a <= b else (b, a)) in reference for a, b in zip(gene_a, gene_b, strict=True)),
+        dtype=bool,
+        count=len(gene_a),
+    )
+    n_top = int(is_top.sum())
 
     a = int(np.sum(is_top & is_known))
     b = int(np.sum(is_top & ~is_known))
@@ -103,14 +110,14 @@ def network_enrichment(
         "odds_ratio": float(odds_ratio),
         "pvalue": float(pvalue),
         "threshold": threshold,
-        "n_top": int(is_top.sum()),
+        "n_top": n_top,
         "n_known": int(is_known.sum()),
-        "n_pairs": int(valid.sum()),
+        "n_pairs": n_pairs,
     }
     get_logger().info(
         "network_enrichment: %d known of %d top pair(s), odds ratio %.2f, p=%.2g",
         a,
-        int(is_top.sum()),
+        n_top,
         odds_ratio,
         pvalue,
     )

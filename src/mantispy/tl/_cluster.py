@@ -38,11 +38,12 @@ def _auto_cut(linkage_matrix: np.ndarray, distances: np.ndarray, max_clusters: i
     for k in range(2, max_clusters + 1):
         labels = fcluster(linkage_matrix, k, criterion="maxclust")
         # A cut can return fewer groups than asked for when merges tie; score only the counts it actually made.
-        if len(set(labels)) < 2:
+        n_labels = len(set(labels))
+        if n_labels < 2:
             continue
         score = float(silhouette_score(square, labels, metric="precomputed"))
         if np.isnan(best_score) or score > best_score:
-            best_labels, best_k, best_score = labels, len(set(labels)), score
+            best_labels, best_k, best_score = labels, n_labels, score
 
     # The height that separates best_k clusters sits between the last merge kept and the first merge cut.
     cut = float("nan")
