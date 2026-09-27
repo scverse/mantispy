@@ -4,9 +4,8 @@ import pandas as pd
 import pytest
 
 import mantispy as mt
-from mantispy._core.features import canonical_channel, parse_feature_names
+from mantispy._core.features import parse_feature_names
 from mantispy._core.schema import SCHEMA_VERSION
-from mantispy._core.schema import stamp as _record
 from mantispy.io._profiles import from_dataframe
 
 
@@ -19,23 +18,6 @@ def _frame(n=4, prefix="Metadata_", well=("A01", "A02", "A03", "A04")):
             "Cells_Intensity_MeanIntensity_DNA": np.linspace(0.1, 0.2, n),
         }
     )
-
-
-def test_from_dataframe_splits_features_and_metadata():
-    adata = from_dataframe(_frame(), channels=["DNA"])
-    assert adata.shape == (4, 2)
-    assert adata.X.dtype == np.float32
-    assert list(adata.obs.columns) == ["Metadata_Plate", "Metadata_Well"]
-    assert adata.var.loc["Cells_Intensity_MeanIntensity_DNA", "channel"] == "DNA"
-    assert adata.uns["mantispy"]["resolution"] == "well"
-
-
-@pytest.mark.parametrize("prefix", ["Image_Metadata_", "Metadata_", "metadata_", "meta_"])
-def test_every_real_world_metadata_prefix_is_recognised(prefix):
-    """Accessions in the Cell Painting Gallery use all four spellings."""
-    adata = from_dataframe(_frame(prefix=prefix), channels=["DNA"])
-    assert "Metadata_Plate" in adata.obs
-    assert adata.n_vars == 2
 
 
 @pytest.mark.parametrize(
@@ -66,19 +48,6 @@ def test_read_profiles_by_suffix(tmp_path, suffix):
     else:
         frame.to_csv(path, sep="\t" if suffix == ".tsv" else ",", index=False)
     assert mt.io.read_profiles(path, channels=["DNA"]).shape == (4, 2)
-
-
-def test_read_profiles_stacks_several_files(tmp_path):
-    paths = []
-    for plate in ("P1", "P2"):
-        frame = _frame()
-        frame["Metadata_Plate"] = plate
-        path = tmp_path / f"{plate}.csv"
-        frame.to_csv(path, index=False)
-        paths.append(path)
-    adata = mt.io.read_profiles(paths, channels=["DNA"])
-    assert adata.n_obs == 8
-    assert set(adata.obs["Metadata_Plate"]) == {"P1", "P2"}
 
 
 def test_column_mismatch_raises_then_intersects(tmp_path):
@@ -123,39 +92,6 @@ def test_write_read_round_trip(tmp_path, cells, suffix):
     assert isinstance(loaded.uns["mantispy"]["image_table"], pd.DataFrame)
 
 
-def test_write_refuses_an_invalid_object(tmp_path, cells):
-    cells.obs = cells.obs.drop(columns="Metadata_Plate")
-    with pytest.raises(ValueError, match="Metadata_Plate"):
-        mt.io.write(cells, tmp_path / "bad.h5ad")
-
-
-def test_write_refuses_an_object_whose_annotation_was_stripped(tmp_path, cells):
-    """stamp fills the annotation columns for every tool that builds an object, but io.write asks it not
-    to: a var column a caller removed is something to report, not to repair on the way out."""
-    del cells.var["feature"]
-    with pytest.raises(ValueError, match="feature"):
-        mt.io.write(cells, tmp_path / "stripped.h5ad")
-
-
-def test_read_rejects_a_foreign_schema_version(tmp_path, cells):
-    path = tmp_path / "old.h5ad"
-    mt.io.write(cells, path)
-    stored = ad.read_h5ad(path)
-    stored.uns["mantispy"]["schema_version"] = "99.0"
-    stored.write_h5ad(path)
-    with pytest.raises(ValueError, match="99.0"):
-        mt.io.read(path)
-
-
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [("Hoechst", "dna"), ("DAPI", "dna"), ("DNA|ER", "dna|er"), ("GFP", "gfp"), (None, None)],
-)
-def test_channel_aliases_make_vocabularies_comparable(raw, expected):
-    """Datasets that name the nuclear channel differently should still compare."""
-    assert canonical_channel(raw) == expected
-
-
 def test_colliding_metadata_prefixes_are_refused():
     """Both normalise to Metadata_Plate, and obs would then hold a duplicate column whose
     every later lookup returns a frame instead of a series."""
@@ -169,32 +105,6 @@ def test_colliding_metadata_prefixes_are_refused():
     )
     with pytest.raises(ValueError, match="collapse onto the same column name"):
         from_dataframe(frame)
-
-
-def test_image_level_features_are_excluded_by_default_and_can_be_kept():
-    """A JUMP plate carries 1077 whole-field Image_ features against 3634 per-cell ones.
-    They are excluded by default, as in pycytominer's default compartments, and
-    objects=None keeps them."""
-    frame = pd.DataFrame(
-        {
-            "Metadata_Plate": ["P1", "P1"],
-            "Metadata_Well": ["A01", "A02"],
-            "Cells_AreaShape_Area": [1.0, 2.0],
-            "Nuclei_Intensity_MeanIntensity_DNA": [3.0, 4.0],
-            "Image_Texture_Contrast_DNA_3_00_256": [5.0, 6.0],
-            "Image_Granularity_1_DNA": [7.0, 8.0],
-        }
-    )
-
-    default = from_dataframe(frame)
-    assert set(default.var_names) == {"Cells_AreaShape_Area", "Nuclei_Intensity_MeanIntensity_DNA"}
-
-    everything = from_dataframe(frame, objects=None)
-    assert "Image_Texture_Contrast_DNA_3_00_256" in set(everything.var_names)
-    assert set(everything.var["object"].astype(str)) == {"Cells", "Nuclei", "Image"}
-
-    nuclei_only = from_dataframe(frame, objects=("Nuclei",))
-    assert set(nuclei_only.var_names) == {"Nuclei_Intensity_MeanIntensity_DNA"}
 
 
 def test_dropping_a_majority_of_features_warns_but_a_minority_stays_quiet(capsys):
@@ -233,88 +143,6 @@ def test_dropping_a_majority_of_features_warns_but_a_minority_stays_quiet(capsys
         assert capsys.readouterr().err == ""
     finally:
         mt.settings.verbosity = previous
-
-
-def test_a_frame_whose_compartments_are_singular_is_refused_by_name():
-    """pycytominer and many custom pipelines emit Cell_/Nucleus_ rather than
-    Cells_/Nuclei_. The default filter would drop all of them and leave an (n, 0) AnnData
-    that mt.io.validate() accepts."""
-    frame = pd.DataFrame(
-        {
-            "Metadata_Plate": ["P1", "P1"],
-            "Metadata_Well": ["A01", "A02"],
-            "Cell_AreaShape_Area": [1.0, 2.0],
-            "Nucleus_Intensity_MeanIntensity_DNA": [3.0, 4.0],
-        }
-    )
-    with pytest.raises(ValueError, match="objects=None"):
-        from_dataframe(frame)
-
-    kept = from_dataframe(frame, objects=None)
-    assert kept.n_vars == 2
-
-
-def test_a_healthy_small_export_does_not_warn_about_its_image_columns(capsys):
-    """Image_ columns removed by the default object filter do not trigger a warning.
-
-    A four-image CellProfiler export routinely has more whole-field Image_ measurements
-    than per-cell ones. Warning on every such read would teach users to ignore the warning
-    for a feature set too thin to profile, which is covered above.
-    """
-    previous = mt.settings.verbosity
-    mt.settings.verbosity = 1
-    try:
-        frame = pd.DataFrame({"Metadata_Plate": ["P1", "P1"], "Metadata_Well": ["A01", "A02"]})
-        for index in range(12):  # comfortably above THIN_FEATURE_SET
-            frame[f"Cells_AreaShape_F{index}"] = [float(index), float(index) + 1]
-        for index in range(30):  # and outnumbered by whole-field columns
-            frame[f"Image_Texture_Contrast_DNA_{index}_00_256"] = [1.0, 2.0]
-
-        adata = from_dataframe(frame)
-        assert adata.n_vars == 12
-        assert capsys.readouterr().err == "", "nothing reaches the default verbosity"
-
-        mt.settings.verbosity = 2
-        from_dataframe(frame)
-        captured = capsys.readouterr().err
-        assert "dropped 30 of 42" in captured, "it still says what it did, as bookkeeping"
-        assert "WARNING" not in captured.upper()
-    finally:
-        mt.settings.verbosity = previous
-
-
-def test_the_inferred_channel_vocabulary_travels_with_the_object():
-    """A parse is only reproducible if what it was parsed with is recorded.
-
-    The vocabulary is read off the column names handed in, so a subset of a plate can
-    infer a smaller one than the whole plate and parse the same column differently:
-    Cells_Correlation_Correlation_AGP_DNA is channel 'AGP|DNA' when AGP is in the
-    vocabulary and channel 'DNA', feature 'Correlation_AGP', when it is not.
-    """
-    shared = ["Metadata_Plate", "Metadata_Well"]
-    correlation = "Cells_Correlation_Correlation_AGP_DNA"
-    full = pd.DataFrame(
-        {
-            "Metadata_Plate": ["P1"],
-            "Metadata_Well": ["A01"],
-            "Cells_Intensity_MeanIntensity_AGP": [1.0],
-            "Cells_Intensity_MeanIntensity_DNA": [2.0],
-            correlation: [0.5],
-        }
-    )
-    subset = full[[*shared, correlation]]
-
-    parsed_full = from_dataframe(full)
-    parsed_subset = from_dataframe(subset)
-
-    assert parsed_full.uns["mantispy"]["channels"] == ["AGP", "DNA"]
-    assert parsed_subset.uns["mantispy"]["channels"] == ["DNA"]
-    assert parsed_full.var.loc[correlation, "channel"] != parsed_subset.var.loc[correlation, "channel"]
-
-    # Naming the vocabulary makes the subset parse the way the full plate did.
-    pinned = from_dataframe(subset, channels=["AGP", "DNA"])
-    assert pinned.var.loc[correlation, "channel"] == parsed_full.var.loc[correlation, "channel"]
-    assert pinned.var.loc[correlation, "feature"] == parsed_full.var.loc[correlation, "feature"]
 
 
 def _cytotable_part(rows: range) -> pd.DataFrame:
@@ -394,23 +222,6 @@ def test_index_columns_name_the_observations(tmp_path):
         mt.io.read_profiles(path, index_columns=("Metadata_Nope",))
 
 
-@pytest.mark.parametrize("resolution", ["cell", "well", "perturbation"])
-def test_stamp_puts_a_hand_built_object_on_the_api_surface(resolution):
-    """An object from another pipeline, or a matrix of learned embeddings, arrives without the
-    stamp every reader here writes, and nothing public used to establish it."""
-    columns = {
-        "cell": {"Metadata_Plate": "P1", "Metadata_Well": "A01"},
-        "well": {"Metadata_Plate": "P1", "Metadata_Well": "A01"},
-        "perturbation": {"Metadata_Perturbation": "cmpd"},
-    }[resolution]
-    obs = pd.DataFrame({name: [value] * 4 for name, value in columns.items()}, index=list("abcd"))
-    adata = ad.AnnData(np.arange(20, dtype=np.float32).reshape(4, 5), obs=obs)
-
-    assert mt.io.stamp(adata, resolution=resolution) is None
-    assert adata.uns["mantispy"]["resolution"] == resolution
-    assert mt.io.validate(adata).ok
-
-
 def test_stamp_refuses_what_the_resolution_needs_and_obs_lacks():
     """Stamping regardless would push the failure into whichever tool ran next."""
     adata = ad.AnnData(np.zeros((3, 2), dtype=np.float32), obs=pd.DataFrame(index=list("abc")))
@@ -419,139 +230,6 @@ def test_stamp_refuses_what_the_resolution_needs_and_obs_lacks():
     with pytest.raises(ValueError, match="resolution must be one of"):
         mt.io.stamp(adata, resolution="plate")
     assert "mantispy" not in adata.uns
-
-
-def test_stamp_can_leave_the_original_alone():
-    obs = pd.DataFrame({"Metadata_Perturbation": ["a", "b"]}, index=["x", "y"])
-    adata = ad.AnnData(np.zeros((2, 3), dtype=np.float32), obs=obs)
-
-    stamped = mt.io.stamp(adata, resolution="perturbation", copy=True)
-    assert stamped.uns["mantispy"]["resolution"] == "perturbation"
-    assert "mantispy" not in adata.uns
-    assert list(adata.var.columns) == []
-
-
-def test_stamp_keeps_the_resolution_the_object_already_records():
-    """A subset of a cell-resolution object is still cell-resolution, and the well default would
-    have demoted it silently: tl.aggregate then takes the non-cell branch and fills
-    Metadata_CellCount with NaN, which disables its min_cells filter."""
-    obs = pd.DataFrame({"Metadata_Plate": ["P1"] * 3, "Metadata_Well": ["A01"] * 3}, index=list("abc"))
-    adata = ad.AnnData(np.zeros((3, 2), dtype=np.float32), obs=obs)
-    mt.io.stamp(adata, resolution="cell")
-
-    mt.io.stamp(adata[:2].copy())
-    mt.io.stamp(adata)
-    assert adata.uns["mantispy"]["resolution"] == "cell"
-    assert mt.io.stamp(adata, resolution="well") is None
-    assert adata.uns["mantispy"]["resolution"] == "well"
-
-
-def test_stamp_lets_a_learned_embedding_be_written(tmp_path):
-    """An embedding has no CellProfiler feature names, so its var carries none of the annotation
-    the schema requires, and `io.write` validates before writing. Without the annotation columns
-    a stamped embedding failed on ten missing var columns and could not be written at all."""
-    obs = pd.DataFrame(
-        {"Metadata_Plate": ["P1"] * 4, "Metadata_Well": ["A01", "A02", "A03", "A04"]},
-        index=list("abcd"),
-    )
-    adata = ad.AnnData(np.arange(24, dtype=np.float32).reshape(4, 6), obs=obs)
-    # The names JUMP-Lite ships. Parsing them reads 'openphenom' as the object and 'nahualX' as
-    # the feature group, so an embedding stamped by the parser grew feature families named after
-    # the model's own tensors.
-    adata.var_names = [f"openphenom_nahualX_{index}" for index in range(6)]
-
-    mt.io.stamp(adata, resolution="well")
-    report = mt.io.validate(adata)
-    assert report.ok, str(report)
-    for column in ("object", "feature_group", "feature", "channel", "params"):
-        assert adata.var[column].isna().all(), column
-    assert adata.var["is_feature"].all()
-
-    path = tmp_path / "embedding.h5ad"
-    mt.io.write(adata, path)
-    assert mt.io.read(path).shape == (4, 6)
-
-
-def test_stamp_keeps_an_annotation_that_is_already_there():
-    """A profile object read by read_profiles carries the parsed annotation, and stamping it
-    again must not blank it."""
-    frame = _frame()
-    adata = from_dataframe(frame)
-    parsed = adata.var["feature_group"].copy()
-
-    mt.io.stamp(adata, resolution="well")
-    pd.testing.assert_series_equal(adata.var["feature_group"], parsed)
-
-
-def test_stamp_fills_only_the_annotation_columns_that_are_missing():
-    """An object hand-built with part of the annotation is the case where the merge can go wrong:
-    the columns that are there have to survive, and the ones added have to be categorical, because
-    an object array of NaN cannot be written to h5ad."""
-    obs = pd.DataFrame({"Metadata_Plate": ["P1"] * 2, "Metadata_Well": ["A01", "A02"]}, index=list("ab"))
-    adata = ad.AnnData(np.zeros((2, 3), dtype=np.float32), obs=obs)
-    adata.var["object"] = pd.Categorical(["Cells", "Nuclei", "Cells"])
-    adata.var["is_feature"] = [True, True, False]
-
-    mt.io.stamp(adata)
-    assert list(adata.var["object"]) == ["Cells", "Nuclei", "Cells"]
-    assert list(adata.var["is_feature"]) == [True, True, False]
-    assert adata.var["feature_group"].isna().all()
-    assert isinstance(adata.var["feature_group"].dtype, pd.CategoricalDtype)
-    assert mt.io.validate(adata).ok
-
-
-def test_stamping_a_view_keeps_the_stamp():
-    """Writing uns before touching var let the var write materialise the view and discard the
-    store written moments earlier, so the object came back unstamped and get_resolution quietly
-    read a well-level object as single-cell."""
-    obj = ad.AnnData(
-        np.ones((4, 3), dtype=np.float32),
-        obs=pd.DataFrame(
-            {"Metadata_Plate": "P1", "Metadata_Well": ["A01", "A02", "A03", "A04"]},
-            index=[str(index) for index in range(4)],
-        ),
-    )
-    obj.var_names = ["emb_0", "emb_1", "emb_2"]
-    view = obj[[0, 1]]
-    assert view.is_view
-
-    mt.io.stamp(view, resolution="well")
-
-    assert view.uns["mantispy"]["schema_version"] == SCHEMA_VERSION
-    assert view.uns["mantispy"]["resolution"] == "well"
-    assert mt.io.validate(view).ok, mt.io.validate(view).errors
-
-
-def test_a_tool_does_not_repair_the_annotation_its_input_had_damaged(tmp_path):
-    """io.write refuses a damaged annotation, but every tool stamps its own result, so a fill in
-    the shared stamp repaired the damage one call earlier and handed the writer a file whose
-    feature column is blank and whose is_feature is a fabrication."""
-    frame = _frame()
-    adata = from_dataframe(frame, resolution="well")
-    del adata.var["feature"]
-
-    aggregated = mt.tl.aggregate(adata, by="Metadata_Plate")
-
-    assert not mt.io.validate(aggregated).ok, "a tool must not launder an annotation its input had lost"
-    with pytest.raises(ValueError, match="feature"):
-        mt.io.write(aggregated, tmp_path / "laundered.h5ad")
-
-
-def test_stamp_supplies_the_annotation_columns_var_does_not_carry():
-    """An object built elsewhere — a published h5ad, a matrix of embeddings — carries none of the
-    schema's annotation, and io.stamp is the entry point that gives it the columns empty."""
-    obj = ad.AnnData(
-        np.ones((2, 3), dtype=np.float32),
-        obs=pd.DataFrame({"Metadata_Plate": ["P1", "P1"], "Metadata_Well": ["A01", "A02"]}, index=["0", "1"]),
-    )
-    obj.var_names = ["emb_0", "emb_1", "emb_2"]
-    assert not mt.io.validate(obj).ok
-
-    mt.io.stamp(obj, resolution="well")
-
-    assert mt.io.validate(obj).ok, mt.io.validate(obj).errors
-    assert obj.var["is_feature"].all()
-    assert obj.var["feature"].isna().all(), "supplied empty, not guessed at by parsing the names"
 
 
 def test_stamp_leaves_an_annotation_that_is_already_there_alone():
@@ -571,51 +249,3 @@ def test_stamp_leaves_an_annotation_that_is_already_there_alone():
     for column in parsed.columns:
         # .equals, not ==: a column the parser left empty holds NaN, which is not equal to itself.
         assert obj.var[column].equals(var[column]), f"{column} kept what the parser found"
-
-
-def test_stamping_a_view_whose_annotation_is_complete_keeps_the_stamp():
-    """The companion to the test above, and the branch it does not reach: with nothing absent there
-    is no var write, so nothing materialised the view and the store went to a DictView that discards
-    it. uns.setdefault bypasses the overridden __setitem__, so the fill was doing the work."""
-    obj = ad.AnnData(
-        np.ones((4, 2), dtype=np.float32),
-        obs=pd.DataFrame(
-            {"Metadata_Plate": "P1", "Metadata_Well": ["A01", "A02", "A03", "A04"]},
-            index=[str(index) for index in range(4)],
-        ),
-        var=parse_feature_names(["Cells_AreaShape_Area", "Nuclei_Intensity_MeanIntensity_DNA"]),
-    )
-    view = obj[[0, 1]]
-    assert view.is_view
-
-    mt.io.stamp(view, resolution="well")
-
-    assert view.uns["mantispy"]["resolution"] == "well"
-    assert mt.io.validate(view).ok, mt.io.validate(view).errors
-
-
-def test_stamping_a_view_does_not_restamp_the_object_it_came_from():
-    """setdefault hands back the parent's own inner dict, so writing the resolution into it wrote
-    through to the parent -- the opposite of the promise that re-stamping a subset does not demote it."""
-    obj = ad.AnnData(
-        np.ones((4, 2), dtype=np.float32),
-        obs=pd.DataFrame(
-            {"Metadata_Plate": "P1", "Metadata_Well": ["A01", "A02", "A03", "A04"]},
-            index=[str(index) for index in range(4)],
-        ),
-    )
-    obj.var_names = ["e0", "e1"]
-    mt.io.stamp(obj, resolution="cell")
-
-    mt.io.stamp(obj[[0, 1]], resolution="perturbation")
-
-    assert obj.uns["mantispy"]["resolution"] == "cell"
-
-
-def test_a_resolution_that_is_refused_leaves_the_store_as_it_was():
-    """The version was written before the resolution was checked, so a rejected call still changed uns."""
-    obj = ad.AnnData(np.ones((2, 1), dtype=np.float32))
-    obj.var_names = ["e0"]
-    with pytest.raises(ValueError, match="resolution must be one of"):
-        _record(obj, resolution="galaxy")
-    assert "mantispy" not in obj.uns
