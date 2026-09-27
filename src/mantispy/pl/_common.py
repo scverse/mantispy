@@ -99,7 +99,6 @@ def maybe_interactive(
     y: str | None = None,
     color: str | None = None,
     hover: Sequence[str] | None = None,
-    text: str | None = None,
     barmode: str | None = None,
     matrix: np.ndarray | None = None,
     rows: Sequence[str] | None = None,
@@ -126,7 +125,6 @@ def maybe_interactive(
         y: Column drawn on the y axis, or the category column for ``"barh"``.
         color: Column that colors the marks, or ``None`` for one color.
         hover: Extra columns to add to the tooltip.
-        text: Column whose values are drawn beside the marks.
         barmode: ``"group"`` for side-by-side ``"barh"`` bars, or ``None`` for plotly's stacked default.
         matrix: The 2-D array for ``"heatmap"``.
         rows: Row labels of ``matrix``.
@@ -142,61 +140,21 @@ def maybe_interactive(
     import plotly.express as px
     from IPython.display import display
 
-    figure = _build_interactive(
-        px,
-        kind,
-        data=data,
-        x=x,
-        y=y,
-        color=color,
-        hover=hover,
-        text=text,
-        barmode=barmode,
-        matrix=matrix,
-        rows=rows,
-        columns=columns,
-        value_label=value_label,
-        title=title,
-    )
-    display(figure)
-    if ax is not None and getattr(ax.figure, _OWNED, False):
-        import matplotlib.pyplot as plt
-
-        plt.close(ax.figure)
-    return True
-
-
-def _build_interactive(
-    px: object,
-    kind: str,
-    *,
-    data: pd.DataFrame | None,
-    x: str | None,
-    y: str | None,
-    color: str | None,
-    hover: Sequence[str] | None,
-    text: str | None,
-    barmode: str | None,
-    matrix: np.ndarray | None,
-    rows: Sequence[str] | None,
-    columns: Sequence[str] | None,
-    value_label: str | None,
-    title: str | None,
-) -> object:
-    """Build one plotly figure for ``kind``; the dispatch behind :func:`maybe_interactive`."""
     hover_list = list(hover) if hover is not None else None
     if kind == "scatter":
-        return px.scatter(data, x=x, y=y, color=color, hover_data=hover_list, text=text, title=title)
-    if kind == "line":
-        return px.line(data, x=x, y=y, color=color, hover_data=hover_list, markers=True, title=title)
-    if kind == "barh":
-        return px.bar(data, x=x, y=y, color=color, hover_data=hover_list, orientation="h", barmode=barmode, title=title)
-    if kind == "histogram":
-        return px.histogram(data, x=x, color=color, hover_data=hover_list, title=title)
-    if kind == "box":
-        return px.box(data, x=x, y=y, color=color, hover_data=hover_list, title=title)
-    if kind == "heatmap":
-        return px.imshow(
+        figure = px.scatter(data, x=x, y=y, color=color, hover_data=hover_list, title=title)
+    elif kind == "line":
+        figure = px.line(data, x=x, y=y, color=color, hover_data=hover_list, markers=True, title=title)
+    elif kind == "barh":
+        figure = px.bar(
+            data, x=x, y=y, color=color, hover_data=hover_list, orientation="h", barmode=barmode, title=title
+        )
+    elif kind == "histogram":
+        figure = px.histogram(data, x=x, color=color, hover_data=hover_list, title=title)
+    elif kind == "box":
+        figure = px.box(data, x=x, y=y, color=color, hover_data=hover_list, title=title)
+    elif kind == "heatmap":
+        figure = px.imshow(
             matrix,
             x=None if columns is None else list(columns),
             y=None if rows is None else list(rows),
@@ -204,4 +162,11 @@ def _build_interactive(
             aspect="auto",
             title=title,
         )
-    raise ValueError(f"unknown interactive kind {kind!r}")
+    else:
+        raise ValueError(f"unknown interactive kind {kind!r}")
+    display(figure)
+    if ax is not None and getattr(ax.figure, _OWNED, False):
+        import matplotlib.pyplot as plt
+
+        plt.close(ax.figure)
+    return True
