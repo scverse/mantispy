@@ -45,7 +45,7 @@ pip install 'mantispy[spatial]'
 | --- | --- |
 | `io.read_profiles` | `X`, `obs` (`Metadata_*`, and from an export directory `Metadata_Center_X`/`_Y`), `var` (parsed annotation), `uns["mantispy"]`: `schema_version`, `resolution`, `channels`, `params`, and `image_table` from an export directory |
 | `io.read_plate` | returns `SpatialData`: fields of view as Images, segmentations as Labels, wells as Shapes; the `cells` and `wells` Tables of a gallery source follow the contract below |
-| `io.read_jump` | as `io.read_profiles`, plus `obs`: `Metadata_JCP2022`, `Metadata_Perturbation`, `Metadata_InChIKey`, `Metadata_Control` |
+| `io.read_jump` | as `io.read_profiles`, plus `obs`: `Metadata_JCP2022`, `Metadata_Perturbation`, `Metadata_Perturbation_Type`, `Metadata_InChIKey`, `Metadata_Control` |
 | `io.write` | validates first, then writes h5ad (or zarr for a `.zarr` suffix) |
 | `io.stamp` | `uns["mantispy"]`: `schema_version`, `resolution`; `var` (the required annotation columns, empty where absent). Refuses an object whose `obs` lacks a column that resolution requires |
 
@@ -94,7 +94,7 @@ pip install 'mantispy[spatial]'
 | Function | Stores |
 | --- | --- |
 | `pp.annotate_controls` | `obs["Metadata_Control"]`, and `obs["Metadata_Control_Type"]` when `poscon` is given |
-| `pp.annotate_jump` | `obs`: `Metadata_JCP2022`, `Metadata_Perturbation`, `Metadata_Control`; `Metadata_InChIKey` for compounds, `Metadata_Gene`, `Metadata_Control_Type` and `Metadata_ChromosomeArm` for CRISPR |
+| `pp.annotate_jump` | `obs`: `Metadata_JCP2022`, `Metadata_Perturbation`, `Metadata_Perturbation_Type`, `Metadata_Control`; `Metadata_InChIKey` for compounds, `Metadata_Gene`, `Metadata_Control_Type` and `Metadata_ChromosomeArm` for CRISPR |
 | `pp.calculate_qc_metrics` | `obs`: `qc_n_nan_features`, `qc_nan_fraction`, `qc_is_border`, `qc_area_outlier`, `qc_pass`; `var`: `qc_n_nan`, `qc_variance`, `qc_n_unique` |
 | `pp.filter_cells` | subsets `obs` in place |
 | `pp.filter_features` | subsets `var` in place |

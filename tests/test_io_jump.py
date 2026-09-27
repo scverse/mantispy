@@ -56,6 +56,7 @@ def test_the_join_names_the_perturbation_and_the_controls(profiles, fake_metadat
     assert list(adata.obs["Metadata_JCP2022"].astype(str)[:4]) == list(fake_metadata["Metadata_JCP2022"])
     assert list(adata.obs["Metadata_Control"].to_numpy()[:4]) == [True, False, False, True]
     assert adata.obs["Metadata_Perturbation"].nunique() == 3  # two compounds, DMSO, and the unannotated well
+    assert set(adata.obs["Metadata_Perturbation_Type"].astype(str)) == {"compound"}
     assert mt.io.validate(adata).ok, mt.io.validate(adata).errors
 
 
@@ -99,6 +100,7 @@ def test_a_crispr_well_is_named_by_its_gene_and_its_controls_by_their_type(fake_
     obs = wells.obs
     assert list(obs["Metadata_Perturbation"].astype(str)) == ["no-guide", "non-targeting", "PLK1", "PSMB2"]
     assert list(obs["Metadata_Gene"].astype(str)) == list(obs["Metadata_Perturbation"].astype(str))
+    assert set(obs["Metadata_Perturbation_Type"].astype(str)) == {"crispr"}
     assert list(obs["Metadata_Control_Type"].astype(str)) == ["negcon", "negcon", "poscon", "trt"]
     assert list(obs["Metadata_Control"].to_numpy()) == [True, True, False, False]
     assert list(obs["Metadata_ChromosomeArm"].astype(object).fillna("")) == ["", "", "16p", "1p"]

@@ -362,6 +362,7 @@ def test_scallops_arv471_maps_controls_and_guides(tmp_path, monkeypatch):
     assert obs["Metadata_Gene"].nunique() == 4  # nontargeting, ESR1, CRBN, OR1L4
     assert obs["Metadata_sgRNA"].nunique() == 7
     assert list(obs["Metadata_Perturbation"].astype(str)) == list(obs["Metadata_sgRNA"].astype(str))
+    assert set(obs["Metadata_Perturbation_Type"].astype(str)) == {"crispr"}
     # Both control and targeted cells are present, and only the NTC cells are marked control.
     control = obs["Metadata_Control"].to_numpy()
     assert control.dtype == bool
@@ -473,6 +474,7 @@ def test_cp_posh_maps_controls_and_guides(tmp_path, monkeypatch):
     assert obs["Metadata_Gene"].nunique() == 5  # nontargeting, intergenic, KIF18A, PSMB1, ARPC4
     assert obs["Metadata_sgRNA"].nunique() == 8
     assert list(obs["Metadata_Perturbation"].astype(str)) == list(obs["Metadata_sgRNA"].astype(str))
+    assert set(obs["Metadata_Perturbation_Type"].astype(str)) == {"crispr"}
     # Both control classes and a targeted gene are present.
     genes = set(obs["Metadata_Gene"].astype(str))
     assert {"nontargeting", "intergenic"} <= genes

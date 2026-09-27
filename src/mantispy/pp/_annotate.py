@@ -102,9 +102,9 @@ def annotate_jump(adata: AnnData, kind: str = "compound", copy: bool = False) ->
         copy: Return an annotated copy instead of annotating in place.
 
     Returns:
-        ``None``, or the annotated copy. Adds ``Metadata_JCP2022`` (the perturbation identifier), ``Metadata_Perturbation`` and ``Metadata_Control``.
-        For compounds it adds ``Metadata_InChIKey``, and the controls are JUMP's DMSO wells.
-        For CRISPR ``Metadata_Perturbation`` is the gene symbol, the controls are the no-guide and non-targeting wells, and it adds ``Metadata_Gene``, ``Metadata_Control_Type`` (``"negcon"``, ``"poscon"`` or ``"trt"``) and ``Metadata_ChromosomeArm``, the arm the gene sits on.
+        ``None``, or the annotated copy. Adds ``Metadata_JCP2022`` (the perturbation identifier), ``Metadata_Perturbation``, ``Metadata_Perturbation_Type`` and ``Metadata_Control``.
+        For compounds the perturbation is the JCP2022 compound id, ``Metadata_Perturbation_Type`` is ``"compound"``, it adds ``Metadata_InChIKey``, and the controls are JUMP's DMSO wells.
+        For CRISPR ``Metadata_Perturbation`` is the gene symbol (its guides are the replicates), ``Metadata_Perturbation_Type`` is ``"crispr"``, the controls are the no-guide and non-targeting wells, and it adds ``Metadata_Gene``, ``Metadata_Control_Type`` (``"negcon"``, ``"poscon"`` or ``"trt"``) and ``Metadata_ChromosomeArm``, the arm the gene sits on.
 
     Notes:
         Downloads about 14 MB of annotation once and caches it.

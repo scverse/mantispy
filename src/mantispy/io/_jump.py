@@ -70,7 +70,7 @@ def read_jump(paths: str | Path | Sequence[str | Path], annotate: bool = True, *
 
     Returns:
         An :class:`~anndata.AnnData` at well resolution.
-        With ``annotate`` it carries ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_InChIKey`` and ``Metadata_Control``.
+        With ``annotate`` it carries ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_Perturbation_Type`` (``"compound"``), ``Metadata_InChIKey`` and ``Metadata_Control``.
 
     Notes:
         JUMP plates from different sources share their feature names but not always the same set of features; pass ``on_column_mismatch="intersect"`` when mixing sources.
@@ -91,9 +91,9 @@ def join_jump_annotation(obs: pd.DataFrame, kind: str = "compound") -> pd.DataFr
         kind: Which perturbation the annotation is read for, one of :data:`KINDS`.
 
     Returns:
-        A new frame with ``Metadata_JCP2022``, ``Metadata_Perturbation`` and ``Metadata_Control`` joined onto `obs`, missing on the wells the annotation does not cover.
-        For ``"compound"`` it adds ``Metadata_InChIKey``, and ``Metadata_Control`` marks :data:`NEGATIVE_CONTROL`.
-        For ``"crispr"`` ``Metadata_Gene`` and ``Metadata_Perturbation`` are the gene symbol, ``Metadata_Control_Type`` is ``"negcon"``, ``"poscon"`` or ``"trt"``, ``Metadata_Control`` marks the no-guide and non-targeting wells, and ``Metadata_ChromosomeArm`` is the arm the gene sits on, such as ``"1p"``, missing for a gene without a mapped locus.
+        A new frame with ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_Perturbation_Type`` and ``Metadata_Control`` joined onto `obs`, missing on the wells the annotation does not cover.
+        For ``"compound"`` the perturbation is the ``Metadata_JCP2022`` compound id, ``Metadata_Perturbation_Type`` is ``"compound"``, it adds ``Metadata_InChIKey``, and ``Metadata_Control`` marks :data:`NEGATIVE_CONTROL`.
+        For ``"crispr"`` ``Metadata_Gene`` and ``Metadata_Perturbation`` are the gene symbol (its guides are the replicates), ``Metadata_Perturbation_Type`` is ``"crispr"``, ``Metadata_Control_Type`` is ``"negcon"``, ``"poscon"`` or ``"trt"``, ``Metadata_Control`` marks the no-guide and non-targeting wells, and ``Metadata_ChromosomeArm`` is the arm the gene sits on, such as ``"1p"``, missing for a gene without a mapped locus.
 
     Raises:
         ValueError: `kind` is not one of :data:`KINDS`.
@@ -108,6 +108,7 @@ def join_jump_annotation(obs: pd.DataFrame, kind: str = "compound") -> pd.DataFr
         compounds = jump_metadata("compound")[["Metadata_JCP2022", "Metadata_InChIKey"]]
         joined = joined.merge(compounds, on="Metadata_JCP2022", how="left", validate="m:1")
         joined["Metadata_Perturbation"] = joined["Metadata_JCP2022"].astype(str)
+        joined["Metadata_Perturbation_Type"] = "compound"
         joined["Metadata_Control"] = (joined["Metadata_JCP2022"] == NEGATIVE_CONTROL).to_numpy()
         return joined
 
@@ -121,7 +122,10 @@ def join_jump_annotation(obs: pd.DataFrame, kind: str = "compound") -> pd.DataFr
     for table in (genes, controls):
         joined = joined.merge(table, on="Metadata_JCP2022", how="left", validate="m:1")
     joined["Metadata_Control_Type"] = joined["Metadata_Control_Type"].fillna("trt")
+    # The gene is the replication unit here: JUMP's mAP benchmark scores the CRISPR arm at the gene level,
+    # treating the several guides per gene as its replicates. The guide reagent stays in Metadata_JCP2022.
     joined["Metadata_Perturbation"] = joined["Metadata_Gene"].fillna(joined["Metadata_JCP2022"]).astype(str)
+    joined["Metadata_Perturbation_Type"] = "crispr"
     joined["Metadata_Control"] = (joined["Metadata_Control_Type"] == "negcon").to_numpy()
     joined["Metadata_ChromosomeArm"] = joined["Metadata_Gene"].map(_chromosome_arms())
     return joined
