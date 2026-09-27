@@ -10,6 +10,7 @@ import pandas as pd
 from mantispy._core._reduce import get_matrix, group_codes
 from mantispy._core.frames import as_frame
 from mantispy.pl._common import axes as _axes
+from mantispy.pl._common import maybe_interactive as _maybe_interactive
 from mantispy.pl._common import table as _table
 
 if TYPE_CHECKING:
@@ -57,6 +58,13 @@ def cluster_composition(composition: AnnData, groupby: str = "Metadata_Perturbat
     ax.set_xticklabels(labels, rotation=90, fontsize=6)
     ax.set_ylabel("fraction of cells")
     ax.legend(fontsize=5, ncol=2, bbox_to_anchor=(1.01, 1), loc="upper left", title="cluster")
+
+    tidy = pd.DataFrame(means, index=pd.Index(labels, name="group"), columns=[str(c) for c in composition.var_names])
+    tidy = tidy.reset_index().melt(id_vars="group", var_name="cluster", value_name="fraction of cells")
+    if _maybe_interactive(
+        "barh", data=tidy, x="fraction of cells", y="group", color="cluster", title="cluster composition"
+    ):
+        plt.close(ax.figure)
     return ax
 
 
@@ -85,6 +93,7 @@ def cell_cycle(
         KeyError: ``obs`` has no ``key`` column, or ``dna_feature`` is not one of ``var_names``.
         ValueError: The object has no layer named ``layer``.
     """
+    # Multi-panel (one histogram per group); the single-figure interactive shim does not fit it. Interactive twin is a later PR.
     import matplotlib.pyplot as plt
 
     if key not in adata.obs:
@@ -140,6 +149,18 @@ def subpopulation_hits(adata: AnnData, key: str = "subpopulation_hits", top: int
     ax.set_yticklabels(grid.index, fontsize=6)
     ax.set_ylabel("cluster")
     ax.figure.colorbar(image, ax=ax, label="-log10 q")
+
+    if _maybe_interactive(
+        "heatmap",
+        matrix=grid.to_numpy(dtype=float),
+        rows=[str(index) for index in grid.index],
+        columns=[str(column) for column in grid.columns],
+        value_label="-log10 q",
+        title="subpopulation hits",
+    ):
+        import matplotlib.pyplot as plt
+
+        plt.close(ax.figure)
     return ax
 
 
@@ -180,6 +201,7 @@ def density(
     groups = obs[groupby].astype(str).to_numpy()
 
     ax = _axes(ax, (5.5, 4.5))
+    records = []
     for name in pd.Series(groups).value_counts().index[:max_groups]:
         rows = np.flatnonzero((groups == name) & np.isfinite(crowding) & np.isfinite(values))
         if rows.size < 3:
@@ -189,8 +211,21 @@ def density(
         slope, intercept = np.polyfit(crowding[rows], values[rows], 1)
         grid = np.linspace(crowding[rows].min(), crowding[rows].max(), 2)
         ax.plot(grid, slope * grid + intercept, lw=1.2, color=points.get_facecolor()[0])
+        records.append(pd.DataFrame({"density": crowding[rows], feature: values[rows], groupby: str(name)}))
 
     ax.set_xlabel("mean distance to the k nearest cells in the field")
     ax.set_ylabel(feature)
     ax.legend(fontsize=6)
+
+    if records and _maybe_interactive(
+        "scatter",
+        data=pd.concat(records, ignore_index=True),
+        x="density",
+        y=feature,
+        color=groupby,
+        title=f"{feature} against density",
+    ):
+        import matplotlib.pyplot as plt
+
+        plt.close(ax.figure)
     return ax
