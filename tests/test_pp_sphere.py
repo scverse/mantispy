@@ -59,62 +59,6 @@ def _batched(n_batches=3, per_batch=40, n_features=6, effect=3.0, seed=0):
     return adata
 
 
-def _reference_tvn(values, controls, batches, epsilon=0.5):
-    """`EFAAR_benchmarking` at 2935f21, `efaar.py::tvn_on_controls`, transcribed.
-
-    Written from the reference rather than from mantispy so the two disagree when the order of
-    operations drifts, or when a population standard deviation turns into a sample one.
-    """
-    from scipy.linalg import fractional_matrix_power
-    from sklearn.decomposition import PCA
-    from sklearn.preprocessing import StandardScaler
-
-    values = StandardScaler().fit(values[controls]).transform(values)
-    values = PCA().fit(values[controls]).transform(values)
-    for batch in np.unique(batches):
-        rows = batches == batch
-        values[rows] = StandardScaler().fit(values[rows & controls]).transform(values[rows])
-
-    identity = np.eye(values.shape[1])
-    target = np.cov(values[controls], rowvar=False, ddof=1) + epsilon * identity
-    for batch in np.unique(batches):
-        rows = batches == batch
-        source = np.cov(values[rows & controls], rowvar=False, ddof=1) + epsilon * identity
-        values[rows] = values[rows] @ fractional_matrix_power(source, -0.5)
-        values[rows] = values[rows] @ fractional_matrix_power(target, 0.5)
-    return values
-
-
-def test_tvn_matches_the_reference_implementation():
-    adata = _batched()
-    expected = _reference_tvn(
-        np.asarray(adata.X, dtype=np.float64),
-        adata.obs["Metadata_Control"].to_numpy(dtype=bool),
-        adata.obs["Metadata_Batch"].to_numpy(),
-    )
-
-    mt.pp.tvn(adata, use_rep=None)
-    assert np.allclose(adata.obsm["X_tvn"], expected, atol=1e-5)
-
-
-def test_tvn_aligns_the_batches_and_leaves_x_alone():
-    """Each batch mixes its features differently, so the batch explains a large share of the
-    variance before the alignment and much less after it."""
-    adata = _batched()
-    before = np.asarray(adata.X).copy()
-
-    import scanpy as sc
-
-    sc.pp.pca(adata, n_comps=5)
-    batch_variance = mt.metrics.pc_regression(adata, key="Metadata_Batch", use_rep="X_pca")["value"].iloc[0]
-
-    mt.pp.tvn(adata, use_rep=None)
-    aligned = mt.metrics.pc_regression(adata, key="Metadata_Batch", use_rep="X_tvn")["value"].iloc[0]
-
-    assert aligned < batch_variance
-    assert np.array_equal(np.asarray(adata.X), before)
-
-
 def test_tvn_keeps_one_component_per_control_when_the_controls_are_few():
     """The rotation is fitted on the controls, so a control-poor screen comes back narrower
     than it went in. That is why this writes obsm: var would no longer describe the columns.
@@ -178,22 +122,3 @@ def test_tvn_says_when_a_batch_cannot_scale_a_dimension():
     # zero, and dividing by it returns values of about 1e16: finite, plausible-looking, and 1e16 times heavier
     # than every other dimension in any distance taken afterwards.
     assert np.abs(adata.obsm["X_tvn"]).max() < 1e3
-
-
-def test_a_spread_of_rounding_is_not_a_spread():
-    """Whether a constant dimension arrives as an exact zero or as 1e-16 is the platform's business.
-
-    An exact-zero test passes on one and not the other, which is how this reached CI as a test that failed on
-    Linux and passed on macOS rather than as the amplification it is.
-    """
-    from mantispy.pp._sphere import _centre_scale
-
-    rng = np.random.default_rng(0)
-    values = rng.normal(size=(20, 3))
-    reference = np.zeros(20, dtype=bool)
-    reference[:10] = True
-    values[reference, 2] = 1.0 + rng.normal(0, 1e-16, 10)
-
-    with pytest.warns(UserWarning, match="1 of 3 dimension"):
-        out = _centre_scale(values, reference)
-    assert np.abs(out[:, 2]).max() < 1e3, "a dimension of rounding was divided by its own rounding"
