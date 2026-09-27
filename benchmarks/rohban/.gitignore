@@ -1,0 +1,2 @@
+# Downloaded reference data (BioGRID ~165 MB, Enrichr GMTs); fetched on demand by reproduce.py
+data/
