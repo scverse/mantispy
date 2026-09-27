@@ -135,6 +135,7 @@ Writing to a layer suffixes the column, so `key_added="sphered"` flags `var["deg
     tl.percent_replicating
     tl.grit
     tl.consensus
+    tl.cluster
     tl.effect_size
     tl.wasserstein_features
     tl.differential_features
@@ -161,6 +162,8 @@ Writing to a layer suffixes the column, so `key_added="sphered"` flags `var["deg
     tl.gene_sets
     tl.pathway_coherence
     tl.enrich_hits
+    tl.ora
+    tl.network_enrichment
 ```
 
 | Function | Stores |
@@ -171,6 +174,7 @@ Writing to a layer suffixes the column, so `key_added="sphered"` flags `var["deg
 | `tl.percent_replicating` | `uns["mantispy"][key_added]` and `..._summary` |
 | `tl.grit` | `obs[key_added]`, `uns["mantispy"][key_added]` |
 | `tl.consensus` | returns a new object at `"perturbation"` resolution; `obs["Metadata_ReplicateCount"]`, `uns["mantispy"]["consensus_weights"]` |
+| `tl.cluster` | `obs[key_added]` (categorical labels); for `method="hierarchical"` also `uns["mantispy"][key_added + "_linkage"]` (the tree) and `uns["mantispy"][key_added]` (chosen cut and leaf labels) |
 | `tl.effect_size` | `varm[key_added]`, `uns["mantispy"][key_added]` and `..._groups` |
 | `tl.wasserstein_features` | `varm[key_added]`, `uns["mantispy"][key_added]` and `..._groups` |
 | `tl.hit_calling` | `uns["mantispy"][key_added]`, `obs[key_added + "_distance"]`, `obs[key_added + "_row_distance"]`, `obs[key_added + "_qvalue"]`, `obs[key_added + "_reference_held_out"]` |
@@ -195,6 +199,8 @@ Writing to a layer suffixes the column, so `key_added="sphered"` flags `var["deg
 | `tl.gene_sets` | returns a gene-set network; stores nothing |
 | `tl.pathway_coherence` | `uns["mantispy"][key_added]`, sorted by coherence |
 | `tl.enrich_hits` | `uns["mantispy"][key_added]` |
+| `tl.ora` | `uns["mantispy"][key_added]`, one row per group and set with `n`, `odds_ratio`, `pvalue`, `qvalue` |
+| `tl.network_enrichment` | `uns["mantispy"][key_added]`: the 2x2 `table`, `odds_ratio`, `pvalue`, `threshold` and pair counts |
 
 `tl.map` has four modes, named after the questions the field asks. `"activity"` matches the copairs
 reference implementation (0.9267 against 0.9267 over 301 JUMP compounds):
@@ -289,6 +295,7 @@ pycytominer and similar tools expect.
     pl.subpopulation_hits
     pl.replicate_saturation
     pl.cytotoxicity
+    pl.dendrogram
     pl.pathway_coherence
     pl.batch_variance
     pl.metrics
@@ -323,6 +330,8 @@ Plotting functions return Matplotlib axes and do not modify the object.
     ds.amish
     ds.chroma
     ds.corum
+    ds.gene_sets
+    ds.interactions
     ds.cp_posh
     ds.jump_crispr
     ds.jump_lite

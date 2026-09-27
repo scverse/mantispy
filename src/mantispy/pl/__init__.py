@@ -5,6 +5,7 @@ Every plot returns Matplotlib axes and does not modify the object it draws.
 Two plots have no function of their own. A plate map of a per-well flag is ``mt.pl.plate(adata, color="qc_well_pass")``, and embeddings side by side are a loop over ``sc.pl.embedding``.
 """
 
+from mantispy.pl._cluster import dendrogram
 from mantispy.pl._diagnostics import control_drift, image_qc, outliers, plate_effects
 from mantispy.pl._evaluation import batch_variance, map, metrics, replicate_correlation, similarity
 from mantispy.pl._features import feature_correlation, feature_groups
@@ -24,6 +25,7 @@ __all__ = [
     "cluster_composition",
     "control_drift",
     "cytotoxicity",
+    "dendrogram",
     "density",
     "distance_heatmap",
     "dose_direction",

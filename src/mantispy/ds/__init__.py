@@ -25,6 +25,7 @@ from mantispy.ds._datasets import (
     rohban,
     scallops_arv471,
 )
+from mantispy.ds._resources import gene_sets, interactions
 from mantispy.ds._synthetic import DEFAULT_CHANNELS, synthetic_plate
 
 __all__ = [
@@ -36,6 +37,8 @@ __all__ = [
     "chroma",
     "corum",
     "cp_posh",
+    "gene_sets",
+    "interactions",
     "jump_cells",
     "JUMP_LITE_MODELS",
     "jump_crispr",
