@@ -12,6 +12,7 @@ from mantispy._core._reduce import get_matrix
 from mantispy._core.frames import as_frame
 from mantispy._core.masks import feature_mask
 from mantispy.pl._common import axes as _axes
+from mantispy.pl._common import maybe_interactive as _maybe_interactive
 
 if TYPE_CHECKING:
     from anndata import AnnData
@@ -51,7 +52,8 @@ def feature_correlation(
     correlation = corr_matrix(get_matrix(adata)[:, positions])
 
     ax = _axes(ax, (7, 6))
-    image = ax.imshow(np.nan_to_num(correlation, nan=0.0), cmap="RdBu_r", vmin=-1, vmax=1)
+    display = np.nan_to_num(correlation, nan=0.0)
+    image = ax.imshow(display, cmap="RdBu_r", vmin=-1, vmax=1)
 
     labels = as_frame(adata.var).loc[order, groupby].astype(str).to_numpy()
     boundaries = np.flatnonzero(labels[1:] != labels[:-1]) + 0.5
@@ -67,6 +69,17 @@ def feature_correlation(
     ax.set_yticklabels(pd.unique(labels), fontsize=7)
     ax.set_title(f"feature correlation ({len(order)} features)", fontsize=9)
     ax.figure.colorbar(image, ax=ax, fraction=0.04, label="correlation")
+
+    features = [str(name) for name in order]
+    _maybe_interactive(
+        "heatmap",
+        ax=ax,
+        matrix=display,
+        rows=features,
+        columns=features,
+        value_label="correlation",
+        title=f"feature correlation ({len(order)} features)",
+    )
     return ax
 
 
@@ -106,4 +119,9 @@ def feature_groups(adata: AnnData, key: str | None = None, ax: Axes | None = Non
     ax.set_xlabel("feature group")
     ax.legend(title="channel", fontsize=7, title_fontsize=8, loc="upper left", bbox_to_anchor=(1.0, 1.0), frameon=False)
     ax.tick_params(axis="x", rotation=45)
+
+    tidy = counts.reset_index().melt(id_vars="feature_group", var_name="channel", value_name="features")
+    _maybe_interactive(
+        "barh", ax=ax, data=tidy, x="features", y="feature_group", color="channel", title="feature groups"
+    )
     return ax

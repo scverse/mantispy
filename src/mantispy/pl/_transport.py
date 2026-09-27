@@ -9,6 +9,7 @@ import pandas as pd
 
 from mantispy._core.frames import as_frame
 from mantispy.pl._common import axes as _axes
+from mantispy.pl._common import maybe_interactive as _maybe_interactive
 from mantispy.pl._common import table as _table
 from mantispy.pl._moa import _heatmap
 
@@ -54,8 +55,19 @@ def transport(
     ax.set_yticks(positions)
     ax.set_yticklabels(shown["group"].astype(str), fontsize=6)
     ax.axvline(0.0, color="grey", lw=0.8)
-    ax.set_xlabel(f"effect agreement across {chosen.replace('Metadata_', '').lower()}")
-    ax.set_title(f"{int(block['transports'].sum())} of {len(block)} reproduce", fontsize=9)
+    xlabel = f"effect agreement across {chosen.replace('Metadata_', '').lower()}"
+    ax.set_xlabel(xlabel)
+    title = f"{int(block['transports'].sum())} of {len(block)} reproduce"
+    ax.set_title(title, fontsize=9)
+
+    tidy = pd.DataFrame(
+        {
+            "group": shown["group"].astype(str).to_numpy(),
+            xlabel: shown["agreement"].to_numpy(dtype=float),
+            "reproduces": np.where(shown["transports"].to_numpy(dtype=bool), "yes", "no"),
+        }
+    )
+    _maybe_interactive("barh", ax=ax, data=tidy, x=xlabel, y="group", color="reproduces", title=title)
     return ax
 
 
@@ -122,4 +134,14 @@ def setting_agreement(
         for position in np.flatnonzero(np.asarray(annotation[1:]) != np.asarray(annotation[:-1])) + 1:
             ax.axhline(position - 0.5, color="white", lw=1.2)
             ax.axvline(position - 0.5, color="white", lw=1.2)
+
+    _maybe_interactive(
+        "heatmap",
+        ax=ax,
+        matrix=matrix.to_numpy(dtype=float),
+        rows=labels,
+        columns=labels,
+        value_label="effect agreement",
+        title="setting agreement",
+    )
     return ax

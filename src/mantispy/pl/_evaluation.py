@@ -6,14 +6,15 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 import numpy as np
+import pandas as pd
 
 from mantispy._core.frames import as_frame
 from mantispy.metrics._common import embedding, r_squared
 from mantispy.pl._common import axes as _axes
+from mantispy.pl._common import maybe_interactive as _maybe_interactive
 from mantispy.pl._common import table as _table
 
 if TYPE_CHECKING:
-    import pandas as pd
     from anndata import AnnData
     from matplotlib.axes import Axes
 
@@ -56,6 +57,23 @@ def map(adata: AnnData, key: str = "map", label_top: int = 10, ax: Axes | None =
     ax.set_xlabel("mean average precision")
     ax.set_ylabel("-log10 corrected p")
     ax.legend(fontsize=7)
+
+    tidy = pd.DataFrame(
+        {
+            group_column: table[group_column].astype(str).to_numpy(),
+            "mean average precision": table["mean_average_precision"].to_numpy(dtype=float),
+            "-log10 corrected p": significance,
+        }
+    )
+    _maybe_interactive(
+        "scatter",
+        ax=ax,
+        data=tidy,
+        x="mean average precision",
+        y="-log10 corrected p",
+        hover=[group_column],
+        title="mean average precision",
+    )
     return ax
 
 
@@ -97,6 +115,26 @@ def replicate_correlation(adata: AnnData, key: str = "percent_replicating", ax: 
     ax.set_xlabel("null threshold")
     ax.set_ylabel("median replicate correlation")
     ax.legend(title="replicating", fontsize=7, title_fontsize=7)
+
+    group_column = table.columns[0]
+    tidy = pd.DataFrame(
+        {
+            group_column: table[group_column].astype(str).to_numpy(),
+            "null threshold": table["null_threshold"].to_numpy(dtype=float),
+            "median replicate correlation": table["median_replicate_correlation"].to_numpy(dtype=float),
+            "replicating": np.where(replicating, "yes", "no"),
+        }
+    )
+    _maybe_interactive(
+        "scatter",
+        ax=ax,
+        data=tidy,
+        x="null threshold",
+        y="median replicate correlation",
+        color="replicating",
+        hover=[group_column],
+        title="replicate correlation",
+    )
     return ax
 
 
@@ -130,14 +168,29 @@ def batch_variance(
 
     ax = _axes(ax, (6, 4))
     components = np.arange(1, values.shape[1] + 1)
+    records = []
     for key in keys:
         covariate = as_frame(adata.obs)[key]
         explained = [r_squared(values[:, index], covariate) for index in range(values.shape[1])]
         ax.plot(components, explained, marker="o", ms=3, label=key)
+        records.append(
+            pd.DataFrame({"principal component": components, "variance explained (R²)": explained, "covariate": key})
+        )
     ax.set_xlabel("principal component")
     ax.set_ylabel("variance explained (R²)")
     ax.set_ylim(0, 1)
     ax.legend(fontsize=7)
+
+    if records:
+        _maybe_interactive(
+            "line",
+            ax=ax,
+            data=pd.concat(records, ignore_index=True),
+            x="principal component",
+            y="variance explained (R²)",
+            color="covariate",
+            title="variance explained per component",
+        )
     return ax
 
 
@@ -173,6 +226,18 @@ def metrics(table: pd.DataFrame, ax: Axes | None = None) -> Axes:
     ax.set_ylabel("value")
     ax.set_xlabel("")
     ax.legend(fontsize=7)
+
+    tidy = pivot.reset_index().melt(id_vars="metric", var_name="representation", value_name="value")
+    _maybe_interactive(
+        "barh",
+        ax=ax,
+        data=tidy,
+        x="value",
+        y="metric",
+        color="representation",
+        barmode="group",
+        title="correction metrics",
+    )
     return ax
 
 
@@ -214,9 +279,21 @@ def similarity(
         order = order[picked]
 
     ax = _axes(ax, (6, 5))
-    image = ax.imshow(matrix[np.ix_(order, order)], cmap="RdBu_r", vmin=-1, vmax=1)
+    ordered = matrix[np.ix_(order, order)]
+    image = ax.imshow(ordered, cmap="RdBu_r", vmin=-1, vmax=1)
     ax.set_title(f"{key} ({order.size} profiles)", fontsize=9)
     ax.set_xticks([])
     ax.set_yticks([])
     ax.figure.colorbar(image, ax=ax, fraction=0.045, label="similarity")
+
+    profiles = adata.obs_names[order].astype(str).tolist()
+    _maybe_interactive(
+        "heatmap",
+        ax=ax,
+        matrix=ordered,
+        rows=profiles,
+        columns=profiles,
+        value_label="similarity",
+        title=f"{key} ({order.size} profiles)",
+    )
     return ax

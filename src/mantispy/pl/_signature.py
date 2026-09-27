@@ -9,6 +9,8 @@ import pandas as pd
 
 from mantispy._core._reduce import get_matrix
 from mantispy._core.frames import as_frame
+from mantispy.pl._common import axes as _axes
+from mantispy.pl._common import maybe_interactive as _maybe_interactive
 
 if TYPE_CHECKING:
     from anndata import AnnData
@@ -77,10 +79,9 @@ def feature_signature(
             else:
                 values, columns = values[:, order], columns[order]
 
-    if ax is None:
-        height = max(2.4, 0.22 * len(rows) + 1.4)
-        width = max(4.0, 0.34 * len(columns) + 2.2)
-        _, ax = plt.subplots(figsize=figsize or (width, height))
+    height = max(2.4, 0.22 * len(rows) + 1.4)
+    width = max(4.0, 0.34 * len(columns) + 2.2)
+    ax = _axes(ax, figsize or (width, height))
 
     limit = float(np.nanmax(np.abs(values))) or 1.0
     image = ax.imshow(values, aspect="auto", cmap=cmap, vmin=-limit, vmax=limit)
@@ -92,4 +93,14 @@ def feature_signature(
     colorbar = plt.colorbar(image, ax=ax, shrink=0.6)
     colorbar.set_label("mean t", fontsize=8)
     plt.tight_layout()
+
+    _maybe_interactive(
+        "heatmap",
+        ax=ax,
+        matrix=values,
+        rows=[str(name) for name in rows],
+        columns=[str(name) for name in columns],
+        value_label="mean t",
+        title="feature signature",
+    )
     return ax

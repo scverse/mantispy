@@ -67,6 +67,7 @@ def plate(
         ValueError: ``agg`` is not one of ``AGGREGATIONS``, ``ax`` was passed for more than one plate, ``groupby`` varies within a drawn plate, or it or ``Metadata_Plate`` has missing values.
         KeyError: ``color`` is neither a feature name nor an ``obs`` column, ``groupby`` is not an ``obs`` column, or ``plate`` is not a plate of ``adata``.
     """
+    # Spatial well grid; deserves a bespoke interactive well-grid, deferred.
     import matplotlib.pyplot as plt
 
     if agg not in AGGREGATIONS:
