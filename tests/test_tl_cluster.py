@@ -87,6 +87,20 @@ def test_a_degenerate_profile_is_reported(planted):
         mt.tl.cluster(planted, use_rep=None)
 
 
+def test_stability_criterion_recovers_the_planted_groups(planted):
+    truth = np.repeat([0, 1, 2], 8)
+    mt.tl.cluster(planted, use_rep=None, criterion="stability")
+
+    summary = planted.uns["mantispy"]["cluster"]
+    assert summary["n_clusters"] == 3
+    assert adjusted_rand_score(truth, planted.obs["cluster"].to_numpy()) == pytest.approx(1.0)
+    assert np.isfinite(summary["distance_cut"])
+    assert np.isfinite(summary["stability"])
+
+    with pytest.raises(ValueError, match="criterion must be"):
+        mt.tl.cluster(planted, use_rep=None, criterion="bogus", key_added="bad")
+
+
 def test_copy_leaves_the_input_alone(planted):
     result = mt.tl.cluster(planted, use_rep=None, copy=True)
     assert "cluster" in result.obs
