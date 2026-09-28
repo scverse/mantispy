@@ -12,7 +12,6 @@ from mantispy._core.mutation import inplace_or_copy
 
 METRICS = ("cosine", "pearson")
 
-#: Largest float64 similarity matrix, in bytes, that ``similarity_matrix`` builds.
 #: The cast to float32 adds half as much again at peak.
 SIMILARITY_BYTES = 4_000_000_000
 
@@ -31,7 +30,8 @@ def similarity_matrix(values: np.ndarray, metric: str = "cosine") -> np.ndarray:
         Missing and infinite values are filled with zero before the similarity is taken, so a profile holding an infinity is compared on its other features.
 
     Raises:
-        ValueError: ``metric`` is not one of ``METRICS``, or the float64 matrix would exceed :data:`SIMILARITY_BYTES`. Memory is quadratic in the number of profiles (50,640 JUMP wells need 30 GB), so aggregate to consensus profiles first.
+        ValueError: ``metric`` is not one of ``METRICS``, or the float64 matrix would exceed :data:`SIMILARITY_BYTES`.
+            Memory is quadratic in the number of profiles (50,640 JUMP wells need 30 GB), so aggregate to consensus profiles first.
     """
     if metric not in METRICS:
         raise ValueError(f"metric must be one of {METRICS}, got {metric!r}")
@@ -85,8 +85,7 @@ def _non_replicate_pool(matrix: np.ndarray, codes: np.ndarray, block: int = 2048
     """Every above-diagonal similarity whose two profiles fall in different groups, read row by row.
 
     This is the null the replicate medians are scored against.
-    It is taken a row block at a time, so the pair indices of the whole upper triangle never exist at once: at 20 000 profiles those two index arrays cost 3.2 GB between them, four times the pool they select.
-    Values stay ``float32`` as ``similarity_matrix`` returns them and are widened once drawn, which is exact because every entry is a float32 either way.
+    It is taken a row block at a time, so the pair indices of the whole upper triangle never exist at once.
 
     Args:
         matrix: Pairwise similarity, as ``similarity_matrix`` returns it.
@@ -141,8 +140,6 @@ def percent_replicating(
         Writes ``uns["mantispy"][key_added]`` with ``group``, ``n_replicates``, ``median_replicate_correlation``, ``null_threshold`` and ``is_replicating``, leaving out groups with a single replicate.
         Writes ``uns["mantispy"][key_added + "_summary"]`` with ``fraction_replicating`` and ``n_groups``.
     """
-    # The matrix stays float32, as ``similarity_matrix`` returns it, and only the drawn values are widened.
-    # Every entry is a float32 widened to float64 either way, so the medians below are unchanged.
     matrix = similarity_matrix(representation(adata, use_rep), metric)
     codes, keys = group_codes(adata, groupby)
     generator = np.random.default_rng(seed)
@@ -156,7 +153,6 @@ def percent_replicating(
             continue
         pair_rows, pair_columns = np.triu_indices(members.size, k=1)
         observed = float(np.median(matrix[members[pair_rows], members[pair_columns]].astype(np.float64)))
-        # Each null draw takes as many non-replicate pairs as the group has replicate pairs.
         draws = generator.choice(non_replicate, size=(null_size, pair_rows.size), replace=True)
         null_threshold = float(np.quantile(np.median(draws.astype(np.float64), axis=1), quantile))
         records.append(

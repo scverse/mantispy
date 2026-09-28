@@ -1,11 +1,6 @@
 """Feature selection, with pycytominer's semantics.
 
 Every operation returns a boolean keep mask over ``var``.
-:func:`feature_select` combines them into one boolean column without dropping anything, and :func:`subset_features` does the subsetting.
-
-Operation names and behavior follow pycytominer, apart from ``drop_degenerate``, which drops the features :func:`~mantispy.pp.normalize` could not scale.
-``variance_threshold`` is an sklearn-style variance cut, and the frequency and uniqueness rules are in the separate ``frequency_threshold``.
-``correlation_threshold`` judges each pair against a ranking computed once from the full matrix instead of sweeping greedily, and thresholds the signed correlation, so two features correlated at -1.0 are both kept.
 """
 
 from __future__ import annotations
@@ -46,9 +41,9 @@ DEFAULT_OPERATIONS = (
 
 
 def _op_drop_degenerate(adata: AnnData) -> np.ndarray:
-    """Drop the features ``normalize`` flagged in ``var["degenerate_scale"]`` because it could not scale them.
+    """Drop the features :func:`~mantispy.pp.normalize` flagged in ``var["degenerate_scale"]`` because it could not scale them.
 
-    An object ``normalize`` never flagged has no such column and keeps every feature.
+    An object :func:`~mantispy.pp.normalize` never flagged has no such column and keeps every feature.
     """
     if "degenerate_scale" not in adata.var:
         return np.ones(adata.n_vars, dtype=bool)
@@ -60,7 +55,6 @@ def _op_variance_threshold(X: np.ndarray, min_variance: float = 1e-6) -> np.ndar
 
     sklearn's ``VarianceThreshold`` keeps ``variance > threshold`` and uses the population variance, so ``ddof=0``.
     """
-    # The same helper pp.filter_features uses, so the two statements of this rule cannot drift apart.
     return np.nan_to_num(nanvar(X), nan=0.0, posinf=0.0) > min_variance
 
 
@@ -105,35 +99,18 @@ def _op_correlation_threshold(
 ) -> np.ndarray:
     """Drop one feature from every pair correlated above ``threshold``.
 
-    With the defaults this matches pycytominer: each over-threshold pair is judged on its own against a
-    ranking of total absolute correlation, the member ranked as more correlated overall is dropped, the
-    comparison is on the signed correlation, and there is no re-sweep.
-
-    ``absolute`` thresholds ``|r|`` instead, so a strongly anti-correlated pair is also reduced.
-    ``iterative`` drops the most-connected feature one at a time, clearing every pair it belongs to
-    before looking again, which keeps at least as many features as the single pass. Together they
-    approximate cytominer's R path (``caret::findCorrelation``, absolute and iterative).
-
-    Exact by default, over the whole matrix in one pass. ``window`` switches to a two-pass fast path:
-    pass 1 is the windowed pre-filter (roughly linear in the feature count) that removes the easy
-    within-window redundancy, then pass 2 runs the exact all-pairs comparison on the survivors only, a
-    small set, so its quadratic cost is cheap and it catches the cross-family redundancy the windows
-    could not see. See :func:`~mantispy._core._corr.correlated_pairs`.
+    With the defaults this matches pycytominer: each over-threshold pair is judged on its own against a ranking of total absolute correlation, the member ranked as more correlated overall is dropped, the comparison is on the signed correlation, and there is no re-sweep.
     """
     n_vars = X.shape[1]
     reduce = _iterative_correlation_drop if iterative else _greedy_keep
-    # correlated_pairs never builds the full matrix, so this scales to tens of thousands of features.
     if window is None:
         pairs, total = correlated_pairs(X, threshold, method=method, absolute=absolute)
         return reduce(pairs, total, n_vars)
-    # Pass 1: windowed pre-filter over the whole feature list (cheap, roughly linear).
     pairs, total = correlated_pairs(
         X, threshold, method=method, absolute=absolute, order=order, window=window, stride=stride
     )
     keep = reduce(pairs, total, n_vars)
     survivors = np.flatnonzero(keep)
-    # Pass 2: exact all-pairs on the survivors only, so the quadratic step runs on a small set and
-    # catches the cross-family redundancy the windows could not see.
     if survivors.size > 1:
         sub_pairs, sub_total = correlated_pairs(X[:, survivors], threshold, method=method, absolute=absolute)
         keep[survivors] = reduce(sub_pairs, sub_total, survivors.size)
@@ -143,19 +120,13 @@ def _op_correlation_threshold(
 def _iterative_correlation_drop(pairs: np.ndarray, total: np.ndarray, n_vars: int) -> np.ndarray:
     """Remove the most-connected feature until no over-threshold pair is left.
 
-    At each step the still-connected feature belonging to the most surviving pairs is dropped, ties
-    broken by the largest total ``|r|`` and then the lowest index, which clears every pair it is part
-    of at once. Dropping the shared feature of a chain, rather than one member of each of its pairs,
-    keeps at least as many features as the single pass, approximating ``caret::findCorrelation``.
-
-    Rescanning the surviving pairs each removal is ``O(drops * pairs)``; this is an opt-in path over the
-    already-thresholded pairs, so the set is small in practice.
+    At each step the still-connected feature belonging to the most surviving pairs is dropped, ties broken by the largest total ``|r|`` and then the lowest index.
     """
     keep = np.ones(n_vars, dtype=bool)
     active = np.ones(len(pairs), dtype=bool)
     while active.any():
         connected, degree = np.unique(pairs[active].ravel(), return_counts=True)
-        # Highest degree first; ties by largest total, then lowest index (lexsort reads keys last-first).
+        # lexsort reads keys last-first: degree, then total, then index.
         worst = connected[np.lexsort((connected, -total[connected], -degree))[0]]
         keep[worst] = False
         active &= (pairs[:, 0] != worst) & (pairs[:, 1] != worst)
@@ -168,10 +139,7 @@ def _op_drop_na_columns(X: np.ndarray, cutoff: float = 0.05) -> np.ndarray:
 
 
 def _op_drop_outliers(X: np.ndarray, outlier_cutoff: float = 500.0) -> np.ndarray:
-    """Drop features whose largest absolute value exceeds ``outlier_cutoff``.
-
-    Ratios with a near-zero denominator blow up like this.
-    """
+    """Drop features whose largest absolute value exceeds ``outlier_cutoff``."""
     # One column block at a time (in _blockwise), so np.abs never copies more than one block.
     largest = _blockwise(X, lambda block: np.nanmax(np.abs(block), axis=0), np.float64)
     return ~(np.nan_to_num(largest, nan=0.0) > outlier_cutoff)
@@ -180,7 +148,7 @@ def _op_drop_outliers(X: np.ndarray, outlier_cutoff: float = 500.0) -> np.ndarra
 def _op_blocklist(adata: AnnData, blocklist: str | Sequence[str] = "default") -> np.ndarray:
     """Drop features named in the blocklist.
 
-    Matched against the current names and, like :func:`~mantispy.pp.filter_features`, against ``var["original_name"]``, so the blocklist still applies after :func:`~mantispy.pp.standardize_feature_names` has renamed the features.
+    Matched against the current names and, like :func:`~mantispy.pp.filter_features`, against ``var["original_name"]``.
     """
     names = [adata.var_names.to_numpy()]
     if "original_name" in adata.var:
@@ -192,14 +160,6 @@ def _op_noise_removal(X: np.ndarray, codes: np.ndarray, stdev_cutoff: float = 0.
     """Drop features that vary too much within a perturbation group.
 
     The statistic is the mean, over groups, of each group's population standard deviation (``ddof=0``).
-
-    ``stdev_cutoff`` is an absolute threshold on whatever scale ``normalize`` left the values on, so it is
-    only meaningful next to the normalization that produced them. pycytominer's 0.8 is calibrated for
-    whole-plate standardization, where a feature's spread is 1 by construction. Normalizing against the
-    controls instead, as :func:`~mantispy.pp.normalize` does by default and as the JUMP recipe does, measures
-    every feature against the spread of the DMSO wells rather than of the plate, and treated wells vary more
-    than controls do. Dividing by a MAD rather than a standard deviation rescales it again. Either choice
-    puts the whole distribution above 0.8 and the operation then drops every feature.
     """
     n_groups = int(codes.max()) + 1
     order, offsets = group_offsets(codes, n_groups)
@@ -238,30 +198,45 @@ def feature_select(
     """Flag the features worth keeping.
 
     Args:
-        adata: Object to select features on. Usually well-level profiles.
-        operations: Which operations to run, from ``OPERATIONS``. The default is pycytominer's own, which omits ``frequency_threshold``, ``drop_outliers`` and ``noise_removal``, plus ``drop_degenerate``, which removes nothing from an object :func:`~mantispy.pp.normalize` did not flag.
+        adata: Object to select features on.
+            Usually well-level profiles.
+        operations: Which operations to run, from ``OPERATIONS``.
+            The default is pycytominer's own, which omits ``frequency_threshold``, ``drop_outliers`` and ``noise_removal``, plus ``drop_degenerate``, which removes nothing from an object :func:`~mantispy.pp.normalize` did not flag.
         min_variance: ``variance_threshold``: keep features with variance above this.
-        freq_cut: ``frequency_threshold``: drop a feature when the count of its second most common value divided by the count of its most common is below this. Either this rule or ``unique_cut`` drops a feature.
+        freq_cut: ``frequency_threshold``: drop a feature when the count of its second most common value divided by the count of its most common is below this.
+            Either this rule or ``unique_cut`` drops a feature.
         unique_cut: ``frequency_threshold``: drop a feature when its share of distinct values is below this.
         corr_threshold: ``correlation_threshold``: drop one member of every pair correlated above this.
         corr_method: ``correlation_threshold``: ``"pearson"`` or ``"spearman"``.
-        corr_window: ``correlation_threshold``: ``None`` runs the exact pass (the default, matching pycytominer). An int switches to the two-pass fast path (prune redundancy within name-sorted windows of that size, then run the exact pass on the survivors); 500 is a good default, several times faster on large screens. It keeps a different set of features (a different member of each correlated group) but preserves the information and the downstream signal.
+        corr_window: ``correlation_threshold``: ``None`` runs the exact pass (the default, matching pycytominer).
+            An int switches to the two-pass fast path (prune redundancy within name-sorted windows of that size, then run the exact pass on the survivors); 500 is a good default, several times faster on large screens.
+            It keeps a different set of features (a different member of each correlated group) but preserves the information and the downstream signal.
         corr_stride: ``correlation_threshold``: step between windows, default half the window.
-        corr_absolute: ``correlation_threshold``: threshold ``|r|`` rather than the signed correlation, so a strongly anti-correlated pair is also reduced. Off by default, matching pycytominer.
-        corr_iterative: ``correlation_threshold``: drop the most-connected feature one at a time until no pair is left, keeping at least as many features as the single pass. Off by default. With ``corr_absolute`` this approximates cytominer's R path (``caret::findCorrelation``).
-        decorrelate: Run an extra, experimental redundancy step after the operations, on the features they keep. Unlike ``correlation_threshold`` it removes features that are a linear combination of several others, not just pairwise duplicates, by a rank-revealing QR. Off by default, and not part of pycytominer.
-        decorr_threshold: ``decorrelate``: drop a feature once its multiple correlation with the kept set reaches this. The default 0.99 removes only near-collinear features, so the kept set spans almost the same space; lower it towards ``corr_threshold`` for a smaller, more aggressive set.
+        corr_absolute: ``correlation_threshold``: threshold ``|r|`` rather than the signed correlation, so a strongly anti-correlated pair is also reduced.
+            Off by default, matching pycytominer.
+        corr_iterative: ``correlation_threshold``: drop the most-connected feature one at a time until no pair is left, keeping at least as many features as the single pass.
+            Off by default.
+            With ``corr_absolute`` this approximates cytominer's R path (``caret::findCorrelation``).
+        decorrelate: Run an extra, experimental redundancy step after the operations, on the features they keep.
+            Unlike ``correlation_threshold`` it removes features that are a linear combination of several others, not just pairwise duplicates, by a rank-revealing QR.
+            Off by default, and not part of pycytominer.
+        decorr_threshold: ``decorrelate``: drop a feature once its multiple correlation with the kept set reaches this.
+            The default 0.99 removes only near-collinear features, so the kept set spans almost the same space; lower it towards ``corr_threshold`` for a smaller, more aggressive set.
         decorr_method: ``decorrelate``: ``"pearson"`` or ``"spearman"``.
         na_cutoff: ``drop_na_columns``: drop features missing in more than this fraction of rows.
         outlier_cutoff: ``drop_outliers``: drop features whose absolute value exceeds this.
-        blocklist: ``blocklist``: ``"default"`` for the bundled list, or explicit names. Matched against the current names and against ``var["original_name"]``, so it works either side of :func:`~mantispy.pp.standardize_feature_names`.
+        blocklist: ``blocklist``: ``"default"`` for the bundled list, or explicit names.
+            Matched against the current names and against ``var["original_name"]``, so it works either side of :func:`~mantispy.pp.standardize_feature_names`.
         noise_removal_perturb_groups: ``noise_removal``: ``obs`` column grouping replicates.
-        noise_removal_stdev_cutoff: ``noise_removal``: drop features whose within-group standard deviation, averaged over groups, is above this. An absolute threshold on the scale ``normalize`` left the values on, so it is only meaningful next to the normalization that produced them; pycytominer's default assumes whole-plate standardization.
+        noise_removal_stdev_cutoff: ``noise_removal``: drop features whose within-group standard deviation, averaged over groups, is above this.
+            An absolute threshold on the scale :func:`~mantispy.pp.normalize` left the values on, so it is only meaningful next to the normalization that produced them; pycytominer's default assumes whole-plate standardization.
         key_added: Name of the boolean ``var`` column to write.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes ``var[key_added]`` and a per-operation count of removals to ``uns["mantispy"]["feature_select"]``, each count being what that operation removes on its own. Nothing is dropped; use :func:`subset_features` for that.
+        ``None``, or the modified copy.
+        Writes ``var[key_added]`` and a per-operation count of removals to ``uns["mantispy"]["feature_select"]``, each count being what that operation removes on its own.
+        Nothing is dropped; use :func:`subset_features` for that.
 
     Raises:
         ValueError: If ``operations`` names an operation that is not in ``OPERATIONS``.
@@ -325,20 +300,16 @@ def feature_select(
                 raise KeyError(f"obs has no column {noise_removal_perturb_groups!r} to group replicates by")
             codes, _ = group_codes(adata, noise_removal_perturb_groups)
             mask = _op_noise_removal(X, codes, noise_removal_stdev_cutoff)
-        # Counted against every judged feature rather than against the features its predecessors left, so the count does not depend on where the operation sits in `operations`.
         removed[operation] = int((~mask).sum())
         keep[judged] &= mask
 
     if decorrelate:
-        # A post step on the features the operations kept, so its count is what it removes from those.
         survivors = np.flatnonzero(keep)
         mask = rank_revealing_subset(full[:, survivors], decorr_threshold, decorr_method)
         removed["decorrelate"] = int((~mask).sum())
         keep[survivors[~mask]] = False
 
     if not keep.any() and adata.n_vars:
-        # Selecting nothing is almost always a cutoff set against the wrong scale rather than a screen with
-        # no usable features, and on its own it surfaces further down as an empty matrix in whatever runs next.
         warnings.warn(
             f"feature_select flagged none of the {adata.n_vars} features as selected; "
             f"uns['mantispy']['feature_select'] says what each operation removed. Every cutoff here is an "
@@ -363,7 +334,8 @@ def subset_features(adata: AnnData, key: str = "selected") -> AnnData:
     """Return a new object holding only the features flagged by ``var[key]``.
 
     Args:
-        adata: Object to subset. Never modified.
+        adata: Object to subset.
+            Never modified.
         key: Boolean ``var`` column naming the features to keep, as :func:`feature_select` writes.
 
     Returns:

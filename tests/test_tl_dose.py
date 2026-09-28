@@ -22,9 +22,7 @@ def dosed():
     adata.obs["Metadata_Concentration"] = dose
     response = rng.normal(0, 0.05, n)
     active = compound == "active"
-    # A sigmoid response. A response linear in log10(dose) still gives a clean Spearman
-    # trend, but without a plateau a four-parameter logistic has no EC50 to find and
-    # fit_ok would refuse it.
+    # Sigmoid, not linear in log10(dose): without a plateau the logistic has no EC50 and fit_ok would refuse it.
     response[active] += four_parameter_logistic(np.log10(dose[active]), 0.0, 10.0, 0.0, 1.5)
     adata.obs["hits_row_distance"] = response
     return adata
@@ -48,7 +46,6 @@ def test_fit_ok_refuses_a_curve_that_only_the_optimiser_believes():
     assert converged >= 55, "the optimiser really does succeed on noise; that is the point"
     assert accepted <= 10, "fit_ok must not"
 
-    # And a real curve still passes, with the EC50 it was built from.
     truth = four_parameter_logistic(log_dose, 0.0, 10.0, 0.0, 1.5)
     ec50, _, _, _, r_squared, ok = _fit_curve(log_dose, truth + rng.normal(0, 0.2, 6), 0.8)
     assert ok
@@ -72,7 +69,6 @@ def test_pure_noise_does_not_reach_the_hit_call_threshold():
 
 
 def _dosed_wells(conc, resp, controls=()):
-    """One compound over `conc`, plus optional control wells, as a well-level mantispy object."""
     n, m = len(conc), len(controls)
     frame = pd.DataFrame(
         {
@@ -94,13 +90,11 @@ def _dosed_wells(conc, resp, controls=()):
 def test_the_cutoff_comes_from_the_controls_that_did_not_fit_the_transform():
     """Regression for #83.
 
-    The controls that fitted the centroid and covariance sit closer to the centroid they placed,
-    so their spread is narrower than the held-out half's. Pooling them shrinks the MAD, which is
-    the whole cutoff, and every curve then clears a bar that is too low.
+    The controls that fitted the centroid and covariance sit closer to the centroid they placed, so their spread is narrower than the held-out half's.
+    Pooling them shrinks the MAD, which is the whole cutoff, and every curve then clears a bar that is too low.
     """
     conc = np.array([0.03, 0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0])
     resp = np.array([0.0, 0.2, 0.1, 0.4, 0.7, 0.9, 0.6, 1.2])
-    # Two halves of one control population, one measured against a centroid it helped place.
     fitted, held_out = np.linspace(-0.1, 0.1, 12), np.linspace(-1.0, 1.0, 12)
 
     adata = _dosed_wells(conc, resp, controls=np.concatenate([fitted, held_out]))
@@ -150,10 +144,9 @@ def test_a_compound_with_one_concentration_is_left_out_of_the_direction_table(ph
 def test_the_amplitude_floor_follows_the_plates_the_concentration_sits_on():
     """Controls drawn without regard to the layout give a floor that does not apply to the concentration.
 
-    Here each plate's controls sit to one side of every feature, which is what a plate effect looks like. A
-    concentration with a well on each plate has those offsets cancel; one with both wells on a single plate does
-    not, and its floor is the offset. A floor taken from any group of the right size would report the same
-    number for both.
+    Here each plate's controls sit to one side of every feature, which is what a plate effect looks like.
+    A concentration with a well on each plate has those offsets cancel; one with both wells on a single plate does not, and its floor is the offset.
+    A floor taken from any group of the right size would report the same number for both.
     """
     rng = np.random.default_rng(0)
     rows = []
@@ -161,7 +154,6 @@ def test_the_amplitude_floor_follows_the_plates_the_concentration_sits_on():
         for _ in range(8):
             rows.append({"plate": plate, "compound": "DMSO", "dose": 0.0, "offset": offset})
         for dose in np.geomspace(0.1, 100.0, 4):
-            # "spread" doses one well per plate; "stacked" puts both of its wells on P1.
             rows.append({"plate": plate, "compound": "spread", "dose": dose, "offset": 0.0})
             rows.append({"plate": "P1", "compound": "stacked", "dose": dose, "offset": 0.0})
     frame = pd.DataFrame(rows)
@@ -180,15 +172,13 @@ def test_the_amplitude_floor_follows_the_plates_the_concentration_sits_on():
 
 
 def test_a_trajectory_is_an_object_io_accepts(tmp_path, phenotypes):
-    """Same defect as #103: var held only `feature` and `position`, so the stamped result failed
-    validation on the nine annotation columns the schema requires."""
+    """Same defect as #103: var held only `feature` and `position`, so the stamped result failed validation on the nine annotation columns the schema requires."""
     mt.tl.dose_direction(phenotypes)
     paths = mt.tl.dose_trajectory(phenotypes, n_positions=3)
 
     report = mt.io.validate(paths)
     assert report.ok, str(report)
-    # `feature` is the one annotation column a trajectory can fill honestly: the source feature the
-    # column was read from. The rest describe a CellProfiler measurement this is not, and stay empty.
+    # The other annotation columns describe a CellProfiler measurement a trajectory is not, so they stay empty.
     assert paths.var["feature"].nunique() == phenotypes.n_vars - 1
     for column in ("object", "feature_group", "channel", "scale", "angle", "gray_levels", "radial_bin", "params"):
         assert paths.var[column].isna().all(), column
@@ -210,9 +200,8 @@ def test_a_trajectory_needs_at_least_two_points(phenotypes):
 
 
 def test_a_position_is_named_the_same_whatever_the_grid_holds(phenotypes):
-    """The suffix width was chosen from the grid, so the endpoints shared by every grid -- 0.0 and
-    1.0 -- were named @0.00 at 101 positions and @0.000 at 102, and no two runs of one screen lined
-    up. The width no longer depends on how many positions were asked for."""
+    """The suffix width was chosen from the grid, so the endpoints shared by every grid -- 0.0 and 1.0 -- were named @0.00 at 101 positions and @0.000 at 102, and no two runs of one screen lined up.
+    The width no longer depends on how many positions were asked for."""
     narrow = mt.tl.dose_trajectory(phenotypes, n_positions=101)
     wide = mt.tl.dose_trajectory(phenotypes, n_positions=102)
 

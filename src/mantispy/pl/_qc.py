@@ -26,7 +26,7 @@ def cell_counts(
     """Distribution of cells per well, split by ``groupby``.
 
     Args:
-        adata: Cells, which are counted per well, or profiles, whose `count_key` is drawn.
+        adata: Cells, which are counted per well, or profiles, whose ``count_key`` is drawn.
         groupby: ``obs`` column whose groups become the boxes.
         ax: Axes to draw on, or ``None`` for a new figure.
         count_key: ``obs`` column holding the cell count of profiles.
@@ -35,7 +35,7 @@ def cell_counts(
         The axes drawn on.
 
     Raises:
-        KeyError: Profiles carry no `count_key`.
+        KeyError: Profiles carry no ``count_key``.
     """
     obs = as_frame(adata.obs)
     cells = get_resolution(adata) == "cell"
@@ -88,7 +88,6 @@ def feature_distributions(
     Raises:
         ValueError: ``kind`` is not one of the three accepted values.
     """
-    # Multi-panel (layers by features); interactive twin deferred.
     import matplotlib.pyplot as plt
 
     if kind not in {"ecdf", "hist", "ridge"}:
@@ -179,7 +178,6 @@ def qc(adata: AnnData, figsize: tuple[float, float] = (12, 8)) -> np.ndarray:
     Returns:
         The two-by-two array of axes.
     """
-    # Multi-panel dashboard; interactive twin deferred.
     import matplotlib.pyplot as plt
 
     figure, axes = plt.subplots(2, 2, figsize=figsize)
@@ -199,7 +197,6 @@ def qc(adata: AnnData, figsize: tuple[float, float] = (12, 8)) -> np.ndarray:
 
     if "qc_variance" in adata.var:
         variance = as_frame(adata.var)["qc_variance"].to_numpy(dtype=float)
-        # All-NaN features have NaN variance, which log10 cannot take.
         variance = variance[np.isfinite(variance) & (variance > 0)]
         if variance.size:
             axes[1, 1].hist(np.log10(variance), bins=40)

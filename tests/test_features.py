@@ -64,8 +64,7 @@ def test_parses_feature_names(name, expected):
 
 
 def test_the_grammar_is_chosen_from_the_whole_list():
-    """A file is written by one tool, so one cp_measure name settles how the rest are read, and a CellProfiler
-    name in that file is a mixed file rather than a name to guess at."""
+    """A file is written by one tool, so one cp_measure name settles how the rest are read, and a CellProfiler name in that file is a mixed file rather than a name to guess at."""
     parsed = parse_feature_names(["cell_0/max/sizeshapeSolidity", "Cells_AreaShape_Area"], channels=CHANNELS)
 
     assert parsed.loc["cell_0/max/sizeshapeSolidity", "feature_group"] == "sizeshape"

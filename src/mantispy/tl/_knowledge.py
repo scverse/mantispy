@@ -1,8 +1,5 @@
 """Gene-set tools for genetic screens.
 
-In a CRISPR or ORF screen each perturbation is a gene, so gene-set resources apply to morphological profiles.
-The enrichment used with feature annotations tests pathways when given a pathway network.
-
 The sets come from OmniPath through decoupler, in the same ``source``/``target``/``weight`` format that :func:`~mantispy.tl.feature_sets` produces.
 """
 
@@ -26,7 +23,8 @@ def gene_sets(source: str = "hallmark", organism: str = "human") -> pd.DataFrame
     """Fetch a gene-set network, or read one from a GMT file.
 
     Args:
-        source: One of ``SOURCES``, or a path ending in ``.gmt``. ``"hallmark"`` (50 broad programs) is a good default for a morphological screen.
+        source: One of ``SOURCES``, or a path ending in ``.gmt``.
+            ``"hallmark"`` (50 broad programs) is a good default for a morphological screen.
         organism: Passed to the OmniPath resource.
 
     Returns:
@@ -208,10 +206,7 @@ def enrich_hits(
             "are empty and there is nothing to compare. Loosen the threshold if nothing was called, tighten "
             "it if everything was, or rank by phenotype strength instead."
         )
-    # ORA returns log odds ratios and BH-adjusted q-values.
-    # The background is the screen's own genes rather than decoupler's genome-wide default.
     # ORA keeps genes ranked above n_up, so n_up = n_bg - n_hits selects the hits and reproduces Fisher's exact test.
-    # empty=False keeps sets without hits, so depletion is reported.
     scores, qvalues = dc.mt.ora(membership, net, tmin=1, n_bg=n_bg, n_up=n_bg - n_hits, empty=False, verbose=False)
     table = pd.DataFrame(
         {

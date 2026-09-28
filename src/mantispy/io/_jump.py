@@ -2,7 +2,6 @@
 
 A JUMP plate parquet carries three metadata columns (source, plate, well) and 4762 features.
 The compound or gene each well received is recorded in a separate repository, keyed by ``Metadata_JCP2022``.
-This module reads the profiles with :func:`~mantispy.io.read_profiles` and joins the annotation onto them.
 
 Sources, all public over HTTPS:
 
@@ -25,14 +24,12 @@ from anndata import AnnData
 from mantispy._core.logging import get_logger
 from mantispy.io._profiles import _read_frame, read_profiles
 
-#: JUMP's annotation tables, pinned by sha256 in the dataset registry because the upstream repository is mutable.
-#: A changed table fails the checksum instead of changing the annotation.
+#: Pinned by sha256 in the dataset registry because the upstream repository is mutable.
 TABLES = ("plate", "well", "compound", "crispr", "perturbation_control", "gene_chromosome_map")
 
 #: JUMP's negative control: DMSO, under its JCP identifier.
 NEGATIVE_CONTROL = "JCP2022_033924"
 
-#: Kinds of perturbation the annotation covers, and the table each is described by.
 KINDS = ("compound", "crispr")
 
 _JOIN_ON = ["Metadata_Source", "Metadata_Plate", "Metadata_Well"]
@@ -71,9 +68,6 @@ def read_jump(paths: str | Path | Sequence[str | Path], annotate: bool = True, *
     Returns:
         An :class:`~anndata.AnnData` at well resolution.
         With ``annotate`` it carries ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_InChIKey`` and ``Metadata_Control``.
-
-    Notes:
-        JUMP plates from different sources share their feature names but not always the same set of features; pass ``on_column_mismatch="intersect"`` when mixing sources.
     """
     adata = read_profiles(paths, resolution="well", **kwargs)
     if annotate:

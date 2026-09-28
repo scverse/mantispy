@@ -1,5 +1,3 @@
-"""Per-group normalization."""
-
 from __future__ import annotations
 
 import warnings
@@ -22,10 +20,7 @@ METHODS = ("mad_robustize", "standardize", "robustize")
 def _median_and_spread(
     adata: AnnData, spread: int, codes: np.ndarray, keys: pd.Index, layer: str | None, mask: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Per-group median and robust spread, from one sort of each group-by-feature slice.
-
-    Asking :func:`~mantispy._core._reduce.reduce_grouped` for the two separately sorted every slice three times: once for the median, then again inside the spread pass, which re-finds that same median before measuring the deviations from it, or takes two more quantiles of the same values.
-    """
+    """Per-group median and robust spread."""
     if adata.isbacked:
         # One group at a time, as the backed branch of reduce_grouped does, so a screen that does not fit in memory still normalizes.
         centre = np.full((len(keys), adata.n_vars), np.nan)
@@ -41,7 +36,7 @@ def _median_and_spread(
         return centre, scale
 
     matrix = get_matrix(adata, layer)
-    # reduce_grouped masks unconditionally, which copies the whole matrix for the common case of a reference that is every row.
+    # Masking copies the whole matrix, so it is skipped when the reference is every row.
     if not mask.all():
         codes, matrix = codes[mask], matrix[mask]
     return grouped_median_spread(matrix, codes, len(keys), spread)
@@ -73,14 +68,9 @@ def _center_and_scale(
     else:  # robustize: median and interquartile range, as sklearn's RobustScaler
         centre, scale = _median_and_spread(adata, IQR, codes, keys, layer, mask)
 
-    # A feature that is constant within a group has zero spread there. sklearn clamps such a
-    # scale to 1.0, giving 0.0. mad_robustize divides by epsilon as pycytominer does, which
-    # multiplies the feature by up to 1e18. A NaN or infinite scale fails this comparison, so
-    # it is left to `uncentred` along with the missing values behind it.
+    # A NaN or infinite scale fails this comparison, so it is left to `uncentred`.
     no_spread = (scale <= epsilon).any(axis=0)
-    # A feature whose reference rows are all missing in a group has no centre there either.
-    # Repairing only the scale would subtract NaN from every row of the group and wipe the
-    # values that were measured outside the reference rows.
+    # Repairing only the scale would subtract a NaN centre from every row of the group, wiping the non-reference values.
     uncentred = ~(np.isfinite(centre) & np.isfinite(scale)).all(axis=0)
     centre = np.where(np.isfinite(centre), centre, 0.0)
     scale = np.where((scale == 0) | ~np.isfinite(scale), 1.0, scale)
@@ -104,16 +94,20 @@ def normalize(
     Args:
         adata: Object to normalize.
         method: ``"mad_robustize"`` computes ``(x - median) / (1.4826 * MAD + epsilon)``, ``"standardize"`` computes ``(x - mean) / sd``, and ``"robustize"`` computes ``(x - median) / IQR``.
-        by: Column(s) defining the groups statistics are computed within, usually the plate. ``None`` fits one set of statistics globally.
+        by: Column(s) defining the groups statistics are computed within, usually the plate.
+            ``None`` fits one set of statistics globally.
         reference: Rows to fit on: ``None`` for all, ``"negcon"`` for ``Metadata_Control``, or the name of a boolean ``obs`` column.
-        epsilon: Added to the MAD, matching pycytominer's ``mad_robustize_epsilon``. Unused by the other methods.
-        keep_raw: Store the pre-normalization matrix in ``layers["raw"]``. Off by default, because the layer doubles memory and the raw table is already on disk.
+        epsilon: Added to the MAD, matching pycytominer's ``mad_robustize_epsilon``.
+            Unused by the other methods.
+        keep_raw: Store the pre-normalization matrix in ``layers["raw"]``.
+            Off by default, because the layer doubles memory and the raw table is already on disk.
         layer: Read this layer instead of ``X``.
         key_added: Write to ``layers[key_added]`` instead of overwriting ``X``.
         copy: Return a normalized copy instead of normalizing in place.
 
     Returns:
-        ``None``, or the normalized copy when ``copy=True``. Writes ``X`` or ``layers[key_added]``, and ``var["degenerate_scale"]``, or ``var["degenerate_scale_<key_added>"]`` when writing to a layer, which flags features that have no spread in some group or no reference values to centre on there, and comes with a warning; drop those features before computing distances.
+        ``None``, or the normalized copy when ``copy=True``.
+        Writes ``X`` or ``layers[key_added]``, and ``var["degenerate_scale"]``, or ``var["degenerate_scale_<key_added>"]`` when writing to a layer, which flags features that have no spread in some group or no reference values to centre on there, and comes with a warning; drop those features before computing distances.
 
     Raises:
         ValueError: If ``method`` is unknown, or ``reference`` selects no rows at all or none in some group.
@@ -133,9 +127,7 @@ def normalize(
 
     centre, scale, no_spread, uncentred = _center_and_scale(adata, method, by, codes, keys, layer, mask, epsilon)
     degenerate = no_spread | uncentred
-    # One flag column per output matrix. A single unsuffixed column lets a second call writing
-    # another layer reset the flags describing the first, and the remedy below then keeps a
-    # feature whose value in that layer is 1e18.
+    # One flag column per output matrix, so a call writing another layer does not reset the flags describing the first.
     flag = "degenerate_scale" if key_added is None else f"degenerate_scale_{key_added}"
     adata.var[flag] = degenerate
     scope = f" among the rows selected by reference={reference!r}" if reference is not None else ""
@@ -156,8 +148,7 @@ def normalize(
             UserWarning,
             stacklevel=3,
         )
-    # Both conditions report, because a feature that is constant in one group and unmeasured
-    # in another is still multiplied by 1e18 in the first.
+    # Not elif: a feature constant in one group and unmeasured in another is still multiplied by 1e18 in the first.
     if no_spread.any():
         warnings.warn(
             f"{int(no_spread.sum())} of {adata.n_vars} features have no spread in at least one "
@@ -176,7 +167,6 @@ def normalize(
     lookup = {key: position for position, key in enumerate(keys)}
 
     def _rescale(key: Any, block: np.ndarray) -> np.ndarray:
-        """Centre and scale one group's block with that group's own statistics."""
         index = lookup[key]
         return (block - centre[index]) / scale[index]
 

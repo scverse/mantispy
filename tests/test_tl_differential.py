@@ -20,8 +20,6 @@ def test_a_group_confounded_with_its_plate_is_skipped_not_scored(well_profiles):
     """Treatment and plate become the same variable, and no test can separate them."""
     rng = np.random.default_rng(3)
     n_features = 200
-    # Two plates, with treatment fully determined by plate. The plate shift is the only
-    # difference between the groups, so nothing here is a treatment effect.
     plate_shift = rng.normal(scale=1.5, size=(2, n_features))
     values = np.concatenate(
         [rng.normal(size=(8, n_features)) + plate_shift[0], rng.normal(size=(8, n_features)) + plate_shift[1]]
@@ -43,8 +41,6 @@ def test_a_group_confounded_with_its_plate_is_skipped_not_scored(well_profiles):
     with pytest.raises(ValueError, match="no group had enough replicates"):
         mt.tl.differential_features(adata)
 
-    # Without blocking the confound goes unnoticed and the plate difference is scored as
-    # a treatment effect.
     mt.tl.differential_features(adata, block=None, key_added="unblocked")
     table = adata.uns["mantispy"]["unblocked"]
     assert (table["qvalue"] < 0.05).mean() > 0.1, "the unblocked test reports the plate as biology"
@@ -57,8 +53,7 @@ def test_the_diagnostic_catches_what_the_docstrings_claim(well_profiles):
     assert report["null p < 0.05"] == "pass"
     assert report["null discoveries"] == "pass"
 
-    # Two wells per treatment across many features: a rank test cannot reach the
-    # threshold that many tests demand, whatever the effect size.
+    # Two wells per treatment: a rank test cannot reach the threshold that many tests demand, whatever the effect size.
     rng = np.random.default_rng(8)
     n_features, n_groups = 200, 12
     labels = ["DMSO"] * 24 + [f"pert{i:02d}" for i in range(n_groups) for _ in range(2)]

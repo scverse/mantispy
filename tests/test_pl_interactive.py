@@ -1,7 +1,7 @@
 """The optional plotly twin: the runtime gate, and that a fired twin closes the static figure.
 
-The gate is forced down each branch by monkeypatching, so these run without a real
-notebook. The False branch runs everywhere; the True branch needs plotly and IPython.
+The gate is forced down each branch by monkeypatching, so these run without a real notebook.
+The False branch runs everywhere; the True branch needs plotly and IPython.
 """
 
 import matplotlib
@@ -50,9 +50,6 @@ def _close_figures():
     plt.close("all")
 
 
-# --- the gate --------------------------------------------------------------
-
-
 def test_gate_is_false_without_plotly(monkeypatch):
     monkeypatch.setattr(_common, "find_spec", lambda name: None)
     assert _common.interactive_available() is False
@@ -85,8 +82,6 @@ def test_gate_is_true_in_a_notebook_with_plotly(monkeypatch):
     monkeypatch.delenv("MANTISPY_PLOTTING_BACKEND", raising=False)
     assert _common.interactive_available() is True
 
-
-# --- the shim, one figure per chart kind -----------------------------------
 
 _FRAME = pd.DataFrame({"a": [1.0, 2.0, 3.0], "b": [3.0, 2.0, 1.0], "g": ["x", "y", "x"], "lab": ["p", "q", "r"]})
 
@@ -130,9 +125,6 @@ def test_each_kind_builds_and_displays_one_figure(displayed, kind):
 def test_an_unknown_kind_is_refused(displayed):
     with pytest.raises(ValueError, match="unknown interactive kind"):
         _common.maybe_interactive("violin", data=_FRAME, x="a", y="b")
-
-
-# --- a representative plot per kind -----------------------------------------
 
 
 @pytest.fixture(scope="module")

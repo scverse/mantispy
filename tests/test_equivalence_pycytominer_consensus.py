@@ -58,8 +58,7 @@ def test_default_matches_pycytominer_median():
 def test_a_shared_gap_weights_the_replicates_as_pycytominer_does():
     """pycytominer correlates pairwise-complete, so a shared gap is neutral there; zero-filling the ranks diverged 0.33 in weight.
 
-    pycytominer is the reference for the weighting rule, and its correlation comes from
-    ``pandas.DataFrame.corr``, which drops a pair's missing features rather than filling them.
+    pycytominer is the reference for the weighting rule, and its correlation comes from ``pandas.DataFrame.corr``, which drops a pair's missing features rather than filling them.
     """
     from pycytominer.cyto_utils.util import get_pairwise_correlation
 
@@ -69,8 +68,7 @@ def test_a_shared_gap_weights_the_replicates_as_pycytominer_does():
     block = rng.normal(size=(4, 60))  # four replicates that agree on nothing
     block[np.ix_([0, 1], np.arange(20))] = np.nan  # the same features undefined in two of them
 
-    # pycytominer's own steps on pycytominer's own correlation: samples are the columns, the
-    # diagonal is dropped, anticorrelation counts as uninformative, and the weights sum to one.
+    # pycytominer's modz rule: diagonal dropped, anticorrelation counts as uninformative, weights sum to one.
     correlation = get_pairwise_correlation(pd.DataFrame(block).transpose(), method="spearman")[0]
     correlation = correlation.to_numpy(dtype=np.float64).copy()
     np.fill_diagonal(correlation, np.nan)

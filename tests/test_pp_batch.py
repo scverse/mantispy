@@ -60,8 +60,6 @@ def test_regress_out_handles_categorical_keys_and_missing_columns(gradient_cells
 
     before = between_plate_spread(wells)
     mt.pp.regress_out(wells, keys=("Metadata_Plate",), by=None)
-    # Regressing out plate identity globally must remove the between-plate difference.
-    # A finiteness check alone would also pass for a function that does nothing.
     assert between_plate_spread(wells) < 0.01 * before
     assert np.isfinite(wells.X).all()
 
@@ -70,16 +68,17 @@ def test_regress_out_handles_categorical_keys_and_missing_columns(gradient_cells
 
 
 def test_harmony_says_so_when_it_corrects_nothing(cells):
-    """harmonypy reports convergence and returns the input unchanged when the batches are
-    perfectly separated in the embedding, because every soft cluster is then single-batch.
-    The wrapper warns in that case."""
+    """harmonypy reports convergence and returns the input unchanged when the batches are perfectly separated in the embedding, because every soft cluster is then single-batch.
+
+    The wrapper warns in that case.
+    """
     pytest.importorskip("harmonypy")
     import scanpy as sc
 
     wells = mt.tl.aggregate(cells, min_cells=0)
     wells.obs["Metadata_Site"] = np.where(wells.obs["Metadata_Plate"].astype(str) == "Plate01", "north", "south")
     values = np.asarray(wells.X, dtype=float).copy()
-    values[(wells.obs["Metadata_Site"] == "north").to_numpy()] += 5.0  # completely separable
+    values[(wells.obs["Metadata_Site"] == "north").to_numpy()] += 5.0
     wells.X = values.astype(np.float32)
     sc.pp.pca(wells, n_comps=10)
 
@@ -104,10 +103,9 @@ def test_harmony_needs_something_to_correct(cells):
 def test_one_infinity_does_not_spread_across_features(gradient_cells):
     """A single inf affects only its own value.
 
-    ``np.linalg.lstsq`` with several right-hand sides returns NaN coefficients for all of
-    them when any one column holds an infinity, which would turn the whole plate into NaN.
-    Three JUMP plates carry one inf each. Regression test for #66: the feature holding it
-    was then fitted with the inf and lost on its plate.
+    ``np.linalg.lstsq`` with several right-hand sides returns NaN coefficients for all of them when any one column holds an infinity, which would turn the whole plate into NaN.
+    Three JUMP plates carry one inf each.
+    Regression test for #66: the feature holding it was then fitted with the inf and lost on its plate.
     """
     adata = gradient_cells.copy()
     adata.obs["Metadata_CellCount"] = np.arange(adata.n_obs) % 37 + 10
@@ -148,16 +146,14 @@ def _two_plates(count_means=(1500.0, 1500.0), slope=0.0, n=192, n_features=30, s
 
 
 def test_regress_out_says_when_a_plate_never_reaches_the_pooled_density():
-    """On pki two plates hold a third of the others' cells; fitted per plate and re-expressed at the pooled
-    mean, the result correlated with the cell count more than the input had."""
+    """On pki two plates hold a third of the others' cells; fitted per plate and re-expressed at the pooled mean, the result correlated with the cell count more than the input had."""
     adata = _two_plates(count_means=(600.0, 1800.0), slope=0.002)
     with pytest.warns(UserWarning, match="extrapolating"):
         mt.pp.regress_out(adata, keys=["Metadata_Count"], by="Metadata_Plate")
 
 
 def _treated_and_thinned(seed=0):
-    """Controls whose features follow density for technical reasons, and a treatment that both thins the wells
-    and has a phenotype of its own, so a fit over every well mistakes the phenotype for density."""
+    """Controls whose features follow density for technical reasons, and a treatment that both thins the wells and has a phenotype of its own, so a fit over every well mistakes the phenotype for density."""
     import anndata as ad
 
     from mantispy._core.schema import stamp
@@ -188,10 +184,8 @@ def test_regress_out_on_the_controls_removes_density_and_keeps_the_phenotype():
 
     fixed = np.asarray(on_controls.X)
     count = adata.obs["Metadata_CellCount"].to_numpy()
-    # The technical slope is gone among the controls, and they stay where normalization put them.
     assert abs(np.corrcoef(count[control], fixed[control, 0])[0, 1]) < 0.2
     assert np.allclose(fixed[control].mean(axis=0), before[control].mean(axis=0), atol=1e-4)
-    # The treatment keeps most of its phenotype; a fit over every well takes it away.
     assert fixed[~control].mean() - fixed[control].mean() > 2.0
     assert np.asarray(on_everything.X)[~control].mean() - np.asarray(on_everything.X)[control].mean() < 1.0
 
@@ -241,10 +235,7 @@ def _operator_wells(missing_label: bool):
 
 
 def test_regress_out_refuses_a_covariate_with_a_missing_label():
-    """A NaN category encodes all-zero, which is the level drop_first removed, so a row
-    whose label is missing is fitted as the reference level: row 0 came out at 13.85
-    instead of 5.06, and the 23 correctly labelled rows moved with it (per-operator means
-    6.42/6.42/6.42 became 5.17/6.42/7.39)."""
+    """A NaN category encodes all-zero, which is the level drop_first removed, so a row whose label is missing is fitted as the reference level: row 0 came out at 13.85 instead of 5.06, and the 23 correctly labelled rows moved with it (per-operator means 6.42/6.42/6.42 became 5.17/6.42/7.39)."""
     adata, _ = _operator_wells(missing_label=True)
     with pytest.raises(ValueError, match="Metadata_Operator"):
         mt.pp.regress_out(adata, keys=["Metadata_Operator"], by=None)
@@ -252,10 +243,10 @@ def test_regress_out_refuses_a_covariate_with_a_missing_label():
 
 @pytest.mark.parametrize("value", [np.nan, np.inf])
 def test_regress_out_says_so_when_a_missing_covariate_value_disables_it(value):
-    """``np.ptp`` is NaN for a covariate holding a NaN and ``NaN > 0`` is False, so the
-    covariate is read as non-varying and dropped: the correction becomes a bitwise no-op
-    (corr 0.98 before and after) while the only log line claims the covariate was removed.
-    An infinite value is dropped the same way, where it was fitted without a warning (#66)."""
+    """``np.ptp`` is NaN for a covariate holding a NaN and ``NaN > 0`` is False, so the covariate is read as non-varying and dropped: the correction becomes a bitwise no-op (corr 0.98 before and after) while the only log line claims the covariate was removed.
+
+    An infinite value is dropped the same way, where it was fitted without a warning (#66).
+    """
     adata, _ = _operator_wells(missing_label=False)
     generator = np.random.default_rng(1)
     counts = generator.normal(1500.0, 200.0, adata.n_obs)
@@ -268,5 +259,4 @@ def test_regress_out_says_so_when_a_missing_covariate_value_disables_it(value):
     before = np.asarray(adata.X).copy()
     with pytest.warns(UserWarning, match="Metadata_CellCount"):
         mt.pp.regress_out(adata, keys=["Metadata_CellCount"], by=None)
-    # Leaving the group uncorrected is the conservative choice; doing it silently is not.
     assert np.array_equal(np.asarray(adata.X), before)

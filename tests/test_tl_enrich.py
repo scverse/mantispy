@@ -64,7 +64,6 @@ def test_rank_features_carries_the_parsed_annotation(profiles):
     mt.tl.rank_features(profiles, groupby="Metadata_Perturbation")
     table = profiles.uns["mantispy"]["rank_features"]
     assert {"group", "feature", "score", "pvalue", "qvalue", "feature_group", "channel"} <= set(table.columns)
-    # The features the simulation moved should lead their perturbation's ranking.
     truth = profiles.uns["mantispy"]["truth"]["affected_features"]
     group = next(name for name, features in truth.items() if features)
     top = table[table["group"] == group].nlargest(3, "score")["feature"].tolist()
@@ -95,8 +94,7 @@ def test_round_trip(profiles, tmp_path):
 
 def test_ora_scores_the_extreme_features_not_the_ordinary_ones():
     """decoupler keeps features whose rank exceeds n_up, so enrich sets a default n_up.
-    Without it ORA runs on the bottom 95%, gives the most extreme set p = 1.0 and reports
-    the depleted set as the hit."""
+    Without it ORA runs on the bottom 95%, gives the most extreme set p = 1.0 and reports the depleted set as the hit."""
     names = [f"Cells_AreaShape_f{i}" for i in range(100)]
     adata = ad.AnnData(
         np.arange(100, dtype=np.float32)[None, :],
@@ -111,14 +109,12 @@ def test_ora_scores_the_extreme_features_not_the_ordinary_ones():
     assert float(scores["TOP"].iloc[0]) > float(scores["BOTTOM"].iloc[0])
     assert float(adata.obsm["padj_ora"]["TOP"].iloc[0]) < 0.05
 
-    # An explicit n_up must override that default.
     explicit = adata.copy()
     mt.tl.enrich(explicit, net=net, method="ora", n_bg=100, tmin=5, n_up=5)
     assert float(explicit.obsm["score_ora"]["TOP"].iloc[0]) != float(scores["TOP"].iloc[0])
 
 
 def _object(var, n_obs=5):
-    """A small well-level object over a hand-made var."""
     return ad.AnnData(
         np.random.default_rng(0).random((n_obs, len(var))).astype(np.float32),
         obs=pd.DataFrame(
@@ -137,16 +133,14 @@ def _unparsed(n=6):
 
 
 def test_feature_sets_returns_an_empty_network_when_no_feature_is_fully_annotated():
-    """An object may legitimately have an annotation that names no family, and the caller asked for
-    the network, not for a verdict on the annotation."""
+    """An object may legitimately have an annotation that names no family, and the caller asked for the network, not for a verdict on the annotation."""
     network = mt.tl.feature_sets(_unparsed())
     assert list(network.columns) == ["source", "target", "weight"]
     assert network.empty
 
 
 def test_feature_sets_survives_an_annotation_no_row_completes():
-    """The all-empty column is not the only way in: two features can each fill a different half of
-    `by`, so neither column is empty and still no row has both."""
+    """The all-empty column is not the only way in: two features can each fill a different half of `by`, so neither column is empty and still no row has both."""
     var = empty_annotation(pd.Index(["f0", "f1"]))
     var["feature_group"] = pd.Categorical(["AreaShape", None])
     var["channel"] = pd.Categorical([None, "DNA"])
@@ -157,8 +151,7 @@ def test_feature_sets_survives_an_annotation_no_row_completes():
 def active():
     """A small object with one genuinely active feature group and a feature_sets-style net.
 
-    The first half of the samples carry a constant added across the ACTIVE group's features,
-    so a working scorer must rank ACTIVE higher there than in the untouched second half.
+    The first half of the samples carry a constant added across the ACTIVE group's features, so a working scorer must rank ACTIVE higher there than in the untouched second half.
     The net has four groups of fifteen features each: enough sets and features for mlm to fit.
     """
     rng = np.random.default_rng(0)
@@ -185,12 +178,10 @@ def active():
     return adata, net, is_active_sample
 
 
-#: The single methods that write only a score; every other one also writes a padj frame.
 _SCORE_ONLY = {"aucell", "gsva"}
 
 
 def _single_method_param(name: str):
-    """Parametrize entry for a single method; xfail only mlm, which the small synthetic net cannot fit."""
     if name == "mlm":
         return pytest.param(
             name,
@@ -261,9 +252,8 @@ def test_consensus_is_idempotent(active):
 
 
 def test_consensus_ignores_a_stale_score_of_a_different_width(active):
-    """A prior enrich may have left a score_* whose width differs from the net's; consensus must build
-    from only its panel, neither crashing on that stale frame nor folding it into the consensus. enrich owns
-    the score_*/padj_* namespace, so it also clears the stale key rather than leaving it behind."""
+    """A prior enrich may have left a score_* whose width differs from the net's; consensus must build from only its panel, neither crashing on that stale frame nor folding it into the consensus.
+    enrich owns the score_*/padj_* namespace, so it also clears the stale key rather than leaving it behind."""
     adata, net, _ = active
     stale = pd.DataFrame(np.zeros((adata.n_obs, 3), dtype=float), index=adata.obs_names, columns=["a", "b", "c"])
     adata.obsm["score_ulm"] = stale
@@ -306,7 +296,6 @@ def test_consensus_does_not_mutate_the_callers_args(active):
 
 
 def test_n_permutations_zero_leaves_the_result_unchanged(active):
-    """The default n_permutations=0 must reproduce today's parametric result exactly."""
     adata, net, _ = active
     default = adata.copy()
     mt.tl.enrich(default, net=net, method="ulm", tmin=2)
@@ -320,8 +309,7 @@ def test_n_permutations_zero_leaves_the_result_unchanged(active):
 
 
 def test_permutation_padj_is_calibrated(active):
-    """A positive n_permutations writes padj_<method> of the right shape, in [0, 1], and calls the
-    genuinely-active set with a smaller padj than an inert one where the activity is real."""
+    """A positive n_permutations writes padj_<method> of the right shape, in [0, 1], and calls the genuinely-active set with a smaller padj than an inert one where the activity is real."""
     adata, net, is_active_sample = active
     mt.tl.enrich(adata, net=net, method="ulm", tmin=2, n_permutations=50)
     padj = adata.obsm["padj_ulm"]
@@ -346,9 +334,8 @@ def test_enrich_rejects_a_negative_n_permutations(active):
 
 
 def test_permutation_ora_uses_the_top_tail(active):
-    """The permutation path must forward the ORA n_up default, so ORA scores the top top_fraction rather
-    than decoupler's bottom-95% tail. On data with a genuinely active set, ORA then calls it with a smaller
-    permutation padj than an inert set."""
+    """The permutation path must forward the ORA n_up default, so ORA scores the top top_fraction rather than decoupler's bottom-95% tail.
+    On data with a genuinely active set, ORA then calls it with a smaller permutation padj than an inert set."""
     adata, net, is_active_sample = active
     mt.tl.enrich(adata, net=net, method="ora", tmin=2, n_permutations=30)
     padj = adata.obsm["padj_ora"]
@@ -358,8 +345,7 @@ def test_permutation_ora_uses_the_top_tail(active):
 
 
 def test_tmin_reaches_the_permutation_path(active):
-    """decoupler_kwargs (here tmin) must reach the permutation scorer via decouple's per-method args, so a
-    set smaller than tmin is dropped from the scored columns rather than scored anyway."""
+    """decoupler_kwargs (here tmin) must reach the permutation scorer via decouple's per-method args, so a set smaller than tmin is dropped from the scored columns rather than scored anyway."""
     adata, net, _ = active
     tiny = pd.DataFrame({"source": ["TINY"], "target": [net["target"].iloc[0]], "weight": [1.0]})
     net = pd.concat([net, tiny], ignore_index=True)
@@ -370,7 +356,6 @@ def test_tmin_reaches_the_permutation_path(active):
 
 
 def test_enrich_clears_stale_scores_from_an_earlier_run(active):
-    """A second enrich with a narrower method set must not leave the earlier run's score_/padj_ behind."""
     adata, net, _ = active
     mt.tl.enrich(adata, net=net, method="consensus", tmin=2)
     assert "score_zscore" in adata.obsm
@@ -380,15 +365,13 @@ def test_enrich_clears_stale_scores_from_an_earlier_run(active):
 
 
 def test_collinearity_warns_on_near_duplicate_sets():
-    """Two sets over the same features are perfectly collinear, so enrichment cannot separate them;
-    the warning names them, and check_collinearity=False suppresses it."""
+    """Two sets over the same features are perfectly collinear, so enrichment cannot separate them; the warning names them, and check_collinearity=False suppresses it."""
     rng = np.random.default_rng(0)
     names = [f"f{index}" for index in range(10)]
     matrix = rng.standard_normal((8, len(names))).astype(np.float32)
     adata = ad.AnnData(
         matrix, obs=pd.DataFrame(index=[str(index) for index in range(8)]), var=pd.DataFrame(index=names)
     )
-    # A and B share their targets, so their scores are identical; C is independent.
     net = pd.DataFrame(
         {"source": ["A"] * 5 + ["B"] * 5 + ["C"] * 5, "target": names[:5] + names[:5] + names[5:], "weight": 1.0}
     )
@@ -403,9 +386,8 @@ def test_collinearity_warns_on_near_duplicate_sets():
 
 
 def test_permutation_survives_an_overlapping_net_at_the_default_tmin():
-    """Regression: a shuffle can collapse an overlapping set's targets below tmin, so the null scores fewer
-    sets than the observed run. The permutation path must realign the null to the observed sets by column
-    rather than crash on the shape mismatch, and still write a padj_* of the right shape with sane values."""
+    """Regression: a shuffle can collapse an overlapping set's targets below tmin, so the null scores fewer sets than the observed run.
+    The permutation path must realign the null to the observed sets by column rather than crash on the shape mismatch, and still write a padj_* of the right shape with sane values."""
     rng = np.random.default_rng(1)
     names = [f"F{index}" for index in range(40)]
     matrix = rng.standard_normal((15, len(names))).astype(np.float32)
@@ -420,7 +402,7 @@ def test_permutation_survives_an_overlapping_net_at_the_default_tmin():
         [(source, target, 1.0) for source, targets in sets.items() for target in targets],
         columns=["source", "target", "weight"],
     )
-    mt.tl.enrich(adata, net=net, method="ulm", n_permutations=200)  # default tmin=5
+    mt.tl.enrich(adata, net=net, method="ulm", n_permutations=200)
     padj = adata.obsm["padj_ulm"]
     assert padj.shape == (adata.n_obs, net["source"].nunique())
     assert list(padj.columns) == sorted(sets)
@@ -429,16 +411,15 @@ def test_permutation_survives_an_overlapping_net_at_the_default_tmin():
 
 
 def test_collinearity_is_checked_below_decouplers_default_tmin():
-    """Regression: net_corr's own default tmin=5 drops small sets and silently skips the check. enrich must
-    thread the scoring tmin through, so near-duplicate sets smaller than five still warn."""
+    """Regression: net_corr's own default tmin=5 drops small sets and silently skips the check.
+    enrich must thread the scoring tmin through, so near-duplicate sets smaller than five still warn."""
     rng = np.random.default_rng(0)
     names = [f"f{index}" for index in range(9)]
     matrix = rng.standard_normal((8, len(names))).astype(np.float32)
     adata = ad.AnnData(
         matrix, obs=pd.DataFrame(index=[str(index) for index in range(8)]), var=pd.DataFrame(index=names)
     )
-    # A and B are size-3 sets over the same targets (perfectly collinear), below net_corr's default tmin; C
-    # is independent, so net_corr has more than the single pair its internal FDR needs.
+    # C is independent so net_corr has more than the single pair its internal FDR needs.
     net = pd.DataFrame(
         {
             "source": ["A"] * 3 + ["B"] * 3 + ["C"] * 3,

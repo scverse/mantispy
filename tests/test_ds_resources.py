@@ -34,7 +34,6 @@ def test_interactions_expands_within_complex_pairs(offline_cache):
     with mt.settings.override(cache_dir=offline_cache):
         edges = mt.ds.interactions("toy")
     pairs = {tuple(row) for row in edges[["gene_a", "gene_b"]].to_numpy()}
-    # C1 = {A, B, C} -> three pairs; C2 = {D, E} -> one pair.
     assert pairs == {("A", "B"), ("A", "C"), ("B", "C"), ("D", "E")}
     assert (edges["gene_a"] < edges["gene_b"]).all()
 

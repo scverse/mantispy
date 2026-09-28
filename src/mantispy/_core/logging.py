@@ -20,7 +20,6 @@ def report_drop(what: str, dropped: int, total: int, remedy: str = "", escalate:
 
     ``escalate=False`` keeps the message at info level however much of the input is removed.
     It is for exclusions that are the documented default rather than a loss: reading a CellProfiler export drops whole-field ``Image_`` measurements by design, and a normal four-image export can have more of those than per-cell ones.
-    A warning there would teach users to ignore warnings.
     """
     if dropped <= 0:
         return

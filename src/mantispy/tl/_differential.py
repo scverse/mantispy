@@ -1,16 +1,7 @@
 """Differential features with the well as the experimental unit.
 
-Cells in a well share its confluency, focus, plate position and treatment, so a per-cell test treats dependent cells as independent replicates and finds a difference between almost any two sets of cells.
-Splitting control wells into two arbitrary halves and testing per cell calls 60% of features significant when the well-to-well spread is a quarter of the cell-level spread.
-Aggregating to wells first calls none.
-
-Wells are in turn nested in plates.
-A perturbation whose wells all sit on plates without control wells cannot be separated from its plate, and an unblocked test is most confident in that layout, so :func:`differential_features` checks the layout.
-
 The test is the moderated t of :cite:t:`Smyth_2004`, the statistic behind ``limma``.
 Each feature's residual variance is shrunk towards a prior estimated from all features.
-This suits morphology profiles, with thousands of features and three or four replicates, and keeps a feature that happens to look quiet in three wells from producing a large t.
-The gain is about sevenfold in true positives at three replicates and none by six.
 """
 
 from __future__ import annotations
@@ -85,7 +76,10 @@ def _design(is_treated: np.ndarray, blocks: np.ndarray | None) -> np.ndarray:
 
 
 def _fit(values: np.ndarray, design: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
-    """Least squares for every feature at once. Returns (coefficient, se_unit, sigma2, df)."""
+    """Least squares for every feature at once.
+
+    Returns (coefficient, se_unit, sigma2, df).
+    """
     rank = np.linalg.matrix_rank(design)
     df = design.shape[0] - rank
     coefficients, *_ = np.linalg.lstsq(design, values, rcond=None)
@@ -109,16 +103,21 @@ def differential_features(
     """Moderated t-test per feature, per group, with wells as the replicates.
 
     Args:
-        adata: Well-level profiles. Cell-level objects are refused; aggregate them first with :func:`~mantispy.tl.aggregate`, since the well is the unit that was randomized.
+        adata: Well-level profiles.
+            Cell-level objects are refused; aggregate them first with :func:`~mantispy.tl.aggregate`, since the well is the unit that was randomized.
         groupby: Column naming the perturbation to test.
         reference: Rows to test against: ``"negcon"``, or the name of a boolean ``obs`` column.
-        contrast: ``"reference"`` tests each group against the reference rows, which gives what the perturbation changed. ``"rest"`` tests it against every other perturbation and leaves the reference out, which gives what distinguishes it from the others. This is the marker-gene contrast, and it removes the component all active perturbations share.
+        contrast: ``"reference"`` tests each group against the reference rows, which gives what the perturbation changed.
+            ``"rest"`` tests it against every other perturbation and leaves the reference out, which gives what distinguishes it from the others.
+            This is the marker-gene contrast, and it removes the component all active perturbations share.
 
             On BBBC021, mechanism retrieval from the resulting signatures is 0.631 for ``"rest"`` and 0.505 for ``"reference"``.
             ``"rest"`` reproduces less well across plates because its comparison set depends on the rest of the screen.
             On the pki dose series, where the rest for a compound includes its own other doses, split-half agreement falls from 0.566 to 0.448.
             Use ``"rest"`` to tell perturbations apart and ``"reference"`` for results to compare between screens.
-        block: Column whose levels enter the model as fixed effects, normally the plate. Without it, plate variance stays in the residual and costs power; on a four-plate layout, blocking raised power from 0.68 to 0.94. ``None`` fits the contrast alone.
+        block: Column whose levels enter the model as fixed effects, normally the plate.
+            Without it, plate variance stays in the residual and costs power; on a four-plate layout, blocking raised power from 0.68 to 0.94.
+            ``None`` fits the contrast alone.
         min_replicates: Groups with fewer wells than this are left unscored.
         key_added: Name for the output table.
         copy: Return a modified copy instead of mutating in place.
@@ -206,8 +205,6 @@ def differential_features(
         statistic = np.full(adata.n_vars, np.nan)
         pvalue = np.full(adata.n_vars, np.nan)
 
-        # Over the rows of this fit only.
-        # A well no comparison includes cannot take a feature away from the groups that are scored.
         usable = finite[rows].all(axis=0)
         unscored += int((~usable).sum())
 

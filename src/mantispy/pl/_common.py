@@ -1,8 +1,3 @@
-"""Helpers shared by the plot modules.
-
-They create axes when the caller passes none, and fetch a result table with an error that names the function that writes it.
-"""
-
 from __future__ import annotations
 
 import os
@@ -20,8 +15,7 @@ if TYPE_CHECKING:
     from matplotlib.axes import Axes
     from matplotlib.figure import Figure
 
-# Marks a figure that :func:`axes` created, so :func:`maybe_interactive` only closes
-# figures this plot owns and never a subplot grid the caller passed in.
+# Only figures carrying this mark are closed by maybe_interactive, never a caller's subplot grid.
 _OWNED = "_mantispy_owned"
 
 
@@ -51,7 +45,8 @@ def table(adata: AnnData, key: str, produced_by: str, when_empty: str | None = N
         adata: Object holding the table.
         key: Name of the table in ``uns["mantispy"]``.
         produced_by: The call to name in the error, for example ``"mt.tl.hit_calling"``.
-        when_empty: Why a table this plot can read holds no rows, for the plots where that is a plausible result rather than a missing step. With ``None`` an empty table is handed back for the caller to draw.
+        when_empty: Why a table this plot can read holds no rows, for the plots where that is a plausible result rather than a missing step.
+            With ``None`` an empty table is handed back for the caller to draw.
 
     Returns:
         The table as a frame.
@@ -73,9 +68,8 @@ def table(adata: AnnData, key: str, produced_by: str, when_empty: str | None = N
 def interactive_available() -> bool:
     """Whether an interactive plotly twin can be shown in the current runtime.
 
-    True only when plotly is installed and we are in a Jupyter frontend
-    (notebook, lab, qtconsole, or a notebook executed at docs build). Plain
-    scripts, the terminal REPL, and headless pytest fall back to static plots.
+    True only when plotly is installed and we are in a Jupyter frontend (notebook, lab, qtconsole, or a notebook executed at docs build).
+    Plain scripts, the terminal REPL, and headless pytest fall back to static plots.
 
     Returns:
         Whether to draw the interactive twin instead of only the static plot.
@@ -109,14 +103,10 @@ def maybe_interactive(
 ) -> bool:
     """Show a plotly twin of a static plot, only when :func:`interactive_available`.
 
-    The tidy kinds (``"scatter"``, ``"barh"``, ``"line"``, ``"histogram"``, ``"box"``)
-    read a long ``data`` frame and its column names; ``"heatmap"`` reads a ``matrix``
-    with its ``rows`` and ``columns`` labels. Every twin carries hover tooltips, so the
-    identities the static plot can only label for its top few are readable on every mark.
+    The tidy kinds (``"scatter"``, ``"barh"``, ``"line"``, ``"histogram"``, ``"box"``) read a long ``data`` frame and its column names; ``"heatmap"`` reads a ``matrix`` with its ``rows`` and ``columns`` labels.
+    Every twin carries hover tooltips, so the identities the static plot can only label for its top few are readable on every mark.
 
-    When a twin fires it closes ``ax``'s figure so the notebook does not also show the
-    static PNG, but only when :func:`axes` created that figure; a caller-supplied subplot
-    grid is left intact.
+    When a twin fires it closes ``ax``'s figure so the notebook does not also show the static PNG, but only when :func:`axes` created that figure; a caller-supplied subplot grid is left intact.
 
     Args:
         kind: One of ``"scatter"``, ``"heatmap"``, ``"barh"``, ``"line"``, ``"histogram"``, ``"box"``.

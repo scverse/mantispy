@@ -16,7 +16,6 @@ def replicated():
 
 
 def test_reproducible_features_score_higher_than_noise(replicated):
-    """A feature the perturbations move consistently must beat one that is pure noise."""
     values = replicated.X.copy()
     values[:, 0] = np.random.default_rng(0).standard_normal(replicated.n_obs)
     replicated.X = values
@@ -32,7 +31,7 @@ def test_reproducible_features_score_higher_than_noise(replicated):
 def test_batch_sensitivity_finds_an_injected_batch_effect(replicated):
     values = replicated.X.copy()
     batch = (replicated.obs["Metadata_Plate"] == "Plate01").to_numpy()
-    values[batch, 0] += 20.0  # feature 0 depends on the plate and nothing else
+    values[batch, 0] += 20.0
     replicated.X = values
 
     mt.pp.feature_batch_sensitivity(replicated, batch_key="Metadata_Plate")

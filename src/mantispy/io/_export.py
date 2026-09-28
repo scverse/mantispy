@@ -53,8 +53,6 @@ class _LazyDataset:
     """One HDF5 dataset that opens its file for each read instead of holding it open.
 
     A dask array over a live ``h5py`` dataset keeps one file descriptor for as long as the array is referenced.
-    One plate of a 384-well export holds about ten thousand elements, which exhausts the process descriptor limit before the plate finishes reading.
-    Reopening per read costs an open per chunk and keeps the descriptor count flat.
     """
 
     def __init__(self, path: Path) -> None:
@@ -65,7 +63,6 @@ class _LazyDataset:
             dataset = handle[DATASET]
             self.shape: tuple[int, ...] = dataset.shape
             self.dtype = dataset.dtype
-            #: The dataset's own chunking, which dask reads in as its chunks.
             self.hdf5_chunks: tuple[int, ...] | None = dataset.chunks
         self.ndim = len(self.shape)
 
@@ -85,8 +82,7 @@ def _read_array(path: Path, *, lazy: bool) -> npt.NDArray | da.Array:
     import dask.array as da
 
     dataset = _LazyDataset(path)
-    # lock: HDF5 is not thread-safe and dask reads on several threads.
-    # name: the path identifies the contents, and tokenizing the reader object would not.
+    # lock: HDF5 is not thread-safe; name: the path identifies the contents, tokenizing the reader object would not.
     return da.from_array(dataset, chunks=dataset.hdf5_chunks or "auto", lock=True, name=f"mantispy-h5-{path}")
 
 

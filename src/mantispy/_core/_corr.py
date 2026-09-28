@@ -1,16 +1,7 @@
 """Feature-by-feature correlation, in batches.
 
-Rows: ``np.corrcoef`` needs the whole matrix transposed into float64, 32 GB at 1M x 4000.
-Accumulating the Gram matrix in row chunks costs O(p^2) memory whatever the row count, which is also what a streaming backend needs.
-
-Missing values: pairwise-complete deletion gives every pair its own row set.
-``pandas.DataFrame.corr`` computes it with one Cython pass per pair, which takes over fourteen minutes on 50 640 JUMP wells by 3634 features.
-With ``M`` the finite mask and ``Z`` the values with missing entries zeroed, every pairwise moment is a matrix product: ``n = MᵀM``, ``Σxy = ZᵀZ``, ``Σx = ZᵀM``, ``Σx² = (Z∘Z)ᵀM``.
-These six products run in BLAS, can be chunked by row, and give the same result as pandas.
-
-Features: the full matrix is O(p^2), 3.2 GB at 20 000 features.
-:func:`correlated_pairs` needs only the pairs above a threshold, so it correlates one column block at a time.
-The peak is one block-by-p strip, capped by :data:`BLOCK_BYTES`, with the same arithmetic.
+Rows are always read in chunks, so memory never scales with the row count, which a streaming backend relies on.
+Missing values get pairwise-complete deletion and match ``pandas.DataFrame.corr``.
 """
 
 from __future__ import annotations
@@ -22,12 +13,8 @@ import numpy as np
 import pandas as pd
 from numpy.typing import DTypeLike
 
-#: Bytes a single float64 row chunk may occupy.
-#: The row count follows from the feature count, which sets the memory: 100 000 rows is 24 MB at 30 features and 3.2 GB at 4000.
 CHUNK_BYTES = 256_000_000
 
-#: Bytes one strip of the correlation matrix may occupy.
-#: The strip is ``block x n_vars``, so the block width follows from this and the feature count.
 BLOCK_BYTES = 256_000_000
 
 
@@ -44,8 +31,7 @@ def block_columns(n_vars: int) -> int:
 def column_block(n_obs: int, itemsize: int) -> int:
     """Feature block width so one ``n_obs x block`` slice of the data stays inside :data:`BLOCK_BYTES`.
 
-    Unlike :func:`block_columns`, which sizes a ``block x n_vars`` correlation strip, this budgets a slice of
-    the data matrix itself and so takes the element size rather than assuming float64.
+    Unlike :func:`block_columns`, which sizes a ``block x n_vars`` correlation strip, this budgets a slice of the data matrix itself and so takes the element size rather than assuming float64.
     """
     return max(int(BLOCK_BYTES / max(n_obs * itemsize, 1)), 1)
 
@@ -53,8 +39,8 @@ def column_block(n_obs: int, itemsize: int) -> int:
 def _blockwise(X: np.ndarray, reduce: Callable[[np.ndarray], np.ndarray], out_dtype: DTypeLike) -> np.ndarray:
     """Apply a per-column ``reduce`` one feature block at a time, so the peak temporary is one block not ``X``.
 
-    ``reduce`` maps an ``n_obs x block`` slice to one value per column. RuntimeWarnings from empty or all-NaN
-    slices are silenced, which is what every caller here needs and what ``np.errstate`` cannot reach.
+    ``reduce`` maps an ``n_obs x block`` slice to one value per column.
+    RuntimeWarnings from empty or all-NaN slices are silenced, which ``np.errstate`` cannot reach.
     """
     n_vars = X.shape[1]
     block = column_block(X.shape[0], X.dtype.itemsize)
@@ -66,7 +52,6 @@ def _blockwise(X: np.ndarray, reduce: Callable[[np.ndarray], np.ndarray], out_dt
     return out
 
 
-#: Mask-pair budget above which pairwise-complete Spearman warns that it will be slow.
 _PATTERN_PAIR_BUDGET = 4096
 
 
@@ -115,7 +100,6 @@ def corr_matrix(
     out = np.full((n_vars, n_vars), np.nan)
     if clean.size:
         out[np.ix_(clean, clean)] = _gram_corr(X, chunk_size, columns=clean, work_dtype=work_dtype)
-    # Every pair touching a missing value, in one batch of six matrix products.
     against = np.arange(n_vars)
     values = _gappy_corr(raw, X, dirty, against, chunk_size, method, work_dtype=work_dtype)
     out[np.ix_(dirty, against)] = values
@@ -142,15 +126,8 @@ def _gappy_corr(
 ) -> np.ndarray:
     """Pairwise-complete correlation of ``left`` against ``right``, re-ranking for Spearman.
 
-    Pearson needs no correction, because dropping a pair's incomplete rows is the whole deletion rule and :func:`_pairwise_corr` does that.
-
-    Spearman is Pearson on ranks, and a rank depends on which rows are present, so ranking each column once over all rows is correct only where both columns of a pair are complete.
+    A rank depends on which rows are present, so global ranks are correct only where both columns of a pair are complete.
     ``pandas.DataFrame.corr`` and ``scipy.stats.spearmanr(nan_policy="omit")`` both re-rank each pair over the rows it shares.
-    Ranking globally disagrees with both on the sign of the correlation in 8 of 300 trials of two columns at 25% missing, by up to 0.10.
-
-    Columns are grouped by missingness pattern, so the cost is one ranking per distinct pair of patterns rather than per pair of columns, over the columns of those two groups only.
-    Real screens have few patterns because whole feature families go undefined together: rohban has one across all of its columns, and JUMP TARGET-2 and pki have none at well level.
-    Where every column is complete, the single group spans everything and the ranks are the global ones.
     """
     if method != "spearman":
         return _pairwise_corr(ranked, left, right, chunk_size, work_dtype=work_dtype)
@@ -158,8 +135,6 @@ def _gappy_corr(
     finite = np.isfinite(raw)
     out = np.full((left.size, right.size), np.nan)
     left_groups, right_groups = _pattern_groups(finite, left), _pattern_groups(finite, right)
-    # Gaps that follow feature families share one pattern.
-    # Random gaps give each column its own pattern and quadratic work: 69 s on 400 rows x 600 columns at 2% random missing, against 0.04 s when the same columns share one pattern.
     if len(left_groups) * len(right_groups) > _PATTERN_PAIR_BUDGET:
         warnings.warn(
             f"spearman with pairwise-complete deletion is re-ranking {len(left_groups)} x {len(right_groups)} "
@@ -178,7 +153,6 @@ def _gappy_corr(
             columns = np.union1d(left_columns, right_columns)
             position = {column: slot for slot, column in enumerate(columns)}
             # On the rows both patterns share, every column of both groups is complete, so a dense Pearson on the ranks is enough.
-            # _pairwise_corr would build six moment matrices for nothing (500 s against 5 s when all patterns are distinct).
             block = _standardize(_rank_columns(raw[rows][:, columns]))
             out[np.ix_(left_slots, right_slots)] = (
                 block[:, [position[column] for column in left_columns]].T
@@ -221,10 +195,12 @@ def correlated_pairs(
         absolute: Threshold ``|r|`` rather than the signed correlation.
             The default is signed, as in pycytominer's ``correlation_threshold``, which keeps a pair correlated at -1.0.
         order: Column order the sliding window walks, as returned by ``np.argsort``.
-            Used only when ``window`` is set. ``None`` walks the columns as given.
+            Used only when ``window`` is set.
+            ``None`` walks the columns as given.
         window: If set, approximate the exact pass by correlating only within a sliding window of this many columns of ``order``.
             Pairs that sort more than one window apart are never tested, so slightly less redundancy is removed.
-        stride: Step between windows. ``None`` steps by half the window, so consecutive windows overlap by half and boundary pairs are still tested; a smaller stride overlaps them further.
+        stride: Step between windows.
+            ``None`` steps by half the window, so consecutive windows overlap by half and boundary pairs are still tested; a smaller stride overlaps them further.
 
     Returns:
         ``(pairs, total)``, where ``pairs`` is a ``(k, 2)`` array of column indices holding each unordered pair once.
@@ -248,15 +224,12 @@ def correlated_pairs(
     pairs: list[np.ndarray] = []
 
     for start, left, earlier, strip in _iter_clean_blocks(X, clean, block_size, chunk_size):
-        # Threshold the strip before overwriting it.
-        # A comparison against NaN is False, and the strict lower triangle of the diagonal block holds each within-block pair once.
-        # A mask avoids np.tril_indices, which would materialize every within-block pair.
+        # Threshold before the strip is overwritten below; the strict lower triangle of the diagonal block holds each within-block pair once.
         above = (np.abs(strip) > threshold) if absolute else (strip > threshold)
         above[:, start:] &= np.tril(np.ones((left.size, left.size), dtype=bool), k=-1)
         rows, columns = np.nonzero(above)
         if rows.size:
             pairs.append(np.column_stack([left[rows], clean[columns]]))
-        # |r| in place, so the strip is not copied again before summing.
         np.abs(strip, out=strip)
         np.nan_to_num(strip, copy=False, nan=0.0)
         # Everything left of the diagonal block counts in both directions of the sum; the diagonal block is symmetric, so its column sums are the within-block total.
@@ -296,13 +269,10 @@ def _windowed_pairs(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Approximate :func:`correlated_pairs` by correlating only within a sliding window of ``order``.
 
-    CellProfiler names encode the feature family, so sorting by name groups correlated features together and a window catches most redundancy.
-    A stride below the window overlaps consecutive windows, so a pair straddling a boundary is still tested; the overlap makes some pairs turn up twice, and both the returned set and the per-feature total count each pair once.
-    Only within-window pairs are ever compared, so features that sort into different windows are never tested and slightly less redundancy is removed than by the exact pass.
+    Overlapping windows test some pairs twice, but both the returned set and the per-feature total count each pair once.
     """
     n_vars = X.shape[1]
     order = np.arange(n_vars) if order is None else np.asarray(order)
-    # Default the stride to half the window, so consecutive windows overlap by half and boundary pairs are still tested.
     stride = max(window // 2, 1) if stride is None else stride
 
     pairs_list: list[np.ndarray] = []
@@ -311,12 +281,10 @@ def _windowed_pairs(
         cols = order[start : start + window]
         if cols.size < 2:
             continue
-        # corr_matrix carries the NaN-safe path, so constant or gappy columns come back as NaN and fail the signed test.
-        # The windowed pass is already approximate, so float32 correlation (good to ~1e-4) costs nothing extra in accuracy and halves the work.
         corr = corr_matrix(X[:, cols], method=method, chunk_size=chunk_size, work_dtype=np.float32)
         iu, ju = np.triu_indices(cols.size, k=1)
         signed = corr[iu, ju]
-        hit = (np.abs(signed) > threshold) if absolute else (signed > threshold)  # As the exact path.
+        hit = (np.abs(signed) > threshold) if absolute else (signed > threshold)
         a, b = cols[iu[hit]], cols[ju[hit]]
         pairs_list.append(np.column_stack([np.minimum(a, b), np.maximum(a, b)]))
         mag_list.append(np.abs(signed[hit]))
@@ -327,7 +295,6 @@ def _windowed_pairs(
     if not pairs_list:
         return np.empty((0, 2), dtype=np.int64), total
 
-    # Overlapping windows test some pairs twice; one dedup keeps each unordered pair once and its total counts it once.
     found, idx = np.unique(np.concatenate(pairs_list), axis=0, return_index=True)
     magnitude = np.concatenate(mag_list)[idx]
     np.add.at(total, found[:, 0], magnitude)
@@ -338,16 +305,13 @@ def _windowed_pairs(
 def rank_revealing_subset(X: np.ndarray, threshold: float, method: str = "pearson") -> np.ndarray:
     """A non-redundant subset of the columns, by rank-revealing QR.
 
-    A pairwise correlation filter is blind to multivariate collinearity: a feature that is a linear
-    combination of several others has no single large pairwise correlation, yet carries no new
-    information. Column-pivoted QR removes it. It orders the columns so each pivot is the one least
-    explained by the pivots before it; on columns scaled to unit norm ``|R_kk|`` is ``sqrt(1 - R**2)``
-    for the multiple correlation ``R`` of that column with those earlier pivots. Keeping every pivot
-    whose residual exceeds ``sqrt(1 - threshold**2)`` drops a column once the features kept before it
-    predict it at multiple correlation ``threshold``, the multivariate generalization of a pairwise cut.
+    A pairwise correlation filter is blind to multivariate collinearity: a feature that is a linear combination of several others has no single large pairwise correlation, yet carries no new information.
+    Column-pivoted QR removes it.
+    It orders the columns so each pivot is the one least explained by the pivots before it; on columns scaled to unit norm ``|R_kk|`` is ``sqrt(1 - R**2)`` for the multiple correlation ``R`` of that column with those earlier pivots.
+    Keeping every pivot whose residual exceeds ``sqrt(1 - threshold**2)`` drops a column once the features kept before it predict it at multiple correlation ``threshold``, the multivariate generalization of a pairwise cut.
 
-    One decomposition does it, keeping original columns rather than components. It is deterministic, but
-    which representative of a near-tied group is kept depends on the column order.
+    One decomposition does it, keeping original columns rather than components.
+    It is deterministic, but which representative of a near-tied group is kept depends on the column order.
 
     Args:
         X: Observations by features.
@@ -355,8 +319,8 @@ def rank_revealing_subset(X: np.ndarray, threshold: float, method: str = "pearso
         method: ``"pearson"``, or ``"spearman"`` to rank the columns first.
 
     Returns:
-        A boolean keep mask over the columns. Constant columns are dropped; columns holding missing
-        values cannot be assessed and are kept, so run ``drop_na_columns`` first.
+        A boolean keep mask over the columns.
+        Constant columns are dropped; columns holding missing values cannot be assessed and are kept, so run ``drop_na_columns`` first.
 
     Raises:
         ValueError: If ``threshold`` is not in ``[0, 1)``.
@@ -368,7 +332,6 @@ def rank_revealing_subset(X: np.ndarray, threshold: float, method: str = "pearso
     X, dirty = _prepare(X, method)
     n_vars = X.shape[1]
     keep = np.ones(n_vars, dtype=bool)
-    # Missing values leave a column unassessable; defer it to drop_na_columns rather than guess.
     clean = np.setdiff1d(np.arange(n_vars), dirty, assume_unique=True)
     if clean.size == 0:
         return keep
@@ -381,7 +344,6 @@ def rank_revealing_subset(X: np.ndarray, threshold: float, method: str = "pearso
     if usable.size == 0:
         return keep
 
-    # mode="r" skips forming the discarded Q factor; only the diagonal and pivots are used.
     r, pivots = qr(standardized if not constant.any() else standardized[:, ~constant], mode="r", pivoting=True)
     # geqp3 orders the diagonal non-increasing, so the dropped columns are the tail of the pivot order.
     residual = np.abs(np.diag(r))
@@ -397,9 +359,6 @@ def _iter_clean_blocks(
 
     Yields ``(offset, block, earlier, strip)``.
     ``strip`` is ``block`` correlated against every clean column up to and including itself, so its last ``block.size`` columns are the symmetric diagonal block and the first ``offset`` are everything before it.
-
-    Iterating over block pairs reads each column block once per partner, ``B**2`` casts of the matrix into float64 for ``B`` blocks, and at 16 000 features those casts dominate the run time.
-    A strip reads the matrix ``B`` times and peaks at ``block_size * n_vars`` instead of ``n_vars ** 2``, so the block size trades memory directly against reads.
     """
     for start in range(0, clean.size, block_size):
         left = clean[start : start + block_size]
@@ -416,8 +375,7 @@ def _gram_corr(
     Each chunk is sliced as it is read, so the peak is one chunk rather than a second full matrix.
     Valid only where no value is missing.
 
-    Columns are centered on their finite mean first, as in :func:`_pairwise_corr`.
-    Otherwise the moment form subtracts two large numbers: on a saturated 16-bit channel (mean 65535, spread 1e-3) independent columns come out at r = 1.0, and at 1e8 the clipped negative variance marks them constant.
+    Columns must be centered on their finite mean first, or the moment form cancels catastrophically on large-offset columns such as a saturated 16-bit channel.
     """
     n_obs = X.shape[0]
     n_vars = X.shape[1] if columns is None else columns.size
@@ -515,7 +473,7 @@ def _pairwise_corr(
 def _finite_mean(X: np.ndarray, chunk_size: int, columns: np.ndarray | None = None) -> np.ndarray:
     """Per-column mean of the finite values, without a second copy of ``X``.
 
-    ``columns`` restricts the mean to a subset in the same way as :func:`_gram_corr`: each row chunk is column-sliced as it is read, so ``X[:, columns]`` is never materialized.
+    ``columns`` restricts the mean to a subset by slicing each row chunk as it is read, so ``X[:, columns]`` is never materialized.
     """
     n_vars = X.shape[1] if columns is None else columns.size
     total = np.zeros(n_vars)

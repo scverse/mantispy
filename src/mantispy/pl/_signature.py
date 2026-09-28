@@ -1,5 +1,3 @@
-"""The feature-family signature as a picture."""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -30,11 +28,16 @@ def feature_signature(
 
     Args:
         adata: The output of :func:`~mantispy.tl.feature_signature`.
-        groupby: ``obs`` column to average rows within, instead of showing one row per perturbation. ``"Metadata_MOA"``, for example, gives one row per mechanism.
-        top: Show only this many rows, those with the largest absolute value. ``None`` shows all of them. Ignored when ``groupby`` is given.
-        cluster: Order rows and columns by hierarchical clustering, so families that move together are adjacent. Otherwise the object's order is kept.
+        groupby: ``obs`` column to average rows within, instead of showing one row per perturbation.
+            ``"Metadata_MOA"``, for example, gives one row per mechanism.
+        top: Show only this many rows, those with the largest absolute value.
+            ``None`` shows all of them.
+            Ignored when ``groupby`` is given.
+        cluster: Order rows and columns by hierarchical clustering, so families that move together are adjacent.
+            Otherwise the object's order is kept.
         cmap: Diverging colormap, centered on zero so decreases and increases read equally.
-        figsize: Size of the figure, in inches, or ``None`` for one that grows with the number of rows and columns. Ignored when ``ax`` is given.
+        figsize: Size of the figure, in inches, or ``None`` for one that grows with the number of rows and columns.
+            Ignored when ``ax`` is given.
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:

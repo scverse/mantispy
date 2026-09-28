@@ -33,11 +33,13 @@ def standardize_feature_names(adata: AnnData, target: str = "cp_measure", copy: 
 
     Args:
         adata: Object to rename.
-        target: Naming grammar. Only ``"cp_measure"`` is supported.
+        target: Naming grammar.
+            Only ``"cp_measure"`` is supported.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Rewrites ``var_names`` and writes ``var["original_name"]`` on the first call, never overwriting it afterwards, so the incoming names survive repeated calls.
+        ``None``, or the modified copy.
+        Rewrites ``var_names`` and writes ``var["original_name"]`` on the first call, never overwriting it afterwards, so the incoming names survive repeated calls.
 
     Raises:
         ValueError: If ``target`` is not supported, or renaming would give two features the same name (for example two Zernike orders).
@@ -48,9 +50,7 @@ def standardize_feature_names(adata: AnnData, target: str = "cp_measure", copy: 
     if "original_name" not in adata.var:
         adata.var["original_name"] = adata.var_names.to_numpy()
 
-    # `or name`: empty_annotation marks a column is_feature so the schema is satisfied while leaving
-    # every descriptive column empty, and _canonical builds the name out of exactly those. A feature
-    # whose annotation names nothing keeps the name it came with rather than becoming "".
+    # `or name`: a feature from empty_annotation has no descriptive columns, so it keeps its name rather than becoming "".
     renamed = [
         (_canonical(row) or name) if row["is_feature"] else name
         for name, row in zip(adata.var_names, as_frame(adata.var).to_dict("records"), strict=True)

@@ -113,10 +113,8 @@ def _labels_from_outlines(
     The gallery publishes outlines, not masks.
     Outlines are one pixel wide and shared between touching objects, so filling them and labelling connected components separates the interiors.
     Each component takes the object number of the centroid inside it; components with no centroid are dropped.
-    Growing the boundary back one pixel reproduces the CellProfiler areas to under a percent.
 
     A component is accepted only when exactly one centroid falls in it and its area is within `max_area_ratio` of the area CellProfiler measured.
-    This rejects the two failures of an unclosed outline: two objects merging into one component, and a centroid landing in the background or in a fragment.
     Objects whose component was rejected are absent, so compare the label count against the centroid count.
 
     Args:
@@ -128,7 +126,6 @@ def _labels_from_outlines(
         area_column: Column of `centres` holding the area CellProfiler measured, used to reject components that cannot be the object.
             Pass ``None``, or leave the column out of `centres`, to skip that check.
         max_area_ratio: How far a component's area may differ from the measured area, either way, and still be accepted.
-            Reconstruction is exact to a fraction of a percent when it works, so the default is tight.
 
     Returns:
         A label image the shape of `outlines`, zero outside objects.
@@ -229,10 +226,9 @@ def _site_dir(root: Path, batch: str, plate: str, well: str, site: int) -> Path:
 def _outline_index(directory: Path) -> dict[str, Path]:
     """Index the files of one site's analysis directory by name, lowercased, up to the first dot.
 
-    The key keeps the name before the first dot rather than dropping one extension, so a ``.ome.tiff`` or ``.tif.gz`` outline answers to the same name as a ``.png`` one.
-    Names are compared without regard to case, because ``Path.glob`` is case-sensitive on POSIX, macOS included, and the lowercase spelling would never match a well named ``A01``.
+    A ``.ome.tiff`` or ``.tif.gz`` outline thus answers to the same name as a ``.png`` one.
     """
-    # Files beside the analysis first, then one level down, which is the order the globs had.
+    # Files beside the analysis first, then one level down.
     index: dict[str, Path] = {}
     for path in [*sorted(directory.glob("*")), *sorted(directory.glob("*/*"))]:
         name, _, extension = path.name.partition(".")
@@ -242,7 +238,7 @@ def _outline_index(directory: Path) -> dict[str, Path]:
 
 
 def _holds_outlines(index: Mapping[str, Path]) -> bool:
-    """Whether a site holds outline images at all, which tells a source without segmentations from one this reader cannot name."""
+    """Whether a site holds outline images at all."""
     return any("outlines" in name for name in index)
 
 
@@ -355,8 +351,7 @@ def _cell_table(files: Sequence[Path], masks: Mapping[str, npt.NDArray], channel
         [_prefix(pd.read_csv(file), "Cells").assign(Metadata_Key=file.parent.name) for file in files],
         ignore_index=True,
     ).rename(columns={"ImageNumber": "Metadata_ImageNumber", "ObjectNumber": "Metadata_ObjectNumber"})
-    # The channels are known from load_data, so the parser is told them rather than guessing a
-    # vocabulary from the column names, which invents entries like 'tubeness' and 'Overflow'.
+    # Guessing channels from the column names would invent entries like 'tubeness' and 'Overflow'.
     adata = from_dataframe(frame, resolution="cell", channels=channels)
     obs = cast("pd.DataFrame", adata.obs)
     keys = obs.pop("Metadata_Key").astype(str).str.rsplit("-", n=2, expand=True)
@@ -442,9 +437,6 @@ def read_gallery_plate(
             plate_format=plate_format,
         )
 
-    # A partial download holds some fields and not others, and reads back as itself rather than failing on
-    # the first one nobody asked for. Which fields are present is asked once, here, so the well the caller
-    # named and the wells we pick for them are decided the same way.
     present = load_data[
         [_image_path(root, batch, row, prefix, channels[0]).exists() for _, row in load_data.iterrows()]
     ]
@@ -477,11 +469,9 @@ def read_gallery_plate(
                 scale_factors=[2, 2],
             )
             directory = _site_dir(root, batch, plate, well, site)
-            # The listing of a site's directory costs two globs and a stat per entry, so both readers share one.
             index = _outline_index(directory) if directory.is_dir() else {}
             site_labels = _site_labels(directory, index, well, site) if index else {}
             if not site_labels:
-                # A site holding no outline images has no segmentation to read; one whose outlines went unmatched has.
                 if _holds_outlines(index):
                     unnamed.append(directory.name)
                 continue

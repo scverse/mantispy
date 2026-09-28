@@ -10,8 +10,7 @@ from mantispy._core.schema import validate
 
 @pytest.mark.parametrize("link_on", ["child", "primary"])
 def test_parent_link_is_found_on_either_table(tmp_path, make_cellprofiler_dir, link_on):
-    """CellProfiler writes Parent_Nuclei on the primary table when cells came from nuclei,
-    and Parent_Cells on the child table otherwise."""
+    """CellProfiler writes Parent_Nuclei on the primary table when cells came from nuclei, and Parent_Cells on the child table otherwise."""
     directory = make_cellprofiler_dir(tmp_path / link_on, link_on=link_on)
     adata = mt.io.read_profiles(directory)
     assert "Nuclei_AreaShape_Area" in adata.var_names
@@ -43,8 +42,7 @@ def test_platemap_is_joined_by_well(cellprofiler_dir, platemap_path):
 
 
 def test_a_duplicated_platemap_row_is_refused(cellprofiler_dir, platemap_path):
-    """Merging it would multiply the cells of that well and leave the object with more
-    rows than the images produced."""
+    """Merging it would multiply the cells of that well and leave the object with more rows than the images produced."""
     frame = pd.read_csv(platemap_path)
     doubled = pd.concat([frame, frame.iloc[[0]]], ignore_index=True)
 
@@ -53,8 +51,7 @@ def test_a_duplicated_platemap_row_is_refused(cellprofiler_dir, platemap_path):
 
 
 def test_metadata_on_both_the_object_and_image_tables_keeps_the_image_value(tmp_path, make_cellprofiler_dir):
-    """CellProfiler can copy image metadata into the object tables, and the merge then
-    suffixed the pair Metadata_Plate_x/_y, so the schema's plate column vanished silently."""
+    """CellProfiler can copy image metadata into the object tables, and the merge then suffixed the pair Metadata_Plate_x/_y, so the schema's plate column vanished silently."""
     directory = make_cellprofiler_dir(tmp_path / "collide")
     cells = pd.read_csv(directory / "Cells.csv")
     cells["Metadata_Plate"] = "from_the_object_table"

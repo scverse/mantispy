@@ -150,8 +150,7 @@ def _export_labels(n: int, dtype: str) -> np.ndarray:
 def build_export(tmp_path: Path, *, plate: str = PLATE, failed: str | None = None, label_dtype: str = "int8") -> Path:
     """Build one plate folder as ExportForSpatialData writes it, including the manifest.
 
-    `failed` names a field whose arrays are not written, as when a cycle raises, so its manifest rows carry a
-    status of `failed` and an error.
+    `failed` names a field whose arrays are not written, as when a cycle raises, so its manifest rows carry a status of `failed` and an error.
     """
     folder = tmp_path / f"{PREFIX}_export" / plate
     rows, obs = [], []
@@ -231,10 +230,9 @@ def write_cellprofiler_dir(
 ) -> Path:
     """One directory as the ExportToSpreadsheet CellProfiler module writes it.
 
-    Columns inside an object table do not carry the object's name, and every file carries `prefix`, the way a run
-    configured with ``MyExpt_`` writes ``MyExpt_Image.csv``. `link_on` says where the parent/child link lives:
-    ``"child"`` writes ``Parent_Cells`` on Nuclei, ``"primary"`` writes ``Parent_Nuclei`` on Cells, and CellProfiler
-    emits both depending on the pipeline. ``one_to_one=False`` gives one cell a second nucleus.
+    Columns inside an object table do not carry the object's name, and every file carries `prefix`, the way a run configured with ``MyExpt_`` writes ``MyExpt_Image.csv``.
+    `link_on` says where the parent/child link lives: ``"child"`` writes ``Parent_Cells`` on Nuclei, ``"primary"`` writes ``Parent_Nuclei`` on Cells, and CellProfiler emits both depending on the pipeline.
+    ``one_to_one=False`` gives one cell a second nucleus.
     """
     rng = np.random.default_rng(0)
     directory.mkdir(parents=True, exist_ok=True)
@@ -278,7 +276,7 @@ def write_cellprofiler_dir(
         cells["Children_Nuclei_Count"] = 1
     else:
         cells["Parent_Nuclei"] = object_no
-    if not one_to_one:  # one cell gains a second nucleus
+    if not one_to_one:
         nuclei = pd.concat([nuclei, nuclei.iloc[[0]]], ignore_index=True)
 
     for name, frame in (("Image", image), ("Cells", cells), ("Nuclei", nuclei)):

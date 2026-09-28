@@ -11,8 +11,7 @@ pycytominer = pytest.importorskip("pycytominer")
 
 @pytest.fixture
 def wells():
-    # Enough control wells that the control matrix is comfortably full rank:
-    # 96 wells over 9 perturbations gives ~11 DMSO wells per plate against 8 features.
+    # 96 wells over 9 perturbations gives ~11 DMSO wells per plate against 8 features, so the controls are full rank.
     cells = synthetic_plate(n_plates=2, n_wells=96, n_cells=10, n_features=8, seed=3)
     return mt.tl.aggregate(cells, min_cells=0)
 
@@ -29,8 +28,7 @@ def test_sphere_matches_pycytominer(wells, method):
         spherize_center=True,
         samples="Metadata_Control == True",
     )
-    # PCA leaves the feature basis, so pycytominer renames the columns to PC1..PCn;
-    # compare positionally rather than by name.
+    # PCA leaves the feature basis, so pycytominer renames the columns to PC1..PCn and they compare by position.
     expected = result[[c for c in result.columns if not c.startswith("Metadata_")]].to_numpy(np.float64)
 
     mt.pp.sphere(wells, method=method, reference="negcon", key_added="sphered")
@@ -53,10 +51,9 @@ def test_controls_become_white(wells):
 
 
 def test_rank_deficient_reference_is_refused(wells):
-    """Regularising through a rank-deficient control set would give a transform
-    dominated by noise directions, so pycytominer raises and so do we."""
+    """Regularising through a rank-deficient control set would give a transform dominated by noise directions, so pycytominer raises and so do we."""
     values = wells.X.copy()
-    values[:, 1] = values[:, 0]  # a perfectly dependent feature
+    values[:, 1] = values[:, 0]
     wells.X = values
     with pytest.raises(ValueError, match="not full rank"):
         mt.pp.sphere(wells, method="ZCA", reference="negcon")

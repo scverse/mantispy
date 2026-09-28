@@ -1,8 +1,7 @@
 """JUMP profiles and the annotation join.
 
-The join is tested offline against fabricated tables, since its failure cases (a
-duplicated key, a well the annotation does not cover, the control flag) do not depend on
-the network. The download is tested separately and marked.
+The join is tested offline against fabricated tables, since its failure cases (a duplicated key, a well the annotation does not cover, the control flag) do not depend on the network.
+The download is tested separately and marked.
 """
 
 import numpy as np

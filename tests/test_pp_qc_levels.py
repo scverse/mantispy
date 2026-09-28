@@ -13,17 +13,13 @@ def imaged():
     )
 
 
-# --- image QC --------------------------------------------------------------
-
-
 @pytest.mark.parametrize("method", ["mad", "knn"])
 def test_image_qc_recovers_the_injected_bad_images(imaged, method):
     mt.pp.image_qc(imaged, method=method, channel="DNA")
     result = imaged.uns["mantispy"]["image_qc"]
     truth = set(imaged.uns["mantispy"]["truth"]["bad_images"])
 
-    # The score must separate the degraded images completely, wherever the default
-    # threshold falls.
+    # The score must separate the degraded images completely, wherever the default threshold falls.
     scores = result["qc_image_score"]
     assert scores.loc[sorted(truth)].min() > scores.drop(index=sorted(truth)).max()
 
@@ -47,7 +43,7 @@ def test_image_qc_refuses_to_pool_plates_silently(imaged):
     imaged.uns["mantispy"]["image_table"] = table
     with pytest.raises(KeyError, match="by=None to pool"):
         mt.pp.image_qc(imaged)
-    mt.pp.image_qc(imaged, by=None)  # explicit opt-in works
+    mt.pp.image_qc(imaged, by=None)
 
 
 def test_image_qc_reports_a_missing_table_and_unknown_metrics(imaged):
@@ -65,9 +61,6 @@ def test_image_qc_warns_about_unmatched_cells(imaged):
     assert imaged.obs["qc_image_pass"].all()
 
 
-# --- well QC ---------------------------------------------------------------
-
-
 def test_well_qc_criteria(cells):
     mt.pp.well_qc(cells, min_cells=16)
     assert not cells.obs["qc_well_pass"].any()
@@ -78,10 +71,7 @@ def test_well_qc_criteria(cells):
     mt.pp.well_qc(cells, min_cells=1, max_control_cv=0.0)
     table = cells.uns["mantispy"]["well_qc"]
     assert not table.loc[table["control_cv"].notna(), "qc_well_pass"].any()
-    assert table["control_cv"].isna().any()  # non-control wells have no CV
-
-
-# --- feature names ---------------------------------------------------------
+    assert table["control_cv"].isna().any()
 
 
 def test_standardize_keeps_originals_and_is_idempotent(cells):
@@ -98,8 +88,7 @@ def test_standardize_refuses_a_collision_and_an_unknown_target(cells):
 
 
 def test_a_failed_image_qc_call_leaves_no_verdict_behind(imaged):
-    """The uns write happened before the broadcast could raise, so a call that failed still
-    left a verdict in uns that was never applied to a single cell, and pl.image_qc plotted it."""
+    """The uns write happened before the broadcast could raise, so a call that failed still left a verdict in uns that was never applied to a single cell, and pl.image_qc plotted it."""
     imaged.obs = imaged.obs.drop(columns="Metadata_ImageNumber")
     with pytest.raises(KeyError, match="Metadata_ImageNumber"):
         mt.pp.image_qc(imaged)

@@ -18,7 +18,6 @@ def _flag_mask(values: pd.Series, label: str, subject: str, remedy: str) -> np.n
     """Read a flag column as a boolean mask, refusing the dtypes that would coerce to all-true.
 
     ``Series.to_numpy(dtype=bool)`` is true for every non-empty string and for NaN, so a column that is not boolean silently selects everything instead of failing.
-    Both flag columns in mantispy go through here so that the two cannot drift apart.
 
     Args:
         values: The column to read.

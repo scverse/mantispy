@@ -1,7 +1,7 @@
 """Equivalence against pycytominer, which is a test-only dependency.
 
-pycytominer is pinned in the ``test`` dependency group. It is never imported from
-``src/``; these tests check that the numba reimplementations give the same results.
+pycytominer is pinned in the ``test`` dependency group.
+It is never imported from ``src/``; these tests check that the numba reimplementations give the same results.
 """
 
 import numpy as np

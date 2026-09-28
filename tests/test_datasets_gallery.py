@@ -1,7 +1,7 @@
-"""The screen of :cite:t:`Rohban_2017` and the PKI dose series. Network-dependent, so marked.
+"""The screen of :cite:t:`Rohban_2017` and the PKI dose series.
 
-These keep the package from being tuned to BBBC021 alone. The assertions cover the two
-things BBBC021 lacks, cell counts and real doses.
+These keep the package from being tuned to BBBC021 alone.
+The assertions cover the two things BBBC021 lacks, cell counts and real doses.
 """
 
 import numpy as np
@@ -59,7 +59,6 @@ def test_a_single_plate_can_be_loaded(rohban):
 @pytest.mark.network
 @pytest.mark.slow
 def test_higher_doses_move_further_from_the_controls(pki):
-    """Profile magnitude grows with dose along PKI's real dose series."""
     adata = pki.copy()
     mt.pp.normalize(adata, method="mad_robustize", by="Metadata_Plate", reference="negcon")
     mt.pp.feature_select(adata, na_cutoff=0.0)

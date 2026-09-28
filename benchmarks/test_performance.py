@@ -1,18 +1,14 @@
 """Performance and memory, on synthetic data at screen scale.
 
-Not part of the test run: ``testpaths`` is ``tests``, so nothing here is collected unless
-you ask for it by path.
+Not part of the test run: ``testpaths`` is ``tests``, so nothing here is collected unless you ask for it by path.
 
     ./.venv/bin/pytest benchmarks -s
 
-Every case reports wall time, peak allocation during the call, and the size of ``X`` it
-worked on, so the overhead is reported rather than asserted. The few assertions are loose,
-since timings on a laptop under load are noisy, and catch only order-of-magnitude
-regressions.
+Every case reports wall time, peak allocation during the call, and the size of ``X`` it worked on, so the overhead is reported rather than asserted.
+The few assertions are loose, since timings on a laptop under load are noisy, and catch only order-of-magnitude regressions.
 
-The release plan asks for 1M cells by 4000 features, which is 16 GB of float32 before any
-transform allocates its output. These run at 500 features, which keeps the shapes
-representative and fits in memory.
+The release plan asks for 1M cells by 4000 features, which is 16 GB of float32 before any transform allocates its output.
+These run at 500 features, which keeps the shapes representative and fits in memory.
 """
 
 from __future__ import annotations
@@ -40,8 +36,7 @@ def _plate(n_obs: int, n_vars: int) -> mt.AnnData:  # type: ignore[name-defined]
     values = rng.normal(size=(n_obs, n_vars)).astype(np.float32)
     n_plates, n_wells = 20, 384
 
-    # A well holds one perturbation, as a real plate does: aggregation has to carry the
-    # perturbation through, and it only can when the column is constant within the group.
+    # Aggregation carries the perturbation through only when it is constant within a well.
     plate = np.repeat(np.arange(n_plates), n_obs // n_plates + 1)[:n_obs]
     well = np.tile(np.arange(n_wells), n_obs // n_wells + 1)[:n_obs]
     rows, columns = well // 24, well % 24
@@ -63,9 +58,8 @@ def _plate(n_obs: int, n_vars: int) -> mt.AnnData:  # type: ignore[name-defined]
 def _measure(label: str, shape: tuple[int, int], call) -> float:
     """Time and peak memory, measured in separate passes.
 
-    tracemalloc traces every allocation, which on code that makes many small ones costs
-    more than the code itself (tl.aggregate takes 10.5 s traced and 0.4 s untraced). The
-    first pass times the call without tracing; the second only measures memory.
+    tracemalloc traces every allocation, which on code that makes many small ones costs more than the code itself (tl.aggregate takes 10.5 s traced and 0.4 s untraced).
+    The first pass times the call without tracing; the second only measures memory.
     """
     start = time.perf_counter()
     call()
@@ -95,8 +89,7 @@ def test_preprocessing(shape):
     _measure("pp.downsample", shape, lambda: mt.pp.downsample(adata, n_per_group=50))
     _measure("tl.aggregate", shape, lambda: mt.tl.aggregate(adata, min_cells=0))
 
-    # A grouped, NaN-aware, 20-plate normalization against one global median: the same
-    # order of work, so anything past 50x is a regression rather than a cost.
+    # The same order of work as one global median, so anything past 50x is a regression rather than a cost.
     assert normalize < 50 * max(baseline, 1e-3)
 
 

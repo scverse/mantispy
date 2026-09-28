@@ -1,11 +1,4 @@
-"""Plate-position, confounder and batch corrections.
-
-Median polish corrects plate position, regression removes a measured confounder, and :func:`harmony` corrects the batch.
-:func:`~mantispy.pp.sphere`, in its own module, whitens by the control covariance.
-
-:func:`harmony` needs ``harmonypy`` 2.0 or later, installed with the ``harmony`` extra.
-Processing a single laboratory's data does not need it.
-"""
+"""Plate-position, confounder and batch corrections."""
 
 from __future__ import annotations
 
@@ -30,9 +23,6 @@ METHODS = ("median_polish",)
 
 def _median_polish_stack(grids: np.ndarray, max_iter: int, tol: float) -> tuple[np.ndarray, np.ndarray]:
     """Median polish every feature of a ``(rows, columns, features)`` stack.
-
-    Each feature's grid is independent, so the stack goes to one numba kernel that polishes a plane per thread.
-    A per-feature Python loop spends almost all of its time in the interpreter and in pandas instead.
 
     Returns the fitted ``(row_effects, column_effects)``, both ``(positions, features)``.
     The grand level is not included, so subtracting the effects keeps each feature's level, as :func:`regress_out` does.
@@ -59,14 +49,17 @@ def correct_plate_position(
         adata: Object to correct, at cell or well resolution.
         method: Only ``"median_polish"`` (Tukey), which is robust to a few extreme wells.
         by: Column identifying the plate.
-        reference: Fit the row and column effects on these rows only. ``"negcon"`` is the usual choice, so that treatments laid out in particular columns are not absorbed into a column effect. ``None`` fits on every well.
+        reference: Fit the row and column effects on these rows only.
+            ``"negcon"`` is the usual choice, so that treatments laid out in particular columns are not absorbed into a column effect.
+            ``None`` fits on every well.
         max_iter: Maximum number of median-polish iterations.
         tol: Convergence tolerance of the median polish.
         key_added: Write to ``layers[key_added]`` instead of overwriting ``X``.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes ``X`` or ``layers[key_added]``, and the fitted effects per plate to ``uns["mantispy"]["plate_position"]``.
+        ``None``, or the modified copy.
+        Writes ``X`` or ``layers[key_added]``, and the fitted effects per plate to ``uns["mantispy"]["plate_position"]``.
 
     Raises:
         ValueError: If ``method`` is unknown, or a plate holds no reference rows.
@@ -85,8 +78,7 @@ def correct_plate_position(
 
     fit_mask = reference_mask(adata, reference)
     codes, keys = group_codes(adata, by)
-    # Keep the output float32 and promote one plate at a time; float64 copies of the input
-    # and output would take four times the matrix in memory.
+    # Promote one plate at a time: float64 copies of the input and output would take four times the matrix in memory.
     out = np.array(X, dtype=np.float32)
     effects: dict[str, dict[str, list]] = {}
 
@@ -96,8 +88,7 @@ def correct_plate_position(
         if fit_rows.size == 0:
             raise ValueError(f"no reference rows in group {key!r}")
 
-        # Each plate is polished on its own extent. One grid for the object would drop a 384-well plate into a
-        # corner of a 1536-well one, and padding to a standard format would fit the effects on empty rows.
+        # Each plate gets its own extent; a shared or padded grid would fit the effects on empty wells.
         n_rows, n_columns = rows[selected].max() + 1, columns[selected].max() + 1
 
         # One value per well, so several cells in a well cannot overwrite each other.
@@ -133,14 +124,20 @@ def regress_out(
 
     Args:
         adata: Object to correct.
-        keys: ``obs`` columns to regress out. Numeric columns enter directly; categorical ones are one-hot encoded with the first level dropped.
-        by: Fit separately within each group of this column, usually the plate, which ``sc.pp.regress_out`` cannot do. ``None`` fits one model globally.
-        reference: Rows to fit on: ``None`` for all, ``"negcon"`` for ``Metadata_Control``, or the name of a boolean ``obs`` column. With a reference, each feature is re-expressed at the reference rows' mean covariate, and a covariate beyond the range the reference rows span is clipped to it, so no row is corrected by extrapolating the fit. Numeric covariates only.
+        keys: ``obs`` columns to regress out.
+            Numeric columns enter directly; categorical ones are one-hot encoded with the first level dropped.
+        by: Fit separately within each group of this column, usually the plate, which :func:`scanpy.pp.regress_out` cannot do.
+            ``None`` fits one model globally.
+        reference: Rows to fit on: ``None`` for all, ``"negcon"`` for ``Metadata_Control``, or the name of a boolean ``obs`` column.
+            With a reference, each feature is re-expressed at the reference rows' mean covariate, and a covariate beyond the range the reference rows span is clipped to it, so no row is corrected by extrapolating the fit.
+            Numeric covariates only.
         key_added: Write to ``layers[key_added]`` instead of overwriting ``X``.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes ``X`` or ``layers[key_added]``, where each feature is replaced by its residual plus the fitted value at an anchor: the mean over the whole object for a numeric covariate, and the group's own mean for a categorical one, which keeps the units of the data. With ``reference``, the anchor is the reference rows' mean within each group.
+        ``None``, or the modified copy.
+        Writes ``X`` or ``layers[key_added]``, where each feature is replaced by its residual plus the fitted value at an anchor: the mean over the whole object for a numeric covariate, and the group's own mean for a categorical one, which keeps the units of the data.
+        With ``reference``, the anchor is the reference rows' mean within each group.
 
     Raises:
         KeyError: If any of ``keys`` is not an ``obs`` column.
@@ -150,11 +147,17 @@ def regress_out(
         Missing and infinite values stay as they are, and a feature holding one is fitted on its finite rows.
         A group with no more rows than design columns is left uncorrected and logged.
 
-        Without a reference, every group is re-expressed at the pooled mean covariate, which removes a density difference between plates when every plate spans that value. A plate that does not span it is corrected by extrapolating its own fit, and a warning names it.
+        Without a reference, every group is re-expressed at the pooled mean covariate, which removes a density difference between plates when every plate spans that value.
+        A plate that does not span it is corrected by extrapolating its own fit, and a warning names it.
 
-        With ``reference="negcon"`` the slope is estimated where density varies for technical reasons only. Fitted on every well of a screen whose treatments change density, the slope also carries the treatments' own effects, so the correction erodes their phenotypes and moves the controls away from the centre a control-referenced normalization put them at. With few control wells per plate, pool them with ``by=None`` and a covariate that is comparable between plates, such as the log of each well's cell count over its plate's control median.
+        With ``reference="negcon"`` the slope is estimated where density varies for technical reasons only.
+        Fitted on every well of a screen whose treatments change density, the slope also carries the treatments' own effects, so the correction erodes their phenotypes and moves the controls away from the centre a control-referenced normalization put them at.
+        With few control wells per plate, pool them with ``by=None`` and a covariate that is comparable between plates, such as the log of each well's cell count over its plate's control median.
 
-        Whether the cell count is a confounder at all depends on the screen. In the ORF and CRISPR arms of JUMP, whose plate layouts were not randomized, it is largely technical, and the recipe regresses it out :cite:p:`Chandrasekaran_2023`. In a compound screen it is partly a treatment effect — a compound that kills cells is supposed to lower it — so regressing it out removes part of the phenotype along with the nuisance, and the recipe does not. Measure both ways before adopting either; :func:`~mantispy.metrics.evaluate_correction` takes a ``covariates`` argument for exactly this, and :func:`~mantispy.tl.cytotoxicity` asks the question directly.
+        Whether the cell count is a confounder at all depends on the screen.
+        In the ORF and CRISPR arms of JUMP, whose plate layouts were not randomized, it is largely technical, and the recipe regresses it out :cite:p:`Chandrasekaran_2023`.
+        In a compound screen it is partly a treatment effect (a compound that kills cells is supposed to lower it), so regressing it out removes part of the phenotype along with the nuisance, and the recipe does not.
+        Measure both ways before adopting either; :func:`~mantispy.metrics.evaluate_correction` takes a ``covariates`` argument for exactly this, and :func:`~mantispy.tl.cytotoxicity` asks the question directly.
 
         A numeric covariate with a missing or infinite value is dropped from that group's design and nothing is regressed out for it there, with a warning.
         A categorical covariate with a missing label is refused instead: the all-zero encoding of a missing category is also the encoding of the level ``drop_first`` removed, so those rows would be corrected as the reference level and take every other row with them.
@@ -176,9 +179,6 @@ def regress_out(
             raise ValueError(
                 "reference= fits numeric covariates only; a categorical level absent from the reference rows has no slope to apply"
             )
-    # nanmean, so one missing covariate value does not make the pooled anchor NaN. A column
-    # whose pooled mean is still non-finite (all missing, or holding an inf) falls back to
-    # each group's own mean, as dummies do.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)  # "Mean of empty slice"
         pooled = np.nanmean(design_all, axis=0)
@@ -189,17 +189,13 @@ def regress_out(
         rows = np.flatnonzero(codes == group)
         fit = fitted_on[rows]
         block_design = design_all[rows]
-        # A column that does not vary inside this group carries no within-group
-        # information; its effect stays in the intercept.
-        # A covariate with a missing or infinite value cannot be fitted, so it is dropped too,
-        # which leaves the group uncorrected. Leaving it alone is the conservative choice; doing
-        # so silently is not, and the log line below reports the covariate as removed either way.
         unusable = ~np.isfinite(block_design).all(axis=0)
         if not fit.any():
             get_logger().warning(
                 "regress_out: no reference rows within %s=%r, so nothing is regressed out there", by, keys_index[group]
             )
             continue
+        # A column constant within the group carries no within-group information; its effect stays in the intercept.
         varying = (np.ptp(block_design[fit], axis=0) > 0) & ~unusable
         varying[0] = True
         incomplete = sorted({str(name) for name in sources[unusable] if name})
@@ -223,16 +219,8 @@ def regress_out(
             )
             continue
 
-        # The covariate value the corrected values are re-expressed at. Anchoring at zero (the
-        # bare intercept) lies outside the data and turns each group's slope noise into an
-        # offset between groups. A numeric covariate is anchored at its pooled mean, so every
-        # group ends at the same value. A dummy is anchored at the group's own mean, so a group
-        # is not extrapolated onto a level it never observed; that part of
-        # `anchor @ coefficients` is the group's mean fitted value, which is unique even where
-        # the least squares solution is not.
+        # Never anchored at zero: the bare intercept lies outside the data and turns each group's slope noise into an offset between groups.
         anchor = np.where(is_numeric[selected] & pooled_ok[selected], pooled[selected], design.mean(axis=0))
-        # With a reference, the anchor is the reference rows' own mean, and a row beyond the covariate range
-        # those rows span is corrected as if it sat at the edge of it rather than by extrapolating the fit.
         applied = design
         if reference is not None:
             anchor = design[fit].mean(axis=0)
@@ -240,9 +228,7 @@ def regress_out(
         elif ((anchor < design.min(axis=0)) | (anchor > design.max(axis=0)))[is_numeric[selected]].any():
             extrapolated.append(str(keys_index[group]))
 
-        # Complete features share one design, so lstsq solves them together; a feature with
-        # gaps is fitted alone on its own rows. The split tests for non-finite values because a
-        # single inf in the batched block makes lstsq return NaN coefficients for every feature.
+        # A single inf in the batched block makes lstsq return NaN coefficients for every feature.
         block = X[rows].astype(np.float64)
         gaps = ~np.isfinite(block).all(axis=0)
         clean = np.flatnonzero(~gaps)
@@ -256,10 +242,9 @@ def regress_out(
             values = block[:, feature]
             observed = np.isfinite(values)
             if (observed & fit).sum() <= design.shape[1]:
-                continue  # too few observations to fit; leave the feature alone
+                continue
             coefficients, *_ = np.linalg.lstsq(design[observed & fit], values[observed & fit], rcond=None)
             residual = values[observed] - applied[observed] @ coefficients
-            # Same anchor rule, over the rows where this feature was measured.
             gap_anchor = np.where(
                 is_numeric[selected] & pooled_ok[selected], pooled[selected], design[observed].mean(axis=0)
             )
@@ -288,10 +273,9 @@ def _design_matrix(adata: AnnData, keys: Sequence[str]) -> tuple[np.ndarray, np.
 
     Built once for the whole object, so a group's design is a row slice and each column means the same in every group, which lets residuals be re-expressed at a common covariate value.
     The mask is needed because numeric columns are anchored at their pooled mean and dummies at the group's own mean.
-    The key names let a column that cannot be fitted be reported under the name the caller passed.
 
     Raises:
-        ValueError: If a categorical covariate has missing values, which ``pd.get_dummies`` encodes as all-zero: the same encoding as the level ``drop_first`` removes.
+        ValueError: If a categorical covariate has missing values, which :func:`pandas.get_dummies` encodes as all-zero: the same encoding as the level ``drop_first`` removes.
     """
     obs = as_frame(adata.obs)
     # The intercept is not a covariate, and belongs to no key.
@@ -312,8 +296,7 @@ def _design_matrix(adata: AnnData, keys: Sequence[str]) -> tuple[np.ndarray, np.
                     "correctly labelled row would move with them. Fill the column (an unmatched "
                     "platemap row is the usual cause), drop those rows, or leave the key out."
                 )
-            # get_dummies emits a column for every declared level, observed or not, and an
-            # all-zero column looks like collinearity to np.linalg.matrix_rank.
+            # get_dummies emits an all-zero column for every unobserved declared level, which matrix_rank reads as collinearity.
             if isinstance(values.dtype, pd.CategoricalDtype):
                 values = values.cat.remove_unused_categories()
             dummies = pd.get_dummies(values, drop_first=True, dtype=float).to_numpy().T
@@ -326,11 +309,8 @@ def _design_matrix(adata: AnnData, keys: Sequence[str]) -> tuple[np.ndarray, np.
 def _independent(design: np.ndarray) -> np.ndarray:
     """Return the indices of a maximal linearly independent set of columns, intercept first.
 
-    Dummies drop the first category of the whole object, so in a group that observed only the other levels they sum to the intercept (a plate run by operators B and C, with A as the reference, gives rank 2 with 3 columns).
+    Dummies drop the first category of the whole object, so in a group that observed only the other levels they sum to the intercept.
     Dropping the redundant column lets the fit proceed without changing the fitted values.
-
-    Makes one rank call per column on one group's block, which is cheap for a few keys on a plate's wells.
-    Switch to a pivoted QR if this runs on cells with many keys.
     """
     keep: list[int] = []
     rank = 0
@@ -361,7 +341,7 @@ def harmony(
     Args:
         adata: Object holding the embedding to correct.
         batch_key: ``obs`` column naming the nuisance grouping, such as the batch, plate or imaging site.
-        use_rep: Embedding to correct, normally ``sc.pp.pca``'s output.
+        use_rep: Embedding to correct, normally the output of :func:`scanpy.pp.pca`.
         key_added: ``obsm`` key for the corrected embedding.
         max_iter: Harmony iterations.
         seed: Seed, passed through as ``random_state``.
@@ -369,7 +349,8 @@ def harmony(
         harmony_kwargs: Passed to ``harmonypy.run_harmony``, for example ``theta``, ``nclust`` or ``sigma``.
 
     Returns:
-        ``None``, or the modified copy. Writes ``obsm[key_added]``.
+        ``None``, or the modified copy.
+        Writes ``obsm[key_added]``.
 
     Raises:
         ImportError: If ``harmonypy`` is not installed.

@@ -71,12 +71,14 @@ def feature_reproducibility(
     Args:
         adata: Profiles with several replicates per group, at well or perturbation resolution.
         groupby: ``obs`` column whose groups are the replicate sets.
-        min_icc: Threshold for the boolean column. See the Notes on choosing it.
+        min_icc: Threshold for the boolean column.
+            See the Notes on choosing it.
         key_added: ``var[key_added]`` holds the ICC; ``var[key_added + "_selected"]`` the flag.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes the ICC to ``var[key_added]`` and the flag to ``var[key_added + "_selected"]``.
+        ``None``, or the modified copy.
+        Writes the ICC to ``var[key_added]`` and the flag to ``var[key_added + "_selected"]``.
 
     Raises:
         ValueError: If ``groupby`` has a single group, so that no variance can lie between groups.
@@ -124,7 +126,8 @@ def feature_batch_sensitivity(
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes ``var[key_added + "_pvalue"]``, ``var[key_added + "_qvalue"]`` and the boolean ``var[key_added + "_sensitive"]``.
+        ``None``, or the modified copy.
+        Writes ``var[key_added + "_pvalue"]``, ``var[key_added + "_qvalue"]`` and the boolean ``var[key_added + "_sensitive"]``.
 
     Raises:
         ValueError: If ``batch_key`` holds fewer than two batches.

@@ -42,8 +42,7 @@ def map(adata: AnnData, key: str = "map", label_top: int = 10, ax: Axes | None =
     significance = -np.log10(np.clip(table["corrected_p_value"].to_numpy(dtype=float), 1e-12, None))
     ax.scatter(table["mean_average_precision"], significance, s=14)
 
-    # The threshold is recorded under the name of the function, not under the name of the table
-    # it wrote, so it stays readable whatever `key` is.
+    # Params are stored under the function name, not the table's `key`.
     threshold = adata.uns.get("mantispy", {}).get("params", {}).get("map", {}).get("threshold", 0.05)
     ax.axhline(-np.log10(threshold), color="grey", ls="--", lw=1, label=f"q = {threshold}")
 
@@ -200,7 +199,8 @@ def metrics(table: pd.DataFrame, ax: Axes | None = None) -> Axes:
     Takes the table instead of an AnnData because the table already holds every representation side by side.
 
     Args:
-        table: A tidy frame with ``metric``, ``representation`` and ``value``, as :func:`~mantispy.metrics.evaluate_correction` returns. Its ``better`` column, when present, adds the direction that is an improvement to each tick label.
+        table: A tidy frame with ``metric``, ``representation`` and ``value``, as :func:`~mantispy.metrics.evaluate_correction` returns.
+            Its ``better`` column, when present, adds the direction that is an improvement to each tick label.
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
@@ -214,9 +214,7 @@ def metrics(table: pd.DataFrame, ax: Axes | None = None) -> Axes:
     pivot.plot.bar(ax=ax)
 
     if "better" in table.columns:
-        # A covariate row carries no direction, because whether its share of the variance should be
-        # small depends on what the covariate is. Its tick is the bare metric name rather than a
-        # promise nobody can keep.
+        # Covariate rows carry no direction, so their tick keeps the bare metric name.
         direction = table.drop_duplicates("metric").set_index("metric")["better"]
         labels = [
             f"{name}\n({direction[name]} is better)" if isinstance(direction.get(name), str) else name
@@ -273,8 +271,7 @@ def similarity(
     if groupby is not None:
         order = np.argsort(adata.obs[groupby].astype(str).to_numpy(), kind="stable")
     if order.size > max_obs:
-        # Sample positions within the ordering, not row indices, so sorting the sample keeps
-        # the groupby blocks intact.
+        # Sample positions within the ordering, not row indices, so the groupby blocks stay contiguous.
         picked = np.sort(np.random.default_rng(0).choice(order.size, size=max_obs, replace=False))
         order = order[picked]
 

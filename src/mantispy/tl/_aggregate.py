@@ -17,11 +17,9 @@ from mantispy._core.logging import get_logger
 from mantispy._core.provenance import record_params
 from mantispy._core.schema import get_resolution, resolution_for, stamp
 
-#: Aggregation functions, mapped to the kernel selector that computes them.
 FUNCTIONS = {"median": MEDIAN, "mean": MEAN}
 
-#: uns["mantispy"] keys that survive aggregation because they describe the features or the experiment.
-#: Result tables are keyed on the input rows and are dropped.
+#: Keys describing the features or the experiment; result tables are keyed on the input rows, so they are dropped.
 _INHERITED = frozenset({"channels", "dataset", "truth", "feature_select", "blocklist"})
 
 #: Columns that add up over a group, so they are recomputed for it rather than carried as constant metadata.
@@ -42,18 +40,21 @@ def aggregate(
 
     Args:
         adata: Single cells, or profiles to aggregate further, as its recorded resolution says.
-        by: Columns defining a profile. The default is one profile per well.
+        by: Columns defining a profile.
+            The default is one profile per well.
         func: ``"median"`` (the pycytominer default) or ``"mean"``.
         min_cells: Groups with fewer cells than this are dropped.
         layer: Aggregate this layer instead of ``X``.
-        use_rep: Aggregate this ``obsm`` representation (e.g. an embedding from ``pp.tvn``/``pp.harmony``) instead of ``X``; the result's ``X`` holds the reduced representation and ``var`` is a plain range index, since the axes are not named features. Mutually exclusive with ``layer``.
+        use_rep: Aggregate this ``obsm`` representation (e.g. an embedding from ``pp.tvn``/``pp.harmony``) instead of ``X``; the result's ``X`` holds the reduced representation and ``var`` is a plain range index, since the axes are not named features.
+            Mutually exclusive with ``layer``.
         count_key: ``obs`` column the cell count is written to, and read from when ``adata`` holds profiles.
         site_key: ``obs`` column the number of fields of view is written to, and read from when ``adata`` holds profiles.
 
     Returns:
         A new :class:`~anndata.AnnData` with one row per group.
         ``var`` is carried over unchanged; ``obs`` holds the grouping columns, `count_key`, `site_key` when the fields of view are known, and every other ``Metadata_`` column that is constant within every group.
-        `count_key` is the number of cells behind a row, so its scope follows ``by``: grouping by site counts the cells of one field of view, grouping by well those of every field. Profiles contribute the cells they carry rather than one each, and profiles that carry no count give an unknown one.
+        `count_key` is the number of cells behind a row, so its scope follows ``by``: grouping by site counts the cells of one field of view, grouping by well those of every field.
+        Profiles contribute the cells they carry rather than one each, and profiles that carry no count give an unknown one.
         `site_key` is the number of fields that contributed cells, summed where the rows carry it and counted from ``Metadata_Site`` otherwise.
         The resolution recorded is ``"well"`` when ``by`` holds both ``Metadata_Plate`` and ``Metadata_Well``, since a finer grouping such as one row per site is still per-well or finer, and ``"perturbation"`` otherwise.
 
@@ -74,8 +75,6 @@ def aggregate(
     tallies = {count_key: counts}
     # The recorded resolution decides, not the column: a cell may carry its well's count as a covariate.
     if get_resolution(adata) != "cell":
-        # Profiles stand for the cells and fields they summarize, not one cell each; without a count, for an
-        # unknown number of them.
         tallies[count_key] = np.full(len(keys), np.nan)
         for column in (count_key, site_key):
             if column in frame:
@@ -96,7 +95,6 @@ def aggregate(
     result = ad.AnnData(X=values[keep].astype(np.float32), obs=obs, var=var)
     stamp(result, resolution=resolution_for(columns))
     store = adata.uns.get("mantispy", {})
-    # Deep copies, so the aggregate and its source do not share mutable frames.
     result.uns["mantispy"].update({key: deepcopy(value) for key, value in store.items() if key in _INHERITED})
     dropped = sorted(set(store) - _INHERITED - {"resolution", "schema_version", "params"})
     if dropped:
@@ -125,7 +123,6 @@ def aggregate(
 
 def _site_counts(frame: pd.DataFrame, codes: np.ndarray, n_groups: int) -> np.ndarray:
     """Distinct fields of view among each group's cells, where site 1 of one well and of the next are different fields."""
-    # One integer per field, built from per-column codes rather than a MultiIndex, which would build a tuple per cell.
     field = np.zeros(len(frame), dtype=np.int64)
     for column in ("Metadata_Plate", "Metadata_Well", "Metadata_Site"):
         if column in frame:

@@ -3,7 +3,8 @@
 This is the only module that parses feature names.
 Its output populates ``adata.var``, and nothing downstream re-parses names.
 
-Two grammars are handled. CellProfiler's::
+Two grammars are handled.
+CellProfiler's::
 
     [<Object>_]<Group>_<feature words>[_<channel>...][_<numeric params>][_<NofM>]
 
@@ -27,7 +28,6 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-#: Columns of the annotation table, in order.
 COLUMNS = [
     "object",
     "feature_group",
@@ -44,7 +44,6 @@ COLUMNS = [
 _TEXT_COLUMNS = ["object", "feature_group", "feature", "channel", "radial_bin", "params"]
 _FLOAT_COLUMNS = ["scale", "angle", "gray_levels"]
 
-#: Groups that never hold a usable profile feature.
 NON_FEATURE_GROUPS = frozenset(
     {
         "Number",
@@ -70,7 +69,6 @@ NON_FEATURE_GROUPS = frozenset(
     }
 )
 
-#: Groups whose names carry one or more channel tokens.
 CHANNEL_BEARING_GROUPS = frozenset(
     {
         "Intensity",
@@ -89,9 +87,7 @@ PLAIN_FEATURE_GROUPS = frozenset({"AreaShape", "Neighbors", "AreaOccupied", "Zer
 
 _KNOWN_GROUPS = NON_FEATURE_GROUPS | CHANNEL_BEARING_GROUPS | PLAIN_FEATURE_GROUPS
 
-#: Maps a lower-cased channel token to the stain it stands for, so that datasets naming a channel differently stay comparable.
 #: Adapted from scverse/cell-painting-io (MIT).
-#: Nothing is renamed unless a caller asks for canonical channels.
 CHANNEL_ALIASES: dict[str, str] = {
     "dna": "dna",
     "hoechst": "dna",
@@ -123,19 +119,14 @@ def canonical_channel(channel: str | None, aliases: dict[str, str] | None = None
     return "|".join(lookup.get(part.lower(), part.lower()) for part in str(channel).split("|"))
 
 
-#: Bare column names CellProfiler emits that are never features.
 _BARE_NON_FEATURES = frozenset({"ImageNumber", "ObjectNumber", "TableNumber"})
 
-#: ``AreaShape`` measurements that say where an object is rather than what it looks like. CellProfiler 4 writes
-#: the centroid here instead of under ``Location``.
+#: CellProfiler 4 writes the centroid under ``AreaShape`` instead of ``Location``.
 _POSITIONAL_AREASHAPE = frozenset({"Center", "BoundingBoxMinimum", "BoundingBoxMaximum"})
 
 _RADIAL_BIN_RE = re.compile(r"^\d+of\d+$")
 _NUMERIC_RE = re.compile(r"^-?\d+(\.\d+)?$")
 
-#: ``cell_0/max/textureContrast_3_03_256``: object, channel index, per-object aggregation, then the group glued to the
-#: feature in camel case. CellProfiler separates every token with an underscore and never emits a ``/``, so a name has
-#: to match this whole shape before it is read this way.
 _CP_MEASURE_RE = re.compile(
     r"^(?P<object>[a-z]+)_(?P<channel>\d+)/(?P<agg>[a-z]+)/(?P<group>[a-z_]+)(?P<feature>[A-Z].*)$"
 )
@@ -149,7 +140,6 @@ def _infer_channels(names: Sequence[str]) -> list[str]:
     """Guess the channel vocabulary from a list of column names.
 
     A token counts as a channel when it trails a channel-bearing group, is neither numeric nor a radial bin, and shows up with at least two distinct feature names in that group.
-    Used only when the caller does not pass ``channels``.
     """
     seen: dict[str, set[str]] = defaultdict(set)
     for name in names:
@@ -198,15 +188,11 @@ def _read_suffixes(row: dict, rest: list[str], group: str) -> None:
 def _parse_cp_measure(name: str) -> dict:
     """Annotate one ``cp_measure`` name, whose channel is an index rather than the stain's name.
 
-    cp_measure is handed one channel at a time and numbers them in the order it was given them, so the index is all
-    the name carries. It is kept as the channel rather than resolved to a stain, because the mapping lives in the
-    acquisition metadata and guessing it would put a wrong stain on every intensity feature in the screen.
+    cp_measure is handed one channel at a time and numbers them in the order it was given them, so the index is all the name carries.
     """
     row: dict = dict.fromkeys(COLUMNS)
     match = _CP_MEASURE_RE.match(name)
     if match is None:
-        # The grammar was chosen from the file as a whole, so a name that does not fit it is a mixed or
-        # hand-edited file rather than a name to guess at.
         row["is_feature"] = False
         return row
 
@@ -280,7 +266,8 @@ def parse_feature_names(names: Sequence[str], channels: Sequence[str] | None = N
 def empty_annotation(names: Sequence[str] | pd.Index, skip: Sequence[str] | None = None) -> pd.DataFrame:
     """The annotation table for features whose names carry no CellProfiler structure.
 
-    Learned embeddings, cluster compositions and feature-family signatures all have columns that are features but are not measurements of a compartment in a channel. The schema still asks for the annotation columns, so they are supplied empty rather than guessed at: :func:`parse_feature_names` reads ``openphenom_nahualX_17`` as the ``nahualX`` group of the ``openphenom`` object, which would give such an object feature families named after the model's own tensors.
+    Learned embeddings, cluster compositions and feature-family signatures all have columns that are features but are not measurements of a compartment in a channel.
+    The schema still asks for the annotation columns, so they are supplied empty rather than guessed at: :func:`parse_feature_names` reads ``openphenom_nahualX_17`` as the ``nahualX`` group of the ``openphenom`` object, which would give such an object feature families named after the model's own tensors.
 
     Args:
         names: The feature names, which are used only as the index.
@@ -306,14 +293,13 @@ def empty_annotation(names: Sequence[str] | pd.Index, skip: Sequence[str] | None
 def annotation(names: Sequence[str] | pd.Index, **known: Any) -> pd.DataFrame:
     """:func:`empty_annotation` with the columns the caller does know filled in.
 
-    Every tool that returns features which are not CellProfiler measurements builds its ``var`` this
-    way. Assigning a value into one of the text columns would replace it and drop the ``category``
-    dtype :func:`empty_annotation` gives it, so anything landing in one is wrapped here instead.
+    Every tool that returns features which are not CellProfiler measurements builds its ``var`` this way.
+    Assigning a value into one of the text columns would replace it and drop the ``category`` dtype :func:`empty_annotation` gives it, so anything landing in one is wrapped here instead.
 
     Args:
         names: The feature names, used as the index.
-        known: Column name to value, for the columns the caller can fill. A column outside
-            :data:`COLUMNS` is added as given, which is how ``position`` and ``n_features`` are written.
+        known: Column name to value, for the columns the caller can fill.
+            A column outside :data:`COLUMNS` is added as given, which is how ``position`` and ``n_features`` are written.
 
     Returns:
         The annotation frame, the named columns filled and the rest empty.
@@ -322,8 +308,6 @@ def annotation(names: Sequence[str] | pd.Index, **known: Any) -> pd.DataFrame:
     for column, values in known.items():
         frame[column] = values
         if column in _TEXT_COLUMNS:
-            # Assigning a value replaces the column, so the category dtype is put back rather than
-            # built first and thrown away.
             frame[column] = frame[column].astype("category")
     return frame
 
@@ -341,7 +325,6 @@ def blocklist_hits(candidates: Sequence[np.ndarray], blocklist: str | Sequence[s
 
     ``candidates`` is normally the current ``var_names`` together with ``var["original_name"]``, so a blocklist matches before and after :func:`~mantispy.pp.standardize_feature_names`.
     That function rewrites channel-bearing names into a grammar no blocklist entry matches, but keeps the incoming name in ``original_name``.
-    Both call sites that apply a blocklist (:func:`~mantispy.pp.filter_features` and the ``blocklist`` operation of :func:`~mantispy.pp.feature_select`) use this function.
     """
     blocked = set(load_blocklist(blocklist) if isinstance(blocklist, str) else blocklist)
     return np.logical_or.reduce([np.isin(np.asarray(candidate), list(blocked)) for candidate in candidates])

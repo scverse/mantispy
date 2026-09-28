@@ -1,8 +1,6 @@
 """Rank-based inverse normal transformation.
 
-After per-plate normalization, each feature is replaced by the normal quantile of its rank.
 This is the ``_int`` step of the JUMP profiling recipe for compound profiles and the third step of the baseline in :cite:t:`Arevalo_2024`.
-Morphology features are heavy-tailed and differ in shape, so a few extreme wells can dominate distances; ranking removes both the shape differences and the outliers, at the cost of the original units.
 
 Reference: the ``rank_int_array`` implementation in ``broadinstitute/jump-profiling-recipe``, which this reproduces on data with no missing values.
 """
@@ -16,7 +14,6 @@ from mantispy._core._reduce import transform_grouped
 from mantispy._core.logging import get_logger
 from mantispy._core.mutation import inplace_or_copy
 
-#: Blom's constant, the default the field uses for the quantile estimate.
 BLOM = 3.0 / 8.0
 
 
@@ -26,7 +23,8 @@ def rank_inverse_normal(X: np.ndarray, c: float = BLOM, stochastic: bool = True,
     Args:
         X: Values to transform, one feature per column.
         c: Blom's constant in ``(rank - c) / (n - 2c + 1)``.
-        stochastic: Break ties at random, as the reference implementation does. With ``False``, tied values share the mid-rank and get the same output, which suits real ties (such as a feature that is zero in half the wells) but not ties from rounding.
+        stochastic: Break ties at random, as the reference implementation does.
+            With ``False``, tied values share the mid-rank and get the same output, which suits real ties (such as a feature that is zero in half the wells) but not ties from rounding.
         seed: Seed for the tie-breaking.
 
     Returns:
@@ -47,8 +45,7 @@ def rank_inverse_normal(X: np.ndarray, c: float = BLOM, stochastic: bool = True,
 
     for column in range(values.shape[1]):
         finite = np.flatnonzero(np.isfinite(values[:, column]))
-        # The transform is defined at one observation, ndtri((1 - c) / (2 - 2c)) = 0.0, and
-        # skipping the column would leave the NaN prefill and lose a measured value.
+        # One observation is still defined, ndtri((1 - c) / (2 - 2c)) = 0.0, so only an empty column is skipped.
         if finite.size == 0:
             continue
         present = values[finite, column]
@@ -76,8 +73,11 @@ def rank_int(
     """Replace every feature by the normal quantile of its rank.
 
     Args:
-        adata: Object to transform. Run it after :func:`~mantispy.pp.normalize`, as the JUMP recipe and the batch-correction benchmark do.
-        by: Rank within each group of this column. ``None`` ranks globally, as the reference implementation does, which keeps every feature comparable across the screen. Ranking per plate also removes plate-level differences in distribution shape, but can hide a plate that failed.
+        adata: Object to transform.
+            Run it after :func:`~mantispy.pp.normalize`, as the JUMP recipe and the batch-correction benchmark do.
+        by: Rank within each group of this column.
+            ``None`` ranks globally, as the reference implementation does, which keeps every feature comparable across the screen.
+            Ranking per plate also removes plate-level differences in distribution shape, but can hide a plate that failed.
         c: Blom's constant.
         stochastic: Tie handling; see ``rank_inverse_normal``.
         seed: Tie handling; see ``rank_inverse_normal``.
@@ -85,7 +85,8 @@ def rank_int(
         copy: Return a modified copy instead of transforming in place.
 
     Returns:
-        ``None``, or the modified copy. Writes ``X`` or ``layers[key_added]``.
+        ``None``, or the modified copy.
+        Writes ``X`` or ``layers[key_added]``.
 
     Notes:
         Every feature comes out standard normal, so no feature dominates a distance through its units.

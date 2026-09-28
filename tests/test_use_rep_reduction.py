@@ -1,7 +1,6 @@
 """Reducing an ``obsm`` representation instead of ``X`` (issue #105).
 
-``pp.tvn``/``pp.harmony`` write a corrected embedding to ``obsm``; ``use_rep`` lets
-``tl.consensus`` and ``tl.aggregate`` reduce that representation into the result's ``X``.
+``pp.tvn``/``pp.harmony`` write a corrected embedding to ``obsm``; ``use_rep`` lets ``tl.consensus`` and ``tl.aggregate`` reduce that representation into the result's ``X``.
 """
 
 import numpy as np

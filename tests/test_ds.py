@@ -81,12 +81,10 @@ def test_the_downloads_read_back_at_the_shape_the_registry_claims(name: str) -> 
     if name == "bbbc021":
         assert adata.obs["Metadata_MOA"].notna().all()
         assert adata.obs["Metadata_Control"].sum() == 330
-    # Regression test for #63: every well-level dataset publishes an exact per-well count upstream.
-    # jump_cells, pooled_rare, scallops_arv471 and cp_posh are cell- or barcode-resolution and carry no per-well count.
+    # Regression test for #63; the cell- or barcode-resolution datasets carry no per-well count.
     if name not in ("jump_cells", "pooled_rare", "scallops_arv471", "cp_posh"):
         assert (adata.obs["Metadata_CellCount"] > 0).all()
-        # jump-profiling-recipe's count table, which jump_crispr reads, has no field count, and
-        # JUMP-Lite publishes one count per well rather than per field.
+        # jump_crispr's count table has no field count and JUMP-Lite publishes one count per well, not per field.
         if name not in ("jump_crispr", "jump_lite"):
             assert adata.obs["Metadata_SiteCount"].between(1, 36).all()
 
@@ -180,8 +178,10 @@ def test_selecting_without_the_annotation_is_refused() -> None:
     ],
 )
 def test_every_jump_lite_feature_set_reads_back_at_its_own_width(model: str, n_features: int) -> None:
-    """The registry records one shape and the generic shape test only ever loads the default model, so the
-    other five widths are asserted nowhere else. The rows are the same wells in all six."""
+    """The registry records one shape and the generic shape test only ever loads the default model, so the other five widths are asserted nowhere else.
+
+    The rows are the same wells in all six.
+    """
     adata = mt.ds.jump_lite(model=model, annotate=False)
 
     assert adata.shape == (1536, n_features)
@@ -189,16 +189,17 @@ def test_every_jump_lite_feature_set_reads_back_at_its_own_width(model: str, n_f
 
 
 def test_jump_lite_names_its_feature_sets():
-    """The six feature sets cover the same wells, so a typo has to fail loudly rather than
-    silently fall back to one of them."""
+    """The six feature sets cover the same wells, so a typo has to fail loudly rather than silently fall back to one of them."""
     with pytest.raises(ValueError, match="model must be one of"):
         mt.ds.jump_lite(model="openphenome")
     assert "cp_measure" in mt.ds.JUMP_LITE_MODELS
 
 
 def test_jump_lite_returns_every_feature_set_in_one_row_order(tmp_path, monkeypatch):
-    """Each feature set is distributed with the wells in its own order, so two of them stacked by position
-    paired one well's features with another's. Read back, every set lists the wells in the same order."""
+    """Each feature set is distributed with the wells in its own order, so two of them stacked by position paired one well's features with another's.
+
+    Read back, every set lists the wells in the same order.
+    """
     from mantispy.ds import _datasets
 
     ids = ["P2_A01", "P1_B01", "P1_A01"]
@@ -230,10 +231,10 @@ def test_jump_lite_returns_every_feature_set_in_one_row_order(tmp_path, monkeypa
 
 @pytest.mark.parametrize(("model", "parsed"), [("openphenom", False), ("cp_measure", True)])
 def test_jump_lite_does_not_read_an_embedding_dimension_as_a_measurement(tmp_path, monkeypatch, model, parsed):
-    """The parser finds structure in names that have none: it reads `openphenom_nahualX_17` as the
-    `nahualX` feature group of an `openphenom` object, so the model's own tensor names became
-    feature families and `scale` became the dimension index. cp_measure is real measurements and
-    keeps its annotation."""
+    """The parser finds structure in names that have none: it reads `openphenom_nahualX_17` as the `nahualX` feature group of an `openphenom` object, so the model's own tensor names became feature families and `scale` became the dimension index.
+
+    cp_measure is real measurements and keeps its annotation.
+    """
     from mantispy.ds import _datasets
 
     names = (
@@ -264,7 +265,6 @@ def test_jump_lite_does_not_read_an_embedding_dimension_as_a_measurement(tmp_pat
     adata = mt.ds.jump_lite(model=model, annotate=False)
 
     assert bool(adata.var["feature_group"].notna().any()) is parsed
-    # The compartment and the channel are what an embedding cannot offer, so they are what cp_measure has to keep.
     if parsed:
         assert list(adata.var["object"]) == ["cell", "nuclei"]
         assert list(adata.var["feature_group"]) == ["sizeshape", "intensity"]
@@ -275,14 +275,12 @@ def test_jump_lite_does_not_read_an_embedding_dimension_as_a_measurement(tmp_pat
 def _write_scallops_fixture(path):
     """A small stand-in for the SCALLOPS upstream table, with the columns scallops_arv471 reads.
 
-    It holds both conditions, a boundary-touching cell, and a cell missing a feature, so the loader's
-    condition filter, boundary drop and NaN drop are all exercised. The ARV-471 arm has thirty
-    non-targeting cells, two targeted genes and one olfactory-receptor negative control.
+    It holds both conditions, a boundary-touching cell, and a cell missing a feature, so the loader's condition filter, boundary drop and NaN drop are all exercised.
+    The ARV-471 arm has thirty non-targeting cells, two targeted genes and one olfactory-receptor negative control.
     """
     from mantispy.ds._datasets import _SCALLOPS_FEATURES
 
     rng = np.random.default_rng(0)
-    # (gene_symbol, sgRNA_id, type, n_cells) for the clean ARV-471 cells.
     groups = [
         ("NTC", "NTC_1", "ntc", 15),
         ("NTC", "NTC_2", "ntc", 15),
@@ -296,8 +294,7 @@ def _write_scallops_fixture(path):
     for gene, guide, kind, n in groups:
         for _ in range(n):
             rows.append((gene, guide, kind, "A", 3, "ARV-471", False))
-    clean = len(rows)  # 70
-    # DMSO cells (dropped by the condition filter), a boundary cell and two feature-NaN cells (dropped).
+    clean = len(rows)
     rows += [("NTC", "NTC_1", "ntc", "A", 1, "DMSO", False) for _ in range(5)]
     rows += [("ESR1", "ESR1_1", "target", "A", 3, "ARV-471", True) for _ in range(3)]
     nan_rows = [("CRBN", "CRBN_1", "target", "A", 3, "ARV-471", False) for _ in range(2)]
@@ -317,14 +314,13 @@ def _write_scallops_fixture(path):
     )
     for feature in _SCALLOPS_FEATURES:
         frame[feature] = rng.normal(size=len(frame))
-    # Make the last two rows (the CRBN cells added above) miss a feature so the NaN drop removes them.
+    # The last two rows are nan_rows.
     frame.loc[frame.index[-2:], _SCALLOPS_FEATURES[0]] = np.nan
     frame.to_parquet(path)
     return clean
 
 
 def _patch_files(monkeypatch, path):
-    """Point the loaders' ``_files`` at a single local fixture, whatever dataset asks for it."""
     from mantispy.ds import _datasets
 
     monkeypatch.setattr(_datasets, "_files", lambda name, cache_dir, select=None: [path])
@@ -343,7 +339,6 @@ def test_scallops_arv471_loads_clean_cell_resolution(tmp_path, monkeypatch):
     report = mt.io.validate(adata)
     assert report.ok, report.errors
     assert adata.obs_names.is_unique
-    # The condition filter, boundary drop and NaN drop leave nothing but the clean ARV-471 cells.
     assert "Condition" not in adata.obs
     assert set(adata.obs["Metadata_Control_Type"].astype(str)) == {"ntc", "target", "neg"}
 
@@ -362,7 +357,6 @@ def test_scallops_arv471_maps_controls_and_guides(tmp_path, monkeypatch):
     assert obs["Metadata_Gene"].nunique() == 4  # nontargeting, ESR1, CRBN, OR1L4
     assert obs["Metadata_sgRNA"].nunique() == 7
     assert list(obs["Metadata_Perturbation"].astype(str)) == list(obs["Metadata_sgRNA"].astype(str))
-    # Both control and targeted cells are present, and only the NTC cells are marked control.
     control = obs["Metadata_Control"].to_numpy()
     assert control.dtype == bool
     assert control.any() and not control.all()
@@ -372,7 +366,6 @@ def test_scallops_arv471_maps_controls_and_guides(tmp_path, monkeypatch):
 
 
 def test_scallops_arv471_runs_hit_calling(tmp_path, monkeypatch):
-    """The object drives hit_calling against the non-targeting controls and returns a table of groups."""
     import inspect
 
     path = tmp_path / "fig3.pq"
@@ -393,8 +386,7 @@ def test_scallops_arv471_runs_hit_calling(tmp_path, monkeypatch):
     assert {"group", "is_hit"} <= set(hits.columns)
 
 
-#: A handful of CellStats-style feature names for the cp_posh fixture. Their names carry no CellProfiler
-#: structure, as the real ones do not, so the loader files them all into X with an empty var annotation.
+#: CellStats-style names that, like the real ones, carry no CellProfiler structure.
 _CP_POSH_FIXTURE_FEATURES = (
     "nucleus_mask_height",
     "nucleus_mask_area_pixel_sq",
@@ -408,14 +400,12 @@ _CP_POSH_FIXTURE_FEATURES = (
 def _write_cp_posh_fixture(path):
     """A small stand-in for the cp-POSH upstream parquet, with the columns cp_posh reads.
 
-    The metadata columns are written as the pandas MultiIndex, as the real file stores them, so the loader's
-    ``reset_index`` brings them back. It holds both control classes (non-targeting and intergenic) and three
-    targeted genes, so the control mapping and the gene and guide counts are all exercised.
+    The metadata columns are written as the pandas MultiIndex, as the real file stores them, so the loader's ``reset_index`` brings them back.
+    It holds both control classes (non-targeting and intergenic) and three targeted genes, so the control mapping and the gene and guide counts are all exercised.
     """
     from mantispy.ds._datasets import _CP_POSH_METADATA
 
     rng = np.random.default_rng(0)
-    # (gene_id, barcode, n_cells); the targeted genes are shifted off the controls so hit_calling has something to find.
     groups = [
         ("nontargeting", "ntc_1", 20, 0.0),
         ("nontargeting", "ntc_2", 20, 0.0),
@@ -454,7 +444,6 @@ def test_cp_posh_loads_clean_cell_resolution(tmp_path, monkeypatch):
     report = mt.io.validate(adata)
     assert report.ok, report.errors
     assert adata.obs_names.is_unique
-    # The upstream metadata columns become obs, not features, and none leak into X or var.
     assert set(adata.var_names) == set(_CP_POSH_FIXTURE_FEATURES)
     assert not adata.var["is_feature"].isna().any()
     # obs is categorized like every other loader's, so string columns are not left as object on 163k rows.
@@ -462,7 +451,6 @@ def test_cp_posh_loads_clean_cell_resolution(tmp_path, monkeypatch):
 
 
 def test_cp_posh_maps_controls_and_guides(tmp_path, monkeypatch):
-    """Both control classes and the targeted genes are present, with only the controls flagged."""
     path = tmp_path / "cp_posh.pq"
     _, controls = _write_cp_posh_fixture(path)
     _patch_files(monkeypatch, path)
@@ -473,22 +461,18 @@ def test_cp_posh_maps_controls_and_guides(tmp_path, monkeypatch):
     assert obs["Metadata_Gene"].nunique() == 5  # nontargeting, intergenic, KIF18A, PSMB1, ARPC4
     assert obs["Metadata_sgRNA"].nunique() == 8
     assert list(obs["Metadata_Perturbation"].astype(str)) == list(obs["Metadata_sgRNA"].astype(str))
-    # Both control classes and a targeted gene are present.
     genes = set(obs["Metadata_Gene"].astype(str))
     assert {"nontargeting", "intergenic"} <= genes
     assert genes - {"nontargeting", "intergenic"}
-    # Only the two control classes are flagged, and every other gene is a targeted perturbation.
     control = obs["Metadata_Control"].to_numpy()
     assert control.dtype == bool
     assert control.any() and not control.all()
     assert control.sum() == controls
     assert set(obs.loc[control, "Metadata_Gene"].astype(str)) == {"nontargeting", "intergenic"}
-    # The well is read out of plate_well by dropping the plate prefix.
     assert list(obs["Metadata_Well"].unique()) == ["B04"]
 
 
 def test_cp_posh_runs_hit_calling(tmp_path, monkeypatch):
-    """The object drives hit_calling against the non-targeting and intergenic controls and returns a table of groups."""
     path = tmp_path / "cp_posh.pq"
     _write_cp_posh_fixture(path)
     _patch_files(monkeypatch, path)
@@ -501,8 +485,7 @@ def test_cp_posh_runs_hit_calling(tmp_path, monkeypatch):
     assert isinstance(hits, pd.DataFrame)
     assert not hits.empty
     assert {"group", "is_hit", "distance", "qvalue"} <= set(hits.columns)
-    # The fixture shifts KIF18A three sigma off the controls, the strongest planted signal, so it must be the single
-    # most distant group and rank below the median qvalue rather than merely landing some row in the table.
+    # The fixture shifts KIF18A three sigma off the controls, the strongest planted signal.
     ranked = hits.set_index("group")
     assert ranked["distance"].idxmax() == "KIF18A"
     assert ranked.loc["KIF18A", "qvalue"] <= ranked["qvalue"].median()

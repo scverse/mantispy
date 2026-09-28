@@ -1,15 +1,3 @@
-"""Over-representation of prior-knowledge gene sets among the genes of each group.
-
-Given a grouping (typically the clusters :func:`~mantispy.tl.cluster` writes), each group's member genes are
-tested against a gene-set network with an over-representation test, so a cluster can be labelled by the
-pathways or complexes its genes fall into. This is the discrete counterpart to :func:`~mantispy.tl.enrich`,
-which scores continuous profiles.
-
-Each set is tested with a two-tailed Fisher exact test, and the universe is the set of genes measured in the
-object (the perturbed set), not every gene in the network, so enrichment is judged against what the screen
-could have found.
-"""
-
 from __future__ import annotations
 
 from typing import Literal
@@ -45,27 +33,29 @@ def ora(
         groupby: ``obs`` column defining the groups whose genes are tested.
         net: A gene-set network with ``source`` and ``target`` columns, such as :func:`mantispy.ds.gene_sets` returns.
         gene_key: ``obs`` column holding the gene symbol.
-        source: Column of ``net`` naming the set. Renamed to ``source`` internally.
-        target: Column of ``net`` naming the gene. Renamed to ``target`` internally.
+        source: Column of ``net`` naming the set.
+            Renamed to ``source`` internally.
+        target: Column of ``net`` naming the gene.
+            Renamed to ``target`` internally.
         tmin: Smallest number of a set's genes that must be in the universe for the set to be tested.
         key_added: Name for the output table.
         copy: Return a modified copy instead of mutating in place.
-        padj_by: Scope of the Benjamini-Hochberg correction. ``"all"`` (default) corrects once across every group and set. ``"group"`` corrects within each group's tests, so a group's modest enrichment is not penalized by unrelated groups (use this when many groups are tested at once). Because the scope is chosen per call, q-values from an ``"all"`` run and a ``"group"`` run are not directly comparable, so keep one scope within a single comparison.
+        padj_by: Scope of the Benjamini-Hochberg correction.
+            ``"all"`` (default) corrects once across every group and set.
+            ``"group"`` corrects within each group's tests, so a group's modest enrichment is not penalized by unrelated groups (use this when many groups are tested at once).
+            Because the scope is chosen per call, q-values from an ``"all"`` run and a ``"group"`` run are not directly comparable, so keep one scope within a single comparison.
 
     Returns:
         ``None``, or the modified copy.
-        Writes ``uns["mantispy"][key_added]`` with ``group``, ``source`` (the set), ``n`` (the group's genes in
-        that set), ``odds_ratio`` (the Haldane-Anscombe log odds ratio), ``pvalue`` (a two-tailed Fisher exact
-        test) and ``qvalue`` (Benjamini-Hochberg corrected), sorted by q.
+        Writes ``uns["mantispy"][key_added]`` with ``group``, ``source`` (the set), ``n`` (the group's genes in that set), ``odds_ratio`` (the Haldane-Anscombe log odds ratio), ``pvalue`` (a two-tailed Fisher exact test) and ``qvalue`` (Benjamini-Hochberg corrected), sorted by q.
 
     Raises:
         KeyError: ``obs`` has no ``groupby`` or no ``gene_key``.
         ValueError: ``net`` is not given, or its ``source``/``target`` columns are missing.
 
     Notes:
-        The universe is the set of distinct genes in ``obs[gene_key]``, so a set is tested only on its genes
-        that the screen measured, and sets with fewer than ``tmin`` measured genes are skipped. Each group and
-        set is tested with a two-tailed Fisher exact test over that universe.
+        The universe is the set of distinct genes in ``obs[gene_key]``, so a set is tested only on its genes that the screen measured, and sets with fewer than ``tmin`` measured genes are skipped.
+        Each group and set is tested with a two-tailed Fisher exact test over that universe.
     """
     from scipy.stats import fisher_exact
 
@@ -86,7 +76,6 @@ def ora(
     in_universe = set(gene_names[present])
     n_bg = len(in_universe)
 
-    # Restrict the net to measured genes, then keep only sets with at least tmin of them to test.
     network = network.astype({"source": str, "target": str})
     network = network[network["target"].isin(in_universe)]
     set_genes = {name: set(block["target"]) for name, block in network.groupby("source", observed=True)}

@@ -1,4 +1,7 @@
-"""BBBC021, the classic MOA benchmark. Network-dependent, so marked."""
+"""BBBC021, the classic MOA benchmark.
+
+Network-dependent, so marked.
+"""
 
 import numpy as np
 import pytest
@@ -38,7 +41,6 @@ def test_loads_annotated_and_valid(bbbc021):
 
 
 def _treatment_consensus(bbbc021, sphere: bool):
-    """Normalize, select features, optionally sphere, then one profile per treatment."""
     adata = bbbc021.copy()
     mt.pp.normalize(adata, method="mad_robustize", by="Metadata_Plate", reference="negcon")
     mt.pp.feature_select(adata)
@@ -90,10 +92,11 @@ def test_the_recipe_reproduces_the_moa_benchmark(bbbc021):
 @pytest.mark.network
 @pytest.mark.slow
 def test_sphering_hurts_this_dataset(bbbc021):
-    """With 330 DMSO wells against 346 features, sphering is underdetermined and amplifies
-    noise. pycytominer gives the same result, so the loss comes from the method itself.
-    This is why evaluate_correction compares corrections instead of applying a fixed
-    recipe."""
+    """With 330 DMSO wells against 346 features, sphering is underdetermined and amplifies noise.
+
+    pycytominer gives the same result, so the loss comes from the method itself.
+    This is why evaluate_correction compares corrections instead of applying a fixed recipe.
+    """
     without = _not_same_compound_accuracy(_treatment_consensus(bbbc021, sphere=False))
     with pytest.warns(UserWarning, match="fewer rows than features"):
         sphered = _treatment_consensus(bbbc021, sphere=True)

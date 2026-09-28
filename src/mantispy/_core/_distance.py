@@ -1,7 +1,6 @@
 """Pairwise distance kernels shared by hit calling, e-distance and local density.
 
 Distances are computed in row chunks.
-A full pairwise matrix between two blocks of n rows is n^2 floats, so without chunking a per-perturbation loop over a single-cell object would allocate a matrix larger than the data.
 """
 
 from __future__ import annotations
@@ -52,15 +51,11 @@ def mahalanobis_transform(
     Distances measured after this transform are Mahalanobis distances under the reference's covariance, so "far from the controls" means the same in every direction.
 
     ``robust=True`` estimates both from the minimum covariance determinant subset instead of every reference row.
-    The centre is already a median, but the scatter is not: a handful of stray control wells widen the covariance in
-    their own direction, and every real hit in that direction is then scored as ordinary. MCD needs more complete rows
-    than features, so it is meant for a reduced representation.
+    The centre is already a median, but the scatter is not: a handful of stray control wells widen the covariance in their own direction, and every real hit in that direction is then scored as ordinary.
+    MCD needs more complete rows than features, so it is meant for a reduced representation.
     """
     reference = np.asarray(reference, dtype=np.float64)
-    # np.cov spreads a single NaN over the whole matrix and eigh then fails to converge, so
-    # the covariance uses complete rows only. Dropping rows keeps the estimate positive
-    # semi-definite, which pairwise-complete covariance does not. The center is nan-aware
-    # and uses every measured value.
+    # np.cov spreads a single NaN over the whole matrix, and pairwise-complete covariance is not positive semi-definite.
     complete = reference[~np.isnan(reference).any(axis=1)]
     if complete.shape[0] < 2:
         raise ValueError(

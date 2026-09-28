@@ -1,9 +1,4 @@
-"""ECOD: empirical-cumulative-distribution outlier detection :cite:p:`Li_2023`.
-
-A row's score is the sum, over features, of how far into a tail its value sits.
-Reimplemented here instead of depending on pyod, and checked against pyod's formulation by an equivalence test.
-Columns stream through a numba kernel, so memory grows with the number of rows and not with rows times features.
-"""
+"""ECOD: empirical-cumulative-distribution outlier detection :cite:p:`Li_2023`."""
 
 from __future__ import annotations
 

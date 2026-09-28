@@ -40,7 +40,6 @@ def test_transport_refuses_a_setting_without_its_own_controls(two_batches):
     plates = two_batches.obs["Metadata_Plate"].astype(str)
     orphan = plates == sorted(plates.unique())[0]
     two_batches.obs.loc[orphan & two_batches.obs["Metadata_Control"].to_numpy(), "Metadata_Control"] = False
-    # One plate now has no controls; the other three still do, so this must survive.
     mt.tl.transport(two_batches, by="Metadata_Plate")
     matrix = two_batches.uns["mantispy"]["transport_units"]
     assert len(matrix) == 3, "a setting with no reference rows is dropped, not guessed at"
@@ -49,8 +48,7 @@ def test_transport_refuses_a_setting_without_its_own_controls(two_batches):
 def test_activity_weighting_changes_the_answer(two_batches):
     """An inactive perturbation has no effect vector worth correlating.
 
-    On JUMP, activity weighting moves the median agreement from +0.33 to +0.75, because
-    the unweighted number is dominated by inactive compounds.
+    On JUMP, activity weighting moves the median agreement from +0.33 to +0.75, because the unweighted number is dominated by inactive compounds.
     """
     mt.tl.transport(two_batches, by="Metadata_Plate", weight="activity", key_added="weighted")
     mt.tl.transport(two_batches, by="Metadata_Plate", weight="equal", key_added="flat")
@@ -84,7 +82,6 @@ def test_both_plots_draw_what_the_table_holds(two_batches):
     drawn = np.asarray(ax.get_images()[0].get_array(), dtype=float)
     np.testing.assert_allclose(drawn, matrix.loc[labels, labels].to_numpy(dtype=float), equal_nan=True)
 
-    # With by= the settings are ordered by it and a line is drawn at each boundary.
     ax = mt.pl.setting_agreement(two_batches, by="Metadata_Batch")
     labels = [label.get_text() for label in ax.get_xticklabels()]
     obs = two_batches.obs

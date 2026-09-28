@@ -1,10 +1,3 @@
-"""Check whether differential testing is calibrated on the screen at hand.
-
-The quantities that decide whether a test is calibrated (wells per treatment, heavy feature tails, replicates crossing plates) vary by an order of magnitude between screens, so calibration measured on one screen does not carry over to another. These checks measure it on the data being tested.
-
-The main check is an empirical null. Control wells are relabeled as pseudo-treatments of the same size as the real treatments and put through the same test. Every call on them is a false positive, so the false positive rate is observed rather than assumed.
-"""
-
 from __future__ import annotations
 
 import warnings
@@ -55,11 +48,7 @@ def _empirical_null(controls: AnnData, size: int, n_draws: int, seed: int, block
 def _empirical_hit_rate(
     controls: AnnData, size: int, n_draws: int, seed: int, n_permutations: int, alpha: float
 ) -> dict[str, int]:
-    """Count the control-only pseudo-treatments each hit caller calls.
-
-    Neither hit caller is fully calibrated at small control counts, and the error depends on the screen, so it is measured on these controls.
-    Counts are returned instead of a rate because the verdict is a binomial tail and needs the denominator.
-    """
+    """Count the control-only pseudo-treatments each hit caller calls."""
     from mantispy.tl._distance import edistance
     from mantispy.tl._hits import hit_calling
 
@@ -101,13 +90,16 @@ def diagnose_testing(
         groupby: As in :func:`~mantispy.tl.differential_features`.
         reference: As in :func:`~mantispy.tl.differential_features`.
         block: As in :func:`~mantispy.tl.differential_features`.
-        n_draws: Pseudo-treatments drawn from the controls for the empirical null. More draws resolve the false positive rate better and take longer.
+        n_draws: Pseudo-treatments drawn from the controls for the empirical null.
+            More draws resolve the false positive rate better and take longer.
         alpha: Nominal rate the null is compared against.
-        seed: Seed for choosing which control wells stand in for a treatment. The two hit callers' permutation nulls are seeded by the draw index instead, so they are identical across calls that differ only in ``seed``.
+        seed: Seed for choosing which control wells stand in for a treatment.
+            The two hit callers' permutation nulls are seeded by the draw index instead, so they are identical across calls that differ only in ``seed``.
         n_permutations: Null size for the two hit callers; smaller is faster and coarser.
 
     Returns:
-        A frame with columns ``check``, ``value``, ``expected``, ``verdict`` and ``note``, one row per check that ran, where a ``FAIL`` verdict means the check does not hold on this data. The empirical-null rows are absent when every null p-value came back non-finite, and the two hit-caller rows need at least eight reference wells.
+        A frame with columns ``check``, ``value``, ``expected``, ``verdict`` and ``note``, one row per check that ran, where a ``FAIL`` verdict means the check does not hold on this data.
+        The empirical-null rows are absent when every null p-value came back non-finite, and the two hit-caller rows need at least eight reference wells.
 
     Raises:
         ValueError: The object is annotated at cell resolution, which none of these checks describe.
@@ -156,7 +148,6 @@ def diagnose_testing(
     threshold = alpha / max(n_tests, 1)
     rows = []
 
-    # Replicate structure the other checks depend on.
     rows.append(
         {
             "check": "wells per treatment",
@@ -170,8 +161,6 @@ def diagnose_testing(
     if block is not None and block in obs.columns:
         blocks = obs[block].to_numpy()
         control_blocks = set(blocks[is_control])
-        # One stable ordering serves every group, and both answers are built in the same pass,
-        # so len(spans) - len(stranded) counts the treatments that do share a block.
         order, offsets = group_offsets(codes, len(keys))
         stranded: list[str] = []
         spans: list[int] = []
@@ -195,7 +184,6 @@ def diagnose_testing(
             }
         )
 
-    # Feature tails, which predict the empirical null below.
     values = get_matrix(adata).astype(np.float64)
     finite = np.isfinite(values).all(axis=0)
     centred = values[:, finite] - values[:, finite].mean(axis=0)
@@ -212,17 +200,11 @@ def diagnose_testing(
         }
     )
 
-    # Whether a rank test can reach the threshold this many tests require. The extreme case
-    # is built from distinct values because scipy uses the normal approximation for tied
-    # samples (2.9e-03 instead of the exact 3.3e-07 at three wells against 330 controls),
-    # while tl.effect_size scores untied measurements with the exact null.
+    # Distinct values, because scipy falls back to the normal approximation on tied samples.
     n_control = int(is_control.sum())
     floor = float(
         stats.mannwhitneyu(np.arange(typical, dtype=float), np.arange(typical, typical + n_control, dtype=float)).pvalue
     )
-    # Compared with Bonferroni, which asks whether the single best test on the screen can
-    # survive. effect_size uses BH, which is looser further down the ranking, so a screen
-    # that fails this can still call features when many of them sit at the floor.
     needed = int(np.ceil(floor * n_tests / alpha))
     rows.append(
         {
@@ -239,7 +221,6 @@ def diagnose_testing(
         }
     )
 
-    # Empirical null, the only check that measures the false positive rate directly.
     controls = adata[is_control].copy()
     # Cap a pseudo-treatment at half the control wells so the rest can serve as the reference.
     pseudo_size = max(min(typical, controls.n_obs // 2), 2)
@@ -269,13 +250,8 @@ def diagnose_testing(
             }
         )
 
-    # The two hit callers on the same empirical null.
     if controls.n_obs >= 8:
         counts = _empirical_hit_rate(controls, pseudo_size, n_draws, seed, n_permutations, alpha)
-        # A calibrated test calls a pseudo-treatment at rate `alpha`, so the count over
-        # `n_draws` is Binomial(n_draws, alpha) and the cutoff is its 95th percentile. A fixed
-        # 0.10 threshold on the rate would fail 34% of calibrated screens at eight draws and
-        # 87% at forty.
         critical = int(stats.binom.ppf(0.95, n_draws, alpha))
         for name, count in counts.items():
             rows.append(

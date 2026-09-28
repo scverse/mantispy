@@ -21,9 +21,6 @@ def test_record_params_makes_values_storable():
     assert isinstance(stored["fn"], str)
 
 
-# --- the mutation contract -------------------------------------------------
-
-
 @inplace_or_copy()
 def _double(adata, factor: float = 2.0, note: str = "hi", copy: bool = False):
     adata.X = adata.X + factor

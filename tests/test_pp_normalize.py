@@ -65,9 +65,7 @@ def test_string_true_false_survives_a_round_trip(adata):
 
 @pytest.mark.parametrize("method", ["mad_robustize", "standardize", "robustize"])
 def test_a_feature_unmeasured_among_one_groups_controls_keeps_its_measured_values(adata, method):
-    """Repairing the zero scale to 1.0 but leaving the centre NaN turns every measured value
-    in that group into NaN: the first plate's treated wells went from [-0.62, -0.22, -0.54]
-    to all-NaN, 6 of 6 rows on that plate against 0 of 6 on the other."""
+    """Repairing the zero scale to 1.0 but leaving the centre NaN turns every measured value in that group into NaN: the first plate's treated wells went from [-0.62, -0.22, -0.54] to all-NaN, 6 of 6 rows on that plate against 0 of 6 on the other."""
     plate = adata.obs["Metadata_Plate"].astype(str).to_numpy()
     control = adata.obs["Metadata_Control"].to_numpy(dtype=bool)
     first = sorted(set(plate))[0]

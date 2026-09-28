@@ -1,12 +1,3 @@
-"""Chatterjee's rank correlation for feature selection.
-
-Chatterjee's xi measures whether one variable is a function of another, monotonic or not.
-A feature that is high at both extremes of a treatment and low in the middle has a near-zero Pearson correlation but a large xi, so this keeps features that a correlation filter drops.
-
-References: :cite:t:`Chatterjee_2020` and :cite:t:`Lin_2022`, which generalizes xi to ``m`` right nearest neighbors.
-At ``m=1`` the two differ by a term of order ``1/n``, and larger ``m`` has a lower noise floor.
-"""
-
 from __future__ import annotations
 
 import numpy as np
@@ -20,10 +11,7 @@ from mantispy._core.mutation import inplace_or_copy
 
 
 def _complete_columns(values: np.ndarray) -> np.ndarray:
-    """Which columns hold a finite value in every row, reduced one column block at a time.
-
-    One ``np.isfinite`` over the whole input is a boolean the size of the matrix, four gigabytes at a million cells by four thousand features, and pairing it with ``x`` needs a second one.
-    """
+    """Which columns hold a finite value in every row, reduced one column block at a time."""
     n_obs, n_vars = values.shape
     out = np.empty(n_vars, dtype=bool)
     width = max(int(CHUNK_BYTES / max(n_obs, 1) / values.itemsize), 1)
@@ -43,12 +31,10 @@ def _xi(x: np.ndarray, values: np.ndarray, m: int, seed: int) -> np.ndarray:
     shuffled = np.random.default_rng(seed).permutation(n)
     order = shuffled[np.argsort(x[shuffled], kind="stable")]
 
-    # How many values of y are at or below each one, read in the order x puts the rows in; tied values share it.
     # As integers: rankdata keeps float32 input float32, whose sums are inexact above 2**24.
     ranks = rankdata(values[order], method="max", axis=0).astype(np.int64)
-    # How far y drops from each row to the m after it.
     drop = sum(np.maximum(ranks[:-step] - ranks[step:], 0).sum(axis=0) for step in range(1, m + 1))
-    # How many are strictly below; the scale is zero only for a constant column, which has no xi.
+    # The scale is zero only for a constant column, which has no xi.
     below = rankdata(values, method="min", axis=0).astype(np.float64) - 1
     with np.errstate(invalid="ignore"):
         scaled = drop / (below * (n - below)).sum(axis=0) * n * (n - 1)
@@ -60,10 +46,13 @@ def chatterjee_xi(x: np.ndarray, y: np.ndarray, m: int = 1, seed: int = 0, min_f
 
     Args:
         x: The variable the others are tested against, such as a group code, a dose or a covariate.
-        y: One column, or a matrix of them. Every column is scored against ``x`` in one pass.
-        m: Right nearest neighbors, as in :cite:t:`Lin_2022`. Larger ``m`` has the same limit under dependence and a lower noise floor under independence, so a fixed threshold is more reliable.
+        y: One column, or a matrix of them.
+            Every column is scored against ``x`` in one pass.
+        m: Right nearest neighbors, as in :cite:t:`Lin_2022`.
+            Larger ``m`` has the same limit under dependence and a lower noise floor under independence, so a fixed threshold is more reliable.
         seed: Seed for breaking ties in ``x``.
-        min_finite: Fewest finite pairs a column may be scored on, raised to ``m + 2`` when it is below that. Under independence xi has standard deviation ``sqrt(2 / (5 * n))``, which at 40 pairs equals the 0.1 threshold :func:`feature_select_chatterjee` selects on, so a column measured fewer times than this cannot be told from noise.
+        min_finite: Fewest finite pairs a column may be scored on, raised to ``m + 2`` when it is below that.
+            Under independence xi has standard deviation ``sqrt(2 / (5 * n))``, which at 40 pairs equals the 0.1 threshold :func:`feature_select_chatterjee` selects on, so a column measured fewer times than this cannot be told from noise.
 
     Returns:
         One xi per column of ``y``, NaN for a constant column or one with fewer than ``min_finite`` finite pairs.
@@ -91,8 +80,6 @@ def chatterjee_xi(x: np.ndarray, y: np.ndarray, m: int = 1, seed: int = 0, min_f
     if complete.all():
         return _xi(x, values, m, seed) if x.size >= floor else np.full(values.shape[1], np.nan)
 
-    # The complete columns share one ordering of x, so they are still ranked in one pass.
-    # The others are missing different rows and no longer share it, so each is ranked over its own.
     scores = np.full(values.shape[1], np.nan)
     if complete.any() and x.size >= floor:
         scores[complete] = _xi(x, values[:, complete], m, seed)
@@ -119,15 +106,19 @@ def feature_select_chatterjee(
     Args:
         adata: Object to select features on.
         groupby: ``obs`` column the features are tested against.
-        threshold: Keep features scoring above this. xi is near zero under independence and approaches one when the feature is a deterministic function of the group, so the threshold is comparable across datasets in a way a correlation cutoff is not.
-        m: Right nearest neighbors :cite:p:`Lin_2022`. ``m=1`` is the coefficient of :cite:t:`Chatterjee_2020` up to a term of order ``1/n``; larger values lower the noise floor without changing what the statistic converges to.
+        threshold: Keep features scoring above this.
+            xi is near zero under independence and approaches one when the feature is a deterministic function of the group, so the threshold is comparable across datasets in a way a correlation cutoff is not.
+        m: Right nearest neighbors :cite:p:`Lin_2022`.
+            ``m=1`` is the coefficient of :cite:t:`Chatterjee_2020` up to a term of order ``1/n``; larger values lower the noise floor without changing what the statistic converges to.
         seed: Seed for breaking ties between rows of the same group.
-        min_finite: Fewest finite values a feature may be scored on. A feature measured fewer times than this scores NaN, which is above no threshold and so is never selected.
+        min_finite: Fewest finite values a feature may be scored on.
+            A feature measured fewer times than this scores NaN, which is above no threshold and so is never selected.
         key_added: Name of the boolean ``var`` column written.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes ``var[key_added]`` and the statistic itself to ``var["chatterjee_xi"]``, which is NaN for a feature that is constant or too sparsely measured to score.
+        ``None``, or the modified copy.
+        Writes ``var[key_added]`` and the statistic itself to ``var["chatterjee_xi"]``, which is NaN for a feature that is constant or too sparsely measured to score.
 
     Raises:
         ValueError: If ``groupby`` has a single group, so that no feature can depend on it.

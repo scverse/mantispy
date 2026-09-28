@@ -15,7 +15,6 @@ def perturbed():
 
 @pytest.mark.parametrize("method", ["cohens_d", "robust_z"])
 def test_the_controls_have_no_effect_against_themselves(perturbed, method):
-    """The calibration check: whatever the estimator, DMSO against DMSO is nothing."""
     mt.tl.effect_size(perturbed, method=method)
     table = perturbed.uns["mantispy"]["effect"]
     assert table[table["group"] == "DMSO"]["effect"].abs().median() < 0.3
@@ -27,8 +26,7 @@ def test_a_group_too_small_to_score_stays_missing_rather_than_zero(perturbed):
 
 
 def test_the_pvalues_can_be_skipped(perturbed):
-    """They dominate the runtime (179 s against under a second on a JUMP-sized screen), and
-    at cell resolution nearly everything is significant."""
+    """They dominate the runtime (179 s against under a second on a JUMP-sized screen), and at cell resolution nearly everything is significant."""
     mt.tl.effect_size(perturbed, pvalues=False)
     table = perturbed.uns["mantispy"]["effect"]
     assert table["pvalue"].isna().all()
@@ -41,10 +39,8 @@ def test_the_pvalues_can_be_skipped(perturbed):
 def test_a_features_pvalue_does_not_depend_on_its_neighbours_in_the_array():
     """One tied feature must not drag the others onto the normal approximation.
 
-    scipy picks exact-or-asymptotic once for a whole 2-D call and looks for ties across
-    every column at once, so a single repeated value in one feature changes every other
-    feature's p-value. At three treated wells the shift is four orders of magnitude, on the
-    low-replicate screens that have no resolution to spare.
+    scipy picks exact-or-asymptotic once for a whole 2-D call and looks for ties across every column at once, so a single repeated value in one feature changes every other feature's p-value.
+    At three treated wells the shift is four orders of magnitude, on the low-replicate screens that have no resolution to spare.
     """
     import anndata as ad
     import pandas as pd
@@ -80,8 +76,7 @@ def test_a_features_pvalue_does_not_depend_on_its_neighbours_in_the_array():
     for name, expected in alone.items():
         assert got[name] == pytest.approx(expected, rel=1e-9), name
 
-    # The untied features reach the exact null and land an order of magnitude below the
-    # tied one, which keeps the approximation.
+    # The untied features reach the exact null and land an order of magnitude below the tied one.
     assert got.iloc[1] * 10 < got.iloc[0]
 
 
@@ -102,7 +97,3 @@ def test_an_infinity_is_dropped_like_a_missing_value_rather_than_returned_as_a_d
     perturbed.X = values
     mt.tl.wasserstein_features(perturbed)
     assert np.isfinite(perturbed.varm["wasserstein"]).all()
-
-
-# An infinite control value gives the pooled spread of that feature no value, so the effect
-# estimate is NaN and numpy says so. This test is about the p-values.

@@ -22,13 +22,12 @@ def test_unknown_method(X):
 def test_column_blocking_agrees_with_the_full_matrix(n_vars):
     """The blocked pair search must find the same pairs as the full matrix.
 
-    Block sizes that do not divide the feature count leave a narrower last block, which is
-    covered here.
+    Block sizes that do not divide the feature count leave a narrower last block, which is covered here.
     """
     rng = np.random.default_rng(0)
     X = rng.normal(size=(200, n_vars))
-    X[:, 1] = X[:, 0] * 0.98 + rng.normal(scale=0.05, size=200)  # a pair over threshold
-    X[rng.integers(0, 200, 3), 5] = np.nan  # and one column with missing values
+    X[:, 1] = X[:, 0] * 0.98 + rng.normal(scale=0.05, size=200)
+    X[rng.integers(0, 200, 3), 5] = np.nan
 
     full = corr_matrix(X)
     rows, columns = np.tril_indices(n_vars, k=-1)
@@ -48,7 +47,6 @@ def test_column_blocking_agrees_with_the_full_matrix(n_vars):
 
 
 def test_correlated_pairs_uses_the_same_spearman_as_the_matrix():
-    """correlated_pairs reaches the same pairwise Spearman path as corr_matrix."""
     rng = np.random.default_rng(1)
     values = rng.normal(size=(60, 20))
     values[rng.random(values.shape) < 0.1] = np.nan

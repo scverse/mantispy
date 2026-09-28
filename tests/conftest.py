@@ -63,8 +63,8 @@ def wells(cells):
 def well_profiles():
     """Factory for well profiles nested in plates, half of each plate treated.
 
-    Every well on a plate shares a plate shift. Without that shared structure a well-level
-    test cannot be told apart from a naive one.
+    Every well on a plate shares a plate shift.
+    Without that shared structure a well-level test cannot be told apart from a naive one.
     """
 
     def build(n_plates=4, per_plate=8, n_features=200, plate_sd=0.8, effect=0.0, affected=0, seed=0):
@@ -98,10 +98,8 @@ def well_profiles():
 def pure_noise_screen():
     """A screen in which nothing happened, so every hit called on it is a false positive.
 
-    Both nulls are biased by the ratio of features to reference rows. The bias shows on a
-    wide, control-poor screen and hides on a narrow, control-rich one, so the defaults
-    (120 controls, 80 features) are wide: a biased null calls most groups here, but almost
-    none at 200 controls and 10 features.
+    Both nulls are biased by the ratio of features to reference rows.
+    The bias shows on a wide, control-poor screen and hides on a narrow, control-rich one, so the defaults (120 controls, 80 features) are wide: a biased null calls most groups here, but almost none at 200 controls and 10 features.
     """
 
     def build(n_control=120, n_groups=12, per_group=12, n_features=80, seed=0):
@@ -167,9 +165,10 @@ def _sigmoid(log_dose, height, ec50, hill=2.0):
 def phenotypes():
     """A plate where one compound grows along one direction and another turns into a different phenotype.
 
-    `grows` moves three features together over its whole range. `turns` moves two features at low concentration
-    and drops them again while two others take over, so its top profile points somewhere else entirely. `quiet`
-    moves nothing. Every feature carries unit noise, so a response in the matrix reads directly in MADs.
+    `grows` moves three features together over its whole range.
+    `turns` moves two features at low concentration and drops them again while two others take over, so its top profile points somewhere else entirely.
+    `quiet` moves nothing.
+    Every feature carries unit noise, so a response in the matrix reads directly in MADs.
     """
     rng = np.random.default_rng(0)
     doses = np.geomspace(0.01, 100.0, 6)

@@ -73,9 +73,7 @@ def test_the_coherence_plot_draws_and_refuses_an_empty_table(screen, net):
 
 
 def test_enrich_hits_uses_the_screened_genes_as_the_background():
-    """A 0/1 membership row makes decoupler drop the non-hit genes as empty and default
-    n_bg to 20000, which inflates enrichment by orders of magnitude and removes depletion
-    from the table."""
+    """A 0/1 membership row makes decoupler drop the non-hit genes as empty and default n_bg to 20000, which inflates enrichment by orders of magnitude and removes depletion from the table."""
     import anndata as ad
 
     from mantispy._core.schema import stamp
@@ -114,9 +112,7 @@ def test_enrich_hits_uses_the_screened_genes_as_the_background():
 
 
 def _screen_of_200_genes(hits_qvalue):
-    """The same 200-gene fixture as the background test above, with a caller-chosen
-    per-gene q-value so the two boundary tests below can put every gene on one side of the
-    hit/non-hit line."""
+    """The same 200-gene fixture as the background test above, with a caller-chosen per-gene q-value so the boundary test below can put every gene on one side of the hit/non-hit line."""
     import anndata as ad
 
     from mantispy._core.schema import stamp
@@ -140,9 +136,10 @@ def _screen_of_200_genes(hits_qvalue):
 
 
 def test_enrich_hits_refuses_a_screen_with_no_hits():
-    """A clean screen calls nothing. Without a guard, decoupler's ORA gets n_up = n_bg and
-    raises a bare ValueError('cannot compute fingerprint of empty set') that names neither
-    the threshold nor the remedy."""
+    """A clean screen calls nothing.
+
+    Without a guard, decoupler's ORA gets n_up = n_bg and raises a bare ValueError('cannot compute fingerprint of empty set') that names neither the threshold nor the remedy.
+    """
     adata, genes = _screen_of_200_genes(0.5)  # every gene misses threshold=0.05
     net = pd.DataFrame({"source": ["S1"] * 20, "target": genes[30:50], "weight": 1.0})
 

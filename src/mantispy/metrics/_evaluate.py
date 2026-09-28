@@ -1,5 +1,3 @@
-"""Compare representations on one table."""
-
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -15,8 +13,6 @@ from mantispy.metrics._variance import pc_regression
 if TYPE_CHECKING:
     from anndata import AnnData
 
-#: Which direction is better, per metric. Batch mixing and biological separation trade off
-#: against each other, so read them together.
 BETTER = {
     "silhouette_label": "higher",
     "silhouette_batch": "higher",
@@ -29,8 +25,6 @@ BETTER = {
 
 def _map_row(adata: AnnData, map_key: str, label_key: str) -> pd.DataFrame:
     """The mean mAP of a table :func:`~mantispy.tl.map` wrote, under the representation that run scored.
-
-    The table is read rather than recomputed, so this is one row per call and not one row per representation: the same number repeated under every representation would read as a measured comparison.
 
     Args:
         adata: Object holding the table and the provenance of the run that wrote it.
@@ -73,20 +67,22 @@ def evaluate_correction(
 ) -> pd.DataFrame:
     """Run every metric for every representation and stack the results.
 
-    Every argument after ``adata`` is keyword-only, so a later metric parameter can be added without changing what an existing argument means.
-
     Args:
         adata: Object holding the representations in ``obsm``.
         reps: Representations to compare, e.g. ``("X_pca", "X_pca_harmony")``.
         label_key: ``obs`` column with the biological grouping.
         batch_key: ``obs`` column with the nuisance grouping.
-        covariates: Further ``obs`` columns to measure each representation against, numeric or categorical, one row each. A representation can be dominated by something that is neither the batch nor the label, such as the cell count, and nothing else here would report it.
-        map_key: Name of a table written by :func:`~mantispy.tl.map`, to add its mean mAP as one more row. That table is read rather than recomputed, so the row appears once, under the representation that run scored, and not once per entry of ``reps``.
-        perplexity: Perplexity for both :func:`~mantispy.metrics.lisi` rows. The default needs more than 90 rows, and on a smaller object those two rows are NaN unless a smaller value is passed.
+        covariates: Further ``obs`` columns to measure each representation against, numeric or categorical, one row each.
+            A representation can be dominated by something that is neither the batch nor the label, such as the cell count, and nothing else here would report it.
+        map_key: Name of a table written by :func:`~mantispy.tl.map`, to add its mean mAP as one more row.
+            That table is read rather than recomputed, so the row appears once, under the representation that run scored, and not once per entry of ``reps``.
+        perplexity: Perplexity for both :func:`~mantispy.metrics.lisi` rows.
+            The default needs more than 90 rows, and on a smaller object those two rows are NaN unless a smaller value is passed.
 
     Returns:
         A tidy frame with ``metric``, ``representation``, ``key``, ``value`` and ``better``, the last saying which direction is an improvement for that metric.
-        A covariate's row has no ``better``: whether its share of the variance should be small depends on what the covariate is. A cell count is a nuisance in a genetic screen, where the layout was not randomized, and partly a treatment effect in a compound screen, where a compound that kills cells is supposed to lower it.
+        A covariate's row has no ``better``: whether its share of the variance should be small depends on what the covariate is.
+        A cell count is a nuisance in a genetic screen, where the layout was not randomized, and partly a treatment effect in a compound screen, where a compound that kills cells is supposed to lower it.
         A metric that is undefined for this object, such as a LISI whose perplexity the row count cannot support or a silhouette over one row per label, is NaN in that frame rather than an error, so one undefined metric still leaves the others readable.
 
     Raises:
@@ -98,14 +94,12 @@ def evaluate_correction(
         frames += [
             silhouette_label(adata, label_key=label_key, use_rep=rep),
             silhouette_batch(adata, label_key=label_key, batch_key=batch_key, use_rep=rep),
-            # kind is explicit because a batch_key such as "Metadata_Site" would otherwise be
-            # named clisi and share a metric name with the label row.
+            # Without kind, a batch_key such as "Metadata_Site" would be named clisi, like the label row.
             lisi(adata, key=batch_key, use_rep=rep, perplexity=perplexity, kind="batch"),
             lisi(adata, key=label_key, use_rep=rep, perplexity=perplexity, kind="label"),
             pc_regression(adata, key=batch_key, use_rep=rep),
         ]
-        # Named per covariate, because two rows called "pc_regression" would collide when the
-        # table is pivoted on the metric.
+        # Two rows called "pc_regression" would collide when the table is pivoted on the metric.
         for covariate in covariates:
             measured = pc_regression(adata, key=covariate, use_rep=rep)
             frames.append(measured.assign(metric=f"pc_regression:{covariate}"))

@@ -93,8 +93,7 @@ def test_write_read_round_trip(tmp_path, cells, suffix):
 
 
 def test_colliding_metadata_prefixes_are_refused():
-    """Both normalise to Metadata_Plate, and obs would then hold a duplicate column whose
-    every later lookup returns a frame instead of a series."""
+    """Both normalise to Metadata_Plate, and obs would then hold a duplicate column whose every later lookup returns a frame instead of a series."""
     frame = pd.DataFrame(
         {
             "Metadata_Plate": ["P1", "P1"],
@@ -108,9 +107,10 @@ def test_colliding_metadata_prefixes_are_refused():
 
 
 def test_dropping_a_majority_of_features_warns_but_a_minority_stays_quiet(capsys):
-    """The default `objects=` filter applies without the caller asking for it and can remove
-    most of a table. Losing the majority must reach the user at the default verbosity;
-    losing a minority stays quiet."""
+    """The default `objects=` filter applies without the caller asking for it and can remove most of a table.
+
+    Losing the majority must reach the user at the default verbosity; losing a minority stays quiet.
+    """
     previous = mt.settings.verbosity
     mt.settings.verbosity = 1
     try:
@@ -178,8 +178,7 @@ def test_a_directory_with_nothing_to_read_says_so(tmp_path):
 
 
 def test_an_unknown_on_column_mismatch_is_refused(tmp_path):
-    """A typo fell through to the intersect branch, which drops every column the files
-    disagree on without saying so."""
+    """A typo fell through to the intersect branch, which drops every column the files disagree on without saying so."""
     path = tmp_path / "a.csv"
     _frame().to_csv(path, index=False)
 
@@ -188,8 +187,7 @@ def test_an_unknown_on_column_mismatch_is_refused(tmp_path):
 
 
 def test_a_file_with_a_header_and_no_rows_is_refused(tmp_path):
-    """It read as a silent 0x0 object with every feature column misfiled into obs, because a
-    column of no values has no dtype to recognise a feature by."""
+    """It read as a silent 0x0 object with every feature column misfiled into obs, because a column of no values has no dtype to recognise a feature by."""
     path = tmp_path / "header_only.csv"
     _frame().iloc[:0].to_csv(path, index=False)
 
@@ -198,8 +196,7 @@ def test_a_file_with_a_header_and_no_rows_is_refused(tmp_path):
 
 
 def test_platemap_wells_that_match_nothing_are_reported(tmp_path, capsys):
-    """They were left silently NaN, so a platemap naming the wrong wells looked like a
-    successful read; io.read_jump warns for the identical join."""
+    """They were left silently NaN, so a platemap naming the wrong wells looked like a successful read; io.read_jump warns for the identical join."""
     path = tmp_path / "profiles.csv"
     _frame().to_csv(path, index=False)
     platemap = pd.DataFrame({"Metadata_Well": ["A01"], "Metadata_Perturbation": ["DMSO"]})
@@ -233,8 +230,10 @@ def test_stamp_refuses_what_the_resolution_needs_and_obs_lacks():
 
 
 def test_stamp_leaves_an_annotation_that_is_already_there_alone():
-    """Only the absent columns are supplied. Filling all ten unconditionally would overwrite a
-    parsed annotation with blanks, so the test deletes one and checks the rest survived."""
+    """Only the absent columns are supplied.
+
+    Filling all ten unconditionally would overwrite a parsed annotation with blanks, so the test deletes one and checks the rest survived.
+    """
     var = parse_feature_names(["Cells_AreaShape_Area", "Nuclei_Intensity_MeanIntensity_DNA"])
     parsed = var.drop(columns=["channel"]).copy()
     obj = ad.AnnData(

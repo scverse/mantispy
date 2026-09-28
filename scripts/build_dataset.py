@@ -3,8 +3,7 @@
     python scripts/build_dataset.py bbbc021 --out build/
 
 Prints the file's size and sha256, for the registry to pin, and a fingerprint of what it holds.
-anndata or h5py releases can write the same object as different bytes, so a rebuild is checked against the
-fingerprint, not the sha256.
+anndata or h5py releases can write the same object as different bytes, so a rebuild is checked against the fingerprint, not the sha256.
 """
 
 import argparse

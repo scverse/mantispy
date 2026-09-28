@@ -1,4 +1,4 @@
-"""OASIS pilot, the dose-response dataset. Network-dependent, so marked."""
+"""OASIS pilot, the dose-response dataset."""
 
 import numpy as np
 import pytest
@@ -15,8 +15,7 @@ def oasis():
 def test_every_well_gets_a_plate_map_row(oasis):
     """The two batches that name compounds in 'Compound Name' leave it blank for DMSO and EMPTY wells.
 
-    Reading that column alone left 576 wells, every one of them a control or an empty, looking
-    unannotated, and the controls with them.
+    Reading that column alone left 576 wells, every one of them a control or an empty, looking unannotated, and the controls with them.
     """
     assert oasis.shape == (4604, 99)
     assert mt.io.validate(oasis).ok, mt.io.validate(oasis).errors

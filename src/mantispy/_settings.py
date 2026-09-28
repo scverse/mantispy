@@ -1,11 +1,3 @@
-"""Package-level settings.
-
-The package logger has no handler of its own, so diagnostics such as "dropped 2 of 3634 feature(s)" or "dropped 960 of 960 cells" would not be shown.
-This module installs a handler and sets its level from ``verbosity``, on the same 0-3 scale as scanpy.
-
-The class comes from scverse-misc, so every setting is also read from a ``MANTISPY_`` environment variable and can be changed for a block with ``settings.override``.
-"""
-
 from __future__ import annotations
 
 import logging

@@ -1,7 +1,6 @@
 """Plots for hits, effects, dose and mechanism.
 
-One smoke test over the namespace, plus assertions where a plot computes something or
-has to explain itself.
+One smoke test over the namespace, plus assertions where a plot computes something or has to explain itself.
 """
 
 import matplotlib
@@ -61,9 +60,7 @@ def test_every_plot_draws_and_changes_nothing(scored, draw):
 
 def test_the_hits_plot_draws_the_threshold_that_colored_the_points():
     """Reading the threshold under the table key rather than the function name drew a run called at q < 0.25 against a line labelled q = 0.05, with a point colored as a hit below it."""
-    # 96 wells over 3 perturbations leaves 24 controls, so the reference is large enough for the null to
-    # mean something. At 48 wells over 11 it left four, two of which formed the whole null, and the hit this
-    # asserts on was the over-calling of #60 rather than the effect.
+    # 96 wells over 3 perturbations leaves 24 controls; fewer let the over-calling of #60 pass as the effect.
     cells = mt.ds.synthetic_plate(
         n_plates=1, n_wells=96, n_cells=6, n_features=8, n_perturbations=3, effect_size=3.0, seed=0
     )
@@ -76,7 +73,6 @@ def test_the_hits_plot_draws_the_threshold_that_colored_the_points():
 
     height = float(line.get_ydata()[0])
     assert height == pytest.approx(-np.log10(0.25))
-    # Every point colored as a hit has to sit on or above the line that called it.
     called = next(group for group in ax.collections if group.get_label() == "hit").get_offsets()
     assert called.shape[0] and (called[:, 1] >= height).all()
 
@@ -135,7 +131,6 @@ def test_the_direction_plot_bands_the_ladder_by_phase(phenotypes):
     table = phenotypes.uns["mantispy"]["dose_direction"]
     drawn_compound = table[table["compound"] == "grows"]
 
-    # One band per concentration of the compound drawn, plus the two lines it reads against.
     assert len(ax.patches) == len(drawn_compound)
     colours = {patch.get_facecolor() for patch in ax.patches}
     assert len(colours) == drawn_compound["phase"].nunique(), "each phase present gets its own colour"

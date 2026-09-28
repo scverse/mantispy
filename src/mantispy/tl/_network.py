@@ -1,15 +1,3 @@
-"""Whether the most similar perturbation pairs are enriched for known interactions.
-
-If a screen recovers real biology, perturbations of interacting genes should look alike, so the most-correlated
-pairs should be enriched for known interactions. This takes the perturbation similarity matrix
-(:func:`~mantispy.tl.similarity`), calls the top pairs by a quantile of the off-diagonal similarity, and tests
-their overlap with a reference edge list (by default the within-complex pairs of
-:func:`mantispy.ds.interactions`) with a one-sided Fisher exact test.
-
-The reference is bring-your-own: pass any two-column frame of gene pairs as ``edges``, for example a BioGRID or
-STRING network, without that ever becoming a dependency.
-"""
-
 from __future__ import annotations
 
 import numpy as np
@@ -36,26 +24,26 @@ def network_enrichment(
     Args:
         adata: Object whose ``obsp[similarity_key]`` holds a pairwise similarity, from :func:`~mantispy.tl.similarity`, and whose ``obs[gene_key]`` names each profile's gene.
         similarity_key: ``obsp`` key holding the pairwise similarity matrix.
-        edges: A two-column frame of reference gene pairs. Its first two columns are read as the pair, in any order. Defaults to :func:`mantispy.ds.interactions` (CORUM within-complex pairs).
+        edges: A two-column frame of reference gene pairs.
+            Its first two columns are read as the pair, in any order.
+            Defaults to :func:`mantispy.ds.interactions` (CORUM within-complex pairs).
         gene_key: ``obs`` column holding the gene symbol.
-        top_quantile: Quantile of the off-diagonal similarity above which a pair counts as a top pair. The default 0.95 takes the top 5%.
+        top_quantile: Quantile of the off-diagonal similarity above which a pair counts as a top pair.
+            The default 0.95 takes the top 5%.
         key_added: Name for the output.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
         ``None``, or the modified copy.
-        Writes ``uns["mantispy"][key_added]`` with the 2x2 contingency ``table`` (top vs not, known vs not),
-        ``odds_ratio`` and ``pvalue`` (a one-sided Fisher exact test), the ``threshold`` similarity, and the
-        pair counts ``n_top``, ``n_known`` and ``n_pairs``.
+        Writes ``uns["mantispy"][key_added]`` with the 2x2 contingency ``table`` (top vs not, known vs not), ``odds_ratio`` and ``pvalue`` (a one-sided Fisher exact test), the ``threshold`` similarity, and the pair counts ``n_top``, ``n_known`` and ``n_pairs``.
 
     Raises:
         KeyError: ``obsp`` has no ``similarity_key``, or ``obs`` has no ``gene_key``.
         ValueError: ``top_quantile`` is outside (0, 1), or the object has fewer than two annotated profiles.
 
     Notes:
-        Only pairs whose two profiles both carry a gene are counted, so control wells with no gene are left out
-        of the universe. The default reference needs the network on its first call to build the pinned CORUM
-        snapshot; pass ``edges`` to avoid any fetch, or to test against a real protein-protein network.
+        Only pairs whose two profiles both carry a gene are counted, so control wells with no gene are left out of the universe.
+        The default reference needs the network on its first call to build the pinned CORUM snapshot; pass ``edges`` to avoid any fetch, or to test against a real protein-protein network.
     """
     from scipy.stats import fisher_exact
 
@@ -77,8 +65,7 @@ def network_enrichment(
     matrix = np.asarray(adata.obsp[similarity_key])
     upper = np.triu_indices(matrix.shape[0], k=1)
     genes = obs[gene_key].astype(str).to_numpy()
-    # Controls carry no gene; drop a pair with a missing gene on either side from the universe rather than
-    # count it as a true negative. notna catches every null kind (NaN, None, pd.NA), and "" a blank symbol.
+    # notna, not the str cast, catches NaN, None and pd.NA.
     present = obs[gene_key].notna().to_numpy() & (genes != "")
     gene_a, gene_b = genes[upper[0]], genes[upper[1]]
 
@@ -91,7 +78,6 @@ def network_enrichment(
     gene_a, gene_b = gene_a[valid], gene_b[valid]
     threshold = float(np.quantile(similarity, top_quantile))
     is_top = similarity >= threshold
-    # Order each pair once (two elements, so min/max beats sorted) and skip the intermediate list np.array builds.
     is_known = np.fromiter(
         (((a, b) if a <= b else (b, a)) in reference for a, b in zip(gene_a, gene_b, strict=True)),
         dtype=bool,

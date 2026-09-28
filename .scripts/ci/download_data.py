@@ -33,8 +33,7 @@ def main(args: argparse.Namespace) -> None:
         "bbbc021": mt.ds.bbbc021,
         "rohban": mt.ds.rohban,
         "pki": mt.ds.pki,
-        # The one-plate-per-source default, plus the twelve plates cross_laboratory.ipynb names for its
-        # source/batch/plate hierarchy. Together ~1.2 GB; all 141 would be 9.4 GB, over GitHub's 10 GB cache.
+        # These two come to ~1.2 GB; all 141 plates would be 9.4 GB, over GitHub's 10 GB cache.
         "jump_target2": mt.ds.jump_target2,
         "jump_target2_hierarchy": lambda: mt.ds.jump_target2(plates=_TARGET2_HIERARCHY),
         "jump_cells": mt.ds.jump_cells,

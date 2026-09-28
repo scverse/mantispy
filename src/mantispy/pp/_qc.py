@@ -17,14 +17,12 @@ from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger, report_drop
 from mantispy._core.mutation import inplace_or_copy
 
-#: Robust z above which a cell's area is called an outlier.
 AREA_Z_CUTOFF = 5.0
 
 
 def _n_unique(X: np.ndarray, missing: np.ndarray) -> np.ndarray:
     """Distinct finite values per feature, a column block at a time.
 
-    Sorting a block of columns in one call avoids a Python-level ``np.unique`` per feature, which took nine seconds on 50 640 JUMP wells by 3634 features.
     Missing values sort to the end, so each column's distinct count is the number of value changes in its finite prefix.
     """
     n_obs, n_vars = X.shape
@@ -52,19 +50,21 @@ def calculate_qc_metrics(
 
     Args:
         adata: Object to annotate.
-        image_shape: ``(height, width)`` of a field of view. Without it, and without ``Metadata_Center_X``/``_Y`` in ``obs``, the border flag stays ``False``.
+        image_shape: ``(height, width)`` of a field of view.
+            Without it, and without ``Metadata_Center_X``/``_Y`` in ``obs``, the border flag stays ``False``.
         border_margin: Distance from the image edge, in pixels, inside which a cell is a border cell.
-        max_nan_fraction: Largest fraction of missing features a cell may have and still pass. Partial NaN is routine in CellProfiler output (Zernike and RadialDistribution features are undefined for small objects), so requiring no missing values would fail almost every cell.
+        max_nan_fraction: Largest fraction of missing features a cell may have and still pass.
+            Partial NaN is routine in CellProfiler output (Zernike and RadialDistribution features are undefined for small objects), so requiring no missing values would fail almost every cell.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes the ``obs`` columns ``qc_n_nan_features``, ``qc_nan_fraction``, ``qc_is_border``, ``qc_area_outlier`` and ``qc_pass``, and the ``var`` columns ``qc_n_nan``, ``qc_variance`` and ``qc_n_unique``.
+        ``None``, or the modified copy.
+        Writes the ``obs`` columns ``qc_n_nan_features``, ``qc_nan_fraction``, ``qc_is_border``, ``qc_area_outlier`` and ``qc_pass``, and the ``var`` columns ``qc_n_nan``, ``qc_variance`` and ``qc_n_unique``.
 
     Raises:
         KeyError: If no column in ``var`` names an area, so ``qc_area_outlier`` cannot be scored and ``qc_pass`` would be an ``and`` over one check fewer than it claims.
     """
-    # Before get_matrix densifies: a call that is going to be rejected should not read the matrix.
-    # (inplace_or_copy has already made the copy by the time any of this runs.)
+    # Before get_matrix densifies, so a call that is going to be rejected does not read the matrix.
     area = _area_features(adata)
 
     X = get_matrix(adata)
@@ -123,8 +123,6 @@ def _area_outlier_flag(adata: AnnData, X: np.ndarray, area: pd.Index) -> np.ndar
     """Cells whose area is more than :data:`AREA_Z_CUTOFF` robust SDs from the plate median.
 
     Every compartment that measured an area is scored within its own plate and the flags are OR-ed, so a cell is an outlier when any of its areas is.
-    Scoring only the first matching column made the flag, and so ``qc_pass``, depend on the order of ``var``.
-
     """
     if "Metadata_Plate" not in adata.obs:
         return np.zeros(adata.n_obs, dtype=bool)
@@ -137,8 +135,7 @@ def _area_outlier_flag(adata: AnnData, X: np.ndarray, area: pd.Index) -> np.ndar
 
     with np.errstate(invalid="ignore", divide="ignore"):
         z = np.abs(columns - median[codes]) / (MAD_TO_SIGMA * mad[codes])
-    # A quantized Area column can have zero MAD, which makes z infinite; posinf=0.0 stops
-    # nan_to_num from turning that into 1.8e308 and flagging the whole plate.
+    # posinf=0.0: a quantized Area column can have zero MAD, and an infinite z would flag the whole plate.
     return (np.nan_to_num(z, nan=0.0, posinf=0.0, neginf=0.0) > AREA_Z_CUTOFF).any(axis=1)
 
 
@@ -153,12 +150,14 @@ def filter_cells(
 
     Args:
         adata: Object to filter.
-        min_cells_per_well: Wells with fewer cells than this are dropped entirely, counted over the cells that survive the other checks in this call so that the cells being dropped cannot hold a well above the floor. ``0`` disables the check.
+        min_cells_per_well: Wells with fewer cells than this are dropped entirely, counted over the cells that survive the other checks in this call so that the cells being dropped cannot hold a well above the floor.
+            ``0`` disables the check.
         qc_pass: Also require ``obs["qc_pass"]``, which :func:`calculate_qc_metrics` writes.
         copy: Return a filtered copy instead of filtering in place.
 
     Returns:
-        ``None``, or the filtered copy. Subsets ``obs`` to the surviving cells, and warns when that leaves none.
+        ``None``, or the filtered copy.
+        Subsets ``obs`` to the surviving cells, and warns when that leaves none.
 
     Raises:
         KeyError: If ``qc_pass`` is requested but ``obs`` has no such column.
@@ -170,10 +169,7 @@ def filter_cells(
         keep &= as_frame(adata.obs)["qc_pass"].to_numpy(dtype=bool)
     if min_cells_per_well > 0:
         codes, keys = group_codes(adata, ["Metadata_Plate", "Metadata_Well"])
-        # Count the survivors, not every cell in the well: counting the cells this call is about
-        # to drop left a well of 60 cells with 12 passing above a floor of 50, and tl.aggregate
-        # then built its profile from 12 cells. Running the two checks as separate calls dropped
-        # that well, so the two paths disagreed.
+        # Count the survivors, so one call agrees with running the two checks as separate calls.
         keep &= np.bincount(codes[keep], minlength=len(keys))[codes] >= min_cells_per_well
 
     dropped = int((~keep).sum())
@@ -200,23 +196,23 @@ def filter_features(
     Args:
         adata: Object to filter.
         drop_nan: Drop features that are missing everywhere.
-        min_variance: Drop features whose variance is at or below this, as :func:`~mantispy.pp.feature_select` and sklearn's ``VarianceThreshold`` do. ``0`` disables the check.
-        blocklist: ``"default"`` for the bundled CellProfiler blocklist, an explicit list of names, or ``None`` to skip. Matched against the current names and against ``var["original_name"]``, so it works either side of :func:`~mantispy.pp.standardize_feature_names`.
+        min_variance: Drop features whose variance is at or below this, as :func:`~mantispy.pp.feature_select` and sklearn's ``VarianceThreshold`` do.
+            ``0`` disables the check.
+        blocklist: ``"default"`` for the bundled CellProfiler blocklist, an explicit list of names, or ``None`` to skip.
+            Matched against the current names and against ``var["original_name"]``, so it works either side of :func:`~mantispy.pp.standardize_feature_names`.
         copy: Return a filtered copy instead of filtering in place.
 
     Returns:
-        ``None``, or the filtered copy. Subsets ``var`` to the surviving features, and reports how many were dropped.
+        ``None``, or the filtered copy.
+        Subsets ``var`` to the surviving features, and reports how many were dropped.
     """
     X = get_matrix(adata)
     keep = np.ones(adata.n_vars, dtype=bool)
     if drop_nan:
         keep &= ~np.isnan(X).all(axis=0)
     if min_variance > 0:
-        # `>` matches pp.feature_select's variance_threshold and sklearn's VarianceThreshold.
         keep &= np.nan_to_num(nanvar(X), nan=0.0, posinf=0.0) > min_variance
     if blocklist is not None:
-        # Also check var["original_name"], because pp.standardize_feature_names rewrites names
-        # into a grammar no blocklist entry matches.
         names = [adata.var_names.to_numpy()]
         if "original_name" in adata.var:
             names.append(adata.var["original_name"].astype(str).to_numpy())

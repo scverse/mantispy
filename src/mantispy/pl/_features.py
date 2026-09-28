@@ -32,8 +32,10 @@ def feature_correlation(
     Ordering by annotation instead of clustering shows directly whether correlated features fall within the same measurement family.
 
     Args:
-        adata: Object to draw. Usually well-level profiles.
-        key: Restrict to features flagged by this boolean ``var`` column. ``None``, or a column the object does not hold, uses every feature.
+        adata: Object to draw.
+            Usually well-level profiles.
+        key: Restrict to features flagged by this boolean ``var`` column.
+            ``None``, or a column the object does not hold, uses every feature.
         groupby: ``var`` column to order and delimit by.
         max_features: Draw at most this many features, taken in the sorted order.
         ax: Axes to draw into.
@@ -90,7 +92,8 @@ def feature_groups(adata: AnnData, key: str | None = None, ax: Axes | None = Non
 
     Args:
         adata: Object to draw.
-        key: Restrict to features flagged by this boolean ``var`` column. ``None``, or a column the object does not hold, uses every feature.
+        key: Restrict to features flagged by this boolean ``var`` column.
+            ``None``, or a column the object does not hold, uses every feature.
         ax: Axes to draw into.
 
     Returns:
@@ -103,8 +106,7 @@ def feature_groups(adata: AnnData, key: str | None = None, ax: Axes | None = Non
     # A geometry feature has no channel; count it under "none" rather than let value_counts drop the NaN.
     annotation = as_frame(adata.var).loc[mask, ["feature_group", "channel"]].astype(object).fillna("none").astype(str)
     counts = annotation.value_counts().unstack(fill_value=0)
-    # Colocalization features carry a pipe-joined channel pair; on their own each pair is a separate
-    # legend entry, dozens in all. Collapse them into one "multiple" category.
+    # Colocalization features carry a pipe-joined channel pair, so they are pooled into one "multiple" channel.
     combined = [channel for channel in counts.columns if "|" in channel]
     if combined:
         counts = counts.drop(columns=combined).assign(multiple=counts[combined].sum(axis=1))

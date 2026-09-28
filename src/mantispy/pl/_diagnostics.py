@@ -1,8 +1,3 @@
-"""Diagnostic plots for plate position, image quality, control drift and outliers.
-
-These plots only diagnose; the corrections are in :mod:`mantispy.pp`.
-"""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -46,7 +41,6 @@ def plate_effects(adata: AnnData, feature: str | None = None, axes: np.ndarray |
     Raises:
         KeyError: ``feature`` is not one of ``var_names``, or ``obs`` has no ``Metadata_Plate`` or ``Metadata_Well`` column.
     """
-    # Multi-panel (row and column marginals per plate); interactive twin deferred.
     import matplotlib.pyplot as plt
 
     values = _feature_values(adata, feature)
@@ -128,7 +122,8 @@ def control_drift(
     Args:
         adata: Object whose ``obs["Metadata_Control"]`` marks the wells to draw.
         groupby: ``obs`` column that colors the control wells, normally the plate or the batch.
-        n_components: Components fitted on the controls. The first two are the ones drawn.
+        n_components: Components fitted on the controls.
+            The first two are the ones drawn.
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
@@ -183,7 +178,6 @@ def outliers(
     Raises:
         KeyError: ``obs`` has no ``key`` column.
     """
-    # Multi-panel (histogram plus per-group bars); interactive twin deferred.
     import matplotlib.pyplot as plt
 
     if key not in adata.obs:

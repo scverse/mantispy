@@ -1,9 +1,3 @@
-"""Whitening fitted on control profiles, in two forms.
-
-:func:`sphere` whitens by the covariance of the negative controls, which removes the variation they share and leaves the effects of the perturbations.
-:func:`tvn` is typical variation normalization as :cite:t:`Celik_2024` defines it: the same idea followed by a per-batch alignment, so batches that disagree about what typical variation looks like are brought onto one another.
-"""
-
 from __future__ import annotations
 
 import warnings
@@ -23,7 +17,6 @@ def _fit(reference: np.ndarray, method: str, epsilon: float) -> tuple[np.ndarray
     """Return ``(center, scale, W)`` for the requested whitening.
 
     Follows pycytominer's ``Spherize``: epsilon is added to the singular values, and when there are no more rows than features the null directions are padded with the smallest non-zero singular value.
-    Adding epsilon to clipped eigenvalues instead diverges from pycytominer by orders of magnitude where the matrix is near-singular.
     """
     # A missing value would otherwise surface as "LinAlgError: SVD did not converge".
     if not np.isfinite(reference).all():
@@ -59,8 +52,7 @@ def _fit(reference: np.ndarray, method: str, epsilon: float) -> tuple[np.ndarray
             UserWarning,
             stacklevel=4,
         )
-    # Centering costs one degree of freedom, so a full-rank reference has rank
-    # min(n_vars, n_obs - 1).
+    # Centering costs one degree of freedom, so a full-rank reference has rank min(n_vars, n_obs - 1).
     rank = np.linalg.matrix_rank(centered)
     if rank != min(n_vars, n_obs - 1):
         raise ValueError(
@@ -69,8 +61,7 @@ def _fit(reference: np.ndarray, method: str, epsilon: float) -> tuple[np.ndarray
             "Use more control wells, or reduce the feature set with mt.pp.feature_select."
         )
 
-    # Only an underdetermined reference needs the null directions. full_matrices otherwise
-    # allocates an (n_obs, n_obs) left factor, about a gigabyte at 7680 reference rows.
+    # Only an underdetermined reference needs the null directions; full_matrices allocates an (n_obs, n_obs) factor.
     _, singular, right = np.linalg.svd(centered, full_matrices=n_obs <= n_vars)
     if n_obs <= n_vars:
         singular = np.concatenate((singular[:rank], np.repeat(singular[rank - 1], n_vars - rank)))
@@ -95,8 +86,11 @@ def sphere(
     """Whiten profiles with a transform fitted on the reference rows.
 
     Args:
-        adata: Object to sphere. Usually well-level profiles.
-        method: ``"ZCA"`` and ``"ZCA-cor"`` rotate back into the original feature basis, so the output columns still correspond to features and ``var`` still describes them. ``"PCA"`` and ``"PCA-cor"`` return principal components, which ``var`` no longer describes, and warn about it unless ``key_added`` is set. The ``-cor`` variants whiten the correlation instead of the covariance, so high-variance features do not dominate.
+        adata: Object to sphere.
+            Usually well-level profiles.
+        method: ``"ZCA"`` and ``"ZCA-cor"`` rotate back into the original feature basis, so the output columns still correspond to features and ``var`` still describes them.
+            ``"PCA"`` and ``"PCA-cor"`` return principal components, which ``var`` no longer describes, and warn about it unless ``key_added`` is set.
+            The ``-cor`` variants whiten the correlation instead of the covariance, so high-variance features do not dominate.
         reference: Rows to fit on: ``"negcon"`` for the controls, ``None`` for everything, or the name of a boolean ``obs`` column.
         epsilon: Regularization added to the singular values.
         by: Fit and apply separately within each group of this column, e.g. per batch.
@@ -104,7 +98,8 @@ def sphere(
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes ``X`` or ``layers[key_added]``.
+        ``None``, or the modified copy.
+        Writes ``X`` or ``layers[key_added]``.
 
     Raises:
         ValueError: If ``method`` is unknown, ``reference`` selects no rows, a group has fewer than two reference rows, the reference holds missing or infinite values, a ``-cor`` method meets a zero-variance feature, or the reference matrix is not full rank.
@@ -151,7 +146,8 @@ def sphere(
 def _centre_scale(values: np.ndarray, reference: np.ndarray, where: str = "") -> np.ndarray:
     """Centre and scale every row by the mean and spread of the reference rows.
 
-    The spread is the population standard deviation, as sklearn's ``StandardScaler`` computes it. A dimension with no spread among the reference rows is left on its own scale rather than divided by zero, and warns, as :func:`~mantispy.pp.normalize` does for the same condition — it cannot flag ``var``, because the columns being scaled are an embedding that ``var`` does not describe.
+    The spread is the population standard deviation, as sklearn's ``StandardScaler`` computes it.
+    A dimension with no spread among the reference rows is left on its own scale rather than divided by zero, and warns.
 
     "No spread" is read against the resolution of the values rather than as an exact zero, since a dimension an embedding is constant in still carries the rounding of the rotation that built it.
 
@@ -166,11 +162,7 @@ def _centre_scale(values: np.ndarray, reference: np.ndarray, where: str = "") ->
     block = values[reference]
     centre = block.mean(axis=0)
     scale = block.std(axis=0, ddof=0)
-    # An exact zero is the wrong test for an embedding. A dimension the reference rows are constant in is constant
-    # only up to the rounding the rotation that built it left behind, so its spread arrives as 1e-16 rather than 0,
-    # passes this check, and is divided by anyway, putting that dimension 1e16 ahead of every other one. Below the
-    # resolution of the values it is measured in, and the error in a standard deviation grows with the rows it is
-    # taken over, a spread is not a spread.
+    # The tolerance scales with the row count because the rounding error in a standard deviation grows with its rows.
     degenerate = scale <= block.shape[0] * np.finfo(scale.dtype).eps * np.abs(block).max(axis=0)
     if (no_spread := int(degenerate.sum())) > 0:
         warnings.warn(
@@ -191,8 +183,6 @@ def _regularized_covariance(values: np.ndarray, epsilon: float) -> np.ndarray:
 
 def _symmetric_power(matrix: np.ndarray, power: float) -> np.ndarray:
     """Raise a symmetric positive definite matrix to a real power through its eigendecomposition.
-
-    ``scipy.linalg.fractional_matrix_power`` handles any matrix, by a Schur decomposition that returns a complex result whose imaginary part is numerical noise. A regularized covariance is symmetric, so this is exact, real and cheaper, and it agrees with the general routine to floating-point noise.
 
     Args:
         matrix: A symmetric, positive definite matrix.
@@ -226,33 +216,42 @@ def tvn(
     """Typical variation normalization, then align each batch's controls onto the pooled controls :cite:p:`Celik_2024`.
 
     The controls define what an untreated well looks like, so they are what the transform is fitted on: the profiles are centred and scaled on them, rotated onto the principal components of the controls alone, and centred and scaled on them again within each batch.
-    The last step is CORAL — each batch is whitened by the covariance of its own controls and recoloured with the covariance of all of them, so a batch whose typical variation points in an unusual direction is brought onto the others rather than merely recentred.
+    The last step is CORAL: each batch is whitened by the covariance of its own controls and recoloured with the covariance of all of them, so a batch whose typical variation points in an unusual direction is brought onto the others rather than merely recentred.
 
     Args:
         adata: Object holding the profiles, usually one row per well.
-        batch_key: ``obs`` column naming the batches to align. Each needs at least two reference rows.
+        batch_key: ``obs`` column naming the batches to align.
+            Each needs at least two reference rows.
         reference: Rows the transform is fitted on: ``"negcon"`` for the controls, ``None`` for everything, or the name of a boolean ``obs`` column.
-        use_rep: Embedding to align, as :func:`~mantispy.pp.harmony` takes one, or ``None`` to align ``X`` itself. Fitting the rotation on the controls of a wide feature matrix is expensive, so the default expects a reduction first, normally ``sc.pp.pca``.
+        use_rep: Embedding to align, as :func:`~mantispy.pp.harmony` takes one, or ``None`` to align ``X`` itself.
+            Fitting the rotation on the controls of a wide feature matrix is expensive, so the default expects a reduction first, normally :func:`scanpy.pp.pca`.
         key_added: ``obsm`` key for the result.
-        epsilon: Added to the diagonal of every covariance before it is inverted. The profiles are on the controls' own scale by then, so their variances are near one and the reference value of 0.5 is a substantial shrink toward isotropy.
+        epsilon: Added to the diagonal of every covariance before it is inverted.
+            The profiles are on the controls' own scale by then, so their variances are near one and the reference value of 0.5 is a substantial shrink toward isotropy.
         copy: Return a modified copy instead of writing in place.
 
     Returns:
-        ``None``, or the modified copy. Writes ``obsm[key_added]``.
+        ``None``, or the modified copy.
+        Writes ``obsm[key_added]``.
 
     Raises:
         KeyError: ``obs`` has no column ``batch_key`` or no column named by ``reference``, or ``obsm`` holds nothing under ``use_rep``.
         ValueError: ``reference`` selects no rows, or fewer than two in some batch, which leaves that batch's covariance undefined.
-        ValueError: A control covariance is singular even after ``epsilon``, so it cannot be inverted. Reachable by passing ``epsilon=0``.
+        ValueError: A control covariance is singular even after ``epsilon``, so it cannot be inverted.
+            Reachable by passing ``epsilon=0``.
 
     Notes:
-        The rotation is fitted on the controls, so it keeps ``min(n_controls, n_features)`` components. With fewer controls than features the result is narrower than the input, which is why this writes ``obsm`` and never ``X``: ``var`` would no longer describe the columns.
+        The rotation is fitted on the controls, so it keeps ``min(n_controls, n_features)`` components.
+        With fewer controls than features the result is narrower than the input, which is why this writes ``obsm`` and never ``X``: ``var`` would no longer describe the columns.
 
-        Batch correction methods disagree with each other often enough that one metric is not evidence. Compare this with :func:`~mantispy.pp.harmony` on the same object using :func:`~mantispy.metrics.evaluate_correction`, and on a screen with annotated perturbations also :func:`~mantispy.metrics.known_relationships`, which is the measure :cite:t:`Celik_2024` selects it by.
+        Batch correction methods disagree with each other often enough that one metric is not evidence.
+        Compare this with :func:`~mantispy.pp.harmony` on the same object using :func:`~mantispy.metrics.evaluate_correction`, and on a screen with annotated perturbations also :func:`~mantispy.metrics.known_relationships`, which is the measure :cite:t:`Celik_2024` selects it by.
 
-        Measured that way, it tends to trade replicate consistency for relationship recall, where :func:`~mantispy.pp.harmony` trades the other way. Neither buys the other's gain, so which of the two readouts the screen is for is the question to answer before running either.
+        Measured that way, it tends to trade replicate consistency for relationship recall, where :func:`~mantispy.pp.harmony` trades the other way.
+        Neither buys the other's gain, so which of the two readouts the screen is for is the question to answer before running either.
 
-        What it needs is controls, per batch and not in total, because the covariance it whitens each batch by is estimated from that batch's controls alone. A batch with fewer controls than the rotation has components cannot span the space, and the warning that says so is the sign to reduce to fewer components or to pool smaller batches together.
+        What it needs is controls, per batch and not in total, because the covariance it whitens each batch by is estimated from that batch's controls alone.
+        A batch with fewer controls than the rotation has components cannot span the space, and the warning that says so is the sign to reduce to fewer components or to pool smaller batches together.
     """
     from sklearn.decomposition import PCA
 
@@ -266,14 +265,10 @@ def tvn(
         raise ValueError(f"no reference rows selected by reference={reference!r}")
 
     values = _centre_scale(values, controls)
-    # Fitted on the controls, so the components describe typical variation rather than the
-    # perturbations, and the transform recentres everything on the control mean again.
     values = PCA().fit(values[controls]).transform(values)
 
     codes, keys = group_codes(adata, batch_key)
-    # One stable ordering serves both passes, where `codes == group` would scan every row once
-    # per batch. The two passes cannot be merged: the target below is taken from every control
-    # row, after the first pass has rewritten them all.
+    # The two passes cannot be merged: the target below is taken from every control row after the first pass rewrote them.
     order, offsets = group_offsets(codes, len(keys))
     batches = [order[offsets[group] : offsets[group + 1]] for group in range(len(keys))]
 
@@ -290,8 +285,6 @@ def tvn(
             thin.append(f"{key!r} ({reference_rows.size})")
         values[rows] = _centre_scale(values[rows], controls[rows], where=f" of batch {key!r}")
 
-    # _centre_scale clamps the directions such a batch leaves empty, and says so per batch. This names the cause
-    # rather than the effect, and is the actionable form: the remedy is fewer components or larger batches.
     if thin:
         warnings.warn(
             f"{len(thin)} batch(es) have no more reference rows than the {values.shape[1]} component(s) "

@@ -1,22 +1,8 @@
 """Matrix access and grouping for every grouped operation.
 
 Nothing outside ``_core`` reads ``adata.X`` or ``adata.layers`` directly, as ``tests/test_api_guards.py`` checks.
-Every read goes through :func:`get_matrix` and every grouping through :func:`group_codes`, so a backed, chunked implementation would go into those two functions.
-
-Built on them:
-
-* :func:`reduce_grouped`: a per-group statistic through the numba kernels (the read path).
-* :func:`transform_grouped`: rewrite the matrix group by group (the write path), over :func:`iter_groups`.
-* :func:`iter_groups`: the ``(key, rows, block)`` iteration, which yields a group's rows in increasing order.
-
-:func:`reduce_grouped` orders its own groups rather than going through :func:`iter_groups`, because it applies ``mask`` to each group's rows before reading them.
-Both orderings have to stay increasing: :func:`get_matrix` hands an increasing index straight to h5py and sorts any other one, at the cost of a full-size copy.
-
-A dozen call sites across ``pp`` and ``tl`` loop over the groups themselves, because what they compute per group (a whitening, a permutation null, a chi-square) is not a statistic the kernels can express.
-Most take their rows from :func:`~mantispy._core._numba.group_offsets`, re-exported here, rather than scanning ``codes == group`` once per group: that scan is O(n_obs) per group, so a loop over g groups costs O(g * n_obs) where one stable ordering serves every group.
-A handful still scan, among them ``tl/_heterogeneity.py``, ``pp/_batch.py`` and ``pp/_sphere.py``; see #113 for the measured cost.
-Each loop would need rewriting for a streaming backend.
-They still take the matrix and the grouping from this module, so the code to change is easy to find.
+Every read goes through :func:`get_matrix` and every grouping through :func:`group_codes`.
+:func:`reduce_grouped` and :func:`iter_groups` both have to yield a group's rows in increasing order: :func:`get_matrix` hands an increasing index straight to h5py and sorts any other one, at the cost of a full-size copy.
 """
 
 from __future__ import annotations
@@ -54,7 +40,7 @@ __all__ = [
 
 
 def group_rows(codes: np.ndarray, n_groups: int) -> list[np.ndarray]:
-    """Row indices of each group, taken from one stable ordering rather than by scanning the codes per group."""
+    """Row indices of each group, from one stable ordering of the codes."""
     order, offsets = group_offsets(codes, n_groups)
     return [order[offsets[group] : offsets[group + 1]] for group in range(n_groups)]
 
@@ -74,8 +60,7 @@ def _obsm_source(adata: AnnData, use_rep: str, layer: str | None) -> np.ndarray:
 def reduced_var(adata: AnnData, use_rep: str | None, n_cols: int) -> pd.DataFrame:
     """The ``var`` for an object reduced by :func:`reduce_grouped`.
 
-    ``use_rep`` reduces an embedding whose axes are not named features, so its ``var`` is a plain
-    range index over ``n_cols``; otherwise the source ``var`` is carried over unchanged.
+    ``use_rep`` reduces an embedding whose axes are not named features, so its ``var`` is a plain range index over ``n_cols``; otherwise the source ``var`` is carried over unchanged.
     """
     if use_rep is not None:
         return annotation(pd.Index([str(index) for index in range(n_cols)]))
@@ -89,7 +74,6 @@ def get_matrix(
 
     ``rows`` reads only those rows, so a backed object holds one group in memory instead of the whole screen.
     h5py accepts a fancy index only in increasing order, so rows asked for in any other order are sorted for the read and the requested order restored afterwards.
-    Every grouped path here asks for a group's rows in increasing order already, and that restoring gather is a full-size copy of what was just read, so it is done only when the order actually differs.
     Rows that cover the whole matrix in order are read as one slice rather than selected point by point, and an in-order read hands back the block the backend produced rather than a copy of it, so treat the result as read-only.
 
     ``use_rep`` reads ``adata.obsm[use_rep]`` instead of ``X`` or a layer; it must be a 2-D representation and cannot be combined with ``layer``.
@@ -105,13 +89,9 @@ def get_matrix(
     if rows is not None:
         wanted = np.asarray(rows)
         if _reads_from_disk(matrix):
-            # Only an integer index takes a shortcut, and its order is settled by comparison rather than by
-            # np.diff: subtraction wraps on an unsigned dtype, which would read a descending index as an
-            # increasing one, and on a boolean array it is a not-equal, which says nothing about order at all.
-            # Anything else goes the way every read went before, and is refused by the backend if it is invalid.
+            # Compared rather than np.diff: subtraction wraps on unsigned dtypes and is a not-equal on booleans.
             increasing = wanted.dtype.kind in "iu" and bool(np.all(wanted[1:] > wanted[:-1]))
             if not increasing:
-                # The order h5py refuses: read the rows sorted, then put them back as they were asked for.
                 order = np.argsort(wanted, kind="stable")
                 block = matrix[wanted[order]]
                 inverse = np.empty_like(order)
@@ -123,21 +103,14 @@ def get_matrix(
                 and wanted[-1] < matrix.shape[0]
                 and wanted[-1] - wanted[0] + 1 == wanted.size
             ):
-                # Increasing with no gaps is a range, and asking for it as one lets the backend read a
-                # contiguous block instead of selecting the rows point by point. Every group of a file
-                # stored in the grouping's own order looks like this, and so does ``by=None``, which asks
-                # for all of them. The ends are checked against the dataset first, because a slice would
-                # silently clamp to what is there where a fancy index is refused.
+                # The ends are bounds-checked because a slice silently clamps where a fancy index is refused.
                 matrix = matrix[int(wanted[0]) : int(wanted[-1]) + 1]
             else:
                 matrix = matrix[wanted]
         else:
             matrix = matrix[wanted]
     elif _reads_from_disk(matrix) and not hasattr(matrix, "__array__"):
-        # anndata's CSRDataset and CSCDataset have no ``__array__``, so the read below sees a sequence of
-        # sparse rows and raises rather than returning the matrix. Asking for every row gives the scipy
-        # matrix that ``toarray`` then flattens out. An h5py dataset does have one and is left alone,
-        # because reading through it converts to float32 as it goes instead of afterwards.
+        # anndata's CSRDataset and CSCDataset have no ``__array__``, so np.asarray below would raise on them.
         matrix = matrix[:]
 
     if hasattr(matrix, "toarray"):
@@ -148,12 +121,9 @@ def get_matrix(
 def _warn_if_not_streamable(matrix: Any) -> None:
     """Say so when a per-group loop over this on-disk matrix will read the whole of it every time.
 
-    anndata indexes a CSR dataset by row without leaving the file, which is what makes streaming work.
-    On a CSC dataset the same index falls back to ``to_memory()``, so a loop over g groups reads and
-    densifies the entire matrix g times rather than once, and the groups are where that is least visible.
-
-    An in-memory scipy CSC matrix also reports ``format == "csc"`` but never leaves memory, so the
-    on-disk check gates the warning here rather than at each call site.
+    anndata indexes a CSR dataset by row without leaving the file.
+    On a CSC dataset the same index falls back to ``to_memory()``, so a loop over g groups reads and densifies the entire matrix g times rather than once.
+    An in-memory scipy CSC matrix also reports ``format == "csc"`` but never leaves memory, so it must not warn.
     """
     if not _reads_from_disk(matrix):
         return
@@ -177,10 +147,7 @@ def _reads_from_disk(matrix: Any) -> bool:
 
 
 def representation(adata: AnnData, use_rep: str | None) -> np.ndarray:
-    """``obsm[use_rep]`` if given, otherwise ``X``, as float64.
-
-    Every tool that can score an embedding instead of the features uses this, so the input is chosen in one place and the missing-key error says how to compute an embedding.
-    """
+    """``obsm[use_rep]`` if given, otherwise ``X``, as float64."""
     if use_rep is None:
         return get_matrix(adata).astype(np.float64)
     if use_rep not in adata.obsm:
@@ -249,8 +216,8 @@ def reduce_grouped(
             Groups are still keyed by the full set of groups present in ``adata``.
         q: Quantile to compute for :data:`QUANTILE`.
         ddof: Delta degrees of freedom for :data:`STD`.
-        use_rep: Reduce ``adata.obsm[use_rep]`` instead of ``X``; ``values`` then has one column per axis of
-            that representation. Mutually exclusive with ``layer``.
+        use_rep: Reduce ``adata.obsm[use_rep]`` instead of ``X``; ``values`` then has one column per axis of that representation.
+            Mutually exclusive with ``layer``.
 
     Returns:
         ``(values, keys, counts)`` where ``values`` is ``(n_groups, n_cols)`` float64 (``n_cols`` is ``n_vars`` for ``X``/``layer`` and the representation's width for ``use_rep``), ``keys`` indexes the groups and ``counts`` holds the contributing row count.
@@ -266,24 +233,15 @@ def reduce_grouped(
         source = adata.X if layer is None else adata.layers[layer]
     n_cols = source.shape[1] if use_rep is not None else adata.n_vars
     selected = None if mask is None else np.asarray(mask, dtype=bool)
-    # Checked here rather than left to whichever branch runs. Selecting a group's rows with the mask reads
-    # only the entries that group owns, so a mask longer than the object would go unnoticed on a backed
-    # object and raise in memory, which is the divergence the backed tests exist to catch.
+    # Checked up front because the backed path indexes the mask per group and would not notice a mask that is too long.
     if selected is not None and selected.shape != (adata.n_obs,):
         raise ValueError(f"mask must be one boolean per row: got shape {selected.shape} for {adata.n_obs} rows")
 
     if _reads_from_disk(source):
         _warn_if_not_streamable(source)
-        # One group at a time, so a screen that does not fit in memory still reduces.
-        # Each group's statistic depends only on its own rows, so the result matches the single kernel call (tests/test_backed.py).
         # A group with no contributing rows is NaN, as in the in-memory kernel.
-        # Zero would read as a measurement and center a plate with no controls left on 0.0.
         values = np.full((len(keys), n_cols), np.nan)
         counts = np.zeros(len(keys), dtype=np.int64)
-        # One stable ordering serves every group. Scanning ``codes == index`` per group instead is two
-        # full-length passes each, so the index arithmetic grows with the group count and at well level
-        # outweighs the reads it is preparing. Without a mask the ordering is already the answer, and
-        # group_rows' slices are views, so the common case copies nothing.
         for index, members in enumerate(group_rows(codes, len(keys))):
             rows = members if selected is None else members[selected[members]]
             if not rows.size:
