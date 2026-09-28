@@ -4,10 +4,7 @@
     python scripts/build_staged_datasets.py --only rohban
 
 Thin CLI over the :data:`mantispy.ds._build.STAGED` registry, which is the single source of truth for the
-variants the staged loaders fetch: ``scripts/check_staged_drift.py`` rebuilds through the same registry and
-compares against the shipped artifacts, so the pipeline there and the uploaded bytes must not diverge. After a
-change to a builder, rebuild with ``--print-sha256``, re-upload to
-``s3://scverse-exampledata/mantispy/<name>/`` and update the sha256 in ``registry.yaml``.
+staged variants and documents the rebuild-and-reupload workflow.
 """
 
 from __future__ import annotations
@@ -35,9 +32,8 @@ def main() -> None:
 
     if args.print_sha256:
         args.out.mkdir(parents=True, exist_ok=True)
-    for name, (builder, _shipped) in STAGED.items():
-        if args.only is not None and name != args.only:
-            continue
+    entries = STAGED.values() if args.only is None else [STAGED[args.only]]
+    for builder, _shipped in entries:
         for filename, adata in builder().items():
             line = f"{filename}  {adata.n_obs} x {adata.n_vars}"
             if args.print_sha256:
