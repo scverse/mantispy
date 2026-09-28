@@ -182,20 +182,15 @@ def test_stability_window_lifts_the_cluster_ceiling():
     span = float(heights[30] - heights[29])
     lo, hi = float(heights[29]) + span * 0.2, float(heights[29]) + span * 0.8
 
-    unbounded = adata.copy()
-    mt.tl.cluster(unbounded, use_rep=None, criterion="stability")
-    n_unbounded = unbounded.uns["mantispy"]["cluster"]["n_clusters"]
-    assert 1 <= n_unbounded <= 25  # the count ceiling keeps the unbounded sweep at or below 25 clusters
-
+    truth = np.repeat(np.arange(30), 2)  # 30 planted pairs of two
     windowed = adata.copy()
     mt.tl.cluster(windowed, use_rep=None, criterion="stability", stability_window=(lo, hi))
     summary = windowed.uns["mantispy"]["cluster"]
-    # The window brackets the 30-cluster plateau, so dropping the ceiling recovers a many-cluster cut instead of the
-    # 1-cluster fallback the ceiling forced when every in-window cut exceeded 25 clusters.
-    assert summary["n_clusters"] > 25
-    assert summary["n_clusters"] != 1
-    assert np.isfinite(summary["distance_cut"])
-    assert np.isfinite(summary["stability"])
+    # The window brackets the 30-cluster plateau, so dropping the ceiling recovers the exact 30-cluster cut instead of
+    # the 1-cluster fallback the ceiling forced when every in-window cut exceeded 25 clusters.
+    assert summary["n_clusters"] == 30
+    assert adjusted_rand_score(truth, windowed.obs["cluster"].to_numpy()) == pytest.approx(1.0)
+    assert 0.0 <= summary["stability"] <= 1.0
     assert lo <= summary["distance_cut"] <= hi
 
 

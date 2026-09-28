@@ -54,13 +54,15 @@ def _stability_cut(
     """The cut height whose cluster membership is most stable across nearby heights.
 
     Each height scores as the fraction of observations that sit in a cluster whose exact membership also occurs at the neighboring grid heights, in [0, 1], smoothed with a short moving average.
-    Only cuts with 2 to ``max_clusters`` clusters are scored.
     Returns the labels at the winning height, that height, and its stability score.
-    A tree with no height spread, or a grid with no in-range cut, falls back to a single cluster with nan cut and score.
+    A tree with no height spread, or a grid with no scored cut, falls back to a single cluster with nan cut and score.
+
+    Without a ``window`` the scored cuts are bounded to 2 to ``max_clusters`` clusters, so the all-in-one-cluster coarse top and the near-all-singletons bottom cannot win; this mirrors the bounded correlation window Rohban 2017 swept.
 
     ``window`` is an optional ``(low, high)`` height band the sweep is clipped to; ``None`` sweeps the full height range.
     A window that does not overlap the tree's height range raises a ValueError.
-    When a window is given the ``max_clusters`` ceiling is dropped and only the 2-or-more-clusters requirement is kept, so a windowed cut may return more than ``max_clusters`` clusters.
+    With a window the height band bounds the sweep at both ends and the ``max_clusters`` ceiling is dropped; only the 2-or-more-clusters floor is kept, so a windowed cut may return more than ``max_clusters`` clusters.
+    The window alone excludes the near-all-singletons bottom, so its low edge must sit above the near-singleton region or a near-singleton cut can be selected.
     """
     from scipy.cluster.hierarchy import fcluster
 
@@ -150,7 +152,7 @@ def cluster(
         With ``criterion="stability"`` a grid of cut heights is swept and the height whose cluster membership recurs most at neighboring heights is kept, the way Rohban 2017 cut their dendrogram.
         Pass ``stability_window`` to restrict that sweep to a height band, so the wide plateau of a few huge clusters near the top of the tree cannot trivially win and collapse the cut; it only affects ``criterion="stability"``.
         Within a window the criterion favors the finest perfectly-stable cut, since the exact-membership stability saturates to 1.0 across a stable plateau.
-        With a window the sweep is bounded by the window rather than by the ``min(n_obs - 1, 25)`` cluster ceiling, so a windowed stability cut may return more than 25 clusters.
+        With a window the sweep is bounded at both ends by the window rather than by the ``min(n_obs - 1, 25)`` cluster ceiling, so a windowed stability cut may return more than 25 clusters; only the two-or-more-clusters floor is kept, so set the window low edge above the near-singleton region of the tree or a near-singleton cut can be selected.
         Rank clusters by the biology they recover rather than trusting the count, since neither score sees biology.
     """
     if method not in METHODS:
