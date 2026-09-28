@@ -43,6 +43,33 @@ def test_rohban_loads_with_genes_controls_and_counts(rohban):
 
 
 @pytest.mark.network
+def test_rohban_feature_selected_variant_is_the_well_level_selected_block():
+    adata = mt.ds.rohban(feature_selected=True)
+    assert adata.shape == (1918, 751)
+    assert mt.io.validate(adata).ok, mt.io.validate(adata).errors
+
+
+@pytest.mark.network
+def test_rohban_aggregated_variants_are_gene_level():
+    gene = mt.ds.rohban(aggregated=True)
+    assert gene.shape == (190, 3616)
+    assert "Metadata_Gene" in gene.obs
+    gene_selected = mt.ds.rohban(aggregated=True, feature_selected=True)
+    assert gene_selected.shape == (190, 751)
+
+
+@pytest.mark.network
+def test_rohban_variants_reject_plate_subsetting():
+    with pytest.raises(ValueError, match="plates only applies"):
+        mt.ds.rohban(plates=["41744"], aggregated=True)
+
+
+def test_rohban_flags_must_be_bool():
+    with pytest.raises(ValueError, match="aggregated must be a bool"):
+        mt.ds.rohban(aggregated=1)
+
+
+@pytest.mark.network
 def test_pki_loads_with_a_dose_series(pki):
     assert pki.shape == (3072, 5857)
     assert mt.io.validate(pki).ok, mt.io.validate(pki).errors

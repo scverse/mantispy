@@ -1946,6 +1946,17 @@ datasets:
     - name: 2013_10_11_SIGMA2_Pilot__41757__41757_augmented.csv.gz
       s3_key: cpg0017-rohban-pathways/broad/workspace/profiles/2013_10_11_SIGMA2_Pilot/41757/41757_augmented.csv.gz
       sha256: 34136ecae8cf23849656325fab6c90e61cd57733d1b644dbe31372bf10c6ed8c
+    # Staged variants rehosted on scverse-exampledata (explicit url overrides base_url, so the raw plate
+    # tables above stay on cellpainting-gallery). Regenerate with scripts/build_staged_datasets.py.
+    - name: rohban_selected.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/rohban/rohban_selected.h5ad
+      sha256: a34f3e01e1ecd953c65bc1a0a5c4c74ed836e16ae38b6b94e5ebdbc8c3317214
+    - name: rohban_gene.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/rohban/rohban_gene.h5ad
+      sha256: a4805da10c7030e8ebcd91cca1c441d37c3b719fbdbb6f229e5811b7c97b7c6a
+    - name: rohban_gene_selected.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/rohban/rohban_gene_selected.h5ad
+      sha256: 243e96d3fc33f0db40efc00d67633104a871896b6537aa84f317b41c637a1189
 
   luad:
     type: mantispy

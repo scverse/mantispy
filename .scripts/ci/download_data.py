@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import argparse
 
-_CNT = 1  # increment this when you want to rebuild the CI cache
+_CNT = 2  # increment this when you want to rebuild the CI cache
 
 # The plates docs/tutorials/multisite/cross_laboratory.ipynb loads by name for its cross-source hierarchy.
 _TARGET2_HIERARCHY = [
@@ -32,6 +32,10 @@ def main(args: argparse.Namespace) -> None:
     loaders = {
         "bbbc021": mt.ds.bbbc021,
         "rohban": mt.ds.rohban,
+        # The staged rohban variants, so tutorials and tests that load them hit the cache (<7 MB each).
+        "rohban_selected": lambda: mt.ds.rohban(feature_selected=True),
+        "rohban_gene": lambda: mt.ds.rohban(aggregated=True),
+        "rohban_gene_selected": lambda: mt.ds.rohban(aggregated=True, feature_selected=True),
         "pki": mt.ds.pki,
         # These two come to ~1.2 GB; all 141 plates would be 9.4 GB, over GitHub's 10 GB cache.
         "jump_target2": mt.ds.jump_target2,
