@@ -15,12 +15,12 @@ mt.pp.normalize(adata)
 ```{toctree}
 :maxdepth: 1
 
+api/datasets
 api/io
 api/preprocessing
 api/tools
+api/plotting
 api/metrics
 api/get
-api/plotting
-api/datasets
 api/settings
 ```
