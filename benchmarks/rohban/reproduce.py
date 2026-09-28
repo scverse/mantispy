@@ -156,8 +156,16 @@ print(f"  consensus profiles: {cons.n_obs} constructs x {cons.n_vars} features")
 # Step 7: hierarchical clustering via mt.tl.cluster + Pearson similarity [G4]
 # =============================================================================================
 banner("Step 7: average-linkage clustering (1-Pearson) + Pearson similarity [G4]")
+# Bound the stability sweep to the paper's correlation window. Rohban swept correlation 0.4 to 0.7;
+# for metric="correlation" height = 1 - correlation, so (0.3, 0.6) in height equals that window.
 mt.tl.cluster(
-    cons, use_rep=None, method="hierarchical", linkage="average", metric="correlation", criterion="stability"
+    cons,
+    use_rep=None,
+    method="hierarchical",
+    linkage="average",
+    metric="correlation",
+    criterion="stability",
+    stability_window=(0.3, 0.6),
 )
 mt.tl.similarity(cons, metric="pearson", use_rep=None)
 
