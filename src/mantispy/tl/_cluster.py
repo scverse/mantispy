@@ -71,8 +71,7 @@ def _stability_cut(
     moving average. Only cuts with 2 to ``max_clusters`` clusters are scored, so the all-in-one-cluster top and the
     near-all-singletons bottom cannot win; this mirrors the bounded correlation window Rohban 2017 swept. Returns
     the labels at the winning height, that height, and its stability score. A tree with no height spread, or a grid
-    with no in-range cut, falls back to a single cluster with nan cut and score. Within a window the finest
-    perfectly-stable cut wins, since the exact-membership stability saturates to 1.0 across a stable plateau.
+    with no in-range cut, falls back to a single cluster with nan cut and score.
 
     ``window`` is an optional ``(low, high)`` height band the sweep is clipped to, so the plateau of 2 to 3 huge
     clusters near the top of the tree cannot trivially win; ``None`` sweeps the full height range. A window that does
@@ -172,9 +171,11 @@ def cluster(
     if criterion not in ("silhouette", "stability"):
         raise ValueError(f"criterion must be 'silhouette' or 'stability', got {criterion!r}")
     if stability_window is not None:
-        if not isinstance(stability_window, tuple) or len(stability_window) != 2:
-            raise ValueError(f"stability_window must be a (low, high) pair of numbers, got {stability_window!r}")
-        if not all(isinstance(v, numbers.Real) for v in stability_window):
+        if not (
+            isinstance(stability_window, tuple)
+            and len(stability_window) == 2
+            and all(isinstance(v, numbers.Real) for v in stability_window)
+        ):
             raise ValueError(f"stability_window must be a (low, high) pair of numbers, got {stability_window!r}")
         if not stability_window[0] < stability_window[1]:
             raise ValueError(f"stability_window must have low < high, got {stability_window!r}")
