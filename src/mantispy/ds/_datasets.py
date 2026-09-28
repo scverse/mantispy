@@ -65,17 +65,20 @@ def _files(name: str, cache_dir: str | Path | None = None, select: Callable[[str
     return fetch(_DATASETS[name], cache_dir or settings.cache_dir, base_url=_BASE_URL, select=select)
 
 
-def _plate(file_name: str) -> str:
-    """The plate of a registry file, which is named ``<batch>__<plate>__<file>``."""
-    return file_name.split("__")[1]
+def _plate(file_name: str) -> str | None:
+    """The plate of a plate file named ``<batch>__<plate>__<file>``, or ``None`` when the name is not one (a rehosted variant)."""
+    parts = file_name.split("__")
+    return parts[1] if len(parts) >= 3 else None
 
 
 def _plate_files(name: str, plates: Sequence[str] | None, cache_dir: str | Path | None) -> list[Path]:
-    known = {_plate(file.name) for file in _DATASETS[name].files}
+    by_file = {file.name: _plate(file.name) for file in _DATASETS[name].files}
+    known = {plate for plate in by_file.values() if plate is not None}
     if plates is not None and (unknown := sorted(set(plates) - known)):
         raise KeyError(f"{name} has no plate(s) {unknown}; available: {sorted(known)}")
     wanted = known if plates is None else set(plates)
-    return _files(name, cache_dir, select=lambda file_name: _plate(file_name) in wanted)
+    # Files that are not plate files (the rehosted variants) map to None and are never selected here.
+    return _files(name, cache_dir, select=lambda file_name: by_file[file_name] in wanted)
 
 
 def _read_counts(path: Path) -> pd.DataFrame:
@@ -183,19 +186,44 @@ def _bbbc021_counts(paths: Sequence[Path]) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["Metadata_Plate", "Metadata_Well", "Metadata_CellCount", "Metadata_SiteCount"])
 
 
-def rohban(plates: Sequence[str] | None = None, cache_dir: str | Path | None = None) -> AnnData:
+#: The (aggregated, feature_selected) combination each rehosted rohban variant answers to.
+_ROHBAN_VARIANTS = {
+    (False, True): "rohban_selected.h5ad",  # 1918 x 751, well level
+    (True, False): "rohban_gene.h5ad",  # 190 x 3616, gene level, full features
+    (True, True): "rohban_gene_selected.h5ad",  # 190 x 751, gene level, feature selected
+}
+
+
+def rohban(
+    plates: Sequence[str] | None = None,
+    cache_dir: str | Path | None = None,
+    *,
+    aggregated: bool = False,
+    feature_selected: bool = False,
+) -> AnnData:
     """An ORF overexpression screen, with the genes and cell counts that BBBC021 lacks.
 
     ``cpg0017-rohban-pathways``: U2OS cells, one ORF construct overexpressed per well, roughly ten replicate wells per construct over five plates.
     Downloads about 27 MB for all five.
 
+    With ``aggregated`` or ``feature_selected`` set, this returns a pre-computed staged variant rehosted on ``scverse-exampledata`` (each under 7 MB) instead of downloading and reprocessing the five raw plate tables. The variants are built once by ``scripts/build_staged_datasets.py`` from per-plate ``mad_robustize`` normalization against the untreated wells:
+
+    - ``feature_selected=True``: the well-level block after pycytominer-default feature selection, 1,918 wells by 751 features.
+    - ``aggregated=True``: one ``modz`` consensus (Spearman, ``min_replicates=2``) per ``Metadata_Gene`` over the screened wells (untreated and transfection controls dropped), 190 genes by 3,616 features.
+    - ``aggregated=True, feature_selected=True``: that same gene consensus on the feature-selected block, 190 genes by 751 features.
+
     Args:
         plates: Plate barcodes to load, all five when omitted.
+            Only applies to the raw well-level path.
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
+        aggregated: Return the gene-level ``modz`` consensus instead of the raw wells.
+        feature_selected: Return the feature-selected block instead of all features.
 
     Returns:
-        Wells by features at well resolution, with:
+        The raw wells by features at well resolution when both flags are ``False``, else the staged variant selected by the two flags, read with :func:`mantispy.io.read`.
+
+        The raw object carries:
 
         ``Metadata_Perturbation``: the ORF construct (``Metadata_broad_sample``, ~323 of them), the unit the screen varied and what replicate wells share. Several constructs can overexpress the same gene, so this is finer than the gene; the paper's active set is construct-level. The control ORFs read as their ``Metadata_pert_name`` (``Luciferase_CTRL``, ``LacZ_CTRL``, ``eGFP_CTRL``) and the untreated EMPTY wells as ``"untreated"``.
 
@@ -207,6 +235,7 @@ def rohban(plates: Sequence[str] | None = None, cache_dir: str | Path | None = N
 
     Raises:
         KeyError: A plate is not one of the five.
+        ValueError: ``aggregated`` or ``feature_selected`` is not a bool, or ``plates`` is given for a variant.
 
     Notes:
         ``Metadata_Control`` marks the wells transfected with a control ORF (Luciferase, LacZ and eGFP), the reference for normalization.
@@ -216,6 +245,18 @@ def rohban(plates: Sequence[str] | None = None, cache_dir: str | Path | None = N
     References:
         :cite:t:`Rohban_2017`.
     """
+    for flag_name, flag in (("aggregated", aggregated), ("feature_selected", feature_selected)):
+        if not isinstance(flag, bool):
+            raise ValueError(f"{flag_name} must be a bool, got {type(flag).__name__}")
+    if (aggregated or feature_selected) and plates is not None:
+        raise ValueError(
+            "plates only applies to the raw wells; a pre-aggregated or feature-selected variant cannot be plate-subset"
+        )
+    if aggregated or feature_selected:
+        target = _ROHBAN_VARIANTS[aggregated, feature_selected]
+        (path,) = _files("rohban", cache_dir, select=lambda name: name == target)
+        return read(path)
+
     adata = _augmented("rohban", plates, cache_dir)
     obs = as_frame(adata.obs)
     role = obs["Metadata_ASSAY_WELL_ROLE"].astype(str)
