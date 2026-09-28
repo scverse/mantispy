@@ -18,6 +18,10 @@ For each correction, applied WITHIN each cluster at cutoff 0.05:
   (c) Two-stage adaptive BH (statsmodels ``fdr_tsbh``), if statsmodels is importable.
   (d) BH per (cluster x collection): GO / CORUM / Reactome corrected independently within a cluster.
   (e) Nominal p<0.05 (no correction), the upper reference.
+  (f) Restricted-universe BH: within each cluster, test and correct over ONLY the sets its genes hit (overlap a>=1).
+      This is conventional overlap-based ORA (the ``n`` column of the ORA table is the overlap a).
+  (g) Restricted-universe BH with a>=2 (a stricter relevance filter: two of the cluster's genes co-occur in a set).
+  (h) Restricted-universe Storey q (a>=1), to see if adaptive pi0 adds anything once the universe is small.
 
 A cluster counts as enriched if it has at least one set below the cutoff. It also runs a single
 permuted null (construct-to-cluster labels shuffled once) through every method as a false-positive
@@ -140,12 +144,38 @@ def significant_per_cluster(
     return counts
 
 
-def summarize(ora: pd.DataFrame, universe: set[str], method: str, per_collection: bool = False) -> tuple[int, int]:
-    """Return (enriched clusters, total set discoveries) restricted to the given cluster universe."""
-    counts = significant_per_cluster(ora, method, per_collection=per_collection)
+def significant_restricted(
+    ora: pd.DataFrame, min_overlap: int, method: str = "bh", cutoff: float = CUTOFF
+) -> dict[str, int]:
+    """Restricted-universe ORA: correct WITHIN each cluster over only the sets its genes actually hit.
+
+    The ``n`` column of the ORA table is the overlap ``a`` (the cluster's genes that fall in the set). Conventional
+    overlap-based ORA tests and corrects a gene list only over the sets it overlaps, not the full net; this keeps
+    each cluster's set of tests to the sets with ``n >= min_overlap`` and then applies ``method`` ("bh" or "storey")
+    within that restricted universe.
+    """
+    fn = bh if method == "bh" else storey_q
+    counts: dict[str, int] = {}
+    for cluster, sub in ora.groupby("group", observed=True):
+        rel = sub[sub["n"] >= min_overlap]
+        if len(rel) == 0:
+            counts[str(cluster)] = 0
+            continue
+        adj = fn(rel["pvalue"].to_numpy())
+        counts[str(cluster)] = int(np.sum(adj < cutoff))
+    return counts
+
+
+def summarize_counts(counts: dict[str, int], universe: set[str]) -> tuple[int, int]:
+    """Return (enriched clusters, total set discoveries) from a per-cluster count map over a cluster universe."""
     enriched = sum(1 for c in universe if counts.get(c, 0) > 0)
     total = sum(counts.get(c, 0) for c in universe)
     return enriched, total
+
+
+def summarize(ora: pd.DataFrame, universe: set[str], method: str, per_collection: bool = False) -> tuple[int, int]:
+    """Return (enriched clusters, total set discoveries) restricted to the given cluster universe."""
+    return summarize_counts(significant_per_cluster(ora, method, per_collection=per_collection), universe)
 
 
 # =============================================================================================
@@ -205,6 +235,27 @@ def main() -> None:
             continue
         enriched, total = summarize(ora, multigene, method, per_collection=per_coll)
         perm_enriched, _ = summarize(perm_ora, perm_multigene, method, per_collection=per_coll)
+        rows.append(
+            (
+                label,
+                f"{enriched}/{n_universe}",
+                str(total),
+                f"{perm_enriched}/{n_perm_universe}",
+            )
+        )
+
+    # Restricted-universe (conventional overlap-based ORA): test and correct WITHIN each cluster over only the sets
+    # its genes actually hit (overlap n >= min). This shrinks the test count per cluster from ~896 to tens.
+    restricted = [
+        ("(f) restricted-universe BH (overlap a>=1)", 1, "bh"),
+        ("(g) restricted-universe BH (overlap a>=2)", 2, "bh"),
+        ("(h) restricted-universe Storey q (a>=1)", 1, "storey"),
+    ]
+    for label, min_overlap, method in restricted:
+        counts = significant_restricted(ora, min_overlap, method=method)
+        perm_counts = significant_restricted(perm_ora, min_overlap, method=method)
+        enriched, total = summarize_counts(counts, multigene)
+        perm_enriched, _ = summarize_counts(perm_counts, perm_multigene)
         rows.append(
             (
                 label,
@@ -274,6 +325,37 @@ def main() -> None:
         lines.append(dfmt(r))
     lines.append("")
 
+    # Diagnostic for method (f): restrict each cluster to the sets its genes actually hit (n>=1), then BH within
+    # that restricted universe. The tested-set count should drop from ~896 to tens; the min BH q shows whether the
+    # smaller universe lets the best hit survive correction.
+    rdiag = []
+    for cluster in sorted(multigene, key=lambda c: int(c) if c.isdigit() else c):
+        sub = ora[ora["group"] == cluster]
+        rel = sub[sub["n"] >= 1]
+        p = rel["pvalue"].to_numpy()
+        if p.size == 0:
+            rdiag.append((cluster, 0, float("nan"), float("nan")))
+            continue
+        rdiag.append((cluster, p.size, float(np.min(p)), float(np.min(bh(p)))))
+    rdiag.sort(key=lambda r: (np.inf if np.isnan(r[2]) else r[2]))
+
+    rcols = ("cluster", "tested sets (a>=1)", "min raw p", "min BH q (restricted)")
+    rrows = [
+        (c, str(n), ("n/a" if np.isnan(mp) else f"{mp:.2e}"), ("n/a" if np.isnan(bq) else f"{bq:.3f}"))
+        for c, n, mp, bq in rdiag
+    ]
+    rwidths = [max(len(rcols[i]), max(len(r[i]) for r in rrows)) for i in range(len(rcols))]
+
+    def rfmt(cols):
+        return "  ".join(str(c).ljust(w) for c, w in zip(cols, rwidths))
+
+    lines.append("Method (f) restricted universe a>=1 (tested-set count and min BH q; why it recovers or not):")
+    lines.append(rfmt(rcols))
+    lines.append("  ".join("-" * w for w in rwidths))
+    for r in rrows:
+        lines.append(rfmt(r))
+    lines.append("")
+
     lines.append("Notes:")
     lines.append("  - total set discoveries and permuted-null counts are over the same multi-gene cluster universe.")
     lines.append("  - nominal p<0.05 is the uncorrected upper reference, not a valid FDR control.")
@@ -286,16 +368,57 @@ def main() -> None:
         "  - Storey and two-stage BH do not help: a 2-8 gene cluster leaves almost all sets genuinely null (pi0~1),"
     )
     lines.append("    so the adaptive pi0 factor is near 1 and the adjusted values track plain BH.")
+
+    # Data-driven verdict for the restricted-universe methods (f/g/h): does shrinking the universe recover REAL signal
+    # WITHOUT equally lighting up the permuted null? The task's bar: real count moving toward the paper's ~19/22 while
+    # the permuted-null count stays at or below the nominal FDR level (a handful at most, i.e. not more than 2-3/17).
+    f_real, f_total = summarize_counts(significant_restricted(ora, 1, method="bh"), multigene)
+    f_perm, _ = summarize_counts(significant_restricted(perm_ora, 1, method="bh"), perm_multigene)
+    g_real, g_total = summarize_counts(significant_restricted(ora, 2, method="bh"), multigene)
+    g_perm, _ = summarize_counts(significant_restricted(perm_ora, 2, method="bh"), perm_multigene)
+    h_real, h_total = summarize_counts(significant_restricted(ora, 1, method="storey"), multigene)
+    h_perm, _ = summarize_counts(significant_restricted(perm_ora, 1, method="storey"), perm_multigene)
+    med_tested_f = int(np.median([r[1] for r in rdiag if r[1] > 0]))
+    best_real = max(f_real, g_real, h_real)
+    worst_perm = max(f_perm, g_perm, h_perm)
+    null_clean = worst_perm <= 3
+
     lines.append(
-        "  - CONCLUSION: on the broad net no within-cluster p-value correction recovers the enrichment, and nominal"
+        f"  - restricted-universe (conventional overlap-based ORA), corrected WITHIN each cluster over only the sets"
+        f" its genes hit:"
     )
     lines.append(
-        "    p<0.05 is not real signal (it also lights up the permuted null). The lever is the test universe, not the"
+        f"    (f) a>=1: REAL {f_real}/{n_universe} ({f_total} discoveries), PERMUTED-NULL {f_perm}/{n_perm_universe}; "
+        f"(g) a>=2: REAL {g_real}/{n_universe} ({g_total}), NULL {g_perm}/{n_perm_universe}; "
+        f"(h) a>=1 Storey: REAL {h_real}/{n_universe} ({h_total}), NULL {h_perm}/{n_perm_universe}."
     )
     lines.append(
-        "    correction: restricting each cluster's tests to the sets its genes actually hit (conventional overlap-"
+        f"  - a>=1 barely shrinks the universe: each cluster's 2-8 genes still hit ~{med_tested_f} of {n_sets} sets"
+        " (every gene sits in many GO/Reactome sets), so BH over ~300 tests still buries the best hit and (f) recovers"
+        f" {f_real}/{n_universe}. Only a>=2 (two of the cluster's genes co-occurring in a set) cuts the universe hard"
+        f" enough to recover {g_real}/{n_universe}."
     )
-    lines.append("    based ORA) or a curated collection is what recovers the paper's per-cluster count.")
+    if null_clean:
+        lines.append(
+            "  - The permuted null stays clean across every restricted method (max"
+            f" {worst_perm}/{n_perm_universe}), so restricting the universe is NOT an artifact of fewer tests: the few"
+            " recoveries are real signal, not shuffled noise clearing an easy bar."
+        )
+        lines.append(
+            "  - CONCLUSION: restricting the test universe is the legitimate lever, and it does recover REAL enrichment"
+            f" the whole-net correction misses ({best_real}/{n_universe} vs 0/{n_universe} for BH over all {n_sets}"
+            " sets), with a clean permuted null. But even conventional ORA recovers only a handful, nowhere near the"
+            " paper's 19/22. So the honest read is that the per-cluster signal is real but WEAK at construct level with"
+            " GO-BP + CORUM + Reactome: G8 is only partially reproducible here, and the earlier curated-collection"
+            " count remains the right graded number rather than the broad net."
+        )
+    else:
+        lines.append(
+            "  - CONCLUSION: restricting the universe raises the REAL count but the PERMUTED NULL also lights up (max"
+            f" {worst_perm}/{n_perm_universe}, above the 2-3/17 bar), so it trades one artifact (over-correction over"
+            f" {n_sets} sets) for another (too few tests, so any overlap clears q<0.05 on shuffled labels). G8 is"
+            " genuinely not reproducible at construct level with these collections."
+        )
 
     table = "\n".join(lines)
     print("\n" + table)

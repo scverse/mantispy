@@ -6,13 +6,16 @@ graded universe: 16 multi-gene clusters (paper reports 19/22 enriched)
 permuted-null universe: 17 multi-gene clusters after one label shuffle (seed=0)
 all corrections applied WITHIN each cluster at cutoff 0.05; a cluster is enriched if >=1 set clears it
 
-method                           enriched (of 16)  total set discoveries  permuted-null enriched
--------------------------------  ----------------  ---------------------  ----------------------
-(a) BH per cluster               0/16              0                      0/17                  
-(b) Storey q per cluster         0/16              0                      0/17                  
-(c) two-stage BH (fdr_tsbh)      0/16              0                      0/17                  
-(d) BH per cluster x collection  0/16              0                      0/17                  
-(e) nominal p<0.05 (reference)   15/16             404                    14/17                 
+method                                     enriched (of 16)  total set discoveries  permuted-null enriched
+-----------------------------------------  ----------------  ---------------------  ----------------------
+(a) BH per cluster                         0/16              0                      0/17                  
+(b) Storey q per cluster                   0/16              0                      0/17                  
+(c) two-stage BH (fdr_tsbh)                0/16              0                      0/17                  
+(d) BH per cluster x collection            0/16              0                      0/17                  
+(e) nominal p<0.05 (reference)             15/16             404                    14/17                 
+(f) restricted-universe BH (overlap a>=1)  0/16              0                      0/17                  
+(g) restricted-universe BH (overlap a>=2)  3/16              61                     0/17                  
+(h) restricted-universe Storey q (a>=1)    2/16              83                     0/17                  
 
 Per-cluster best hit (why every correction collapses to 0):
 cluster  n_tests  min raw p  min BH q  min Storey q  min tsbh q
@@ -34,6 +37,26 @@ cluster  n_tests  min raw p  min BH q  min Storey q  min tsbh q
 21       896      1.56e-02   1.000     1.000         1.000     
 3        896      5.23e-02   1.000     1.000         1.000     
 
+Method (f) restricted universe a>=1 (tested-set count and min BH q; why it recovers or not):
+cluster  tested sets (a>=1)  min raw p  min BH q (restricted)
+-------  ------------------  ---------  ---------------------
+25       307                 4.40e-04   0.135                
+27       637                 7.25e-04   0.070                
+16       539                 1.34e-03   0.505                
+2        280                 1.64e-03   0.230                
+13       680                 3.12e-03   0.842                
+1        189                 3.42e-03   0.164                
+15       337                 3.42e-03   0.384                
+24       182                 3.42e-03   0.156                
+18       763                 4.28e-03   1.000                
+19       459                 6.90e-03   1.000                
+6        306                 7.18e-03   0.467                
+14       459                 8.29e-03   0.626                
+4        291                 9.98e-03   0.550                
+26       163                 1.41e-02   0.683                
+21       258                 1.56e-02   0.695                
+3        87                  5.23e-02   0.462                
+
 Notes:
   - total set discoveries and permuted-null counts are over the same multi-gene cluster universe.
   - nominal p<0.05 is the uncorrected upper reference, not a valid FDR control.
@@ -41,7 +64,8 @@ Notes:
     best hit by that count; the strongest single hit anywhere is p=4.4e-04, giving min BH q=0.39.
   - Storey and two-stage BH do not help: a 2-8 gene cluster leaves almost all sets genuinely null (pi0~1),
     so the adaptive pi0 factor is near 1 and the adjusted values track plain BH.
-  - CONCLUSION: on the broad net no within-cluster p-value correction recovers the enrichment, and nominal
-    p<0.05 is not real signal (it also lights up the permuted null). The lever is the test universe, not the
-    correction: restricting each cluster's tests to the sets its genes actually hit (conventional overlap-
-    based ORA) or a curated collection is what recovers the paper's per-cluster count.
+  - restricted-universe (conventional overlap-based ORA), corrected WITHIN each cluster over only the sets its genes hit:
+    (f) a>=1: REAL 0/16 (0 discoveries), PERMUTED-NULL 0/17; (g) a>=2: REAL 3/16 (61), NULL 0/17; (h) a>=1 Storey: REAL 2/16 (83), NULL 0/17.
+  - a>=1 barely shrinks the universe: each cluster's 2-8 genes still hit ~306 of 896 sets (every gene sits in many GO/Reactome sets), so BH over ~300 tests still buries the best hit and (f) recovers 0/16. Only a>=2 (two of the cluster's genes co-occurring in a set) cuts the universe hard enough to recover 3/16.
+  - The permuted null stays clean across every restricted method (max 0/17), so restricting the universe is NOT an artifact of fewer tests: the few recoveries are real signal, not shuffled noise clearing an easy bar.
+  - CONCLUSION: restricting the test universe is the legitimate lever, and it does recover REAL enrichment the whole-net correction misses (3/16 vs 0/16 for BH over all 896 sets), with a clean permuted null. But even conventional ORA recovers only a handful, nowhere near the paper's 19/22. So the honest read is that the per-cluster signal is real but WEAK at construct level with GO-BP + CORUM + Reactome: G8 is only partially reproducible here, and the earlier curated-collection count remains the right graded number rather than the broad net.
