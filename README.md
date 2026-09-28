@@ -1,4 +1,4 @@
-# mantispy
+<img src="https://raw.githubusercontent.com/scverse/mantispy/main/docs/_static/mantispy-logo.png" width="400" alt="mantispy">
 
 [![Tests][badge-tests]][tests]
 [![Documentation][badge-docs]][documentation]
