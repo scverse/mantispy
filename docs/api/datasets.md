@@ -19,11 +19,7 @@
     ds.jump_target2
     ds.jump_crispr
     ds.jump_lite
-    ds.agnp
-    ds.amish
     ds.chroma
-    ds.luad
-    ds.miami
     ds.neuropainting
     ds.oasis_pilot
     ds.pooled_rare

@@ -1958,86 +1958,6 @@ datasets:
       url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/rohban/rohban_gene_selected.h5ad
       sha256: 243e96d3fc33f0db40efc00d67633104a871896b6537aa84f317b41c637a1189
 
-  luad:
-    type: mantispy
-    doc_header: LUAD alleles, wild-type against mutant.
-    accession: cpg0031-caicedo-cmvip
-    shape: [6144, 427]
-    read:
-      on_column_mismatch: intersect
-      index_columns: [Metadata_Plate, Metadata_Well]
-    files:
-    - name: BBBC043__52649__52649_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0031-caicedo-cmvip/broad/workspace/profiles/BBBC043/52649/52649_normalized_feature_select_batch.csv.gz
-      sha256: 6365ed8d626f4d1aad4c866118021cecff2695495fba28b19592b7e2832cdcca
-    - name: BBBC043__52651__52651_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0031-caicedo-cmvip/broad/workspace/profiles/BBBC043/52651/52651_normalized_feature_select_batch.csv.gz
-      sha256: 26b3fbc0f30b76972d49a8bf7bbb5f563bb24012d353acb8d07a8afa5a0e424c
-    - name: BBBC043__52652__52652_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0031-caicedo-cmvip/broad/workspace/profiles/BBBC043/52652/52652_normalized_feature_select_batch.csv.gz
-      sha256: 601125cec9638ffeeb4f9dc7275483f570db90ba9190635f4ac6aaea076b96ce
-    - name: BBBC043__52653__52653_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0031-caicedo-cmvip/broad/workspace/profiles/BBBC043/52653/52653_normalized_feature_select_batch.csv.gz
-      sha256: 0f5a5ed749c4ce4a43242b53a576aae2db0fb4054031b846d3168367e3651f98
-    - name: BBBC043__52654__52654_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0031-caicedo-cmvip/broad/workspace/profiles/BBBC043/52654/52654_normalized_feature_select_batch.csv.gz
-      sha256: d4e2ef2cb19223344c44ffe75ba335d1d96c56ea583ff66d2d8eb84341040649
-    - name: BBBC043__52657__52657_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0031-caicedo-cmvip/broad/workspace/profiles/BBBC043/52657/52657_normalized_feature_select_batch.csv.gz
-      sha256: 52f1b311ccf47c07efda744a90c2d018ad39ba152413e17e88cd502d53dd19b2
-    - name: BBBC043__52662__52662_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0031-caicedo-cmvip/broad/workspace/profiles/BBBC043/52662/52662_normalized_feature_select_batch.csv.gz
-      sha256: c5f1f0b53eb76e75b75e63f245774a5f513aa5846a120edd86e0f2a701892d84
-    - name: BBBC043__52663__52663_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0031-caicedo-cmvip/broad/workspace/profiles/BBBC043/52663/52663_normalized_feature_select_batch.csv.gz
-      sha256: 89ee046325aaeedfeea0476952625bfb666903822fb54e6eac564d669f663fbf
-    - name: BBBC043__52664__52664_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0031-caicedo-cmvip/broad/workspace/profiles/BBBC043/52664/52664_normalized_feature_select_batch.csv.gz
-      sha256: a83233e1f12616a3efba9e8896376fae08790b77d13bbcaa893daed2e0e5dd13
-    - name: BBBC043__52665__52665_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0031-caicedo-cmvip/broad/workspace/profiles/BBBC043/52665/52665_normalized_feature_select_batch.csv.gz
-      sha256: d7ab43555c9ce82bd88133a0d41425af4f8ce562759da8d66632813af5b851ea
-    - name: BBBC043__52666__52666_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0031-caicedo-cmvip/broad/workspace/profiles/BBBC043/52666/52666_normalized_feature_select_batch.csv.gz
-      sha256: ef424024478fe6b3f17434f11157ace779d177b6fb4677bc9fed3f5e3e3d955d
-    - name: BBBC043__52671__52671_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0031-caicedo-cmvip/broad/workspace/profiles/BBBC043/52671/52671_normalized_feature_select_batch.csv.gz
-      sha256: cded964c5bb4c9294c1196afc4cf9fead433f37fe65275972b5a0740ed48bb64
-    - name: BBBC043__52672__52672_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0031-caicedo-cmvip/broad/workspace/profiles/BBBC043/52672/52672_normalized_feature_select_batch.csv.gz
-      sha256: 7c7a7ca9d661c1b69f4225ac2c7bffaadc9219fff840f8bfda6b068dc1fc2b8d
-    - name: BBBC043__52673__52673_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0031-caicedo-cmvip/broad/workspace/profiles/BBBC043/52673/52673_normalized_feature_select_batch.csv.gz
-      sha256: 3adecc015fed4047ab076f11d18cd629c9bb186d3ff03a7f276fe779e64c5183
-    - name: BBBC043__52674__52674_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0031-caicedo-cmvip/broad/workspace/profiles/BBBC043/52674/52674_normalized_feature_select_batch.csv.gz
-      sha256: bbef5e893518a4c64488a45f29582f3fcde3c0902fce065e0ff4742d6ce0b68d
-    - name: BBBC043__52675__52675_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0031-caicedo-cmvip/broad/workspace/profiles/BBBC043/52675/52675_normalized_feature_select_batch.csv.gz
-      sha256: a6390d76323737f5580f38ee031769dc5fe98be5273c8e696553496805fc3110
-
-  agnp:
-    type: mantispy
-    doc_header: Silver nanoparticles at four sizes and three doses.
-    accession: cpg0040-garcia-fossa-AgNP
-    shape: [180, 112]
-    read:
-      on_column_mismatch: intersect
-      index_columns: [Metadata_Plate, Metadata_Well]
-    files:
-    - name: 2022_06_02_LiveCellPainting__220602_145121_Plate_1__220602_145121_Plate_1_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0040-garcia-fossa-AgNP/unicamp/workspace/profiles/2022_06_02_LiveCellPainting/220602_145121_Plate_1/220602_145121_Plate_1_normalized_feature_select_batch.csv.gz
-      sha256: 61f9536f5a47c03b4f7c013c3cb04599639db79a8dae2e1fc10e3a6dd6133b56
-    - name: 2022_06_02_LiveCellPainting__220616_143137_Plate_1__220616_143137_Plate_1_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0040-garcia-fossa-AgNP/unicamp/workspace/profiles/2022_06_02_LiveCellPainting/220616_143137_Plate_1/220616_143137_Plate_1_normalized_feature_select_batch.csv.gz
-      sha256: d93cc1eb6e625b39cbd2a78dc9195eae66edfba4671e73506f4b38aec8017f1e
-    - name: 2022_06_05_CellPainting__220605_085428_Plate_1__220605_085428_Plate_1_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0040-garcia-fossa-AgNP/unicamp/workspace/profiles/2022_06_05_CellPainting/220605_085428_Plate_1/220605_085428_Plate_1_normalized_feature_select_batch.csv.gz
-      sha256: 88065fdae016d07d38672524b8d859616e5c2903e3dbcdfa0a0e00729c25616b
-    - name: 2022_06_05_CellPainting__220617_134428_Plate_1__220617_134428_Plate_1_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0040-garcia-fossa-AgNP/unicamp/workspace/profiles/2022_06_05_CellPainting/220617_134428_Plate_1/220617_134428_Plate_1_normalized_feature_select_batch.csv.gz
-      sha256: 05b7dcc71933ff57668ea5386aecc791ce85054e810702021bce35e3d17dd5c3
-
   neuropainting:
     type: mantispy
     doc_header: Astrocytes and neurons imaged at 20x and 63x.
@@ -2064,25 +1984,6 @@ datasets:
     - name: NCP_NEURONS_2_63x__BR00132673__BR00132673_normalized_feature_select_batch.csv.gz
       s3_key: cpg0038-tegtmeyer-neuropainting/broad/workspace/profiles/NCP_NEURONS_2_63x/BR00132673/BR00132673_normalized_feature_select_batch.csv.gz
       sha256: 41cee30b1c7386b27d157f5c23dc9ee22afcc6e24cbf5395c2f04289dfb858ef
-
-  amish:
-    type: mantispy
-    doc_header: An Amish cohort, varying seeding density and timepoint.
-    accession: cpg0047-amish
-    shape: [468, 571]
-    read:
-      on_column_mismatch: intersect
-      index_columns: [Metadata_Plate, Metadata_Well]
-    files:
-    - name: 20260310_AmishBD_CP_CellDensity__BR00143056__BR00143056_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0047-amish/broad/workspace/profiles/20260310_AmishBD_CP_CellDensity/BR00143056/BR00143056_normalized_feature_select_batch.csv.gz
-      sha256: 132e73063a9af2156888451a82da966de58f8a184788de0f718d0abbc6e1a1ac
-    - name: 20260310_AmishBD_CP_CellDensity__BR00143057__BR00143057_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0047-amish/broad/workspace/profiles/20260310_AmishBD_CP_CellDensity/BR00143057/BR00143057_normalized_feature_select_batch.csv.gz
-      sha256: 605cc08b3c6c580b8ddb2ec9624d65ed2c73892e7374a8593584e46a1fcfcbf2
-    - name: 20260310_AmishBD_CP_CellDensity__BR00143059__BR00143059_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0047-amish/broad/workspace/profiles/20260310_AmishBD_CP_CellDensity/BR00143059/BR00143059_normalized_feature_select_batch.csv.gz
-      sha256: 7db5b6d6a53422e46e3d276ae4d7ee6feec292219a982d6344ca2dbf3f963b66
 
   chroma:
     type: mantispy
@@ -2202,57 +2103,6 @@ datasets:
     - name: 2025_07_29_OASIS_HepaRG_Ptx_AD2__BR00147879__platemap.txt
       s3_key: cpg0033-oasis-pilot/broad/workspace/metadata/2025_07_29_OASIS_HepaRG_Ptx_AD2/platemap/BR00147879.txt
       sha256: eda00ee6e9d50e91a935ae5d505c9dc751ac0a81cb46968ccd22147b138acbac
-  miami:
-    type: mantispy
-    doc_header: MIAMI, compounds in U2OS cells.
-    accession: cpg0006-miami
-    shape: [2775, 66]
-    read:
-      on_column_mismatch: intersect
-      index_columns: [Metadata_Plate, Metadata_Well]
-    files:
-    - name: 2021_08_23_Batch12__BR00126102__BR00126102_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0006-miami/broad/workspace/profiles/2021_08_23_Batch12/BR00126102/BR00126102_normalized_feature_select_batch.csv.gz
-      sha256: 2e3013ebc2297b031d5600bdea8cc4a4b15a7027aee1f7d6eec4dc0deb322fc1
-    - name: 2021_08_23_Batch12__BR00126103__BR00126103_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0006-miami/broad/workspace/profiles/2021_08_23_Batch12/BR00126103/BR00126103_normalized_feature_select_batch.csv.gz
-      sha256: 0ad9d2899375cb2bc587ad5af129ebbaea8b81c6da5c1af31c3302c98b630bba
-    - name: 2021_08_23_Batch12__BR00126104__BR00126104_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0006-miami/broad/workspace/profiles/2021_08_23_Batch12/BR00126104/BR00126104_normalized_feature_select_batch.csv.gz
-      sha256: 529d5c5e1c4bbd81f4c22ef214b79baefa6442d21a99976f11f1adb23e69f70c
-    - name: 2021_08_23_Batch12__BR00126105__BR00126105_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0006-miami/broad/workspace/profiles/2021_08_23_Batch12/BR00126105/BR00126105_normalized_feature_select_batch.csv.gz
-      sha256: 6eea880cf34d6832f2b6271afec5eec35da2b1234dec4d58bd771d4866134b35
-    - name: 2021_08_23_Batch12__BR00126106__BR00126106_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0006-miami/broad/workspace/profiles/2021_08_23_Batch12/BR00126106/BR00126106_normalized_feature_select_batch.csv.gz
-      sha256: e0f980259eeac5fc0dca7d4fcb02a7f1713d9f0d12d6e55862c5a7670599e644
-    - name: 2021_08_23_Batch12__BR00126113__BR00126113_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0006-miami/broad/workspace/profiles/2021_08_23_Batch12/BR00126113/BR00126113_normalized_feature_select_batch.csv.gz
-      sha256: 223924561bb29360ad010e1a74d2cfd839ddd3315c230792becc5738b98d57ef
-    - name: 2021_08_23_Batch12__BR00126707__BR00126707_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0006-miami/broad/workspace/profiles/2021_08_23_Batch12/BR00126707/BR00126707_normalized_feature_select_batch.csv.gz
-      sha256: 0fdb3fb8c85147c16c9c5a91439ee2379516fc8b5da40fae3d91d6608a895555
-    - name: 2021_08_30_Batch13__BR00123538__BR00123538_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0006-miami/broad/workspace/profiles/2021_08_30_Batch13/BR00123538/BR00123538_normalized_feature_select_batch.csv.gz
-      sha256: beac9ff1531058328a30f2681e7b7439c82fbc494480caf9a92b03117dbb8a0c
-    - name: 2021_08_30_Batch13__BR00127149__BR00127149_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0006-miami/broad/workspace/profiles/2021_08_30_Batch13/BR00127149/BR00127149_normalized_feature_select_batch.csv.gz
-      sha256: af68b89fa209f4bcd5e8566f21ec63df4e22daefba45b4f06f198bbecbd637c6
-    - name: 2021_08_30_Batch13__BR00127150__BR00127150_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0006-miami/broad/workspace/profiles/2021_08_30_Batch13/BR00127150/BR00127150_normalized_feature_select_batch.csv.gz
-      sha256: eb0fa7a4600d8f7ef7ee64615fb843913da0cf5eeb4df8673ba4e358893b1d62
-    - name: 2021_08_30_Batch13__BR00127151__BR00127151_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0006-miami/broad/workspace/profiles/2021_08_30_Batch13/BR00127151/BR00127151_normalized_feature_select_batch.csv.gz
-      sha256: bb82f4032639a420a43e18f1f7351264a27a27a9294abb7d088666236b3b6af0
-    - name: 2021_08_30_Batch13__BR00127152__BR00127152_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0006-miami/broad/workspace/profiles/2021_08_30_Batch13/BR00127152/BR00127152_normalized_feature_select_batch.csv.gz
-      sha256: 476a234f156519606b227e33ed26bc83ab8a4227cf9cba0407ae94f6a23f0795
-    - name: 2021_08_30_Batch13__BR00127153__BR00127153_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0006-miami/broad/workspace/profiles/2021_08_30_Batch13/BR00127153/BR00127153_normalized_feature_select_batch.csv.gz
-      sha256: fde293b9b07abe2020c6d070ed85e54164806f366616f34ad45e4971224c253e
-    - name: 2021_08_30_Batch13__BR00127154__BR00127154_normalized_feature_select_batch.csv.gz
-      s3_key: cpg0006-miami/broad/workspace/profiles/2021_08_30_Batch13/BR00127154/BR00127154_normalized_feature_select_batch.csv.gz
-      sha256: d2f1bbcd914825e82cea73d254b2bde2a2da11239d6b358e3a2b4bfcf0613143
 
   pki:
     type: mantispy

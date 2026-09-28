@@ -413,98 +413,6 @@ def pooled_rare(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
     return adata
 
 
-def luad(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
-    """LUAD alleles, 6,144 wells of wild-type against mutant.
-
-    ``cpg0031-caicedo-cmvip``, sixteen plates read down to the features they share.
-    ``Metadata_x_mutation_status`` separates the mutants from the wild type.
-
-    Args:
-        cache_dir: Where to keep the download.
-            Defaults to :attr:`mantispy.settings.cache_dir`.
-        kwargs: Passed to :func:`mantispy.io.read_profiles`.
-
-    Returns:
-        Wells by features, indexed by plate and well, with ``Metadata_CellCount`` and ``Metadata_SiteCount`` and:
-
-        ``Metadata_Perturbation``: the ORF construct (``Metadata_broad_sample``, ~594 of them), the unit the screen varied, since a gene is present as several alleles each on its own construct. The untreated EMPTY wells read as ``"untreated"``.
-
-        ``Metadata_Perturbation_Type``: ``"orf"`` for the overexpression and control-vector constructs, ``"untreated"`` for the EMPTY wells.
-
-        ``Metadata_Gene`` (the gene the allele belongs to, ~136 of them, read off ``Metadata_x_mutation_status``), ``Metadata_Construct`` (the ``broad_sample``), ``Metadata_Allele`` (the human-readable ``x_mutation_status``, such as ``"EGFR_p.L858R"``) and ``Metadata_Control`` (the empty-vector wells, ``Metadata_pert_type == "ctl_vector"``).
-    """
-    adata = _profiles("luad", cache_dir, **kwargs)
-    obs = as_frame(adata.obs)
-    pert_type = obs["Metadata_pert_type"].astype(str)
-    untreated = (pert_type == "EMPTY").to_numpy()
-    construct = obs["Metadata_broad_sample"].astype(str)
-    allele = obs["Metadata_x_mutation_status"].astype(str)
-    obs["Metadata_Perturbation"] = pd.Categorical(np.where(untreated, "untreated", construct.to_numpy()))
-    obs["Metadata_Perturbation_Type"] = pd.Categorical(np.where(untreated, "untreated", "orf"))
-    # The gene is the token before the first underscore of the allele: "EGFR_p.L858R" -> "EGFR".
-    obs["Metadata_Gene"] = allele.str.split("_").str[0].astype("category")
-    obs["Metadata_Construct"] = obs["Metadata_broad_sample"]
-    obs["Metadata_Allele"] = allele.astype("category")
-    obs["Metadata_Control"] = (pert_type == "ctl_vector").to_numpy()
-    get_logger().info(
-        "luad: %d wells x %d features, %d ORF constructs over %d genes",
-        adata.n_obs,
-        adata.n_vars,
-        int(construct[~untreated].nunique()),
-        int(obs.loc[~untreated, "Metadata_Gene"].nunique()),
-    )
-    return adata
-
-
-def agnp(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
-    """Silver nanoparticles in Huh7 cells, 180 wells at two sizes and three timepoints.
-
-    ``cpg0040-garcia-fossa-AgNP``, the smallest dataset here at 300 kB.
-    Each size is given at one dose: 40 nm at 0.00012 mg/ml and 100 nm at 0.00036 mg/ml, in ``Metadata_NPSize_nm`` and ``Metadata_Concentration_mgml``.
-    The 60 untreated wells, size and dose 0, are the ``negcon`` of ``Metadata_control_type``.
-    ``Metadata_Time`` is 1, 15 or 30, with 20 wells of each condition at each.
-
-    Args:
-        cache_dir: Where to keep the download.
-            Defaults to :attr:`mantispy.settings.cache_dir`.
-        kwargs: Passed to :func:`mantispy.io.read_profiles`.
-
-    Returns:
-        Wells by features, indexed by plate and well, with ``Metadata_CellCount`` and ``Metadata_SiteCount`` and:
-
-        ``Metadata_Perturbation``: the nanoparticle at its size, ``"AgNP_40nm"`` or ``"AgNP_100nm"`` (each size is given at one dose), and ``"untreated"`` for the non-treated wells.
-
-        ``Metadata_Perturbation_Type``: ``"compound"`` for the treated wells (a nanoparticle is a material perturbagen) and ``"untreated"`` for the non-treated.
-
-        ``Metadata_Compound`` (the native ``"AgNP"``/``"Non-treated"``), ``Metadata_Concentration`` (the dose, in mg/ml, not molar) and ``Metadata_Control`` (the non-treated wells). ``Metadata_Time`` (1, 15 or 30 h) is a separate axis; fold it in with ``groupby=("Metadata_Perturbation", "Metadata_Time")`` if a timepoint should not pool.
-    """
-    adata = _profiles("agnp", cache_dir, **kwargs)
-    obs = as_frame(adata.obs)
-    control = (obs["Metadata_control_type"].astype(str) == "negcon").to_numpy()
-    obs["Metadata_Control"] = control
-    compound = obs["Metadata_Compound"].astype(str)
-    size = obs["Metadata_NPSize_nm"].astype(str)
-    obs["Metadata_Compound"] = compound.astype("category")
-    obs["Metadata_Concentration"] = pd.to_numeric(obs["Metadata_Concentration_mgml"], errors="coerce").to_numpy(
-        dtype=float
-    )
-    label = np.where(
-        control,
-        "untreated",
-        np.char.add(np.char.add(compound.to_numpy().astype(str), "_"), size.to_numpy().astype(str) + "nm"),
-    )
-    obs["Metadata_Perturbation"] = pd.Categorical(label)
-    obs["Metadata_Perturbation_Type"] = pd.Categorical(np.where(control, "untreated", "compound"))
-    get_logger().info(
-        "agnp: %d wells x %d features, %d nanoparticle condition(s), %d untreated wells",
-        adata.n_obs,
-        adata.n_vars,
-        int(pd.Series(label[~control]).nunique()),
-        int(control.sum()),
-    )
-    return adata
-
-
 def neuropainting(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
     """Astrocytes and neurons, 1,691 wells imaged at 20x and 63x.
 
@@ -523,26 +431,6 @@ def neuropainting(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData
         No ``Metadata_Perturbation`` is set. This is a genotype-and-donor comparison (a control-versus-deletion contrast over patient and isogenic lines) rather than a reagent perturbation screen, and its genotype and line columns differ between plates, so the per-plate column intersect keeps none of them. Group with an explicit ``groupby=`` on the column the analysis needs.
     """
     return _profiles("neuropainting", cache_dir, **kwargs)
-
-
-def amish(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
-    """An Amish cohort, 468 wells varying seeding density and timepoint.
-
-    ``cpg0047-amish``.
-    ``Metadata_density_cells_per_well`` and ``Metadata_timepoint_hours`` hold the two factors.
-
-    Args:
-        cache_dir: Where to keep the download.
-            Defaults to :attr:`mantispy.settings.cache_dir`.
-        kwargs: Passed to :func:`mantispy.io.read_profiles`.
-
-    Returns:
-        Wells by features, indexed by plate and well, with ``Metadata_CellCount`` and ``Metadata_SiteCount``, and the screen's own ``Metadata_cell_line``, ``Metadata_density_cells_per_well`` and ``Metadata_timepoint_hours``.
-
-    Notes:
-        No ``Metadata_Perturbation`` is set. No reagent is applied here: the object varies the donor cell line, the seeding density and the timepoint, which are experimental-design factors rather than a perturbation. Group with an explicit ``groupby=`` on the factor the analysis needs, such as ``"Metadata_cell_line"``.
-    """
-    return _profiles("amish", cache_dir, **kwargs)
 
 
 def chroma(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
@@ -719,45 +607,6 @@ def oasis_pilot(annotate: bool = True, cache_dir: str | Path | None = None, **kw
         int(merged.loc[~is_control, "Metadata_Compound"].nunique()),
         int(merged["Metadata_Concentration"].nunique()),
         int(is_control.sum()),
-    )
-    return adata
-
-
-def miami(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
-    """MIAMI, 2,775 wells of compounds in U2OS cells.
-
-    ``cpg0006-miami``, fourteen plates read down to the features they share.
-
-    Args:
-        cache_dir: Where to keep the download.
-            Defaults to :attr:`mantispy.settings.cache_dir`.
-        kwargs: Passed to :func:`mantispy.io.read_profiles`.
-
-    Returns:
-        Wells by features, indexed by plate and well, with ``Metadata_CellCount`` and ``Metadata_SiteCount`` and:
-
-        ``Metadata_Perturbation``: the compound reagent (``Metadata_broad_sample``, ~316 of them), with the wells that carry no reagent grouped as ``"DMSO"``.
-
-        ``Metadata_Perturbation_Type``: ``"compound"``.
-
-        ``Metadata_Compound`` (the same reagent id).
-
-    Notes:
-        The fourteen plates do not all publish the same metadata columns, so the per-plate column intersect keeps only ``Metadata_broad_sample``; the dose, compound name, mechanism and control-type columns some plates carry are dropped. The perturbation is therefore the reagent id, and the reagent-less wells (DMSO and empty) are pooled into one ``"DMSO"`` group rather than split by a dose that is not uniformly available.
-    """
-    adata = _profiles("miami", cache_dir, **kwargs)
-    obs = as_frame(adata.obs)
-    sample = obs["Metadata_broad_sample"]
-    obs["Metadata_Perturbation"] = pd.Categorical(
-        np.where(sample.notna().to_numpy(), sample.astype(str).to_numpy(), "DMSO")
-    )
-    obs["Metadata_Perturbation_Type"] = pd.Series("compound", index=obs.index, dtype="category")
-    obs["Metadata_Compound"] = sample.astype("category")
-    get_logger().info(
-        "miami: %d wells x %d features, %d compound reagents",
-        adata.n_obs,
-        adata.n_vars,
-        int(sample.nunique()),
     )
     return adata
 
