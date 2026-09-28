@@ -73,7 +73,9 @@ def _stability_cut(
 
     ``window`` is an optional ``(low, high)`` height band the sweep is clipped to, so the plateau of 2 to 3 huge
     clusters near the top of the tree cannot trivially win; ``None`` sweeps the full height range. A window that does
-    not overlap the tree's height range raises a ValueError.
+    not overlap the tree's height range raises a ValueError. When a window is given it already excludes the coarse top
+    and singleton bottom, so the ``max_clusters`` ceiling is dropped and only the 2-or-more-clusters requirement is
+    kept; a windowed cut may therefore return more than ``max_clusters`` clusters.
     """
     from scipy.cluster.hierarchy import fcluster
 
@@ -91,10 +93,11 @@ def _stability_cut(
     grid = np.linspace(lo, hi, n_steps)
     parts = [fcluster(linkage_matrix, h, criterion="distance") for h in grid]
     sets = [{frozenset(np.flatnonzero(p == c).tolist()) for c in np.unique(p)} for p in parts]
+    upper = n_obs if window is not None else max_clusters
     raw = np.zeros(n_steps)
     for i in range(1, n_steps - 1):
         cur = sets[i]
-        if not (2 <= len(cur) <= max_clusters):
+        if not (2 <= len(cur) <= upper):
             continue
         agree = sum(len(c) for c in cur if c in sets[i - 1]) + sum(len(c) for c in cur if c in sets[i + 1])
         raw[i] = agree / 2 / n_obs  # fraction of observations in a cluster that recurs at neighboring heights
@@ -160,7 +163,8 @@ def cluster(
         Pass ``stability_window`` to restrict that sweep to a height band, so the wide plateau of a few huge clusters
         near the top of the tree cannot trivially win and collapse the cut; it only affects ``criterion="stability"``.
         Within a window the criterion favors the finest perfectly-stable cut, since the exact-membership stability
-        saturates to 1.0 across a stable plateau.
+        saturates to 1.0 across a stable plateau. With a window the sweep is bounded by the window rather than by the
+        ``min(n_obs - 1, 25)`` cluster ceiling, so a windowed stability cut may return more than 25 clusters.
         Rank clusters by the biology they recover rather than trusting the count, since neither score sees biology.
     """
     if method not in METHODS:
