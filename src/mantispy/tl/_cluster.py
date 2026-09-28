@@ -10,6 +10,7 @@ The granularity is chosen automatically by default, by best silhouette or by mos
 
 from __future__ import annotations
 
+import numbers
 from typing import Literal
 
 import numpy as np
@@ -57,7 +58,9 @@ def _auto_cut(linkage_matrix: np.ndarray, distances: np.ndarray, max_clusters: i
 
 
 def _stability_cut(
-    linkage_matrix: np.ndarray, max_clusters: int, n_steps: int = 200, ma_frac: float = 0.05
+    linkage_matrix: np.ndarray,
+    max_clusters: int,
+    window: tuple[float, float] | None = None,
 ) -> tuple[np.ndarray, float, float]:
     """The cut height whose cluster membership is most stable across nearby heights.
 
@@ -66,18 +69,28 @@ def _stability_cut(
     moving average. Only cuts with 2 to ``max_clusters`` clusters are scored, so the all-in-one-cluster top and the
     near-all-singletons bottom cannot win; this mirrors the bounded correlation window Rohban 2017 swept. Returns
     the labels at the winning height, that height, and its stability score. A tree with no height spread, or a grid
-    with no in-range cut, falls back to a 2-cluster cut.
+    with no in-range cut, falls back to a single cluster with nan cut and score.
+
+    ``window`` is an optional ``(low, high)`` height band the sweep is clipped to, so the plateau of 2 to 3 huge
+    clusters near the top of the tree cannot trivially win; ``None`` sweeps the full height range. A window that does
+    not overlap the tree's height range raises a ValueError.
     """
     from scipy.cluster.hierarchy import fcluster
 
+    n_steps, ma_frac = 200, 0.05
+    n_obs = int(linkage_matrix.shape[0]) + 1
     heights = linkage_matrix[:, 2]
     lo, hi = float(heights.min()), float(heights.max())
+    if window is not None:
+        w_lo, w_hi = max(lo, float(window[0])), min(hi, float(window[1]))
+        if not w_hi > w_lo:
+            raise ValueError(f"stability_window {window} does not overlap the tree height range [{lo:.3g}, {hi:.3g}]")
+        lo, hi = w_lo, w_hi
     if not hi > lo:
-        return np.ones(int(linkage_matrix.shape[0]) + 1, dtype=np.int64), float("nan"), float("nan")
+        return np.ones(n_obs, dtype=np.int64), float("nan"), float("nan")
     grid = np.linspace(lo, hi, n_steps)
     parts = [fcluster(linkage_matrix, h, criterion="distance") for h in grid]
     sets = [{frozenset(np.flatnonzero(p == c).tolist()) for c in np.unique(p)} for p in parts]
-    n_obs = int(linkage_matrix.shape[0]) + 1
     raw = np.zeros(n_steps)
     for i in range(1, n_steps - 1):
         cur = sets[i]
@@ -89,7 +102,7 @@ def _stability_cut(
     # Each raw score is a fraction in [0, 1]; clip keeps the smoothed score there against convolution rounding.
     smooth = np.clip(np.convolve(raw, np.ones(w) / w, mode="same"), 0.0, 1.0)
     if not smooth.any():
-        return fcluster(linkage_matrix, 2, criterion="maxclust"), float("nan"), float("nan")
+        return np.ones(n_obs, dtype=np.int64), float("nan"), float("nan")
     best = int(np.argmax(smooth[1:-1])) + 1
     return parts[best], float(grid[best]), float(smooth[best])
 
@@ -107,6 +120,8 @@ def cluster(
     resolution: float = 1.0,
     key_added: str = "cluster",
     copy: bool = False,
+    *,
+    stability_window: tuple[float, float] | None = None,
 ) -> AnnData | None:
     """Cluster the profiles and store the labels, with the linkage tree for a dendrogram.
 
@@ -122,6 +137,7 @@ def cluster(
         resolution: Passed to :func:`scanpy.tl.leiden` for ``method="leiden"``.
         key_added: ``obs`` column the labels are written to.
         copy: Return a modified copy instead of mutating in place.
+        stability_window: Optional ``(low, high)`` height band the ``criterion="stability"`` sweep is restricted to, in the same height units as ``distance_cut`` (for ``metric="correlation"``, height is ``1 - correlation``, so the correlation window 0.4 to 0.7 is ``(0.3, 0.6)``). ``None`` (the default) sweeps the full height range. Whenever provided it is validated for shape; it is only applied to the ``criterion="stability"`` automatic cut.
 
     Returns:
         ``None``, or the modified copy.
@@ -129,17 +145,22 @@ def cluster(
         linkage matrix to ``uns["mantispy"][key_added + "_linkage"]`` and, to ``uns["mantispy"][key_added]``, a summary
         with ``n_clusters``, ``distance_cut``, ``metric``, ``linkage``, ``silhouette``, ``stability`` and the
         ``labels`` the tree's leaves carry, in the object's row order, so :func:`~mantispy.pl.dendrogram` can label
-        them. ``silhouette`` is set only when the automatic ``criterion="silhouette"`` cut ran and ``stability`` only
-        when the automatic ``criterion="stability"`` cut ran; the other stays ``nan``.
+        them. ``silhouette`` is set only when the automatic ``criterion="silhouette"`` cut ran. ``stability`` is set
+        when the ``criterion="stability"`` auto-cut selects an in-range cut, and stays ``nan`` on the degenerate
+        fallback (a flat tree or no in-range cut). The score that did not run stays ``nan``.
 
     Raises:
-        ValueError: ``method`` is not one of ``METHODS``, both ``distance_cut`` and ``n_clusters`` are given, ``criterion`` is not ``"silhouette"`` or ``"stability"``, or the object has fewer than two rows to cluster.
+        ValueError: ``method`` is not one of ``METHODS``, both ``distance_cut`` and ``n_clusters`` are given, ``criterion`` is not ``"silhouette"`` or ``"stability"``, ``stability_window`` is not a length-2 ``(low, high)`` pair of numbers with ``low < high`` or does not overlap the tree's height range, or the object has fewer than two rows to cluster.
 
     Notes:
         With neither ``distance_cut`` nor ``n_clusters`` the granularity is chosen automatically. With
         ``criterion="silhouette"`` the tree is cut into 2 to ``min(n_obs - 1, 25)`` clusters and the cut with the
         best silhouette is kept. With ``criterion="stability"`` a grid of cut heights is swept and the height whose
         cluster membership recurs most at neighboring heights is kept, the way Rohban 2017 cut their dendrogram.
+        Pass ``stability_window`` to restrict that sweep to a height band, so the wide plateau of a few huge clusters
+        near the top of the tree cannot trivially win and collapse the cut; it only affects ``criterion="stability"``.
+        Within a window the criterion favors the finest perfectly-stable cut, since the exact-membership stability
+        saturates to 1.0 across a stable plateau.
         Rank clusters by the biology they recover rather than trusting the count, since neither score sees biology.
     """
     if method not in METHODS:
@@ -148,6 +169,15 @@ def cluster(
         raise ValueError("pass at most one of distance_cut and n_clusters, not both")
     if criterion not in ("silhouette", "stability"):
         raise ValueError(f"criterion must be 'silhouette' or 'stability', got {criterion!r}")
+    if stability_window is not None:
+        if not (
+            isinstance(stability_window, tuple)
+            and len(stability_window) == 2
+            and all(isinstance(v, numbers.Real) for v in stability_window)
+        ):
+            raise ValueError(f"stability_window must be a (low, high) pair of numbers, got {stability_window!r}")
+        if not stability_window[0] < stability_window[1]:
+            raise ValueError(f"stability_window must have low < high, got {stability_window!r}")
     if adata.n_obs < 2:
         raise ValueError(f"clustering needs at least two rows, got {adata.n_obs}")
 
@@ -181,6 +211,7 @@ def cluster(
 
     silhouette = float("nan")
     stability = float("nan")
+    max_clusters = min(adata.n_obs - 1, 25)
     if n_clusters is not None:
         labels = fcluster(linkage_matrix, n_clusters, criterion="maxclust")
         cut = float("nan")
@@ -188,15 +219,15 @@ def cluster(
         labels = fcluster(linkage_matrix, distance_cut, criterion="distance")
         cut = float(distance_cut)
     elif criterion == "silhouette":
-        labels, cut, silhouette = _auto_cut(linkage_matrix, distances, min(adata.n_obs - 1, 25))
+        labels, cut, silhouette = _auto_cut(linkage_matrix, distances, max_clusters)
     else:
-        labels, cut, stability = _stability_cut(linkage_matrix, min(adata.n_obs - 1, 25))
+        labels, cut, stability = _stability_cut(linkage_matrix, max_clusters, window=stability_window)
     chosen = int(len(set(labels)))
 
     adata.obs[key_added] = pd.Categorical([str(label) for label in labels])
     store = adata.uns.setdefault("mantispy", {})
     store[f"{key_added}_linkage"] = np.asarray(linkage_matrix, dtype=float)
-    summary = {
+    store[key_added] = {
         "n_clusters": chosen,
         "distance_cut": cut,
         "metric": metric,
@@ -205,6 +236,5 @@ def cluster(
         "stability": stability,
         "labels": [str(name) for name in adata.obs_names],
     }
-    store[key_added] = summary
     get_logger().info("cluster(hierarchical): %d cluster(s) over %d profile(s)", chosen, adata.n_obs)
     return None

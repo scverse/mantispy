@@ -122,6 +122,50 @@ def test_stability_criterion_does_not_over_segment_moderate_groups():
     assert 0.0 <= summary["stability"] <= 1.0
 
 
+def test_stability_window_restricts_the_sweep_to_a_height_band():
+    """Two super-groups split into finer sub-groups: unbounded stability sits on the coarse plateau."""
+    rng = np.random.default_rng(11)
+    direction = rng.normal(size=40)
+    direction /= np.linalg.norm(direction)
+    supers = np.stack([direction, -direction])  # anti-correlated, so the super merge sits near height 2
+    subs = np.repeat(supers, 3, axis=0) + rng.normal(size=(6, 40)) * 0.06  # three tight sub-groups per super
+    values = np.repeat(subs, 8, axis=0) + rng.normal(scale=0.015, size=(48, 40))
+    adata = ad.AnnData(
+        X=values.astype(np.float32),
+        obs=pd.DataFrame({"Metadata_Perturbation": [f"p{i}" for i in range(48)]}, index=[str(i) for i in range(48)]),
+        var=pd.DataFrame(index=[f"f{i}" for i in range(40)]),
+    )
+    adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "perturbation"}
+
+    truth = np.repeat(np.arange(6), 8)  # six planted sub-groups of eight
+
+    unbounded = adata.copy()
+    mt.tl.cluster(unbounded, use_rep=None, criterion="stability")
+    n_unbounded = unbounded.uns["mantispy"]["cluster"]["n_clusters"]
+
+    windowed = adata.copy()
+    lo, hi = 0.05, 0.25
+    mt.tl.cluster(windowed, use_rep=None, criterion="stability", stability_window=(lo, hi))
+    summary = windowed.uns["mantispy"]["cluster"]
+    # The coarse plateau near the top is the most stable overall, so unbounded collapses to a couple of clusters;
+    # restricting the sweep to the finer band below it recovers the exact planted sub-structure inside the window.
+    assert summary["n_clusters"] == 6
+    assert summary["n_clusters"] > n_unbounded
+    assert adjusted_rand_score(truth, windowed.obs["cluster"].to_numpy()) == pytest.approx(1.0)
+    assert lo <= summary["distance_cut"] <= hi
+
+    with pytest.raises(ValueError, match="stability_window"):
+        mt.tl.cluster(adata, use_rep=None, criterion="stability", stability_window=(0.6, 0.3), key_added="bad")
+    # A window entirely above every merge height overlaps nothing, so the sweep has no cut to make.
+    with pytest.raises(ValueError, match="does not overlap"):
+        mt.tl.cluster(adata, use_rep=None, criterion="stability", stability_window=(100.0, 200.0), key_added="bad")
+    # A non-numeric or non-pair window is rejected up front, not left to fail downstream.
+    with pytest.raises(ValueError, match="stability_window"):
+        mt.tl.cluster(adata, use_rep=None, criterion="stability", stability_window=("a", "b"), key_added="bad")
+    with pytest.raises(ValueError, match="stability_window"):
+        mt.tl.cluster(adata, use_rep=None, criterion="stability", stability_window=0.5, key_added="bad")
+
+
 def test_copy_leaves_the_input_alone(planted):
     result = mt.tl.cluster(planted, use_rep=None, copy=True)
     assert "cluster" in result.obs
