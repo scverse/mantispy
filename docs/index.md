@@ -7,7 +7,6 @@
 :maxdepth: 1
 
 tutorials/index
-datasets/index
 api.md
 changelog.md
 contributing.md
