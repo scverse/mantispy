@@ -1,22 +1,21 @@
-"""Diagnostic plots for plate position, image quality, control drift and outliers.
-
-These plots only diagnose; the corrections are in :mod:`mantispy.pp`.
-"""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
 from mantispy._core._reduce import get_matrix
-from mantispy._core._utils import as_frame, reference_mask
+from mantispy._core.frames import as_frame
+from mantispy._core.masks import reference_mask
 from mantispy._core.plate import well_col, well_row
+from mantispy.pl._common import axes as _axes
+from mantispy.pl._common import maybe_interactive as _maybe_interactive
+from mantispy.pl._common import table as _table
 
 if TYPE_CHECKING:
     from anndata import AnnData
+    from matplotlib.axes import Axes
 
 
 def _feature_values(adata: AnnData, feature: str | None) -> np.ndarray:
@@ -28,18 +27,22 @@ def _feature_values(adata: AnnData, feature: str | None) -> np.ndarray:
         return np.nanmean(matrix, axis=1)
 
 
-def plate_effects(adata: AnnData, feature: str | None = None, axes: np.ndarray | None = None):
+def plate_effects(adata: AnnData, feature: str | None = None, axes: np.ndarray | None = None) -> np.ndarray:
     """Row and column medians per plate, for spotting plate position artifacts.
 
     Args:
         adata: Object to draw, at any resolution.
         feature: A single feature, or ``None`` for the mean across features.
-        axes: A ``(n_plates, 2)`` array of axes to draw into.
+        axes: A ``(n_plates, 2)`` array of axes to draw into, or ``None`` for a new figure.
 
     Returns:
-        The axes array, one row per plate, with the row marginal on the left and the column marginal on the
-        right, each with the plate median drawn as a reference line.
+        The axes array, one row per plate, with the row marginal on the left and the column marginal on the right, each with the plate median drawn as a reference line.
+
+    Raises:
+        KeyError: ``feature`` is not one of ``var_names``, or ``obs`` has no ``Metadata_Plate`` or ``Metadata_Well`` column.
     """
+    import matplotlib.pyplot as plt
+
     values = _feature_values(adata, feature)
     frame = pd.DataFrame(
         {
@@ -67,13 +70,22 @@ def plate_effects(adata: AnnData, feature: str | None = None, axes: np.ndarray |
     return axes
 
 
-def image_qc(adata: AnnData, ax: plt.Axes | None = None):
-    """Image quality score per image, with the flagged images marked."""
-    if "image_qc" not in adata.uns.get("mantispy", {}):
-        raise KeyError("uns['mantispy']['image_qc'] is missing; run mt.pp.image_qc first")
-    table = pd.DataFrame(adata.uns["mantispy"]["image_qc"])
+def image_qc(adata: AnnData, ax: Axes | None = None) -> Axes:
+    """Image quality score per image, with the flagged images marked.
 
-    ax = ax or plt.subplots(figsize=(8, 4))[1]
+    Args:
+        adata: Object :func:`~mantispy.pp.image_qc` has run on.
+        ax: Axes to draw on, or ``None`` for a new figure.
+
+    Returns:
+        The axes drawn on, with one point per image in the order of the table and the flagged images drawn larger and in crimson.
+
+    Raises:
+        KeyError: ``uns["mantispy"]`` holds no ``image_qc`` table.
+    """
+    table = _table(adata, "image_qc", "mt.pp.image_qc")
+    ax = _axes(ax, (8, 4))
+
     failed = ~table["qc_image_pass"].to_numpy(dtype=bool)
     positions = np.arange(len(table))
     ax.scatter(positions[~failed], table["qc_image_score"].to_numpy()[~failed], s=6, label="pass")
@@ -81,6 +93,19 @@ def image_qc(adata: AnnData, ax: plt.Axes | None = None):
     ax.set_xlabel("image")
     ax.set_ylabel("quality score")
     ax.legend(fontsize=7)
+
+    tidy = table.assign(image=positions, status=np.where(failed, "flagged", "pass"))
+    hover = [column for column in table.columns if column.startswith("Metadata_")]
+    _maybe_interactive(
+        "scatter",
+        ax=ax,
+        data=tidy,
+        x="image",
+        y="qc_image_score",
+        color="status",
+        hover=hover or None,
+        title="image quality",
+    )
     return ax
 
 
@@ -88,39 +113,77 @@ def control_drift(
     adata: AnnData,
     groupby: str = "Metadata_Plate",
     n_components: int = 2,
-    ax: plt.Axes | None = None,
-):
+    ax: Axes | None = None,
+) -> Axes:
     """Control wells projected onto principal components fitted on the controls alone.
 
-    Fitting on the controls alone shows how the reference moves between plates or batches,
-    which is the drift normalization should remove.
+    Fitting on the controls alone shows how the reference moves between plates or batches, which is the drift normalization should remove.
+
+    Args:
+        adata: Object whose ``obs["Metadata_Control"]`` marks the wells to draw.
+        groupby: ``obs`` column that colors the control wells, normally the plate or the batch.
+        n_components: Components fitted on the controls.
+            The first two are the ones drawn.
+        ax: Axes to draw on, or ``None`` for a new figure.
+
+    Returns:
+        The axes drawn on, with one scatter per group of ``groupby`` in the space of the first two control components.
+
+    Raises:
+        KeyError: ``obs`` has no ``Metadata_Control`` column to select the controls with, or no ``groupby`` column.
+        ValueError: ``n_components`` is below the two that are drawn, or there are that many control rows or fewer, too few to fit them.
     """
     from sklearn.decomposition import PCA
+
+    if n_components < 2:
+        raise ValueError(f"n_components must be at least 2, got {n_components}")
 
     is_control = reference_mask(adata, "negcon")
     if is_control.sum() < n_components + 1:
         raise ValueError(f"need more than {n_components} control rows, found {int(is_control.sum())}")
 
-    controls = np.nan_to_num(get_matrix(adata)[is_control], nan=0.0)
+    controls = np.nan_to_num(get_matrix(adata)[is_control], nan=0.0, posinf=0.0, neginf=0.0)
     embedding = PCA(n_components=n_components).fit_transform(controls)
     labels = adata.obs[groupby].astype(str).to_numpy()[is_control]
 
-    ax = ax or plt.subplots(figsize=(5, 4))[1]
+    ax = _axes(ax, (5, 4))
     for group in pd.unique(labels):
         selected = labels == group
         ax.scatter(embedding[selected, 0], embedding[selected, 1], s=12, label=str(group))
     ax.set_xlabel("control PC1")
     ax.set_ylabel("control PC2")
     ax.legend(title=groupby, fontsize=6, title_fontsize=7)
+
+    tidy = pd.DataFrame({"control PC1": embedding[:, 0], "control PC2": embedding[:, 1], groupby: labels})
+    _maybe_interactive(
+        "scatter", ax=ax, data=tidy, x="control PC1", y="control PC2", color=groupby, title="control drift"
+    )
     return ax
 
 
-def outliers(adata: AnnData, key: str = "qc_outlier", axes: np.ndarray | None = None):
-    """Outlier score distribution, and the flagged fraction per plate."""
+def outliers(
+    adata: AnnData, key: str = "qc_outlier", groupby: str = "Metadata_Plate", axes: np.ndarray | None = None
+) -> np.ndarray:
+    """Outlier score distribution, and the flagged fraction per ``groupby`` group.
+
+    Args:
+        adata: Object :func:`~mantispy.pp.outliers` has run on.
+        key: ``obs`` column holding the flag, whose score is read from ``key + "_score"``.
+        groupby: ``obs`` column whose groups become the bars, e.g. ``"Metadata_Well"`` on a single plate.
+        axes: A pair of axes to draw into, or ``None`` for a new figure.
+
+    Returns:
+        The two axes: the score histogram split into kept and flagged, and the flagged fraction per group.
+
+    Raises:
+        KeyError: ``obs`` has no ``key`` column.
+    """
+    import matplotlib.pyplot as plt
+
     if key not in adata.obs:
         raise KeyError(f"obs has no {key!r}; run mt.pp.outliers first")
     if axes is None:
-        _, axes = plt.subplots(1, 2, figsize=(9, 3.5))
+        _, axes = plt.subplots(1, 2, figsize=(9, 3.5), layout="constrained")
 
     scores = as_frame(adata.obs)[f"{key}_score"].to_numpy(dtype=float)
     flagged = as_frame(adata.obs)[key].to_numpy(dtype=bool)
@@ -129,9 +192,10 @@ def outliers(adata: AnnData, key: str = "qc_outlier", axes: np.ndarray | None = 
     axes[0].set_xlabel("outlier score")
     axes[0].legend(fontsize=7)
 
-    per_plate = as_frame(adata.obs).groupby("Metadata_Plate", observed=True)[key].mean()
-    axes[1].bar(np.arange(len(per_plate)), per_plate.to_numpy())
-    axes[1].set_xticks(np.arange(len(per_plate)))
-    axes[1].set_xticklabels([str(name) for name in per_plate.index], rotation=45, fontsize=7)
+    per_group = as_frame(adata.obs).groupby(groupby, observed=True)[key].mean()
+    axes[1].bar(np.arange(len(per_group)), per_group.to_numpy())
+    axes[1].set_xticks(np.arange(len(per_group)))
+    axes[1].set_xticklabels([str(name) for name in per_group.index], rotation=45, fontsize=7)
+    axes[1].set_xlabel(groupby)
     axes[1].set_ylabel("fraction flagged")
     return axes

@@ -1,7 +1,7 @@
-"""Rohban 2017 and the PKI dose series. Network-dependent, so marked.
+"""The screen of :cite:t:`Rohban_2017` and the PKI dose series.
 
-These keep the package from being tuned to BBBC021 alone. The assertions cover the two
-things BBBC021 lacks, cell counts and real doses.
+These keep the package from being tuned to BBBC021 alone.
+The assertions cover the two things BBBC021 lacks, cell counts and real doses.
 """
 
 import numpy as np
@@ -24,7 +24,14 @@ def pki():
 def test_rohban_loads_with_genes_controls_and_counts(rohban):
     assert rohban.shape == (1918, 3634)
     assert mt.io.validate(rohban).ok, mt.io.validate(rohban).errors
-    assert rohban.obs["Metadata_Perturbation"].nunique() == 194
+    # The replication unit is the ORF construct, not the gene: 323 broad_sample constructs, plus the three
+    # control ORFs (by pert_name) and the one untreated group. The gene stays in its own column.
+    assert rohban.obs["Metadata_Perturbation"].nunique() == 327
+    assert rohban.obs["Metadata_Gene"].nunique() == 194
+    assert set(rohban.obs["Metadata_Perturbation_Type"].astype(str)) == {"orf", "untreated"}
+    empty = rohban.obs["Metadata_gene_name"].astype(str) == "EMPTY"
+    assert set(rohban.obs.loc[empty, "Metadata_Perturbation"].astype(str)) == {"untreated"}
+    assert set(rohban.obs.loc[empty, "Metadata_Perturbation_Type"].astype(str)) == {"untreated"}
     # The control ORFs only: the untreated EMPTY wells were never transfected.
     assert int(rohban.obs["Metadata_Control"].sum()) == 120
     assert set(rohban.obs.loc[rohban.obs["Metadata_Control"], "Metadata_gene_name"]) == {
@@ -33,6 +40,32 @@ def test_rohban_loads_with_genes_controls_and_counts(rohban):
         "eGFP",
     }
     assert rohban.obs["Metadata_CellCount"].between(1, 1e5).all()
+
+
+@pytest.mark.network
+def test_rohban_feature_selected_variant_is_the_well_level_selected_block():
+    adata = mt.ds.rohban(feature_selected=True)
+    assert adata.shape == (1918, 751)
+    assert mt.io.validate(adata).ok, mt.io.validate(adata).errors
+
+
+@pytest.mark.network
+def test_rohban_aggregated_variants_are_gene_level():
+    gene = mt.ds.rohban(aggregated=True)
+    assert gene.shape == (190, 3616)
+    assert "Metadata_Gene" in gene.obs
+    gene_selected = mt.ds.rohban(aggregated=True, feature_selected=True)
+    assert gene_selected.shape == (190, 751)
+
+
+def test_rohban_variants_reject_plate_subsetting():
+    with pytest.raises(ValueError, match="plates only applies"):
+        mt.ds.rohban(plates=["41744"], aggregated=True)
+
+
+def test_rohban_flags_must_be_bool():
+    with pytest.raises(ValueError, match="aggregated must be a bool"):
+        mt.ds.rohban(aggregated=1)
 
 
 @pytest.mark.network
@@ -59,7 +92,6 @@ def test_a_single_plate_can_be_loaded(rohban):
 @pytest.mark.network
 @pytest.mark.slow
 def test_higher_doses_move_further_from_the_controls(pki):
-    """Profile magnitude grows with dose along PKI's real dose series."""
     adata = pki.copy()
     mt.pp.normalize(adata, method="mad_robustize", by="Metadata_Plate", reference="negcon")
     mt.pp.feature_select(adata, na_cutoff=0.0)

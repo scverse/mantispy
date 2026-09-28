@@ -1,8 +1,8 @@
 """Chatterjee equivalence against scmorph, which is where this coefficient came from.
 
-scmorph uses the coefficient to filter features that are redundant with each other, while
-``pp.feature_select_chatterjee`` scores each feature against the perturbation. The
-statistic underneath is the same, and these tests assert that.
+scmorph uses the coefficient to filter features that are redundant with each other, while ``pp.feature_select_chatterjee`` scores each feature against the perturbation.
+The statistic underneath is the same on input without ties, and these tests assert that.
+scmorph breaks ties in y at random, where mantispy handles them as Chatterjee does.
 """
 
 import numpy as np
@@ -27,7 +27,7 @@ def paired():
 
 @pytest.mark.parametrize("m", [1, 5])
 def test_our_coefficient_is_scmorphs(paired, m):
-    """Lin & Han's m-nearest-neighbour form, which is Chatterjee's original at m=1."""
+    """The m-nearest-neighbour form of :cite:t:`Lin_2022`."""
     for name, (x, y) in paired.items():
         ours = float(chatterjee_xi(x, y, m=m)[0])
         theirs = float(xim(x, y, M=m)[0, 1])

@@ -4,27 +4,38 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
 from mantispy._core._reduce import get_matrix, group_codes
-from mantispy._core._utils import as_frame
+from mantispy._core.frames import as_frame
 from mantispy.pl._common import axes as _axes
+from mantispy.pl._common import maybe_interactive as _maybe_interactive
 from mantispy.pl._common import table as _table
 
 if TYPE_CHECKING:
     from anndata import AnnData
+    from matplotlib.axes import Axes
 
-#: Fixed phase colors, so each phase has the same color in every figure.
 PHASE_COLOURS = {"G1": "tab:blue", "S": "tab:grey", "G2M": "tab:red"}
 
 
-def cluster_composition(composition: AnnData, groupby: str = "Metadata_Perturbation", ax: plt.Axes | None = None):
+def cluster_composition(composition: AnnData, groupby: str = "Metadata_Perturbation", ax: Axes | None = None) -> Axes:
     """Stacked bars of cell-state fractions, averaged within each group.
 
-    Takes the object :func:`~mantispy.tl.cluster_composition` returns.
+    Args:
+        composition: The well-level object :func:`~mantispy.tl.cluster_composition` returns, holding one cluster per feature.
+        groupby: ``obs`` column whose groups become the bars.
+        ax: Axes to draw on, or ``None`` for a new figure.
+
+    Returns:
+        The axes drawn on, with one bar per group of ``groupby`` in the order the groups first appear and one stacked segment per cluster.
+
+    Raises:
+        KeyError: ``obs`` has no ``groupby`` column.
     """
+    import matplotlib.pyplot as plt
+
     if groupby not in composition.obs:
         raise KeyError(f"obs has no column {groupby!r}")
 
@@ -44,6 +55,12 @@ def cluster_composition(composition: AnnData, groupby: str = "Metadata_Perturbat
     ax.set_xticklabels(labels, rotation=90, fontsize=6)
     ax.set_ylabel("fraction of cells")
     ax.legend(fontsize=5, ncol=2, bbox_to_anchor=(1.01, 1), loc="upper left", title="cluster")
+
+    tidy = pd.DataFrame(means, index=pd.Index(labels, name="group"), columns=[str(c) for c in composition.var_names])
+    tidy = tidy.reset_index().melt(id_vars="group", var_name="cluster", value_name="fraction of cells")
+    _maybe_interactive(
+        "barh", ax=ax, data=tidy, x="fraction of cells", y="group", color="cluster", title="cluster composition"
+    )
     return ax
 
 
@@ -53,12 +70,28 @@ def cell_cycle(
     by: str | None = "Metadata_Plate",
     key: str = "Metadata_CellCyclePhase",
     layer: str | None = None,
-):
+) -> np.ndarray:
     """Log DNA intensity per group, colored by assigned phase.
 
-    Two separated peaks with the phases split between them indicate a working assignment; a
-    single broad distribution indicates a failed one.
+    Two separated peaks with the phases split between them indicate a working assignment; a single broad distribution indicates a failed one.
+
+    Args:
+        adata: Single-cell object :func:`~mantispy.tl.cell_cycle_phase` has run on.
+        dna_feature: The DNA intensity feature the phases were assigned from.
+        by: ``obs`` column whose groups become panels, or ``None`` for a single panel over every row.
+        key: ``obs`` column holding the assigned phase, whose values are matched against ``PHASE_COLOURS``, so a phase named anything else is not drawn.
+        layer: Layer to read the intensity from, or ``None`` for ``X``.
+            Only positive values are drawn, since the plot takes their logarithm.
+
+    Returns:
+        A ``(1, n_groups)`` array of axes sharing an x axis, one panel per group of ``by``, each holding one filled histogram per phase.
+
+    Raises:
+        KeyError: ``obs`` has no ``key`` column, or ``dna_feature`` is not one of ``var_names``.
+        ValueError: The object has no layer named ``layer``.
     """
+    import matplotlib.pyplot as plt
+
     if key not in adata.obs:
         raise KeyError(f"obs has no column {key!r}; run mt.tl.cell_cycle_phase first")
 
@@ -82,12 +115,23 @@ def cell_cycle(
     return axes
 
 
-def subpopulation_hits(adata: AnnData, key: str = "subpopulation_hits", top: int = 30, ax: plt.Axes | None = None):
-    """Cluster by group heatmap of significance, so an effect in one cell state stands out."""
-    table = _table(adata, key, "mt.tl.subpopulation_hits")
-    if table.empty:
-        raise ValueError(f"uns['mantispy'][{key!r}] is empty; no cluster held both controls and another group")
+def subpopulation_hits(adata: AnnData, key: str = "subpopulation_hits", top: int = 30, ax: Axes | None = None) -> Axes:
+    """Cluster by group heatmap of significance, so an effect in one cell state stands out.
 
+    Args:
+        adata: Object holding the table :func:`~mantispy.tl.subpopulation_hits` wrote.
+        key: Name of that table in ``uns["mantispy"]``.
+        top: How many groups to draw, taken by their most significant cluster.
+        ax: Axes to draw on, or ``None`` for a new figure.
+
+    Returns:
+        The axes drawn on, holding ``-log10`` q per cluster and group, the drawn groups sorted by name, with a colorbar beside them.
+
+    Raises:
+        KeyError: ``uns["mantispy"]`` holds no table under ``key``.
+        ValueError: That table is empty, which is what happens when no cluster held both controls and another group.
+    """
+    table = _table(adata, key, "mt.tl.subpopulation_hits", "no cluster held both controls and another group")
     table = table.assign(significance=-np.log10(np.clip(table["qvalue"].to_numpy(dtype=float), 1e-12, None)))
     grid = table.pivot_table(index="cluster", columns="group", values="significance", aggfunc="max")
     keep = grid.max(axis=0).nlargest(min(top, grid.shape[1])).index
@@ -101,6 +145,16 @@ def subpopulation_hits(adata: AnnData, key: str = "subpopulation_hits", top: int
     ax.set_yticklabels(grid.index, fontsize=6)
     ax.set_ylabel("cluster")
     ax.figure.colorbar(image, ax=ax, label="-log10 q")
+
+    _maybe_interactive(
+        "heatmap",
+        ax=ax,
+        matrix=grid.to_numpy(dtype=float),
+        rows=[str(index) for index in grid.index],
+        columns=[str(column) for column in grid.columns],
+        value_label="-log10 q",
+        title="subpopulation hits",
+    )
     return ax
 
 
@@ -110,13 +164,13 @@ def density(
     groupby: str = "Metadata_Perturbation",
     key: str = "Metadata_LocalDensity",
     max_groups: int = 6,
-    ax: plt.Axes | None = None,
-):
+    ax: Axes | None = None,
+) -> Axes:
     """Local cell density against a feature, per group.
 
-    Crowding alone changes morphology. Use this plot to check whether density explains a
-    phenotype before regressing it out with :func:`~mantispy.pp.regress_out`. A group whose
-    points fall on the same line as the controls differs from them only in density.
+    Crowding alone changes morphology.
+    Use this plot to check whether density explains a phenotype before regressing it out with :func:`~mantispy.pp.regress_out`.
+    A group whose points fall on the same line as the controls differs from them only in density.
 
     Args:
         adata: Single-cell object carrying the density column and the feature.
@@ -127,8 +181,11 @@ def density(
         ax: Axes to draw on.
 
     Returns:
-        The axes. The legend gives each group's Pearson correlation between density and the
-        feature.
+        The axes drawn on, with a scatter and a fitted line per group and each group's Pearson correlation between density and the feature in the legend.
+        A group with fewer than three usable points is left out.
+
+    Raises:
+        KeyError: ``obs`` has no ``key`` column, or ``feature`` is not one of ``var_names``.
     """
     if key not in adata.obs:
         raise KeyError(f"obs has no column {key!r}; run mt.tl.neighbors_local_density first")
@@ -139,6 +196,7 @@ def density(
     groups = obs[groupby].astype(str).to_numpy()
 
     ax = _axes(ax, (5.5, 4.5))
+    records = []
     for name in pd.Series(groups).value_counts().index[:max_groups]:
         rows = np.flatnonzero((groups == name) & np.isfinite(crowding) & np.isfinite(values))
         if rows.size < 3:
@@ -148,8 +206,20 @@ def density(
         slope, intercept = np.polyfit(crowding[rows], values[rows], 1)
         grid = np.linspace(crowding[rows].min(), crowding[rows].max(), 2)
         ax.plot(grid, slope * grid + intercept, lw=1.2, color=points.get_facecolor()[0])
+        records.append(pd.DataFrame({"density": crowding[rows], feature: values[rows], groupby: str(name)}))
 
     ax.set_xlabel("mean distance to the k nearest cells in the field")
     ax.set_ylabel(feature)
     ax.legend(fontsize=6)
+
+    if records:
+        _maybe_interactive(
+            "scatter",
+            ax=ax,
+            data=pd.concat(records, ignore_index=True),
+            x="density",
+            y=feature,
+            color=groupby,
+            title=f"{feature} against density",
+        )
     return ax

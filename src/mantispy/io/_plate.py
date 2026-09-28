@@ -16,8 +16,7 @@ Layout = Literal["gallery", "cellprofiler"]
 def _detect_layout(path: Path) -> Layout:
     """Tell a Cell Painting Gallery source from a CellProfiler export by what sits under `path`.
 
-    A gallery source is the one with a ``workspace/`` tree, and that is checked first: a source that has been
-    read once also holds SpatialData zarr stores, which carry a ``tables/`` directory like an export does.
+    A gallery source is the one with a ``workspace/`` tree, and that is checked first: a source that has been read once also holds SpatialData zarr stores, which carry a ``tables/`` directory like an export does.
     An export plate folder has its table in ``tables/`` and is looked for at `path` and one level below it.
     """
     if (path / "workspace").is_dir():
@@ -73,7 +72,7 @@ def read_plate(
 
     Where a source recorded stage coordinates and a pixel size, every element sits in three coordinate systems, ``{plate}_{well}_s{site}``, ``{plate}_{well}`` and ``{plate}``.
     Where it did not, each field sits in its own frame.
-    See :doc:`the tutorial </tutorials/reading_plates>` for what each layout publishes and what is dropped.
+    See :doc:`the tutorial </tutorials/data/images>` for what each layout publishes and what is dropped.
 
     Args:
         path: A Cell Painting Gallery source directory, or an export root or one of its plate folders.

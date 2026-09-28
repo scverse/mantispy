@@ -20,7 +20,7 @@ def test_scores_match_pyod(seed):
 def test_symmetric_feature_and_ties_match_pyod():
     """skew == 0 contributes both tails; repeated values share the highest rank."""
     rng = np.random.default_rng(3)
-    X = np.column_stack([rng.standard_normal(200), np.tile([1.0, 2.0], 100), np.zeros(200)])
+    X = np.column_stack([rng.standard_normal(200), np.tile([1.0, 2.0, 3.0, 2.0], 50), np.zeros(200)])
     X[:3, 0] += 8.0
     np.testing.assert_allclose(ecod_scores(X), ecod.ECOD().fit(X).decision_scores_, rtol=1e-9)
 
@@ -32,3 +32,13 @@ def test_matches_pyod_on_a_synthetic_plate():
     wells = mt.tl.aggregate(synthetic_plate(n_wells=48, n_cells=10, n_features=12, seed=0), min_cells=0)
     X = wells.X.astype(np.float64)
     np.testing.assert_allclose(ecod_scores(X), ecod.ECOD().fit(X).decision_scores_, rtol=1e-9)
+
+
+def test_float32_and_missing_values_match_pyod_on_the_imputed_matrix():
+    """CellProfiler output arrives as float32 with gaps; a gap takes its column's mean."""
+    rng = np.random.default_rng(4)
+    X = rng.standard_normal((300, 6)).astype(np.float32)
+    X[:4] += 9.0
+    X[rng.random(X.shape) < 0.02] = np.nan
+    imputed = np.where(np.isnan(X), np.nanmean(X, axis=0), X)
+    np.testing.assert_allclose(ecod_scores(X), ecod.ECOD().fit(imputed).decision_scores_, rtol=1e-9)

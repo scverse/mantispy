@@ -1,19 +1,6 @@
 """Consensus signatures, one profile per perturbation.
 
-``tl.aggregate(by=("Metadata_Perturbation",))`` gives a median consensus. modz is the
-weighted version used in the field. Replicates that agree with the others count for more,
-so one bad well moves the signature less.
-
-The weighting follows ``pycytominer.cyto_utils.modz.modz_base``, which comes from cmapPy:
-
-1. correlate every replicate with every other over the features (Spearman by default);
-2. set the diagonal to NaN and clip negative correlations to zero, so a replicate that
-   anticorrelates with the rest counts as uninformative;
-3. take a replicate's raw weight as its mean correlation with the others, floored at
-   ``min_weight``;
-4. normalize the weights to sum to one (equal weights if they are all zero) and round
-   them to ``precision`` decimals;
-5. take the weighted sum as the signature.
+The modz weighting follows ``pycytominer.cyto_utils.modz.modz_base``, which comes from cmapPy.
 """
 
 from __future__ import annotations
@@ -22,11 +9,11 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 from anndata import AnnData
-from scipy.stats import rankdata
 
 from mantispy._core._numba import MEDIAN
-from mantispy._core._reduce import get_matrix, group_codes, reduce_grouped
-from mantispy._core._utils import as_frame, record_params, report_drop
+from mantispy._core._reduce import get_matrix, group_codes, group_offsets, reduce_grouped, reduced_var
+from mantispy._core.logging import report_drop
+from mantispy._core.provenance import record_params
 from mantispy._core.schema import stamp
 from mantispy.tl._aggregate import _group_obs
 from mantispy.tl._similarity import similarity_matrix
@@ -35,19 +22,39 @@ METHODS = ("modz", "median")
 CORRELATIONS = ("spearman", "pearson")
 
 
-def modz_weights(block: np.ndarray, correlation: str = "spearman", min_weight: float = 0.01, precision: int = 4):
+def modz_weights(
+    block: np.ndarray, correlation: str = "spearman", min_weight: float = 0.01, precision: int = 4
+) -> np.ndarray:
     """Weight each replicate by how well it agrees with the others.
 
-    A perturbation whose replicates all sit at ``min_weight`` has no reproducible signature,
-    whatever its consensus profile looks like.
+    A perturbation whose replicates all sit at ``min_weight`` has no reproducible signature, whatever its consensus profile looks like.
+
+    Args:
+        block: One perturbation's replicates, as rows, by features.
+        correlation: ``"spearman"`` ranks the features first, ``"pearson"`` correlates the values.
+        min_weight: Floor on a replicate's weight.
+        precision: Decimals the weights are rounded to, as in pycytominer.
+
+    Returns:
+        One weight per row of ``block``, summing to one.
     """
+    from scipy.stats import rankdata
+
     if block.shape[0] == 1:
         return np.ones(1)
 
-    # nan_policy="omit" ranks the present values and leaves NaN in place. The default,
-    # "propagate", turns a replicate with one missing feature into an all-NaN row, which
-    # drops its weight to min_weight.
-    values = rankdata(block, axis=1, nan_policy="omit") if correlation == "spearman" else block
+    values = np.asarray(block, dtype=np.float64)
+    if correlation == "spearman":
+        # The default nan_policy, "propagate", turns a row with one missing feature into all NaN.
+        values = rankdata(values, axis=1, nan_policy="omit")
+
+    # Not similarity_matrix's zero fill: zero sits below every rank, so replicates sharing a gap would correlate.
+    gaps = np.isnan(values)
+    if gaps.any():
+        present = np.maximum((~gaps).sum(axis=1, keepdims=True), 1)
+        centre = np.nansum(values, axis=1, keepdims=True) / present
+        values = np.where(gaps, centre, values)
+
     matrix = similarity_matrix(values, metric="pearson").astype(np.float64)
     np.fill_diagonal(matrix, np.nan)
 
@@ -61,47 +68,44 @@ def modz_weights(block: np.ndarray, correlation: str = "spearman", min_weight: f
 def consensus(
     adata: AnnData,
     by: str = "Metadata_Perturbation",
-    method: str = "modz",
+    method: str = "median",
     correlation: str = "spearman",
     min_replicates: int = 2,
     min_weight: float = 0.01,
     precision: int = 4,
+    use_rep: str | None = None,
 ) -> AnnData:
     """One profile per group, weighting replicates by how well they agree.
 
     Args:
         adata: Profiles to summarize, normally well level.
         by: Column defining a perturbation.
-        method: ``"modz"`` weights replicates by their agreement, so a single bad replicate moves
-            the signature far less than it would a plain mean. ``"median"`` is the
-            unweighted alternative, identical to ``tl.aggregate`` by the same column.
-        correlation: How replicate agreement is measured: ``"spearman"`` (pycytominer's default, and
-            insensitive to a few extreme features) or ``"pearson"``.
+        method: ``"median"`` (the default, matching pycytominer and identical to :func:`~mantispy.tl.aggregate` by the same column) or ``"modz"``, which weights replicates by their agreement so a single bad replicate moves the signature far less than a plain mean would.
+        correlation: How replicate agreement is measured: ``"spearman"`` (pycytominer's default, and insensitive to a few extreme features) or ``"pearson"``.
         min_replicates: Groups with fewer replicates are dropped.
-        min_weight: Floor on a replicate's weight. A group whose replicates all land on the floor
-            becomes an unweighted mean.
+        min_weight: Floor on a replicate's weight.
+            A group whose replicates all land on the floor becomes an unweighted mean.
         precision: Decimals the weights are rounded to, as in pycytominer.
+        use_rep: Reduce this ``obsm`` representation (e.g. an embedding from :func:`~mantispy.pp.tvn`/:func:`~mantispy.pp.harmony`) instead of ``X``; the result's ``X`` holds the reduced representation and ``var`` is a plain range index, since the axes are not named features.
 
     Returns:
-        A new object at ``"perturbation"`` resolution, one row per group, with
-        ``Metadata_ReplicateCount`` and the metadata that is constant within a group.
-        ``uns["mantispy"]["consensus_weights"]`` keeps the weight given to every input row,
-        so a signature can be traced back to its replicates.
+        A new object at ``"perturbation"`` resolution, one row per group, with ``Metadata_ReplicateCount`` and the metadata that is constant within a group.
+        ``uns["mantispy"]["consensus_weights"]`` keeps the weight given to every input row, including the rows of groups dropped for having too few replicates, so a signature can be traced back to its replicates.
+        Under ``method="median"`` no weights are computed and every row is recorded as 1.0, since a median is not a weighted sum.
+
+    Raises:
+        ValueError: ``method`` is not one of ``METHODS``, ``correlation`` is not one of ``CORRELATIONS``, or ``use_rep`` is not a 2-D representation in ``obsm``.
 
     Notes:
-        Missing values are treated as zero when correlating replicates, matching the rest of
-        the package. The signature itself is a weighted sum, so a NaN feature stays NaN.
+        A missing value is filled with its own replicate's mean before the replicates are correlated.
+        Zero would be an extreme value among ranks, and two replicates sharing a gap would look alike.
+        The signature itself is a weighted sum, so a NaN feature stays NaN.
 
-        modz is a weighted mean. With one outlying replicate it drifts about forty times less
-        than the unweighted mean, but it does not beat a median. On BBBC021, not-same-compound
-        MOA retrieval was 0.777 with ``method="median"`` and 0.660 with modz. It is the default
-        because it matches pycytominer and is the usual definition of a consensus signature.
-        Compare both methods on your own data.
+        modz is a weighted mean: with one outlying replicate it drifts about forty times less than the unweighted mean, but it does not beat a median.
+        median is at least as robust as modz for consensus signatures, so compare both on your own data.
 
-        Normalize before taking a consensus, and first drop the features ``pp.normalize`` flags
-        in ``var["degenerate_scale"]``. A feature that is constant among the controls is divided
-        by epsilon, and a weighted mean carries the resulting values of order 1e17 into the
-        signature, where a median would discard them.
+        Normalize before taking a consensus, and first drop the features :func:`~mantispy.pp.normalize` flags in ``var["degenerate_scale"]``.
+        A feature that is constant among the controls is divided by epsilon, and a weighted mean carries the resulting values of order 1e17 into the signature, where a median would discard them.
     """
     if method not in METHODS:
         raise ValueError(f"method must be one of {METHODS}, got {method!r}")
@@ -113,33 +117,41 @@ def consensus(
     weights = np.ones(adata.n_obs)
 
     if method == "median":
-        values, _, _ = reduce_grouped(adata, [by], MEDIAN)
+        values, _, _ = reduce_grouped(adata, [by], MEDIAN, use_rep=use_rep)
     else:
-        X = get_matrix(adata)
-        values = np.zeros((len(keys), adata.n_vars), dtype=np.float64)
+        X = get_matrix(adata, use_rep=use_rep)
+        values = np.zeros((len(keys), X.shape[1]), dtype=np.float64)
+        order, offsets = group_offsets(codes, len(keys))
         for index in range(len(keys)):
-            rows = np.flatnonzero(codes == index)
+            rows = order[offsets[index] : offsets[index + 1]]
             block = modz_weights(X[rows], correlation, min_weight, precision)
             weights[rows] = block
             values[index] = block @ X[rows]
 
-    obs = _group_obs(adata, [by], keys, codes, counts)
-    # _group_obs writes the group size as Metadata_CellCount; here a group is replicates.
-    obs = obs.rename(columns={"Metadata_CellCount": "Metadata_ReplicateCount"})
+    obs = _group_obs(adata, [by], keys, codes, {"Metadata_ReplicateCount": counts})
 
     keep = counts >= min_replicates
     report_drop("group(s)", int((~keep).sum()), int(keep.size), remedy=f"lower min_replicates below {min_replicates}")
 
+    var = reduced_var(adata, use_rep, values.shape[1])
     result = ad.AnnData(
         X=values[keep].astype(np.float32),
         obs=obs.loc[keep].reset_index(drop=True).set_axis(pd.Index([str(i) for i in range(int(keep.sum()))])),
-        var=as_frame(adata.var).copy(),
+        var=var,
     )
     stamp(result, resolution="perturbation")
     result.uns["mantispy"]["consensus_weights"] = pd.DataFrame(
         {"group": [str(keys[code]) for code in codes], "weight": weights}
     )
     record_params(
-        result, "consensus", {"by": by, "method": method, "correlation": correlation, "min_replicates": min_replicates}
+        result,
+        "consensus",
+        {
+            "by": by,
+            "method": method,
+            "correlation": correlation,
+            "min_replicates": min_replicates,
+            "use_rep": use_rep,
+        },
     )
     return result

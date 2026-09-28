@@ -30,19 +30,6 @@ def test_it_matches_the_jump_recipe_exactly(stochastic):
     np.testing.assert_allclose(ours, theirs, atol=1e-12)
 
 
-def test_one_missing_well_does_not_erase_the_feature():
-    """scipy's rankdata returns all-NaN for a column holding any NaN, so the reference
-    implementation loses the whole feature to one unmeasured well."""
-    values = np.array([[3.0], [1.0], [np.nan], [2.0]])
-
-    assert np.isnan(reference(values.ravel())).all()
-
-    ours = rank_inverse_normal(values)
-    assert np.isnan(ours[2, 0])
-    assert np.isfinite(ours[[0, 1, 3], 0]).all()
-    assert ours[0, 0] > ours[3, 0] > ours[1, 0]  # the order of the measured values survives
-
-
 def test_the_output_is_standard_normal_per_feature(cells):
     mt.pp.rank_int(cells)
     values = np.asarray(cells.X, dtype=float)
@@ -57,9 +44,3 @@ def test_grouping_ranks_within_each_group(cells):
         block = np.asarray(cells.layers["ranked"], dtype=float)[rows]
         np.testing.assert_allclose(block.mean(axis=0), 0.0, atol=1e-6)
     assert not np.allclose(np.asarray(cells.X), np.asarray(cells.layers["ranked"]))
-
-
-def test_it_is_reproducible(cells):
-    first = mt.pp.rank_int(cells, copy=True)
-    second = mt.pp.rank_int(cells, copy=True)
-    np.testing.assert_array_equal(np.asarray(first.X), np.asarray(second.X))

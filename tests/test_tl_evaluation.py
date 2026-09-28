@@ -3,7 +3,9 @@
 import warnings
 from importlib.util import find_spec
 
+import anndata as ad
 import numpy as np
+import pandas as pd
 import pytest
 
 import mantispy as mt
@@ -22,36 +24,128 @@ def profiles():
     return mt.tl.aggregate(cells, min_cells=0)
 
 
-# --- mAP -------------------------------------------------------------------
-
-
 @requires_copairs
 def test_activity_scores_treatments_against_the_controls(profiles):
-    """Phenotypic activity as the field defines it: replicates retrieved against control
-    profiles only, with the controls themselves dropped from the result."""
+    """Phenotypic activity as the field defines it: replicates retrieved against control profiles only, with the controls themselves dropped from the result."""
     mt.tl.map(profiles, mode="activity", null_size=200)
     table = profiles.uns["mantispy"]["map"]
 
     assert "DMSO" not in set(table["Metadata_Perturbation"])
-    assert table["mean_average_precision"].median() > 0.9  # every injected effect is real
+    assert table["mean_average_precision"].median() > 0.9
     assert {"map", "map_qvalue"} <= set(profiles.obs.columns)
+
+
+def _inert_p_value(pure_noise_screen, controls_elsewhere: int) -> float:
+    """Score a compound drawn exactly as its plate's controls are, beside a second plate of nothing but controls.
+    Each plate has its own seed, so the first is identical whatever the second holds."""
+    here = pure_noise_screen(n_control=24, n_groups=1, per_group=6, n_features=12, seed=0)
+    there = pure_noise_screen(n_control=controls_elsewhere, n_groups=0, n_features=12, seed=1)
+    there.obs["Metadata_Plate"] = "P2"
+    here.X[:, 0] += 10
+    there.X[:, 1] += 10
+    wells = ad.concat([here, there], keys=["P1", "P2"], index_unique=":")
+    mt.io.stamp(wells, resolution="well")
+    mt.tl.map(wells, mode="activity", null_size=2000)
+    return float(wells.uns["mantispy"]["map"]["p_value"].item())
+
+
+@requires_copairs
+def test_activity_does_not_depend_on_another_plates_controls(pure_noise_screen):
+    """Phenotypic activity asks whether a perturbation stands apart from the controls it was plated with.
+
+    Pooling every plate's controls lets another plate in.
+    Its controls sit far away and are beaten trivially, but they still count in the permutation null, which then expects the replicates to compete with all of them.
+    So the more controls another plate has, the more active an inert compound on this plate looks.
+    """
+    few, many = _inert_p_value(pure_noise_screen, 24), _inert_p_value(pure_noise_screen, 96)
+
+    assert few == many
+    assert few > 0.05
+
+
+@requires_copairs
+def test_a_plate_without_controls_calls_nothing_active(pure_noise_screen):
+    """A query with replicates and nothing to rank them against has a perfect rank list by construction.
+    Scored, the inert compound on the plate without controls would come out active at the smallest p."""
+    here = pure_noise_screen(n_control=24, n_groups=1, per_group=6, n_features=12, seed=0)
+    there = pure_noise_screen(n_control=0, n_groups=1, per_group=6, n_features=12, seed=1)
+    there.obs["Metadata_Plate"], there.obs["Metadata_Perturbation"] = "P2", "stranded"
+    wells = ad.concat([here, there], keys=["P1", "P2"], index_unique=":")
+    mt.io.stamp(wells, resolution="well")
+
+    with pytest.warns(UserWarning, match="no negative pair"):
+        mt.tl.map(wells, mode="activity", null_size=200)
+
+    assert set(wells.uns["mantispy"]["map"]["Metadata_Perturbation"]) == {"p00"}
+
+
+@requires_copairs
+def test_a_null_too_small_for_the_correction_says_so(pure_noise_screen):
+    """No p-value falls below 1 / (null_size + 1), so over enough groups the correction calls nothing however strong a lone effect is, and a screen scored that way would report no hits without saying why."""
+    screen = pure_noise_screen()
+    with pytest.warns(UserWarning, match="at least 3 reach that floor"):
+        mt.tl.map(screen, mode="activity", null_size=100)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        mt.tl.map(screen, mode="activity", null_size=1000)
+
+
+@requires_copairs
+def test_a_p_value_does_not_depend_on_earlier_calls(pure_noise_screen, tmp_path, monkeypatch):
+    """copairs draws each null with a seed that depends on the other nulls in the same call.
+    A cache shared across calls hands the second object a null drawn for the first, so its p-values depend on what ran before it."""
+    alone = pure_noise_screen(n_control=0, n_groups=6, per_group=4, seed=0)
+    other_plate = pure_noise_screen(n_control=0, n_groups=3, per_group=2, seed=1)
+    other_plate.obs["Metadata_Plate"] = "P2"
+    other_plate.obs["Metadata_Perturbation"] = "q" + other_plate.obs["Metadata_Perturbation"].astype(str)
+    both = ad.concat([alone, other_plate], index_unique=":", keys=["P1", "P2"])
+    mt.io.stamp(both, resolution="well")
+
+    def p_values(*objects):
+        for adata in objects:
+            mt.tl.map(adata, mode="replicability", reference=None, null_size=200)
+        return objects[-1].uns["mantispy"]["map"]["p_value"].to_numpy()
+
+    monkeypatch.setenv("HOME", str(tmp_path / "fresh"))
+    fresh = p_values(alone.copy())
+    monkeypatch.setenv("HOME", str(tmp_path / "after"))
+    after = p_values(both, alone.copy())
+
+    np.testing.assert_array_equal(fresh, after)
+    assert not (tmp_path / "after" / ".copairs").exists()
 
 
 @requires_copairs
 def test_activity_and_replicability_are_different_questions(profiles):
-    """They differ by an order of magnitude on real data (JUMP: 0.93 against 0.09), so they
-    have separate names."""
     mt.tl.map(profiles, mode="activity", null_size=200, key_added="activity")
     mt.tl.map(profiles, mode="replicability", null_size=200, key_added="replicability")
 
     activity = profiles.uns["mantispy"]["activity"].set_index("Metadata_Perturbation")
     replicability = profiles.uns["mantispy"]["replicability"].set_index("Metadata_Perturbation")
 
-    # The controls are a group like any other under replicability, and the thing every
-    # other group is measured against under activity.
-    assert "DMSO" in replicability.index
+    # Both score the treatments; the controls are what activity retrieves against, and replicability leaves them out.
     assert "DMSO" not in activity.index
-    assert set(activity.index) == set(replicability.index) - {"DMSO"}
+    assert set(activity.index) == set(replicability.index)
+
+
+@requires_copairs
+def test_replicability_is_the_map_nonrep_of_arevalo(profiles):
+    """Regression test for #70: as in the paper's code, negatives come from the query's plate and the controls are left out."""
+    mt.tl.map(profiles, mode="replicability", null_size=200)
+    treated = profiles[~profiles.obs["Metadata_Control"].to_numpy()].copy()
+    mt.tl.map(
+        treated,
+        pos_sameby=["Metadata_Perturbation"],
+        neg_sameby=["Metadata_Plate"],
+        neg_diffby=["Metadata_Perturbation"],
+        null_size=200,
+    )
+    pd.testing.assert_frame_equal(
+        profiles.uns["mantispy"]["map"], treated.uns["mantispy"]["map"], check_categorical=False
+    )
+
+    mt.tl.map(profiles, mode="replicability", reference=None, null_size=200, key_added="with_controls")
+    assert "DMSO" in set(profiles.uns["mantispy"]["with_controls"]["Metadata_Perturbation"])
 
 
 @requires_copairs
@@ -63,8 +157,7 @@ def test_activity_needs_controls_and_says_so(profiles):
 
 @requires_copairs
 def test_consistency_groups_by_an_annotation(profiles):
-    """Kalinin et al.'s phenotypic consistency: do perturbations sharing a mechanism look
-    alike, against those that do not?"""
+    """Phenotypic consistency :cite:p:`Kalinin_2025`: do perturbations sharing a mechanism look alike, against those that do not?"""
     with pytest.raises(ValueError, match="annotation_key"):
         mt.tl.map(profiles, mode="consistency", null_size=100)
 
@@ -80,9 +173,8 @@ def test_consistency_groups_by_an_annotation(profiles):
 def test_consistency_does_not_count_a_perturbation_agreeing_with_itself(profiles):
     """Two wells of one treatment share its annotation trivially.
 
-    Counting those pairs makes replicate retrieval look like mechanism coherence, more so
-    the more wells a perturbation has. A consensus object has one row per perturbation, so
-    excluding same-perturbation pairs must change nothing there.
+    Counting those pairs makes replicate retrieval look like mechanism coherence, more so the more wells a perturbation has.
+    A consensus object has one row per perturbation, so excluding same-perturbation pairs must change nothing there.
     """
     profiles.obs["Metadata_MOA"] = np.where(
         profiles.obs["Metadata_Perturbation"].astype(str).isin(["pert00", "pert01"]), "A", "B"
@@ -104,7 +196,6 @@ def test_consistency_does_not_count_a_perturbation_agreeing_with_itself(profiles
     strict = wells.uns["mantispy"]["map"]["mean_average_precision"].mean()
     assert strict < loose.uns["mantispy"]["map"]["mean_average_precision"].mean()
 
-    # On one profile per perturbation the exclusion removes no pair, so the two agree.
     signatures = mt.tl.consensus(treated, method="median", min_replicates=1)
     signatures.obs["Metadata_MOA"] = np.where(
         signatures.obs["Metadata_Perturbation"].astype(str).isin(["pert00", "pert01"]), "A", "B"
@@ -168,20 +259,15 @@ def test_map_refuses_missing_values(profiles):
         mt.tl.map(profiles, mode="activity", null_size=100)
 
 
-# --- similarity and the older readouts -------------------------------------
+@pytest.mark.parametrize("infinity", [np.inf, -np.inf])
+def test_an_infinite_value_is_compared_as_missing(infinity):
+    """Regression test for #65: filled as the largest float, one infinity made its profile orthogonal to every other."""
+    from mantispy.tl._similarity import similarity_matrix
 
-
-@pytest.mark.parametrize("metric", ["cosine", "pearson"])
-def test_similarity_is_symmetric_with_unit_diagonal(profiles, metric):
-    mt.tl.similarity(profiles, metric=metric)
-    matrix = np.asarray(profiles.obsp["similarity"])
-    np.testing.assert_allclose(matrix, matrix.T, rtol=1e-5)
-    np.testing.assert_allclose(np.diag(matrix), 1.0, atol=1e-5)
-
-
-def test_pearson_similarity_matches_numpy(profiles):
-    mt.tl.similarity(profiles, metric="pearson")
-    np.testing.assert_allclose(np.asarray(profiles.obsp["similarity"]), np.corrcoef(profiles.X), rtol=1e-4, atol=1e-5)
+    values = np.array([[1.0, 2.0, 3.0], [1.0, 2.0, 3.1], [1.0, infinity, 3.0]])
+    matrix = similarity_matrix(values)
+    np.testing.assert_array_equal(matrix, similarity_matrix(np.where(np.isinf(values), np.nan, values)))
+    assert matrix[2, :2].min() > 0.8
 
 
 def test_percent_replicating_finds_strong_perturbations(profiles):
@@ -205,8 +291,7 @@ def test_grit_needs_controls(profiles):
 
 
 def test_cell_resolution_warns_but_perturbation_level_does_not(profiles):
-    """Consensus profiles are the canonical input, so a warning on them would teach users
-    to ignore the one at cell resolution."""
+    """Consensus profiles are the canonical input, so a warning on them would teach users to ignore the one at cell resolution."""
     cells = synthetic_plate(n_wells=24, n_cells=5, n_features=10, seed=0)
     with pytest.warns(UserWarning, match="resolution"):
         mt.tl.similarity(cells)

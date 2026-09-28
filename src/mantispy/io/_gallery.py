@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import warnings
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, cast
@@ -9,6 +10,7 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
+from mantispy._core.logging import get_logger
 from mantispy.io._cellprofiler import _prefix
 from mantispy.io._profiles import from_dataframe, read_profiles
 
@@ -111,10 +113,8 @@ def _labels_from_outlines(
     The gallery publishes outlines, not masks.
     Outlines are one pixel wide and shared between touching objects, so filling them and labelling connected components separates the interiors.
     Each component takes the object number of the centroid inside it; components with no centroid are dropped.
-    Growing the boundary back one pixel reproduces the CellProfiler areas to under a percent.
 
     A component is accepted only when exactly one centroid falls in it and its area is within `max_area_ratio` of the area CellProfiler measured.
-    This rejects the two failures of an unclosed outline: two objects merging into one component, and a centroid landing in the background or in a fragment.
     Objects whose component was rejected are absent, so compare the label count against the centroid count.
 
     Args:
@@ -126,7 +126,6 @@ def _labels_from_outlines(
         area_column: Column of `centres` holding the area CellProfiler measured, used to reject components that cannot be the object.
             Pass ``None``, or leave the column out of `centres`, to skip that check.
         max_area_ratio: How far a component's area may differ from the measured area, either way, and still be accepted.
-            Reconstruction is exact to a fraction of a percent when it works, so the default is tight.
 
     Returns:
         A label image the shape of `outlines`, zero outside objects.
@@ -224,18 +223,37 @@ def _site_dir(root: Path, batch: str, plate: str, well: str, site: int) -> Path:
     return root / "workspace/analysis" / batch / plate / "analysis" / f"{plate}-{well}-{site}"
 
 
-def _outline_file(directory: Path, well: str, site: int, kind: str) -> Path | None:
-    """Find one outline image, whatever the source called it.
+def _outline_index(directory: Path) -> dict[str, Path]:
+    """Index the files of one site's analysis directory by name, lowercased, up to the first dot.
+
+    A ``.ome.tiff`` or ``.tif.gz`` outline thus answers to the same name as a ``.png`` one.
+    """
+    # Files beside the analysis first, then one level down.
+    index: dict[str, Path] = {}
+    for path in [*sorted(directory.glob("*")), *sorted(directory.glob("*/*"))]:
+        name, _, extension = path.name.partition(".")
+        if extension and path.is_file():
+            index.setdefault(name.lower(), path)
+    return index
+
+
+def _holds_outlines(index: Mapping[str, Path]) -> bool:
+    """Whether a site holds outline images at all."""
+    return any("outlines" in name for name in index)
+
+
+def _outline_file(index: Mapping[str, Path], well: str, site: int, kind: str) -> Path | None:
+    """Find one outline image in an index of a site's files, whatever the source called it.
 
     Seen across the gallery: ``outlines/A01_s1--cell_outlines.png``, ``outlines/a01_1--cell_outlines.png``, and ``A01_s1_cell_outlines.tiff`` in a directory named after the plate.
     """
-    for stem in (
+    for name in (
         f"{well}_s{site}--{kind}_outlines",
         f"{well}_{site}--{kind}_outlines",
         f"{well}_s{site}_{kind}_outlines",
     ):
-        if matches := sorted(directory.glob(f"{stem}.*")) + sorted(directory.glob(f"*/{stem}.*")):
-            return matches[0]
+        if (match := index.get(name.lower())) is not None:
+            return match
     return None
 
 
@@ -266,12 +284,12 @@ def _centre_columns(objects: pd.DataFrame) -> tuple[str, str]:
     raise ValueError(msg)
 
 
-def _site_labels(directory: Path, well: str, site: int) -> dict[str, npt.NDArray[np.uint32]]:
+def _site_labels(directory: Path, index: Mapping[str, Path], well: str, site: int) -> dict[str, npt.NDArray[np.uint32]]:
     import imageio.v3 as iio
 
     masks = {}
     for name, kind, csv in (("nuclei", "nuclei", "Nuclei"), ("cells", "cell", "Cells")):
-        path = _outline_file(directory, well, site, kind)
+        path = _outline_file(index, well, site, kind)
         if path is None or not (directory / f"{csv}.csv").exists():
             return {}
         candidates = _outline_candidates(np.squeeze(iio.imread(path)))
@@ -324,7 +342,7 @@ def _well_table(path: Path, *, region: str | None, plate_format: int) -> ad.AnnD
     return TableModel.parse(adata, region=region, region_key="region", instance_key="well_index")
 
 
-def _cell_table(files: Sequence[Path], masks: Mapping[str, npt.NDArray]) -> ad.AnnData:
+def _cell_table(files: Sequence[Path], masks: Mapping[str, npt.NDArray], channels: Sequence[str]) -> ad.AnnData:
     from spatialdata import sanitize_table
     from spatialdata.models import TableModel
 
@@ -333,7 +351,8 @@ def _cell_table(files: Sequence[Path], masks: Mapping[str, npt.NDArray]) -> ad.A
         [_prefix(pd.read_csv(file), "Cells").assign(Metadata_Key=file.parent.name) for file in files],
         ignore_index=True,
     ).rename(columns={"ImageNumber": "Metadata_ImageNumber", "ObjectNumber": "Metadata_ObjectNumber"})
-    adata = from_dataframe(frame, resolution="cell")
+    # Guessing channels from the column names would invent entries like 'tubeness' and 'Overflow'.
+    adata = from_dataframe(frame, resolution="cell", channels=channels)
     obs = cast("pd.DataFrame", adata.obs)
     keys = obs.pop("Metadata_Key").astype(str).str.rsplit("-", n=2, expand=True)
     plates, wells, sites = (keys[i].astype(str) for i in range(3))
@@ -418,17 +437,24 @@ def read_gallery_plate(
             plate_format=plate_format,
         )
 
-    if wells is None:
-        first = load_data.groupby(level="well").head(1)
-        wells = [
-            str(key[0])
-            for key, row in first.iterrows()
-            if isinstance(key, tuple) and _image_path(root, batch, row, prefix, channels[0]).exists()
-        ]
+    present = load_data[
+        [_image_path(root, batch, row, prefix, channels[0]).exists() for _, row in load_data.iterrows()]
+    ]
+    if len(present) < len(load_data):
+        get_logger().info(
+            "read_plate: %d of %d field(s) of view are not present under %s",
+            len(load_data) - len(present),
+            len(load_data),
+            root,
+        )
+    requested = None if wells is None else list(wells)
+    if requested is not None:
+        present = present[present.index.get_level_values("well").isin(requested)]
+    wells = list(dict.fromkeys(present.index.get_level_values("well").astype(str)))
 
-    images, labels, masks, analysed = {}, {}, {}, []
+    images, labels, masks, analysed, unnamed = {}, {}, {}, [], []
     for well in wells:
-        for site in sorted(load_data.loc[well].index):
+        for site in sorted(present.loc[well].index):
             fov = f"{plate}_{well}_s{site}"
             transformations: dict[str, Identity | Translation] = {fov: Identity()}
             if located:
@@ -443,17 +469,29 @@ def read_gallery_plate(
                 scale_factors=[2, 2],
             )
             directory = _site_dir(root, batch, plate, well, site)
-            site_labels = _site_labels(directory, well, site) if directory.is_dir() else {}
+            index = _outline_index(directory) if directory.is_dir() else {}
+            site_labels = _site_labels(directory, index, well, site) if index else {}
             if not site_labels:
+                if _holds_outlines(index):
+                    unnamed.append(directory.name)
                 continue
             analysed.append(directory / "Cells.csv")
             for name, mask in site_labels.items():
                 masks[f"{fov}_{name}"] = mask
                 labels[f"{fov}_{name}"] = Labels2DModel.parse(mask, dims=("y", "x"), transformations=transformations)
 
+    if not images:
+        raise FileNotFoundError(f"no images for well(s) {requested or 'on the plate'} of {plate} under {root}")
+    if unnamed:
+        warnings.warn(
+            f"read no labels for {len(unnamed)} analysed sites holding outline images this reader could not name, {unnamed[0]} among them",
+            UserWarning,
+            stacklevel=2,
+        )
+
     tables, shapes = {}, {}
     if analysed:
-        tables["cells"] = _cell_table(analysed, {k: v for k, v in masks.items() if k.endswith("_cells")})
+        tables["cells"] = _cell_table(analysed, {k: v for k, v in masks.items() if k.endswith("_cells")}, channels)
     if profile is not None:
         path = (
             Path(profile)

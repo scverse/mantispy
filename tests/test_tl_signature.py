@@ -1,5 +1,6 @@
 """Feature-family signatures: the contrast, the collapse, and the plot."""
 
+import anndata as ad
 import matplotlib
 import numpy as np
 import pandas as pd
@@ -26,69 +27,37 @@ def annotated(well_profiles):
     return build
 
 
-def test_the_rest_contrast_leaves_the_reference_out(annotated):
-    """'rest' compares a perturbation with the other perturbations, not with the controls."""
-    rng = np.random.default_rng(3)
-    n_features = 80
-    labels = ["DMSO"] * 12 + ["a"] * 6 + ["b"] * 6
-    values = rng.normal(size=(len(labels), n_features))
-    # Give the controls a large offset that both treatments share. Against the controls it
-    # dominates; against each other it cancels.
-    values[:12] += 6.0
-    obs = pd.DataFrame(
-        {
-            "Metadata_Plate": "P0",
-            "Metadata_Well": [f"A{i + 1:02d}" for i in range(len(labels))],
-            "Metadata_Perturbation": labels,
-            "Metadata_Control": [label == "DMSO" for label in labels],
-        },
-        index=[str(i) for i in range(len(labels))],
-    )
-    import anndata as ad
-
-    from mantispy._core.schema import stamp
-
-    adata = ad.AnnData(X=values.astype(np.float32), obs=obs)
-    adata.var_names = [f"Cells_AreaShape_F{i}" for i in range(n_features)]
-    stamp(adata, resolution="well")
-
-    mt.tl.differential_features(adata, block=None, key_added="vs_dmso")
-    mt.tl.differential_features(adata, block=None, contrast="rest", key_added="vs_rest")
-    against_dmso = adata.uns["mantispy"]["vs_dmso"]["difference"].abs().median()
-    against_rest = adata.uns["mantispy"]["vs_rest"]["difference"].abs().median()
-    assert against_dmso > 4.0, "the shared offset shows up against the controls"
-    assert against_rest < 1.0, "and cancels when the perturbations are compared with each other"
-
-
-def test_the_signature_collapses_to_named_families(annotated):
+def test_the_signature_is_an_object_io_accepts(tmp_path, annotated):
+    """Regression test for #103: var held only the columns that name a family, so the stamped result failed validation on the seven annotation columns the schema requires and could not be written."""
     adata = annotated()
     mt.tl.differential_features(adata, block=None, key_added="d")
     signature = mt.tl.feature_signature(adata, key="d")
 
-    families = set(adata.var[["feature_group", "channel", "object"]].astype(str).apply(" | ".join, axis=1))
-    assert set(signature.var_names) == families
-    assert signature.n_obs == adata.uns["mantispy"]["d"]["group"].nunique()
+    report = mt.io.validate(signature)
+    assert report.ok, str(report)
+    # A family is not a CellProfiler measurement, so the columns that do not name one stay empty.
+    for column in ("feature", "scale", "angle", "gray_levels", "radial_bin", "params"):
+        assert signature.var[column].isna().all(), column
+    assert signature.var["is_feature"].all()
+    assert set(signature.var["feature_group"]) <= {"AreaShape", "Intensity", "Texture"}
+    assert set(signature.var["object"]) <= {"Cells", "Nuclei"}
     assert int(signature.var["n_features"].sum()) == adata.n_vars
 
-    # Each entry is the mean statistic of its family, sign kept.
-    table = adata.uns["mantispy"]["d"]
-    group = signature.obs_names[0]
-    family = signature.var_names[0]
-    members = adata.var_names[
-        adata.var[["feature_group", "channel", "object"]].astype(str).apply(" | ".join, axis=1) == family
-    ]
-    expected = table.loc[(table["group"] == group) & table["feature"].isin(members), "t"].mean()
-    np.testing.assert_allclose(signature[group, family].X.ravel()[0], expected, rtol=1e-5)
+    path = tmp_path / "signature.h5ad"
+    mt.io.write(signature, path)
+    loaded = mt.io.read(path)
+    assert list(loaded.var_names) == list(signature.var_names)
+    assert list(loaded.var.columns) == list(signature.var.columns)
+    # The empty annotation columns are category dtype because an object-dtype column of only None does not survive the h5ad writer.
+    for column in ("feature", "radial_bin", "params"):
+        assert loaded.var[column].isna().all(), column
 
 
-def test_the_signature_is_an_ordinary_profile_object(annotated):
-    """So scanpy clusters it and the MOA tools score it, with no special handling."""
+def test_by_refuses_the_same_column_twice(annotated):
     adata = annotated()
     mt.tl.differential_features(adata, block=None, key_added="d")
-    signature = mt.tl.feature_signature(adata, key="d")
-    assert signature.uns["mantispy"]["resolution"] == "perturbation"
-    mt.tl.similarity(signature)
-    assert signature.obsp["similarity"].shape == (signature.n_obs, signature.n_obs)
+    with pytest.raises(ValueError, match="more than once"):
+        mt.tl.feature_signature(adata, key="d", by=("object", "object"))
 
 
 def test_it_says_so_when_the_table_or_the_annotation_is_missing(annotated):
@@ -112,16 +81,36 @@ def test_the_heatmap_draws_one_row_per_group(annotated):
     assert len(axes.get_xticklabels()) == signature.n_vars
 
 
-def test_an_annotation_holding_the_separator_does_not_break_the_split(annotated):
-    """rohban has feature groups that contain a pipe."""
-    adata = annotated()
-    adata.var["feature_group"] = np.where(
-        adata.var["feature_group"].to_numpy() == "Texture", "Texture|Gabor", adata.var["feature_group"]
-    )
-    mt.tl.differential_features(adata, block=None, key_added="d")
-    signature = mt.tl.feature_signature(adata, key="d")
+def test_the_heatmap_reads_an_infinity_as_missing():
+    """Regression test for #65: one infinity overflowed the clustering distances and raised, and set the colour limits."""
+    values = np.random.default_rng(0).normal(size=(6, 5))
+    drawn = []
+    for value in (np.inf, np.nan):
+        values[0, 0] = value
+        drawn.append(mt.pl.feature_signature(ad.AnnData(values.copy())).images[0])
+    assert drawn[0].get_clim() == drawn[1].get_clim()
+    np.testing.assert_array_equal(drawn[0].get_array(), drawn[1].get_array())
 
-    # The components are read back from the annotation, so they survive intact.
-    assert "Texture|Gabor" in set(signature.var["feature_group"])
-    assert set(signature.var["channel"]) <= {"DNA", "Tub", "none"}
-    assert int(signature.var["n_features"].sum()) == adata.n_vars
+
+def test_two_components_that_name_the_same_family_are_refused(annotated):
+    """The separator can appear inside a component -- rohban2017's feature groups do -- so ('A | B', 'C') and ('A', 'B | C') join to one name.
+    They were averaged into a single column and var reported whichever tuple came first, which flips when var is reordered."""
+    adata = annotated(n_features=4)
+    adata.var["feature_group"] = ["A | B", "A", "A | B", "A"]
+    adata.var["channel"] = ["C", "B | C", "C", "B | C"]
+    adata.var["object"] = ["Cells"] * 4
+    mt.tl.differential_features(adata, block=None, key_added="d")
+
+    with pytest.raises(ValueError, match="name the same family"):
+        mt.tl.feature_signature(adata, key="d")
+
+
+def test_a_signature_over_an_annotation_that_names_nothing_is_refused(annotated):
+    """Every by column empty makes one family called "none | none | none", averaging every feature in the object into a single column and reporting nothing about any of them."""
+    adata = annotated(n_features=20)
+    for column in ("feature_group", "channel", "object"):
+        adata.var[column] = pd.Categorical([None] * adata.n_vars)
+    mt.tl.differential_features(adata, block=None, key_added="d")
+
+    with pytest.raises(ValueError, match="name no family"):
+        mt.tl.feature_signature(adata, key="d")

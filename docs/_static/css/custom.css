@@ -1,3 +1,93 @@
+/* Colors from the mantispy logo: teal #1a878a and orange #f36c00. The -ink variants keep text above 4.5:1 on white. */
+:root {
+    --mantispy-teal: #1a878a;
+    --mantispy-teal-ink: #146c6e;
+    --mantispy-teal-light: #3fb0b3;
+    --mantispy-orange: #f36c00;
+    --mantispy-orange-ink: #c25400;
+    --mantispy-orange-light: #ff8a2b;
+}
+
+html[data-theme="light"] {
+    --pst-color-primary: var(--mantispy-teal-ink);
+    --pst-color-primary-highlight: var(--mantispy-orange-ink);
+    --pst-color-secondary: var(--mantispy-orange-ink);
+    --pst-color-secondary-highlight: var(--mantispy-teal-ink);
+    --pst-color-link: var(--mantispy-teal-ink);
+    --pst-color-link-hover: var(--mantispy-orange-ink);
+    --pst-color-inline-code: var(--mantispy-teal-ink);
+    --pst-color-accent: var(--mantispy-orange);
+    --pst-color-target: #fff1e6;
+
+    --sd-color-primary: var(--mantispy-teal-ink);
+    --sd-color-primary-highlight: var(--mantispy-orange-ink);
+    --sd-color-shadow: rgba(26, 135, 138, 0.2);
+}
+
+html[data-theme="dark"] {
+    --pst-color-primary: var(--mantispy-teal-light);
+    --pst-color-primary-highlight: var(--mantispy-orange-light);
+    --pst-color-secondary: var(--mantispy-orange-light);
+    --pst-color-secondary-highlight: var(--mantispy-teal-light);
+    --pst-color-link: var(--mantispy-teal-light);
+    --pst-color-link-hover: var(--mantispy-orange-light);
+    --pst-color-inline-code: var(--mantispy-teal-light);
+    --pst-color-accent: var(--mantispy-orange);
+    --pst-color-target: rgba(243, 108, 0, 0.18);
+
+    --sd-color-primary: var(--mantispy-teal-light);
+    --sd-color-primary-highlight: var(--mantispy-orange-light);
+    --sd-color-shadow: rgba(0, 0, 0, 0.5);
+}
+
+/* The logo carries the wordmark, so the text title would repeat it. */
+.navbar-brand .title {
+    display: none;
+}
+
+.bd-sidebar-primary .caption-text,
+nav.bd-links p.caption .caption-text {
+    color: var(--pst-color-secondary);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 0.78rem;
+}
+
+li.toctree-l3 {
+    font-size: 81.25% !important;
+}
+li.toctree-l4 {
+    font-size: 75% !important;
+}
+
+.sd-card {
+    border: 1px solid var(--pst-color-border);
+    border-radius: 0.6rem;
+    transition:
+        transform 0.18s ease,
+        box-shadow 0.18s ease,
+        border-color 0.18s ease;
+}
+.sd-card:hover {
+    transform: translateY(-3px);
+    border-color: var(--mantispy-orange);
+    box-shadow: 0 0.5rem 1.25rem var(--sd-color-shadow);
+}
+.sd-card .sd-card-title {
+    color: var(--pst-color-primary);
+    font-weight: 600;
+}
+.sd-card .sd-card-title .sd-octicon {
+    color: var(--mantispy-orange);
+    margin-right: 0.4rem;
+    vertical-align: -0.12em;
+}
+.sd-card a.sd-card-title,
+.sd-card a.sd-card-title:hover {
+    text-decoration: none;
+}
+
 /* Reduce the font size in data frames - See https://github.com/scverse/cookiecutter-scverse/issues/193 */
 div.cell_output table.dataframe {
     font-size: 0.8em;

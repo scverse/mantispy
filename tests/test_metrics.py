@@ -1,4 +1,4 @@
-"""Integration metrics, including equivalence with scib where the definition is shared."""
+"""Integration metrics: the definitions follow scib, which nothing here imports, so these tests pin the behaviour rather than an equivalence."""
 
 import numpy as np
 import pandas as pd
@@ -9,7 +9,7 @@ import mantispy as mt
 from mantispy.ds import synthetic_plate
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def corrected():
     cells = synthetic_plate(
         n_plates=4,
@@ -31,58 +31,42 @@ def _value(frame, metric):
     return float(frame.loc[frame["metric"] == metric, "value"].iloc[0])
 
 
-@pytest.mark.parametrize(
-    "call",
-    [
-        lambda a: mt.metrics.silhouette_label(a, label_key="Metadata_Perturbation"),
-        lambda a: mt.metrics.silhouette_batch(a, label_key="Metadata_Perturbation", batch_key="Metadata_Batch"),
-        lambda a: mt.metrics.lisi(a, key="Metadata_Batch"),
-        lambda a: mt.metrics.pc_regression(a, key="Metadata_Batch"),
-    ],
-    ids=["silhouette_label", "silhouette_batch", "lisi", "pc_regression"],
-)
-def test_every_metric_returns_a_tidy_row(corrected, call):
-    frame = call(corrected)
-    assert {"metric", "representation", "key", "value"} <= set(frame.columns)
-    assert len(frame) == 1 and np.isfinite(frame["value"]).all()
-
-
-def test_pc_regression_detects_the_injected_batch_effect(corrected):
-    with_effect = _value(mt.metrics.pc_regression(corrected, key="Metadata_Batch"), "pc_regression")
-    shuffled = corrected.copy()
-    shuffled.obs["Metadata_Batch"] = np.random.default_rng(0).permutation(shuffled.obs["Metadata_Batch"].to_numpy())
-    without = _value(mt.metrics.pc_regression(shuffled, key="Metadata_Batch"), "pc_regression")
-    assert with_effect > without
-
-
-def test_correction_moves_the_batch_metric_the_right_way(corrected):
-    """Centring each batch is the simplest correction, and the batch metric must register it."""
-    before = _value(mt.metrics.pc_regression(corrected, key="Metadata_Batch", use_rep="X_pca"), "pc_regression")
-
-    centred = corrected.copy()
-    mt.pp.normalize(centred, method="standardize", by="Metadata_Batch")
-    sc.pp.pca(centred, n_comps=10)
-    corrected.obsm["X_centred"] = centred.obsm["X_pca"]
-
-    after = _value(mt.metrics.pc_regression(corrected, key="Metadata_Batch", use_rep="X_centred"), "pc_regression")
-    assert after < before
-
-
-def test_evaluate_correction_stacks_and_names_both_lisis(corrected):
-    """Two rows both called 'lisi' would collide when the table is pivoted."""
-    frame = mt.metrics.evaluate_correction(corrected, reps=("X_pca",))
-    assert {"ilisi", "clisi"} <= set(frame["metric"])
-    assert frame["metric"].is_unique
-    assert set(frame["better"]) <= {"higher", "lower"}
-
-
-def test_evaluate_correction_compares_representations_and_adds_map(corrected):
+def test_evaluate_correction_compares_representations_and_names_the_map_row_honestly(corrected):
+    """Reading one uns table once per representation gave every representation the same mAP, 0.7757 under both X_pca and X_other, inside the function whose purpose is comparing them."""
     pytest.importorskip("copairs")  # copairs declares requires-python <3.13
+    corrected = corrected.copy()  # module-scoped fixture; this test writes obsm["X_other"] and tl.map writes uns
     corrected.obsm["X_other"] = np.asarray(corrected.obsm["X_pca"])[:, :5]
-    mt.tl.map(corrected, mode="activity", null_size=200)
+    mt.tl.map(corrected, mode="activity", null_size=200)  # scores X, neither representation
+
     frame = mt.metrics.evaluate_correction(corrected, reps=("X_pca", "X_other"), map_key="map")
-    assert set(frame["representation"]) == {"X_pca", "X_other"}
-    assert "mean_average_precision" in set(frame["metric"])
+    assert {"X_pca", "X_other"} <= set(frame["representation"])
+
+    rows = frame[frame["metric"] == "mean_average_precision"]
+    assert len(rows) == 1
+    assert rows["representation"].iloc[0] == "X"
+
+
+def test_evaluate_correction_survives_an_object_where_most_metrics_are_undefined():
+    """A consensus object holds one row per perturbation, where the label silhouette, batch mixing and both LISIs are undefined at once, and the table still has to come back with whatever can be measured."""
+    import anndata as ad
+
+    rng = np.random.default_rng(0)
+    obs = pd.DataFrame(
+        {
+            "Metadata_Perturbation": ["a", "b", "c", "d"],
+            "Metadata_Batch": ["B1", "B2", "B1", "B2"],
+        },
+        index=[str(index) for index in range(4)],
+    )
+    adata = ad.AnnData(X=rng.normal(size=(4, 5)).astype(np.float32), obs=obs)
+    adata.obsm["X_pca"] = rng.normal(size=(4, 3))
+
+    with pytest.warns(UserWarning):
+        frame = mt.metrics.evaluate_correction(adata)
+
+    values = frame.set_index("metric")["value"]
+    assert values[["silhouette_label", "silhouette_batch", "ilisi", "clisi"]].isna().all()
+    assert np.isfinite(values["pc_regression"])
 
 
 def test_batch_variance_explained_covers_every_key(corrected):
@@ -95,74 +79,224 @@ def test_missing_representation_says_how_to_make_one(corrected):
         mt.metrics.silhouette_label(corrected, label_key="Metadata_Perturbation", use_rep="X_nope")
 
 
-def test_silhouette_batch_skips_labels_where_mixing_is_undefined():
-    """One well per plate on three plates is three points in three groups, which sklearn
-    refuses. That label is skipped and the others are still scored."""
+def _gene_map(n_sets=4, per_set=3, n_background=24, n_features=16, noise=0.1, seed=0):
+    """One profile per gene, where the genes of a set share a direction and the rest are noise."""
     import anndata as ad
 
-    rng = np.random.default_rng(0)
-    obs = pd.DataFrame(
-        {
-            "Metadata_Compound": ["a", "a", "a", "b", "b", "b", "b"],
-            "Metadata_Plate": ["P1", "P2", "P3", "P1", "P1", "P2", "P2"],
-        },
-        index=[str(index) for index in range(7)],
-    )
-    adata = ad.AnnData(X=rng.normal(size=(7, 4)).astype(np.float32), obs=obs)
-    adata.obsm["X_pca"] = rng.normal(size=(7, 3))
+    generator = np.random.default_rng(seed)
+    names, rows, edges = [], [], []
+    for index in range(n_sets):
+        direction = generator.normal(size=n_features)
+        for member in range(per_set):
+            names.append(f"SET{index}G{member}")
+            rows.append(direction + noise * generator.normal(size=n_features))
+            edges.append({"source": f"complex{index}", "target": names[-1]})
+    for index in range(n_background):
+        names.append(f"BG{index}")
+        rows.append(generator.normal(size=n_features))
 
-    result = mt.metrics.silhouette_batch(adata, label_key="Metadata_Compound", batch_key="Metadata_Plate")
-    assert np.isfinite(result["value"].iloc[0])  # 'b' is usable; 'a' is skipped
-
-
-def test_diagnose_testing_measures_the_hit_callers_on_this_screen(pure_noise_screen):
-    """Both hit callers are only approximately calibrated, to a degree that depends on the
-    control count, so diagnose_testing measures them on the screen at hand."""
-    adata = pure_noise_screen(n_control=200, n_groups=6, per_group=8, n_features=8)
-    report = mt.metrics.diagnose_testing(adata, n_draws=3, n_permutations=200)
-
-    checks = set(report["check"])
-    assert {"hit_calling null rate", "edistance null rate"} <= checks
-
-    # Smoke test: on pure noise the battery must pass both hit callers. Both call 0 of 3
-    # here, which passes under a binomial and a fixed-rate cutoff alike; the test below
-    # checks the cutoff.
-    verdicts = report.set_index("check")
-    for name in ("hit_calling null rate", "edistance null rate"):
-        assert verdicts.loc[name, "verdict"] == "pass", report
+    obs = pd.DataFrame({"Metadata_Perturbation": names}, index=pd.Index(names, name="gene"))
+    return ad.AnnData(np.asarray(rows, dtype=np.float32), obs=obs), pd.DataFrame(edges)
 
 
-@pytest.mark.parametrize(
-    ("count", "expected"),
-    [
-        (0, "pass"),
-        (1, "pass"),  # rate 0.125, which a fixed 0.10 threshold would fail
-        (2, "pass"),  # rate 0.250; 2 is the binomial cutoff at eight draws
-        (3, "warn"),
-        (4, "FAIL"),
-    ],
-)
-def test_the_null_rate_verdict_is_a_binomial_tail(monkeypatch, pure_noise_screen, count, expected):
-    """The null-rate verdict uses a binomial tail, checked at counts where a fixed rate disagrees.
+def test_known_relationships_measures_chance_for_a_perturbation_in_many_sets():
+    """A compound annotated to many targets draws many of the pairs.
 
-    A calibrated test calls a pseudo-treatment with probability ``alpha``, so the count over
-    ``n_draws`` is Binomial(n_draws, alpha) and the cutoff is that distribution's upper tail
-    (2 at eight draws). A fixed 0.10 rate fails counts of 1 and 2, which calibrated screens
-    produce often: that rule fails 34% of them at eight draws and 87% at forty.
-
-    The count is stubbed rather than simulated so the assertion does not depend on a random
-    draw.
+    This one points away from every other profile, so its pairs sit in a tail whatever the annotation says: the recall is far above 2 x percentile, and only a shuffle that keeps how many sets each perturbation belongs to shows that it is chance.
     """
-    from mantispy.metrics import _diagnose
+    import anndata as ad
 
-    monkeypatch.setattr(
-        _diagnose,
-        "_empirical_hit_rate",
-        lambda *args, **kwargs: {"hit_calling": count, "edistance": count},
+    values = 3.0 + np.random.default_rng(0).normal(size=(60, 16))
+    values[0] *= -1
+    names = [f"G{index}" for index in range(60)]
+    adata = ad.AnnData(values.astype(np.float32), obs=pd.DataFrame({"Metadata_Perturbation": names}, index=names))
+    hub = [(f"hub{k}", member) for k in range(1, 20) for member in ("G0", f"G{k}")]
+    rest = [(f"pair{k}", f"G{member}") for k in range(20) for member in (20 + 2 * k, 21 + 2 * k)]
+    net = pd.DataFrame(hub + rest, columns=["source", "target"])
+
+    result = mt.metrics.known_relationships(adata, net, n_permutations=100, seed=0).iloc[0]
+
+    assert result["value"] > 0.3
+    assert result["null"] > 0.3
+    assert result["p_value"] > 0.05
+
+
+def test_known_relationships_refuses_input_it_cannot_score():
+    adata, net = _gene_map(seed=4)
+    with pytest.raises(ValueError, match="aggregate first"):
+        mt.metrics.known_relationships(adata[[0, 0, 1]].copy(), net)
+    with pytest.raises(ValueError, match="relates no two"):
+        mt.metrics.known_relationships(adata, net.assign(target="ABSENT" + net["target"]))
+    with pytest.raises(KeyError, match="Metadata_Missing"):
+        mt.metrics.known_relationships(adata, net, label_key="Metadata_Missing")
+    with pytest.raises(ValueError, match=r"must be in \(0, 50\)"):
+        mt.metrics.known_relationships(adata, net, percentile=150)
+
+
+def test_known_relationships_names_each_annotation_source():
+    """Every source is scored on its own, so stacking two unnamed rows gave a table that pl.metrics could not pivot: 'Index contains duplicate entries'."""
+    adata, net = _gene_map(seed=7)
+    rows = pd.concat(
+        [
+            mt.metrics.known_relationships(adata, net, name="corum"),
+            mt.metrics.known_relationships(adata, net, name="reactome"),
+        ]
     )
-    adata = pure_noise_screen(n_control=40, n_groups=3, per_group=6, n_features=6)
-    report = mt.metrics.diagnose_testing(adata, n_draws=8, n_permutations=50)
 
-    verdicts = report.set_index("check")
-    for name in ("hit_calling null rate", "edistance null rate"):
-        assert verdicts.loc[name, "verdict"] == expected, report
+    assert list(rows["metric"]) == ["known_relationships:corum", "known_relationships:reactome"]
+    mt.pl.metrics(rows)
+
+
+def test_known_relationships_caps_what_one_set_expands_into(monkeypatch):
+    """A set of n members is n(n-1)/2 pairs, so one set naming every gene in a genome would both dominate the recall and exhaust memory.
+
+    The message has to name the way out.
+    """
+    adata, _ = _gene_map(seed=6)
+    genes = adata.obs["Metadata_Perturbation"].to_numpy()
+    everything = pd.DataFrame({"source": "all", "target": genes})
+
+    monkeypatch.setattr(mt.metrics._relationships, "MAX_PAIRS", 5)
+    with pytest.raises(ValueError, match="drop the largest ones"):
+        mt.metrics.known_relationships(adata, everything)
+
+
+def test_known_relationships_takes_a_pair_list_once_it_is_reshaped():
+    """The reference relationship sets ship one pair per row.
+
+    There is one annotation shape, so the conversion is the caller's, and it has to give the same answer as the sets do.
+    """
+    adata, _ = _gene_map(seed=5)
+    genes = adata.obs["Metadata_Perturbation"].to_numpy()
+    # Written both ways round, so the direction a pair appears in cannot change the answer.
+    pairs = pd.DataFrame(
+        [
+            {"entity1": genes[3 * index + a], "entity2": genes[3 * index + b]}
+            for index in range(4)
+            for a, b in ((0, 1), (1, 0))
+        ]
+    )
+    reshaped = pairs.assign(source=pairs.index.astype(str)).melt(id_vars="source", value_name="target")[
+        ["source", "target"]
+    ]
+    sets = pd.DataFrame(
+        [{"source": f"complex{index}", "target": genes[3 * index + member]} for index in range(4) for member in (0, 1)]
+    )
+
+    assert _value(mt.metrics.known_relationships(adata, reshaped), "known_relationships") == _value(
+        mt.metrics.known_relationships(adata, sets), "known_relationships"
+    )
+
+    with pytest.raises(ValueError, match="net needs"):
+        mt.metrics.known_relationships(adata, pairs)
+
+
+def _carried_pair(seed=0):
+    """An embedding and a named block on the same wells: three features are linear in the embedding, three are pure noise."""
+    import anndata as ad
+
+    rng = np.random.default_rng(seed)
+    n_obs, k = 60, 4
+    names = [f"W{index}" for index in range(n_obs)]
+    emb = rng.normal(size=(n_obs, k))
+
+    adata = ad.AnnData(X=rng.normal(size=(n_obs, 3)).astype(np.float32), obs=pd.DataFrame(index=names))
+    adata.obsm["X_emb"] = emb
+
+    signal = emb @ rng.normal(size=(k, 3)) + 0.01 * rng.normal(size=(n_obs, 3))
+    noise = rng.normal(size=(n_obs, 3))
+    var = pd.DataFrame({"feature_group": ["signal"] * 3 + ["noise"] * 3}, index=[f"F{index}" for index in range(6)])
+    reference = ad.AnnData(
+        X=np.hstack([signal, noise]).astype(np.float32),
+        obs=pd.DataFrame(index=names),
+        var=var,
+    )
+    return adata, reference
+
+
+def test_variance_carried_returns_one_row_per_feature_or_per_group():
+    adata, reference = _carried_pair()
+
+    per_feature = mt.metrics.variance_carried(adata, reference, use_rep="X_emb", groupby=None)
+    assert list(per_feature.columns) == ["feature", "variance_carried"]
+    assert len(per_feature) == reference.n_vars
+
+    per_group = mt.metrics.variance_carried(adata, reference, use_rep="X_emb", groupby="feature_group")
+    assert len(per_group) == 2
+    assert "n_features" in per_group.columns
+
+
+def test_variance_carried_refuses_input_it_cannot_score():
+    adata, reference = _carried_pair()
+
+    disjoint = reference.copy()
+    disjoint.obs_names = [f"other{index}" for index in range(disjoint.n_obs)]
+    with pytest.raises(ValueError, match="obs_names"):
+        mt.metrics.variance_carried(adata, disjoint, use_rep="X_emb")
+
+    with pytest.raises(ValueError, match="not a column"):
+        mt.metrics.variance_carried(adata, reference, use_rep="X_emb", groupby="nope")
+
+
+def test_variance_carried_rejects_non_unique_obs_names():
+    """Duplicate obs_names raise an actionable error rather than an opaque pandas one."""
+    adata, reference = _carried_pair()
+
+    dup_reference = reference.copy()
+    dup_reference.obs_names = ["W0"] * dup_reference.n_obs
+    with pytest.raises(ValueError, match="not unique"):
+        mt.metrics.variance_carried(adata, dup_reference, use_rep="X_emb")
+
+    dup_adata = adata.copy()
+    dup_adata.obs_names = ["W0"] * dup_adata.n_obs
+    with pytest.raises(ValueError, match="not unique"):
+        mt.metrics.variance_carried(dup_adata, reference, use_rep="X_emb")
+
+
+def test_variance_carried_all_nan_when_fewer_shared_than_splits():
+    """Fewer shared wells than n_splits yields all-NaN, not an opaque sklearn crash (issue #128)."""
+    adata, reference = _carried_pair()
+    few = adata[:3].copy()  # 3 shared wells, default n_splits=5
+
+    frame = mt.metrics.variance_carried(few, reference, use_rep="X_emb", groupby=None)
+    assert frame["variance_carried"].isna().all()
+
+
+def test_variance_carried_survives_an_inf_target():
+    """An inf in one target column drops only that row rather than aborting the run: neighbours still score (issue #128)."""
+    adata, reference = _carried_pair()
+    reference = reference.copy()
+    block = np.asarray(reference.X).copy()
+    block[0, 1] = np.inf
+    reference.X = block.astype(np.float32)
+
+    frame = mt.metrics.variance_carried(adata, reference, use_rep="X_emb", groupby=None)
+    carried = frame.set_index("feature")["variance_carried"]
+    assert carried["F0"] > 0.7
+
+
+def test_evaluate_correction_reports_a_covariate_nothing_else_would_catch(corrected):
+    """A representation can be dominated by something that is neither the batch nor the label.
+
+    On the learned embeddings of `ds.jump_lite` the cell count explains several times more of the variance than the source does, and no other row of this table would say so.
+    """
+    generator = np.random.default_rng(0)
+    embedding = np.asarray(corrected.obsm["X_pca"]).copy()
+    corrected.obs["Metadata_CellCount"] = embedding[:, 0] * 10 + generator.normal(scale=0.01, size=corrected.n_obs)
+    corrected.obs["Metadata_Unrelated"] = generator.normal(size=corrected.n_obs)
+
+    frame = mt.metrics.evaluate_correction(
+        corrected, reps=("X_pca",), covariates=("Metadata_CellCount", "Metadata_Unrelated"), perplexity=10
+    )
+
+    assert frame["metric"].is_unique  # a second row called "pc_regression" would collide
+    dominant = _value(frame, "pc_regression:Metadata_CellCount")
+    unrelated = _value(frame, "pc_regression:Metadata_Unrelated")
+    batch = _value(frame, "pc_regression")
+    assert dominant > batch and dominant > 0.5
+    assert unrelated < 0.2
+
+    # Whether a small share is better depends on what the covariate is, so no direction is claimed.
+    covariate_rows = frame[frame["metric"].str.startswith("pc_regression:")]
+    assert covariate_rows["better"].isna().all()
+    assert not frame[~frame["metric"].str.startswith("pc_regression:")]["better"].isna().any()

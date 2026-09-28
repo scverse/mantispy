@@ -328,10 +328,11 @@ download size and the expected runtime; close it with a session-info cell.
 
 Notebooks live in `docs/tutorials` and are rendered by [myst-nb][] with their committed outputs:
 `nb_execution_mode` is `off`, so the Read the Docs build downloads nothing and renders the outputs
-as they are. The `Tutorials run` job in `.github/workflows/test.yaml` executes every notebook with
+as they are. The `Tutorials run` job in `.github/workflows/test.yaml` executes every tutorial with
 `nb_execution_mode=cache`, so a committed output cannot silently stop matching the code.
 
-Re-run a notebook and commit its outputs whenever you change it.
+Re-run a notebook and commit its outputs whenever you change it. The pages in `docs/datasets` load about 3 GB, so
+CI skips them; re-run them whenever a loader or a function they call changes.
 
 `nb_output_stderr` is `remove`, so warnings do **not** appear on the rendered page. Never write
 prose that tells the reader to read a warning. If a warning is part of the explanation, capture it

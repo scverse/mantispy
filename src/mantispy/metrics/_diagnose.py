@@ -1,15 +1,3 @@
-"""Check whether differential testing is calibrated on the screen at hand.
-
-The quantities that decide whether a test is calibrated (wells per treatment, heavy feature
-tails, replicates crossing plates) vary by an order of magnitude between screens, so
-calibration measured on one screen does not carry over to another. These checks measure it
-on the data being tested.
-
-The main check is an empirical null. Control wells are relabeled as pseudo-treatments of
-the same size as the real treatments and put through the same test. Every call on them is a
-false positive, so the false positive rate is observed rather than assumed.
-"""
-
 from __future__ import annotations
 
 import warnings
@@ -18,11 +6,11 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 from anndata import AnnData
-from scipy import stats
 
-from mantispy._core._reduce import get_matrix, group_codes
+from mantispy._core._reduce import get_matrix, group_codes, group_offsets
 from mantispy._core._stats import benjamini_hochberg
-from mantispy._core._utils import as_frame, reference_mask
+from mantispy._core.frames import as_frame
+from mantispy._core.masks import reference_mask
 from mantispy._core.schema import get_resolution, stamp
 
 #: How far the observed null rate may exceed the nominal one before it is a failure.
@@ -47,7 +35,7 @@ def _empirical_null(controls: AnnData, size: int, n_draws: int, seed: int, block
         obs = as_frame(controls.obs).copy()
         obs["Metadata_Perturbation"] = labels
         obs["Metadata_Control"] = labels == "__reference__"
-        scratch = ad.AnnData(X=values.copy(), obs=obs, var=pd.DataFrame(index=controls.var_names))
+        scratch = ad.AnnData(X=values.copy(), obs=obs, var=as_frame(controls.var).copy())
         stamp(scratch, resolution="well")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -60,12 +48,7 @@ def _empirical_null(controls: AnnData, size: int, n_draws: int, seed: int, block
 def _empirical_hit_rate(
     controls: AnnData, size: int, n_draws: int, seed: int, n_permutations: int, alpha: float
 ) -> dict[str, int]:
-    """Count the control-only pseudo-treatments each hit caller calls.
-
-    Neither hit caller is fully calibrated at small control counts, and the error depends on
-    the screen, so it is measured on these controls. Returns counts instead of a rate
-    because the verdict is a binomial tail and needs the denominator.
-    """
+    """Count the control-only pseudo-treatments each hit caller calls."""
     from mantispy.tl._distance import edistance
     from mantispy.tl._hits import hit_calling
 
@@ -78,7 +61,7 @@ def _empirical_hit_rate(
         obs = as_frame(controls.obs).copy()
         obs["Metadata_Perturbation"] = labels
         obs["Metadata_Control"] = labels == "__reference__"
-        scratch = ad.AnnData(X=values.copy(), obs=obs, var=pd.DataFrame(index=controls.var_names))
+        scratch = ad.AnnData(X=values.copy(), obs=obs, var=as_frame(controls.var).copy())
         stamp(scratch, resolution="well")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -103,55 +86,52 @@ def diagnose_testing(
     """Check whether differential testing is calibrated on this screen.
 
     Args:
-        adata: Well-level profiles after the normalization and transform you plan to test
-            with, since the results depend on both.
+        adata: Well-level profiles after the normalization and transform you plan to test with, since the results depend on both.
         groupby: As in :func:`~mantispy.tl.differential_features`.
         reference: As in :func:`~mantispy.tl.differential_features`.
         block: As in :func:`~mantispy.tl.differential_features`.
-        n_draws: Pseudo-treatments drawn from the controls for the empirical null. More draws
-            resolve the false positive rate better and take longer.
+        n_draws: Pseudo-treatments drawn from the controls for the empirical null.
+            More draws resolve the false positive rate better and take longer.
         alpha: Nominal rate the null is compared against.
-        seed: Seed for choosing which control wells stand in for a treatment. The two hit
-            callers' permutation nulls are seeded by the draw index instead, so they are
-            identical across calls that differ only in ``seed``.
+        seed: Seed for choosing which control wells stand in for a treatment.
+            The two hit callers' permutation nulls are seeded by the draw index instead, so they are identical across calls that differ only in ``seed``.
         n_permutations: Null size for the two hit callers; smaller is faster and coarser.
 
     Returns:
-        A frame with columns ``check``, ``value``, ``expected``, ``verdict`` and ``note``.
-        A ``FAIL`` verdict means the check does not hold on this data.
+        A frame with columns ``check``, ``value``, ``expected``, ``verdict`` and ``note``, one row per check that ran, where a ``FAIL`` verdict means the check does not hold on this data.
+        The empirical-null rows are absent when every null p-value came back non-finite, and the two hit-caller rows need at least eight reference wells.
+
+    Raises:
+        ValueError: The object is annotated at cell resolution, which none of these checks describe.
+        ValueError: No treatment has two wells, or there are fewer than four reference wells, leaving nothing to measure a null against.
 
     Notes:
         The checks and what each one detects:
 
         ``null p < 0.05`` / ``null p < 0.01``
-            Control wells relabeled as treatments of the size yours have. The rate should
-            match the nominal one. Heavy tails distort small p-values first, so a test can be
-            calibrated at 0.05 and not at 0.01, which is closer to the range a false
-            discovery rate works in.
+            Control wells relabeled as treatments of the size yours have.
+            The rate should match the nominal one.
+            Heavy tails distort small p-values first, so a test can be calibrated at 0.05 and not at 0.01, which is closer to the range a false discovery rate works in.
         ``null discoveries``
-            How many of those null p-values survive Benjamini-Hochberg. A count above zero
-            means the q-values on the real data are optimistic by roughly that much.
+            How many of those null p-values survive Benjamini-Hochberg.
+            A count above zero means the q-values on the real data are optimistic by roughly that much.
         ``hit_calling null rate`` / ``edistance null rate``
-            The same relabeling applied to the two hit callers, counted over ``n_draws``
-            draws. Both are permutation tests that are not fully calibrated at small control
-            counts, so the count is compared against the upper tail of
-            ``Binomial(n_draws, alpha)`` instead of a fixed rate. At eight draws the smallest
-            non-zero rate is 0.125, and a threshold below that would fail a calibrated screen
-            a third of the time. Raising ``n_draws`` sharpens the answer and moves the cutoff
-            with it.
+            The same relabeling applied to the two hit callers, counted over ``n_draws`` draws.
+            Both are permutation tests that are not fully calibrated at small control counts, so the count is compared against the upper tail of ``Binomial(n_draws, alpha)`` instead of a fixed rate.
+            At eight draws the smallest non-zero rate is 0.125, and a threshold below that would fail a calibrated screen a third of the time.
+            Raising ``n_draws`` sharpens the answer and moves the cutoff with it.
         ``rank test resolution``
-            The smallest p-value a Mann-Whitney test can return at your replication, compared
-            with what multiple-testing correction requires. With three wells against 14
-            reference wells the floor is 2.9e-03 whatever the effect size, and
-            :func:`~mantispy.tl.effect_size` then silently calls nothing.
+            The smallest p-value a Mann-Whitney test can return at your replication, compared with what multiple-testing correction requires.
+            With three wells against 14 reference wells the floor is 2.9e-03 whatever the effect size, and :func:`~mantispy.tl.effect_size` then silently calls nothing.
         ``excess kurtosis``
-            How far the features are from the normality a t-test assumes. It predicts the
-            null checks above but is not a verdict on its own, since heavy tails matter less
-            with enough wells per group.
+            How far the features are from the normality a t-test assumes.
+            It predicts the null checks above but is not a verdict on its own, since heavy tails matter less with enough wells per group.
         ``wells per treatment`` and ``treatments sharing a {block} with the reference``
-            The replicate structure the other checks depend on. A treatment whose wells share
-            no block with the reference cannot be tested.
+            The replicate structure the other checks depend on.
+            A treatment whose wells share no block with the reference cannot be tested.
     """
+    from scipy import stats
+
     if get_resolution(adata) == "cell":
         raise ValueError("diagnose_testing describes well-level testing; aggregate first with mt.tl.aggregate")
 
@@ -168,7 +148,6 @@ def diagnose_testing(
     threshold = alpha / max(n_tests, 1)
     rows = []
 
-    # Replicate structure the other checks depend on.
     rows.append(
         {
             "check": "wells per treatment",
@@ -182,12 +161,17 @@ def diagnose_testing(
     if block is not None and block in obs.columns:
         blocks = obs[block].to_numpy()
         control_blocks = set(blocks[is_control])
-        stranded = [
-            str(keys[index])
-            for index in range(len(keys))
-            if sizes[index] >= 2 and not set(blocks[(codes == index) & ~is_control]) & control_blocks
-        ]
-        spans = [len(set(blocks[(codes == index) & ~is_control])) for index in range(len(keys)) if sizes[index] >= 2]
+        order, offsets = group_offsets(codes, len(keys))
+        stranded: list[str] = []
+        spans: list[int] = []
+        for index in range(len(keys)):
+            if sizes[index] < 2:
+                continue
+            group = order[offsets[index] : offsets[index + 1]]
+            seen = set(blocks[group[~is_control[group]]])
+            spans.append(len(seen))
+            if not seen & control_blocks:
+                stranded.append(str(keys[index]))
         rows.append(
             {
                 "check": f"treatments sharing a {block} with the reference",
@@ -200,7 +184,6 @@ def diagnose_testing(
             }
         )
 
-    # Feature tails, which predict the empirical null below.
     values = get_matrix(adata).astype(np.float64)
     finite = np.isfinite(values).all(axis=0)
     centred = values[:, finite] - values[:, finite].mean(axis=0)
@@ -217,17 +200,11 @@ def diagnose_testing(
         }
     )
 
-    # Whether a rank test can reach the threshold this many tests require. The extreme case
-    # is built from distinct values because scipy uses the normal approximation for tied
-    # samples (2.9e-03 instead of the exact 3.3e-07 at three wells against 330 controls),
-    # while tl.effect_size scores untied measurements with the exact null.
+    # Distinct values, because scipy falls back to the normal approximation on tied samples.
     n_control = int(is_control.sum())
     floor = float(
         stats.mannwhitneyu(np.arange(typical, dtype=float), np.arange(typical, typical + n_control, dtype=float)).pvalue
     )
-    # Compared with Bonferroni, which asks whether the single best test on the screen can
-    # survive. effect_size uses BH, which is looser further down the ranking, so a screen
-    # that fails this can still call features when many of them sit at the floor.
     needed = int(np.ceil(floor * n_tests / alpha))
     rows.append(
         {
@@ -244,7 +221,6 @@ def diagnose_testing(
         }
     )
 
-    # Empirical null, the only check that measures the false positive rate directly.
     controls = adata[is_control].copy()
     # Cap a pseudo-treatment at half the control wells so the rest can serve as the reference.
     pseudo_size = max(min(typical, controls.n_obs // 2), 2)
@@ -274,13 +250,8 @@ def diagnose_testing(
             }
         )
 
-    # The two hit callers on the same empirical null.
     if controls.n_obs >= 8:
         counts = _empirical_hit_rate(controls, pseudo_size, n_draws, seed, n_permutations, alpha)
-        # A calibrated test calls a pseudo-treatment at rate `alpha`, so the count over
-        # `n_draws` is Binomial(n_draws, alpha) and the cutoff is its 95th percentile. A fixed
-        # 0.10 threshold on the rate would fail 34% of calibrated screens at eight draws and
-        # 87% at forty.
         critical = int(stats.binom.ppf(0.95, n_draws, alpha))
         for name, count in counts.items():
             rows.append(

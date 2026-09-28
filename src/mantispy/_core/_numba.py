@@ -1,24 +1,26 @@
 """NaN-skipping grouped reduction kernels.
 
-Two design choices matter at JUMP scale:
-
-* The row permutation is passed as an index array and applied inside the kernel.
-  Materializing ``X[order]`` would copy the whole matrix for every statistic, twice
-  for ``mad_robustize`` and four times for ``robustize``.
-* Parallelism is over groups, not over (group, feature) pairs, so the per-column scratch
-  buffer is allocated once per group instead of once per output cell. Allocating inside
-  a hot ``prange`` body serializes the loop on numba's allocator lock.
-
+The row permutation is passed as an index array and applied inside the kernel, never materialized as ``X[order]``.
+Scratch buffers are allocated once per group, because allocating inside a ``prange`` body serializes the loop on numba's allocator lock.
 Input stays ``float32``; accumulation is in ``float64`` scalars.
 """
 
 from __future__ import annotations
 
-import numpy as np
-from numba import njit, prange
+from typing import TYPE_CHECKING
 
-# Statistic selectors, kept as ints so one kernel serves all of them.
+import numpy as np
+from numba import njit
+
+if TYPE_CHECKING:
+    # numba's prange iterates like range, but its own type says nothing about that.
+    from builtins import range as prange
+else:
+    from numba import prange
+
 MEAN, MEDIAN, MAD, STD, QUANTILE = 0, 1, 2, 3, 4
+#: Spread selector for :func:`grouped_median_spread` only, alongside :data:`MAD`.
+IQR = 5
 
 
 def group_offsets(codes: np.ndarray, n_groups: int) -> tuple[np.ndarray, np.ndarray]:
@@ -36,10 +38,22 @@ def group_counts(codes: np.ndarray, n_groups: int) -> np.ndarray:
 
 
 @njit(cache=True, nogil=True)
-def _median_of(buffer, n):
+def _longest_group(offsets: np.ndarray) -> int:
+    """Rows in the largest group, which is how wide a per-thread gather buffer has to be."""
+    longest = 0
+    for group in range(offsets.size - 1):
+        length = offsets[group + 1] - offsets[group]
+        if length > longest:
+            longest = length
+    return longest
+
+
+@njit(cache=True, nogil=True)
+def _median_sorted(values: np.ndarray) -> float:
+    """Median of ``values``, already sorted ascending."""
+    n = values.size
     if n == 0:
         return np.nan
-    values = np.sort(buffer[:n])
     middle = n // 2
     if n % 2 == 1:
         return values[middle]
@@ -47,10 +61,11 @@ def _median_of(buffer, n):
 
 
 @njit(cache=True, nogil=True)
-def _quantile_of(buffer, n, q):
+def _quantile_sorted(values: np.ndarray, q: float) -> float:
+    """Linearly interpolated quantile of ``values``, already sorted ascending."""
+    n = values.size
     if n == 0:
         return np.nan
-    values = np.sort(buffer[:n])
     position = q * (n - 1)
     low = int(np.floor(position))
     high = int(np.ceil(position))
@@ -59,15 +74,25 @@ def _quantile_of(buffer, n, q):
     return values[low] + (position - low) * (values[high] - values[low])
 
 
+@njit(cache=True, nogil=True)
+def _median_of(buffer: np.ndarray, n: int) -> float:
+    """Median of the ``n`` gathered values in ``buffer``, which this sorts."""
+    return _median_sorted(np.sort(buffer[:n]))
+
+
+@njit(cache=True, nogil=True)
+def _quantile_of(buffer: np.ndarray, n: int, q: float) -> float:
+    """Quantile of the ``n`` gathered values in ``buffer``, which this sorts."""
+    return _quantile_sorted(np.sort(buffer[:n]), q)
+
+
 @njit(parallel=True, cache=True, nogil=True)
-def _grouped(X, order, offsets, n_groups, stat, q, ddof):
+def _grouped(
+    X: np.ndarray, order: np.ndarray, offsets: np.ndarray, n_groups: int, stat: int, q: float, ddof: int
+) -> np.ndarray:
     n_vars = X.shape[1]
     out = np.empty((n_groups, n_vars), dtype=np.float64)
-    longest = 0
-    for group in range(n_groups):
-        length = offsets[group + 1] - offsets[group]
-        if length > longest:
-            longest = length
+    longest = _longest_group(offsets)
 
     for group in prange(n_groups):
         start, stop = offsets[group], offsets[group + 1]
@@ -123,8 +148,71 @@ def grouped_stat(
     return _grouped(X, order, offsets, n_groups, stat, float(q), int(ddof))
 
 
+@njit(parallel=True, cache=True, nogil=True)
+def _grouped_median_spread(
+    X: np.ndarray, order: np.ndarray, offsets: np.ndarray, n_groups: int, spread: int
+) -> tuple[np.ndarray, np.ndarray]:
+    n_vars = X.shape[1]
+    centre = np.empty((n_groups, n_vars), dtype=np.float64)
+    scale = np.empty((n_groups, n_vars), dtype=np.float64)
+    longest = _longest_group(offsets)
+
+    for group in prange(n_groups):
+        start, stop = offsets[group], offsets[group + 1]
+        buffer = np.empty(longest, dtype=np.float64)
+        for j in range(n_vars):
+            n = 0
+            for i in range(start, stop):
+                value = X[order[i], j]
+                if not np.isnan(value):
+                    buffer[n] = value
+                    n += 1
+            if n == 0:
+                centre[group, j] = np.nan
+                scale[group, j] = np.nan
+                continue
+            values = np.sort(buffer[:n])
+            middle = _median_sorted(values)
+            centre[group, j] = middle
+            if spread == MAD:
+                # Deviations taken in sorted order rather than in gather order are a permutation of the same numbers, so their median is the same.
+                for k in range(n):
+                    buffer[k] = abs(values[k] - middle)
+                scale[group, j] = _median_of(buffer, n)
+            else:
+                scale[group, j] = _quantile_sorted(values, 0.75) - _quantile_sorted(values, 0.25)
+    return centre, scale
+
+
+def grouped_median_spread(
+    X: np.ndarray, codes: np.ndarray, n_groups: int, spread: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-group median and robust spread, both read off one sort per (group, feature) slice.
+
+    The same pair out of :func:`grouped_stat` costs three sorts of every slice: for the MAD because the spread pass re-finds the median it measures deviations from, and for the IQR because each of the three quantiles is its own pass.
+    Sorting is nearly the whole cost of a robust normalization at screen scale, so this nearly halves ``mad_robustize`` and cuts ``robustize`` to a third.
+
+    Args:
+        X: ``(n_obs, n_vars)`` matrix, read as ``float32``.
+        codes: Per-row group code in ``[0, n_groups)``.
+        n_groups: Number of groups, so that a group with no rows still gets its row of ``NaN`` instead of being dropped.
+        spread: :data:`MAD` for the unscaled median absolute deviation, or :data:`IQR` for the interquartile range.
+
+    Returns:
+        ``(median, spread)``, each ``(n_groups, n_vars)`` float64, holding ``NaN`` wherever a group has no usable value for a feature.
+
+    Raises:
+        ValueError: If ``spread`` is neither :data:`MAD` nor :data:`IQR`.
+    """
+    if spread not in (MAD, IQR):
+        raise ValueError(f"spread must be MAD or IQR, got {spread!r}")
+    X = np.ascontiguousarray(X, dtype=np.float32)
+    order, offsets = group_offsets(codes, n_groups)
+    return _grouped_median_spread(X, order, offsets, n_groups, int(spread))
+
+
 @njit(cache=True, nogil=True)
-def _count_below(column, stop, value):
+def _count_below(column: np.ndarray, stop: int, value: float) -> tuple[int, int]:
     """``(#values < value, #values == value)`` in ``column[:stop]``, which is sorted."""
     low, high = 0, stop
     while low < high:  # first index not less than value
@@ -145,17 +233,13 @@ def _count_below(column, stop, value):
 
 
 @njit(parallel=True, cache=True, nogil=True)
-def _mwu_moments(treated, control, n_control, control_ties):
+def _mwu_moments(
+    treated: np.ndarray, control: np.ndarray, n_control: np.ndarray, control_ties: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Mann-Whitney ``U1``, the pooled tie term and the finite count, per feature.
 
-    ``treated`` and ``control`` are ``(n_vars, n_obs)``, feature-major so each row is
-    contiguous for the binary search. ``control`` is sorted ascending with missing values
-    last, ``n_control`` is how many of each row are finite, and ``control_ties`` is that
-    row's ``sum(c ** 3 - c)`` over its runs of equal values.
-
-    The control is the same for every group, but ``scipy.stats.mannwhitneyu`` called per
-    group re-ranks it each time. Ranked once and searched into, each group costs its own
-    size rather than the reference's.
+    ``treated`` and ``control`` are ``(n_vars, n_obs)``, feature-major so each row is contiguous for the binary search.
+    ``control`` is sorted ascending with missing values last, ``n_control`` is how many of each row were measured, and ``control_ties`` is that row's ``sum(c ** 3 - c)`` over its runs of equal values.
     """
     n_vars, n_treated = treated.shape
     statistic = np.empty(n_vars, dtype=np.float64)
@@ -194,16 +278,13 @@ def _mwu_moments(treated, control, n_control, control_ties):
 
 
 @njit(parallel=True, cache=True, nogil=True)
-def _polish_planes(planes, max_iter, tol):
+def _polish_planes(planes: np.ndarray, max_iter: int, tol: float) -> tuple[np.ndarray, np.ndarray]:
     """Tukey median polish of every ``(rows, columns)`` plane of ``planes``.
 
-    ``planes`` is ``(n_features, n_rows, n_columns)``, feature-major so each plane is
-    contiguous and handled by one thread. Returns the fitted row and column effects with
-    the grand level held out of both, as ``(n_features, n_rows)`` and
-    ``(n_features, n_columns)``.
+    ``planes`` is ``(n_features, n_rows, n_columns)``, feature-major so each plane is contiguous and handled by one thread.
+    Returns the fitted row and column effects with the grand level held out of both, as ``(n_features, n_rows)`` and ``(n_features, n_columns)``.
 
-    The arithmetic matches ``np.median`` over a stacked array. The medians here are over
-    16 and 24 values, where numpy's per-slice dispatch costs more than the median.
+    The arithmetic matches ``np.median`` over a stacked array.
     """
     n_features, n_rows, n_columns = planes.shape
     row_out = np.zeros((n_features, n_rows), dtype=np.float64)
@@ -273,16 +354,18 @@ def _polish_planes(planes, max_iter, tol):
 
 
 @njit(parallel=True, cache=True, nogil=True)
-def _wasserstein_against(treated, control, n_control):
+def _wasserstein_against(treated: np.ndarray, control: np.ndarray, n_control: np.ndarray) -> np.ndarray:
     """Wasserstein-1 distance per feature, against a reference sorted once.
 
-    Both arrays are ``(n_vars, n_obs)``, feature-major so each row is contiguous, and each
-    row of ``control`` is sorted ascending over its first ``n_control`` entries.
+    ``W1`` is the integral of ``|F_treated - F_control|`` over the merged support.
 
-    ``W1`` is the integral of ``|F_treated - F_control|`` over the merged support, computed
-    in one walk through both sorted samples. A per-group ``argsort`` of the concatenation
-    re-sorts the reference each time, which dominates the cost when the reference is the
-    eight thousand control wells of a screen.
+    Args:
+        treated: ``(n_vars, n_treated)`` float64 sample, feature-major so each row is contiguous, and holding no missing value: every entry of a row counts towards that feature's treated CDF.
+        control: ``(n_vars, n_obs)`` float64 reference, feature-major, each row sorted ascending over its first ``n_control`` entries, as :func:`~mantispy._core._stats.sorted_control` returns it.
+        n_control: How many entries of each row of `control` were measured, so that the unmeasured tail a row was padded with is left out of the reference CDF.
+
+    Returns:
+        ``(n_vars,)`` float64, the distance between the two samples of each feature in that feature's own units, and ``NaN`` for a feature with no treated rows or no measured reference value.
     """
     n_vars, n_treated = treated.shape
     out = np.empty(n_vars, dtype=np.float64)
@@ -301,8 +384,7 @@ def _wasserstein_against(treated, control, n_control):
         seen_control = 0
         previous = min(control[j, 0], values[0])
         while i < m or k < n_treated:
-            # Ties go to the treated sample, matching a stable sort of the concatenation
-            # with the treated block first. The gap is zero either way.
+            # Ties go to the treated sample, as in a stable sort with the treated block first; the gap is zero either way.
             if k < n_treated and (i >= m or values[k] <= control[j, i]):
                 current = values[k]
                 k += 1
@@ -311,8 +393,7 @@ def _wasserstein_against(treated, control, n_control):
                 current = control[j, i]
                 i += 1
                 from_treated = False
-            # The step from the previous point to this one is weighted by the two CDFs
-            # as they stood at the previous point, so the counts advance afterwards.
+            # The step is weighted by the CDFs as they stood at the previous point, so the counts advance afterwards.
             total += abs(seen_treated / n_treated - seen_control / m) * (current - previous)
             if from_treated:
                 seen_treated += 1

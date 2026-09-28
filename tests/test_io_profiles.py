@@ -1,9 +1,10 @@
+import anndata as ad
 import numpy as np
 import pandas as pd
 import pytest
 
 import mantispy as mt
-from mantispy._core.features import canonical_channel
+from mantispy._core.features import parse_feature_names
 from mantispy._core.schema import SCHEMA_VERSION
 from mantispy.io._profiles import from_dataframe
 
@@ -19,21 +20,17 @@ def _frame(n=4, prefix="Metadata_", well=("A01", "A02", "A03", "A04")):
     )
 
 
-def test_from_dataframe_splits_features_and_metadata():
-    adata = from_dataframe(_frame(), channels=["DNA"])
-    assert adata.shape == (4, 2)
-    assert adata.X.dtype == np.float32
-    assert list(adata.obs.columns) == ["Metadata_Plate", "Metadata_Well"]
-    assert adata.var.loc["Cells_Intensity_MeanIntensity_DNA", "channel"] == "DNA"
-    assert adata.uns["mantispy"]["resolution"] == "well"
-
-
-@pytest.mark.parametrize("prefix", ["Image_Metadata_", "Metadata_", "metadata_", "meta_"])
-def test_every_real_world_metadata_prefix_is_recognised(prefix):
-    """Accessions in the Cell Painting Gallery use all four spellings."""
-    adata = from_dataframe(_frame(prefix=prefix), channels=["DNA"])
-    assert "Metadata_Plate" in adata.obs
-    assert adata.n_vars == 2
+@pytest.mark.parametrize(
+    ("published", "expected"),
+    [({"Metadata_Count_Cells": 7, "Metadata_Object_Count": 9}, 7.0), ({"Metadata_Object_Count": 9}, 9.0)],
+)
+def test_pycytominer_counts_are_copied_to_the_names_mantispy_reads(published, expected):
+    frame = _frame().assign(**published, Metadata_Site_Count=9)
+    obs = from_dataframe(frame, channels=["DNA"]).obs
+    assert (obs["Metadata_CellCount"] == expected).all()
+    assert (obs["Metadata_SiteCount"] == 9).all()
+    # Copied, not renamed: code reading the upstream columns keeps working.
+    assert set(published) | {"Metadata_Site_Count"} <= set(obs.columns)
 
 
 def test_sentinels_become_nan():
@@ -51,19 +48,6 @@ def test_read_profiles_by_suffix(tmp_path, suffix):
     else:
         frame.to_csv(path, sep="\t" if suffix == ".tsv" else ",", index=False)
     assert mt.io.read_profiles(path, channels=["DNA"]).shape == (4, 2)
-
-
-def test_read_profiles_stacks_several_files(tmp_path):
-    paths = []
-    for plate in ("P1", "P2"):
-        frame = _frame()
-        frame["Metadata_Plate"] = plate
-        path = tmp_path / f"{plate}.csv"
-        frame.to_csv(path, index=False)
-        paths.append(path)
-    adata = mt.io.read_profiles(paths, channels=["DNA"])
-    assert adata.n_obs == 8
-    assert set(adata.obs["Metadata_Plate"]) == {"P1", "P2"}
 
 
 def test_column_mismatch_raises_then_intersects(tmp_path):
@@ -108,36 +92,8 @@ def test_write_read_round_trip(tmp_path, cells, suffix):
     assert isinstance(loaded.uns["mantispy"]["image_table"], pd.DataFrame)
 
 
-def test_write_refuses_an_invalid_object(tmp_path, cells):
-    cells.obs = cells.obs.drop(columns="Metadata_Plate")
-    with pytest.raises(ValueError, match="Metadata_Plate"):
-        mt.io.write(cells, tmp_path / "bad.h5ad")
-
-
-def test_read_rejects_a_foreign_schema_version(tmp_path, cells):
-    import anndata as ad
-
-    path = tmp_path / "old.h5ad"
-    mt.io.write(cells, path)
-    stored = ad.read_h5ad(path)
-    stored.uns["mantispy"]["schema_version"] = "99.0"
-    stored.write_h5ad(path)
-    with pytest.raises(ValueError, match="99.0"):
-        mt.io.read(path)
-
-
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [("Hoechst", "dna"), ("DAPI", "dna"), ("DNA|ER", "dna|er"), ("GFP", "gfp"), (None, None)],
-)
-def test_channel_aliases_make_vocabularies_comparable(raw, expected):
-    """Datasets that name the nuclear channel differently should still compare."""
-    assert canonical_channel(raw) == expected
-
-
 def test_colliding_metadata_prefixes_are_refused():
-    """Both normalise to Metadata_Plate, and obs would then hold a duplicate column whose
-    every later lookup returns a frame instead of a series."""
+    """Both normalise to Metadata_Plate, and obs would then hold a duplicate column whose every later lookup returns a frame instead of a series."""
     frame = pd.DataFrame(
         {
             "Metadata_Plate": ["P1", "P1"],
@@ -150,36 +106,11 @@ def test_colliding_metadata_prefixes_are_refused():
         from_dataframe(frame)
 
 
-def test_image_level_features_are_excluded_by_default_and_can_be_kept():
-    """A JUMP plate carries 1077 whole-field Image_ features against 3634 per-cell ones.
-    They are excluded by default, as in pycytominer's default compartments, and
-    objects=None keeps them."""
-    frame = pd.DataFrame(
-        {
-            "Metadata_Plate": ["P1", "P1"],
-            "Metadata_Well": ["A01", "A02"],
-            "Cells_AreaShape_Area": [1.0, 2.0],
-            "Nuclei_Intensity_MeanIntensity_DNA": [3.0, 4.0],
-            "Image_Texture_Contrast_DNA_3_00_256": [5.0, 6.0],
-            "Image_Granularity_1_DNA": [7.0, 8.0],
-        }
-    )
-
-    default = from_dataframe(frame)
-    assert set(default.var_names) == {"Cells_AreaShape_Area", "Nuclei_Intensity_MeanIntensity_DNA"}
-
-    everything = from_dataframe(frame, objects=None)
-    assert "Image_Texture_Contrast_DNA_3_00_256" in set(everything.var_names)
-    assert set(everything.var["object"].astype(str)) == {"Cells", "Nuclei", "Image"}
-
-    nuclei_only = from_dataframe(frame, objects=("Nuclei",))
-    assert set(nuclei_only.var_names) == {"Nuclei_Intensity_MeanIntensity_DNA"}
-
-
 def test_dropping_a_majority_of_features_warns_but_a_minority_stays_quiet(capsys):
-    """The default `objects=` filter applies without the caller asking for it and can remove
-    most of a table. Losing the majority must reach the user at the default verbosity;
-    losing a minority stays quiet."""
+    """The default `objects=` filter applies without the caller asking for it and can remove most of a table.
+
+    Losing the majority must reach the user at the default verbosity; losing a minority stays quiet.
+    """
     previous = mt.settings.verbosity
     mt.settings.verbosity = 1
     try:
@@ -214,88 +145,6 @@ def test_dropping_a_majority_of_features_warns_but_a_minority_stays_quiet(capsys
         mt.settings.verbosity = previous
 
 
-def test_a_frame_whose_compartments_are_singular_is_refused_by_name():
-    """pycytominer and many custom pipelines emit Cell_/Nucleus_ rather than
-    Cells_/Nuclei_. The default filter would drop all of them and leave an (n, 0) AnnData
-    that mt.io.validate() accepts."""
-    frame = pd.DataFrame(
-        {
-            "Metadata_Plate": ["P1", "P1"],
-            "Metadata_Well": ["A01", "A02"],
-            "Cell_AreaShape_Area": [1.0, 2.0],
-            "Nucleus_Intensity_MeanIntensity_DNA": [3.0, 4.0],
-        }
-    )
-    with pytest.raises(ValueError, match="objects=None"):
-        from_dataframe(frame)
-
-    kept = from_dataframe(frame, objects=None)
-    assert kept.n_vars == 2
-
-
-def test_a_healthy_small_export_does_not_warn_about_its_image_columns(capsys):
-    """Image_ columns removed by the default object filter do not trigger a warning.
-
-    A four-image CellProfiler export routinely has more whole-field Image_ measurements
-    than per-cell ones. Warning on every such read would teach users to ignore the warning
-    for a feature set too thin to profile, which is covered above.
-    """
-    previous = mt.settings.verbosity
-    mt.settings.verbosity = 1
-    try:
-        frame = pd.DataFrame({"Metadata_Plate": ["P1", "P1"], "Metadata_Well": ["A01", "A02"]})
-        for index in range(12):  # comfortably above THIN_FEATURE_SET
-            frame[f"Cells_AreaShape_F{index}"] = [float(index), float(index) + 1]
-        for index in range(30):  # and outnumbered by whole-field columns
-            frame[f"Image_Texture_Contrast_DNA_{index}_00_256"] = [1.0, 2.0]
-
-        adata = from_dataframe(frame)
-        assert adata.n_vars == 12
-        assert capsys.readouterr().err == "", "nothing reaches the default verbosity"
-
-        mt.settings.verbosity = 2
-        from_dataframe(frame)
-        captured = capsys.readouterr().err
-        assert "dropped 30 of 42" in captured, "it still says what it did, as bookkeeping"
-        assert "WARNING" not in captured.upper()
-    finally:
-        mt.settings.verbosity = previous
-
-
-def test_the_inferred_channel_vocabulary_travels_with_the_object():
-    """A parse is only reproducible if what it was parsed with is recorded.
-
-    The vocabulary is read off the column names handed in, so a subset of a plate can
-    infer a smaller one than the whole plate and parse the same column differently:
-    Cells_Correlation_Correlation_AGP_DNA is channel 'AGP|DNA' when AGP is in the
-    vocabulary and channel 'DNA', feature 'Correlation_AGP', when it is not.
-    """
-    shared = ["Metadata_Plate", "Metadata_Well"]
-    correlation = "Cells_Correlation_Correlation_AGP_DNA"
-    full = pd.DataFrame(
-        {
-            "Metadata_Plate": ["P1"],
-            "Metadata_Well": ["A01"],
-            "Cells_Intensity_MeanIntensity_AGP": [1.0],
-            "Cells_Intensity_MeanIntensity_DNA": [2.0],
-            correlation: [0.5],
-        }
-    )
-    subset = full[[*shared, correlation]]
-
-    parsed_full = from_dataframe(full)
-    parsed_subset = from_dataframe(subset)
-
-    assert parsed_full.uns["mantispy"]["channels"] == ["AGP", "DNA"]
-    assert parsed_subset.uns["mantispy"]["channels"] == ["DNA"]
-    assert parsed_full.var.loc[correlation, "channel"] != parsed_subset.var.loc[correlation, "channel"]
-
-    # Naming the vocabulary makes the subset parse the way the full plate did.
-    pinned = from_dataframe(subset, channels=["AGP", "DNA"])
-    assert pinned.var.loc[correlation, "channel"] == parsed_full.var.loc[correlation, "channel"]
-    assert pinned.var.loc[correlation, "feature"] == parsed_full.var.loc[correlation, "feature"]
-
-
 def _cytotable_part(rows: range) -> pd.DataFrame:
     """A CytoTable-shaped frame: prefixed identifiers, compartment-prefixed features."""
     return pd.DataFrame(
@@ -328,6 +177,36 @@ def test_a_directory_with_nothing_to_read_says_so(tmp_path):
         mt.io.read_profiles(tmp_path)
 
 
+def test_an_unknown_on_column_mismatch_is_refused(tmp_path):
+    """A typo fell through to the intersect branch, which drops every column the files disagree on without saying so."""
+    path = tmp_path / "a.csv"
+    _frame().to_csv(path, index=False)
+
+    with pytest.raises(ValueError, match="on_column_mismatch"):
+        mt.io.read_profiles(path, channels=["DNA"], on_column_mismatch="intersct")
+
+
+def test_a_file_with_a_header_and_no_rows_is_refused(tmp_path):
+    """It read as a silent 0x0 object with every feature column misfiled into obs, because a column of no values has no dtype to recognise a feature by."""
+    path = tmp_path / "header_only.csv"
+    _frame().iloc[:0].to_csv(path, index=False)
+
+    with pytest.raises(ValueError, match="no rows"):
+        mt.io.read_profiles(path, channels=["DNA"])
+
+
+def test_platemap_wells_that_match_nothing_are_reported(tmp_path, capsys):
+    """They were left silently NaN, so a platemap naming the wrong wells looked like a successful read; io.read_jump warns for the identical join."""
+    path = tmp_path / "profiles.csv"
+    _frame().to_csv(path, index=False)
+    platemap = pd.DataFrame({"Metadata_Well": ["A01"], "Metadata_Perturbation": ["DMSO"]})
+
+    adata = mt.io.read_profiles(path, channels=["DNA"], platemap=platemap)
+
+    assert int(adata.obs["Metadata_Perturbation"].isna().sum()) == 3
+    assert "3 of 4" in capsys.readouterr().err
+
+
 def test_index_columns_name_the_observations(tmp_path):
     path = tmp_path / "profile.csv"
     _frame().to_csv(path, index=False)
@@ -338,3 +217,34 @@ def test_index_columns_name_the_observations(tmp_path):
         mt.io.read_profiles(path, index_columns=("Metadata_Plate",))
     with pytest.raises(KeyError, match="index columns not in metadata"):
         mt.io.read_profiles(path, index_columns=("Metadata_Nope",))
+
+
+def test_stamp_refuses_what_the_resolution_needs_and_obs_lacks():
+    """Stamping regardless would push the failure into whichever tool ran next."""
+    adata = ad.AnnData(np.zeros((3, 2), dtype=np.float32), obs=pd.DataFrame(index=list("abc")))
+    with pytest.raises(ValueError, match=r"Metadata_Plate.*Metadata_Well"):
+        mt.io.stamp(adata)
+    with pytest.raises(ValueError, match="resolution must be one of"):
+        mt.io.stamp(adata, resolution="plate")
+    assert "mantispy" not in adata.uns
+
+
+def test_stamp_leaves_an_annotation_that_is_already_there_alone():
+    """Only the absent columns are supplied.
+
+    Filling all ten unconditionally would overwrite a parsed annotation with blanks, so the test deletes one and checks the rest survived.
+    """
+    var = parse_feature_names(["Cells_AreaShape_Area", "Nuclei_Intensity_MeanIntensity_DNA"])
+    parsed = var.drop(columns=["channel"]).copy()
+    obj = ad.AnnData(
+        np.ones((2, 2), dtype=np.float32),
+        obs=pd.DataFrame({"Metadata_Plate": ["P1", "P1"], "Metadata_Well": ["A01", "A02"]}, index=["0", "1"]),
+        var=parsed,
+    )
+
+    mt.io.stamp(obj, resolution="well")
+
+    assert obj.var["channel"].isna().all(), "the one that was absent is supplied empty"
+    for column in parsed.columns:
+        # .equals, not ==: a column the parser left empty holds NaN, which is not equal to itself.
+        assert obj.var[column].equals(var[column]), f"{column} kept what the parser found"

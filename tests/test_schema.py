@@ -103,6 +103,19 @@ def test_warns_but_passes_when_nothing_is_a_feature():
     assert any("is_feature" in warning for warning in report.warnings)
 
 
+def test_a_well_level_object_without_a_cell_count_is_warned_about(adata):
+    """Regression test for #63: the absence is reported here, not left to fail in tl.cytotoxicity."""
+    assert not any("Metadata_CellCount" in warning for warning in validate(adata).warnings)
+
+    stamp(adata, resolution="well")
+    report = validate(adata)
+    assert report.ok
+    assert any("Metadata_CellCount" in warning for warning in report.warnings)
+
+    adata.obs["Metadata_CellCount"] = 10.0
+    assert not any("Metadata_CellCount" in warning for warning in validate(adata).warnings)
+
+
 def test_schema_version_is_stamped(adata):
     assert adata.uns["mantispy"]["schema_version"] == SCHEMA_VERSION
 
@@ -126,7 +139,6 @@ def test_published_spec_matches_the_constants():
 
 
 def test_an_object_from_the_previous_schema_migrates(adata, tmp_path):
-    """An object written under the previous schema migrates to the current one."""
     import mantispy as mt
 
     mt.io.write(adata, tmp_path / "old.h5ad")

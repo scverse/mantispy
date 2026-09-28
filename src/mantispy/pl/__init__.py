@@ -2,16 +2,16 @@
 
 Every plot returns Matplotlib axes and does not modify the object it draws.
 
-Two plots have no function of their own. A plate map of a per-well flag is
-``mt.pl.plate(adata, color="qc_well_pass")``, and embeddings side by side are a loop over
-``sc.pl.embedding``.
+Two plots have no function of their own.
+A plate map of a per-well flag is ``mt.pl.plate(adata, color="qc_well_pass")``, and embeddings side by side are a loop over :func:`scanpy.pl.embedding`.
 """
 
+from mantispy.pl._cluster import dendrogram
 from mantispy.pl._diagnostics import control_drift, image_qc, outliers, plate_effects
 from mantispy.pl._evaluation import batch_variance, map, metrics, replicate_correlation, similarity
 from mantispy.pl._features import feature_correlation, feature_groups
 from mantispy.pl._heterogeneity import cell_cycle, cluster_composition, density, subpopulation_hits
-from mantispy.pl._hits import dose_response, effect_sizes, feature_volcano, hits
+from mantispy.pl._hits import dose_direction, dose_response, effect_sizes, feature_volcano, hits
 from mantispy.pl._moa import distance_heatmap, moa_confusion, moa_enrichment, pathway_coherence, sets_heatmap
 from mantispy.pl._plate import plate
 from mantispy.pl._qc import cell_counts, cytotoxicity, feature_distributions, nan_matrix, qc, replicate_saturation
@@ -26,8 +26,10 @@ __all__ = [
     "cluster_composition",
     "control_drift",
     "cytotoxicity",
+    "dendrogram",
     "density",
     "distance_heatmap",
+    "dose_direction",
     "dose_response",
     "effect_sizes",
     "feature_correlation",

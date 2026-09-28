@@ -7,8 +7,8 @@ import numpy as np
 import pandas as pd
 
 from mantispy._core._reduce import get_matrix
-from mantispy._core._utils import as_frame
 from mantispy._core.features import parse_feature_names
+from mantispy._core.frames import as_frame
 from mantispy._core.schema import stamp
 
 if TYPE_CHECKING:

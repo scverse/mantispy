@@ -1,23 +1,21 @@
 """The mantispy AnnData contract.
 
-An object is described by three things: the ``Metadata_`` columns in ``obs`` that
-identify where a profile came from, the parsed annotation columns in ``var`` that say
-what each feature measures, and a small ``uns["mantispy"]`` dict holding the schema
-version, the resolution, and provenance.
+An object is described by three things: the ``Metadata_`` columns in ``obs`` that identify where a profile came from, the parsed annotation columns in ``var`` that say what each feature measures, and a small ``uns["mantispy"]`` dict holding the schema version, the resolution, and provenance.
 
-Resolution is advisory. :func:`validate` uses it to decide which identifier columns are
-required, but no function raises because it was given an object at another resolution.
+Resolution is advisory.
+:func:`validate` uses it to decide which identifier columns are required, but no function raises because it was given an object at another resolution.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import numpy as np
 
-from ._utils import get_logger
 from .features import COLUMNS as VAR_COLUMNS
+from .logging import get_logger
 from .plate import normalize_well
 
 if TYPE_CHECKING:
@@ -31,7 +29,6 @@ SUPPORTED_VERSIONS: tuple[str, ...] = ("0.1", "1.0")
 #: Resolutions a mantispy object can be at, coarsest last.
 RESOLUTIONS = ("cell", "well", "perturbation")
 
-#: Identifier columns required in ``obs``, per resolution.
 REQUIRED_OBS: dict[str, tuple[str, ...]] = {
     "cell": ("Metadata_Plate", "Metadata_Well"),
     "well": ("Metadata_Plate", "Metadata_Well"),
@@ -39,7 +36,7 @@ REQUIRED_OBS: dict[str, tuple[str, ...]] = {
     "perturbation": (),
 }
 
-#: Columns mantispy understands but does not require. OPS entries are reserved for 0.8.
+#: Columns mantispy understands but does not require.
 RESERVED_OBS: tuple[str, ...] = (
     "Metadata_Batch",
     "Metadata_Source",
@@ -47,11 +44,19 @@ RESERVED_OBS: tuple[str, ...] = (
     "Metadata_ImageNumber",
     "Metadata_ObjectNumber",
     "Metadata_Perturbation",
+    # What the perturbation is, one of "compound", "orf", "crispr" or "untreated". Control-ness stays in
+    # Metadata_Control / Metadata_Control_Type, which are orthogonal to the kind of perturbation.
+    "Metadata_Perturbation_Type",
     "Metadata_Compound",
     "Metadata_Concentration",
+    # The dose as the plate map wrote it, where Metadata_Concentration holds the one the well was meant to get.
+    "Metadata_ConcentrationRecorded",
     "Metadata_MOA",
+    "Metadata_CellLine",
     "Metadata_Control",
+    # Cells behind a row and the fields of view that contributed them, written by tl.aggregate
     "Metadata_CellCount",
+    "Metadata_SiteCount",
     "Metadata_Center_X",
     "Metadata_Center_Y",
     "Metadata_Control_Type",
@@ -62,15 +67,17 @@ RESERVED_OBS: tuple[str, ...] = (
     "Metadata_JCP2022",
     "Metadata_InChIKey",
     "Metadata_PlateType",
-    # reserved for optical pooled screening, unused before 0.8
+    # Genetic-perturbation annotation written by the ORF, CRISPR and variant loaders and, for Metadata_Gene, by
+    # pp.annotate_jump(kind="crispr"); the barcode fields stay reserved for optical pooled screening in 0.8.
     "Metadata_Barcode",
     "Metadata_Gene",
     "Metadata_sgRNA",
+    "Metadata_Construct",
+    "Metadata_Allele",
     "Metadata_BarcodeQuality",
 )
 
 #: Annotation columns mantispy writes to ``var`` and reads back, none of them required.
-#: Listed so that downstream tools can rely on the names without reading the docstrings.
 OPTIONAL_VAR: tuple[str, ...] = (
     "selected",
     "selected_chatterjee",
@@ -87,7 +94,6 @@ OPTIONAL_VAR: tuple[str, ...] = (
     "original_name",
 )
 
-#: Annotation columns required in ``var``.
 REQUIRED_VAR: tuple[str, ...] = tuple(VAR_COLUMNS)
 
 #: Keys describing the object itself, as opposed to a result computed from it.
@@ -103,8 +109,7 @@ UNS_KEYS: tuple[str, ...] = (
     "truth",
 )
 
-#: Result tables mantispy writes under ``uns["mantispy"]`` and reads back. Each is read by
-#: a plot or another tool, which makes it part of the contract.
+#: Result tables mantispy writes under ``uns["mantispy"]`` and reads back.
 UNS_RESULTS: tuple[str, ...] = (
     "feature_select",
     "image_qc",
@@ -136,7 +141,10 @@ UNS_RESULTS: tuple[str, ...] = (
 
 @dataclass
 class ValidationReport:
-    """Result of :func:`~mantispy.io.validate`. Truthy when there are no errors."""
+    """Result of :func:`~mantispy.io.validate`.
+
+    Truthy when there are no errors.
+    """
 
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -159,19 +167,54 @@ class ValidationReport:
 
 
 def stamp(adata: AnnData, resolution: str | None = None) -> None:
-    """Write the schema version, and optionally the resolution, into ``uns``."""
-    store = adata.uns.setdefault("mantispy", {})
-    store["schema_version"] = SCHEMA_VERSION
+    """Write the schema version, and optionally the resolution, into ``uns``.
+
+    Args:
+        adata: The object to stamp, in place.
+        resolution: What one row is; left as it is when ``None``.
+
+    Raises:
+        ValueError: ``resolution`` is not one of :data:`RESOLUTIONS`.
+
+    Notes:
+        This records what the object is; it does not make it valid.
+        A tool building a new object supplies its own annotation from :func:`~mantispy._core.features.annotation`, and :func:`~mantispy.io.stamp` supplies it for an object built elsewhere.
+        Filling here would repair an annotation a caller had damaged, leaving :func:`~mantispy.io.write` nothing to report.
+    """
+    if resolution is not None and resolution not in RESOLUTIONS:
+        raise ValueError(f"resolution must be one of {RESOLUTIONS}, got {resolution!r}")
+
+    # Not uns.setdefault: on a view that is dict's own, so it writes nowhere the caller sees, or into the parent's dict.
+    store = {**adata.uns.get("mantispy", {}), "schema_version": SCHEMA_VERSION}
     if resolution is not None:
-        if resolution not in RESOLUTIONS:
-            raise ValueError(f"resolution must be one of {RESOLUTIONS}, got {resolution!r}")
         store["resolution"] = resolution
+    adata.uns["mantispy"] = store
 
 
 def get_resolution(adata: AnnData) -> str:
     """Recorded resolution of ``adata``, defaulting to ``"cell"``."""
     resolution = adata.uns.get("mantispy", {}).get("resolution")
     return resolution if resolution in RESOLUTIONS else "cell"
+
+
+def resolution_for(columns: Iterable[str]) -> str:
+    """Resolution an object grouped by ``columns`` is at.
+
+    Args:
+        columns: Columns the grouping supplies, which become the identifier columns of the result.
+
+    Returns:
+        The finest resolution whose :data:`REQUIRED_OBS` columns ``columns`` covers, so that :func:`validate` requires of the result only what it carries.
+
+    Notes:
+        ``"cell"`` is never returned, since a grouping replaces the cells and requires the same columns as ``"well"`` anyway.
+        A grouping finer than the well, by site or by anything else, is still per-well or finer, and it carries the plate and well columns a well-resolution object needs.
+    """
+    supplied = set(columns)
+    for resolution in RESOLUTIONS[1:]:
+        if set(REQUIRED_OBS[resolution]) <= supplied:
+            return resolution
+    return RESOLUTIONS[-1]
 
 
 def validate(adata: AnnData, *, raise_on_error: bool = False) -> ValidationReport:
@@ -234,6 +277,12 @@ def validate(adata: AnnData, *, raise_on_error: bool = False) -> ValidationRepor
     if adata.n_vars and "is_feature" in adata.var and not adata.var["is_feature"].any():
         report.warnings.append("no column in var is marked is_feature")
 
+    if resolution == "well" and "Metadata_CellCount" not in adata.obs:
+        report.warnings.append(
+            "obs has no Metadata_CellCount, so mt.tl.cytotoxicity cannot separate a hit from cell loss; "
+            "aggregate single cells with mt.tl.aggregate, which writes it, or add a per-well count"
+        )
+
     if raise_on_error and not report.ok:
         raise ValueError("\n".join(report.errors))
     return report
@@ -253,9 +302,9 @@ def migrate(adata: AnnData, copy: bool = False) -> AnnData | None:
         ValueError: If the object carries a version this build does not know.
 
     Notes:
-        0.1 to 1.0 only updates the version stamp. The 1.0 freeze added names to the
-        vocabulary (optional ``var`` columns, JUMP identifiers, the result tables) and removed
-        none, so no data moves. Later versions that do move data add their migration here.
+        0.1 to 1.0 only updates the version stamp.
+        The 1.0 freeze added names to the vocabulary (optional ``var`` columns, JUMP identifiers, the result tables) and removed none, so no data moves.
+        Later versions that do move data add their migration here.
     """
     target = adata.copy() if copy else adata
     store = target.uns.setdefault("mantispy", {})

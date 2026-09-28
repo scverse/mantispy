@@ -1,21 +1,8 @@
 """Matrix access and grouping for every grouped operation.
 
-Nothing outside ``_core`` reads ``adata.X`` or ``adata.layers`` directly, as
-``tests/test_api_guards.py`` checks. Every read goes through :func:`get_matrix` and every
-grouping through :func:`group_codes`, so a backed, chunked implementation would go into
-those two functions.
-
-Built on them:
-
-* :func:`reduce_grouped`: a per-group statistic through the numba kernels (the read path).
-* :func:`transform_grouped`: rewrite the matrix group by group (the write path).
-* :func:`iter_groups`: the ``(key, rows, block)`` iteration both are built on.
-
-Sixteen call sites across ``pp`` and ``tl`` run their own ``np.flatnonzero(codes == group)``
-loop over the matrix from :func:`get_matrix`, because what they compute per group (a
-whitening, a permutation null, a chi-square) is not a statistic the kernels can express.
-Each loop would need rewriting for a streaming backend. They still take the matrix and
-the grouping from this module, so the code to change is easy to find.
+Nothing outside ``_core`` reads ``adata.X`` or ``adata.layers`` directly, as ``tests/test_api_guards.py`` checks.
+Every read goes through :func:`get_matrix` and every grouping through :func:`group_codes`.
+:func:`reduce_grouped` and :func:`iter_groups` both have to yield a group's rows in increasing order: :func:`get_matrix` hands an increasing index straight to h5py and sorts any other one, at the cost of a full-size copy.
 """
 
 from __future__ import annotations
@@ -26,8 +13,10 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 
-from ._numba import MAD, MEAN, MEDIAN, QUANTILE, STD, group_counts, grouped_stat
-from ._utils import as_frame
+from ._numba import MAD, MEAN, MEDIAN, QUANTILE, STD, group_counts, group_offsets, grouped_stat
+from .features import annotation
+from .frames import as_frame
+from .logging import get_logger
 
 if TYPE_CHECKING:
     from anndata import AnnData
@@ -40,46 +29,117 @@ __all__ = [
     "STD",
     "get_matrix",
     "group_codes",
+    "group_offsets",
+    "group_rows",
     "iter_groups",
     "reduce_grouped",
+    "reduced_var",
     "representation",
     "transform_grouped",
 ]
 
 
-def get_matrix(adata: AnnData, layer: str | None = None, rows: np.ndarray | None = None) -> np.ndarray:
+def group_rows(codes: np.ndarray, n_groups: int) -> list[np.ndarray]:
+    """Row indices of each group, from one stable ordering of the codes."""
+    order, offsets = group_offsets(codes, n_groups)
+    return [order[offsets[group] : offsets[group + 1]] for group in range(n_groups)]
+
+
+def _obsm_source(adata: AnnData, use_rep: str, layer: str | None) -> np.ndarray:
+    """The 2-D ``obsm[use_rep]`` array, refusing a ``layer`` alongside it or a missing or non-2-D key."""
+    if layer is not None:
+        raise ValueError(f"use_rep={use_rep!r} and layer={layer!r} are mutually exclusive; pass only one")
+    if use_rep not in adata.obsm:
+        raise ValueError(f"no obsm {use_rep!r}; have {sorted(adata.obsm)}")
+    matrix = np.asarray(adata.obsm[use_rep])
+    if matrix.ndim != 2:
+        raise ValueError(f"obsm {use_rep!r} must be 2-D, got {matrix.ndim}-D")
+    return matrix
+
+
+def reduced_var(adata: AnnData, use_rep: str | None, n_cols: int) -> pd.DataFrame:
+    """The ``var`` for an object reduced by :func:`reduce_grouped`.
+
+    ``use_rep`` reduces an embedding whose axes are not named features, so its ``var`` is a plain range index over ``n_cols``; otherwise the source ``var`` is carried over unchanged.
+    """
+    if use_rep is not None:
+        return annotation(pd.Index([str(index) for index in range(n_cols)]))
+    return as_frame(adata.var).copy()
+
+
+def get_matrix(
+    adata: AnnData, layer: str | None = None, rows: np.ndarray | None = None, *, use_rep: str | None = None
+) -> np.ndarray:
     """Return the requested matrix as a dense ``float32`` array.
 
-    ``rows`` reads only those rows, so a backed object holds one group in memory instead of
-    the whole screen. h5py accepts a fancy index only in increasing order, so the indices
-    are sorted for the read and the requested order is restored afterwards.
+    ``rows`` reads only those rows, so a backed object holds one group in memory instead of the whole screen.
+    h5py accepts a fancy index only in increasing order, so rows asked for in any other order are sorted for the read and the requested order restored afterwards.
+    Rows that cover the whole matrix in order are read as one slice rather than selected point by point, and an in-order read hands back the block the backend produced rather than a copy of it, so treat the result as read-only.
+
+    ``use_rep`` reads ``adata.obsm[use_rep]`` instead of ``X`` or a layer; it must be a 2-D representation and cannot be combined with ``layer``.
     """
-    matrix: Any = adata.X if layer is None else adata.layers[layer]
-    if matrix is None:
-        raise ValueError("adata has no matrix to read" if layer is None else f"no layer {layer!r}")
+    matrix: Any
+    if use_rep is not None:
+        matrix = _obsm_source(adata, use_rep, layer)
+    else:
+        matrix = adata.X if layer is None else adata.layers[layer]
+        if matrix is None:
+            raise ValueError("adata has no matrix to read" if layer is None else f"no layer {layer!r}")
 
     if rows is not None:
         wanted = np.asarray(rows)
         if _reads_from_disk(matrix):
-            order = np.argsort(wanted, kind="stable")
-            block = matrix[wanted[order]]
-            inverse = np.empty_like(order)
-            inverse[order] = np.arange(order.size)
-            matrix = block[inverse]
+            # Compared rather than np.diff: subtraction wraps on unsigned dtypes and is a not-equal on booleans.
+            increasing = wanted.dtype.kind in "iu" and bool(np.all(wanted[1:] > wanted[:-1]))
+            if not increasing:
+                order = np.argsort(wanted, kind="stable")
+                block = matrix[wanted[order]]
+                inverse = np.empty_like(order)
+                inverse[order] = np.arange(order.size)
+                matrix = block[inverse]
+            elif (
+                wanted.size
+                and 0 <= wanted[0]
+                and wanted[-1] < matrix.shape[0]
+                and wanted[-1] - wanted[0] + 1 == wanted.size
+            ):
+                # The ends are bounds-checked because a slice silently clamps where a fancy index is refused.
+                matrix = matrix[int(wanted[0]) : int(wanted[-1]) + 1]
+            else:
+                matrix = matrix[wanted]
         else:
             matrix = matrix[wanted]
+    elif _reads_from_disk(matrix) and not hasattr(matrix, "__array__"):
+        # anndata's CSRDataset and CSCDataset have no ``__array__``, so np.asarray below would raise on them.
+        matrix = matrix[:]
 
     if hasattr(matrix, "toarray"):
         matrix = matrix.toarray()
     return np.asarray(matrix, dtype=np.float32)
 
 
+def _warn_if_not_streamable(matrix: Any) -> None:
+    """Say so when a per-group loop over this on-disk matrix will read the whole of it every time.
+
+    anndata indexes a CSR dataset by row without leaving the file.
+    On a CSC dataset the same index falls back to ``to_memory()``, so a loop over g groups reads and densifies the entire matrix g times rather than once.
+    An in-memory scipy CSC matrix also reports ``format == "csc"`` but never leaves memory, so it must not warn.
+    """
+    if not _reads_from_disk(matrix):
+        return
+    if getattr(matrix, "format", None) == "csc":
+        get_logger().warning(
+            "the matrix on disk is stored column-major (CSC), which cannot be read row by row: every "
+            "group's read loads the whole matrix. Store it row-major before writing, with "
+            "adata.X = adata.X.tocsr(), or read the object into memory with mt.io.read(path)."
+        )
+
+
 def _reads_from_disk(matrix: Any) -> bool:
     """Whether this matrix is an on-disk dataset rather than an array in memory.
 
-    ``shape`` and ``dtype`` are not enough, because a scipy sparse matrix has both and is in
-    memory. ``toarray`` separates them: every in-memory sparse container has it, and an h5py
-    or zarr dataset does not.
+    ``shape`` and ``dtype`` are not enough, because a scipy sparse matrix has both and is in memory.
+    ``toarray`` separates them: every in-memory sparse container has it, and an h5py or zarr dataset does not.
     """
     if isinstance(matrix, np.ndarray) or hasattr(matrix, "toarray"):
         return False
@@ -87,11 +147,7 @@ def _reads_from_disk(matrix: Any) -> bool:
 
 
 def representation(adata: AnnData, use_rep: str | None) -> np.ndarray:
-    """``obsm[use_rep]`` if given, otherwise ``X``, as float64.
-
-    Every tool that can score an embedding instead of the features uses this, so the input
-    is chosen in one place and the missing-key error says how to compute an embedding.
-    """
+    """``obsm[use_rep]`` if given, otherwise ``X``, as float64."""
     if use_rep is None:
         return get_matrix(adata).astype(np.float64)
     if use_rep not in adata.obsm:
@@ -102,8 +158,8 @@ def representation(adata: AnnData, use_rep: str | None) -> np.ndarray:
 def group_codes(adata: AnnData, by: str | Sequence[str] | None) -> tuple[np.ndarray, pd.Index]:
     """Per-row integer group codes plus the ordered group keys.
 
-    Values are used without conversion to strings, so numeric metadata keeps its dtype and
-    ``0.4`` and ``0.40`` are one group. Missing values raise instead of forming a group.
+    Values are used without conversion to strings, so numeric metadata keeps its dtype and ``0.4`` and ``0.40`` are one group.
+    Missing values raise instead of forming a group.
     """
     if by is None:
         return np.zeros(adata.n_obs, dtype=np.int32), pd.Index(["all"])
@@ -130,6 +186,7 @@ def iter_groups(
 ) -> Iterator[tuple[Any, np.ndarray, np.ndarray]]:
     """Yield ``(key, row_index, block)`` per group, in group-key order."""
     codes, keys = group_codes(adata, by)
+    _warn_if_not_streamable(adata.X if layer is None else adata.layers[layer])
     order = np.argsort(codes, kind="stable")
     bounds = np.searchsorted(codes[order], np.arange(len(keys) + 1))
     for index, key in enumerate(keys):
@@ -145,6 +202,8 @@ def reduce_grouped(
     mask: np.ndarray | None = None,
     q: float = 0.5,
     ddof: int = 1,
+    *,
+    use_rep: str | None = None,
 ) -> tuple[np.ndarray, pd.Index, np.ndarray]:
     """Per-group statistic over the feature matrix.
 
@@ -153,29 +212,38 @@ def reduce_grouped(
         by: Grouping column(s), or ``None`` for a single group.
         stat: One of :data:`MEAN`, :data:`MEDIAN`, :data:`MAD`, :data:`STD`, :data:`QUANTILE`.
         layer: Layer to read instead of ``X``.
-        mask: Boolean row mask restricting which rows contribute, e.g. controls only. Groups
-            are still keyed by the full set of groups present in ``adata``.
+        mask: Boolean row mask restricting which rows contribute, e.g. controls only.
+            Groups are still keyed by the full set of groups present in ``adata``.
         q: Quantile to compute for :data:`QUANTILE`.
         ddof: Delta degrees of freedom for :data:`STD`.
+        use_rep: Reduce ``adata.obsm[use_rep]`` instead of ``X``; ``values`` then has one column per axis of that representation.
+            Mutually exclusive with ``layer``.
 
     Returns:
-        ``(values, keys, counts)`` where ``values`` is ``(n_groups, n_vars)`` float64,
-        ``keys`` indexes the groups and ``counts`` holds the contributing row count.
+        ``(values, keys, counts)`` where ``values`` is ``(n_groups, n_cols)`` float64 (``n_cols`` is ``n_vars`` for ``X``/``layer`` and the representation's width for ``use_rep``), ``keys`` indexes the groups and ``counts`` holds the contributing row count.
+
+    Raises:
+        ValueError: ``mask`` does not hold one entry per row of ``adata``, or ``use_rep`` and ``layer`` are both given, or ``use_rep`` is not a 2-D ``obsm``.
     """
     codes, keys = group_codes(adata, by)
-    source: Any = adata.X if layer is None else adata.layers[layer]
-    selected = np.ones(adata.n_obs, dtype=bool) if mask is None else np.asarray(mask, dtype=bool)
+    source: Any
+    if use_rep is not None:
+        source = _obsm_source(adata, use_rep, layer)
+    else:
+        source = adata.X if layer is None else adata.layers[layer]
+    n_cols = source.shape[1] if use_rep is not None else adata.n_vars
+    selected = None if mask is None else np.asarray(mask, dtype=bool)
+    # Checked up front because the backed path indexes the mask per group and would not notice a mask that is too long.
+    if selected is not None and selected.shape != (adata.n_obs,):
+        raise ValueError(f"mask must be one boolean per row: got shape {selected.shape} for {adata.n_obs} rows")
 
     if _reads_from_disk(source):
-        # One group at a time, so a screen that does not fit in memory still reduces. Each
-        # group's statistic depends only on its own rows, so the result matches the single
-        # kernel call (tests/test_backed.py).
-        # A group with no contributing rows is NaN, as in the in-memory kernel. Zero would
-        # read as a measurement and center a plate with no controls left on 0.0.
-        values = np.full((len(keys), adata.n_vars), np.nan)
+        _warn_if_not_streamable(source)
+        # A group with no contributing rows is NaN, as in the in-memory kernel.
+        values = np.full((len(keys), n_cols), np.nan)
         counts = np.zeros(len(keys), dtype=np.int64)
-        for index in range(len(keys)):
-            rows = np.flatnonzero((codes == index) & selected)
+        for index, members in enumerate(group_rows(codes, len(keys))):
+            rows = members if selected is None else members[selected[members]]
             if not rows.size:
                 continue
             block = get_matrix(adata, layer, rows=rows)
@@ -183,8 +251,8 @@ def reduce_grouped(
             counts[index] = rows.size
         return values, keys, counts
 
-    matrix = get_matrix(adata, layer)
-    if mask is not None:
+    matrix = get_matrix(adata, layer, use_rep=use_rep)
+    if selected is not None:
         codes, matrix = codes[selected], matrix[selected]
     values = grouped_stat(matrix, codes, len(keys), stat, q=q, ddof=ddof)
     return values, keys, group_counts(codes, len(keys))
@@ -198,11 +266,11 @@ def transform_grouped(
 ) -> np.ndarray:
     """Rewrite the matrix one group at a time.
 
-    ``func(key, block)`` receives a group's rows as ``float32`` and returns the
-    replacement block. The output is written into one preallocated ``float32`` array, so
-    the peak cost is the input plus the output, with no full-size ``float64`` temporaries.
+    ``func(key, block)`` receives a group's rows as ``float32`` and returns the replacement block.
+    The output is written into one preallocated ``float32`` array, so the peak cost is the input plus the output, with no full-size ``float64`` temporaries.
     """
-    out = np.empty_like(get_matrix(adata, layer))
+    # Shaped from the object, not read off the matrix: get_matrix with no rows reads all of it.
+    out = np.empty(adata.shape, dtype=np.float32)
     for key, rows, block in iter_groups(adata, by, layer=layer):
         if rows.size:
             out[rows] = func(key, block).astype(np.float32, copy=False)

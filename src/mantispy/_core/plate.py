@@ -1,8 +1,7 @@
 """Plate and well geometry.
 
-Well names are normalized to the canonical ``A01`` form on read, so every downstream
-consumer can assume that shape. Rows are 0-based and support the two-letter names used
-by 1536-well plates (``A`` -> 0, ``AA`` -> 26, ``AF`` -> 31).
+Well names are normalized to the canonical ``A01`` form on read, so every downstream consumer can assume that shape.
+Rows are 0-based and support the two-letter names used by 1536-well plates (``A`` -> 0, ``AA`` -> 26, ``AF`` -> 31).
 """
 
 from __future__ import annotations
@@ -54,8 +53,7 @@ def well_col(well: str) -> int:
 def row_label(row: int) -> int | str:
     """Inverse of :func:`well_row`: the letter label for a 0-based row index.
 
-    Rows past ``Z`` get the two-letter names CellProfiler and plate readers use
-    (``AA``, ``AB``, ...), which is what 1536-well plates need.
+    Rows past ``Z`` get the two-letter names CellProfiler and plate readers use (``AA``, ``AB``, ...), which is what 1536-well plates need.
     """
     if row < 0:
         raise ValueError(f"row index must be non-negative, got {row}")
@@ -85,3 +83,8 @@ def detect_plate_format(wells: Iterable[str]) -> int:
         if n_rows <= max_rows and n_cols <= max_cols:
             return size
     raise ValueError(f"no standard plate format holds {n_rows} rows x {n_cols} columns")
+
+
+def plate_grid(wells: Iterable[str]) -> tuple[int, int]:
+    """Rows and columns of the smallest standard format these wells fit, so a plate is drawn on its own grid."""
+    return PLATE_FORMATS[detect_plate_format(wells)]

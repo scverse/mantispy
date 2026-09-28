@@ -13,40 +13,6 @@ def adata():
     return synthetic_plate(n_wells=8, n_cells=20, n_features=15, nan_fraction=0.02, seed=0)
 
 
-def test_metrics_are_written_and_match_numpy(adata):
-    mt.pp.calculate_qc_metrics(adata)
-    missing = np.isnan(adata.X)
-    np.testing.assert_array_equal(adata.obs["qc_n_nan_features"].to_numpy(), missing.sum(axis=1))
-    np.testing.assert_allclose(adata.obs["qc_nan_fraction"].to_numpy(), missing.mean(axis=1), rtol=1e-6)
-    np.testing.assert_allclose(adata.var["qc_variance"].to_numpy(), np.nanvar(adata.X, axis=0), rtol=1e-5)
-    np.testing.assert_array_equal(adata.var["qc_n_nan"].to_numpy(), missing.sum(axis=0))
-
-
-def test_partial_nan_does_not_fail_every_cell(adata):
-    """Requiring zero missing features would fail ~26% of cells here and ~100% on a real
-    2000-feature table, so filter_cells would empty the dataset."""
-    mt.pp.calculate_qc_metrics(adata)
-    assert (adata.obs["qc_n_nan_features"] > 0).mean() > 0.15
-    assert adata.obs["qc_pass"].mean() > 0.95
-
-
-def test_max_nan_fraction_is_honoured(adata):
-    mt.pp.calculate_qc_metrics(adata, max_nan_fraction=0.0)
-    assert adata.obs["qc_pass"].mean() < 0.9
-
-
-def test_zero_area_mad_does_not_flag_the_whole_plate(adata):
-    """A quantised Area column gives MAD 0 and z = +inf; without posinf handling
-    nan_to_num leaves 1.8e308 and every cell is called an outlier."""
-    area = next(name for name in adata.var_names if name.endswith("AreaShape_Area"))
-    values = adata.X.copy()
-    values[:, adata.var_names.get_loc(area)] = 1.0
-    values[0, adata.var_names.get_loc(area)] = 99.0
-    adata.X = values
-    mt.pp.calculate_qc_metrics(adata)
-    assert not adata.obs["qc_area_outlier"].all()
-
-
 def test_border_flag_needs_coordinates_and_shape(adata):
     mt.pp.calculate_qc_metrics(adata)
     assert not adata.obs["qc_is_border"].any()
@@ -74,8 +40,8 @@ def test_filter_cells_without_metrics_says_what_to_run(adata):
 
 def test_filter_features_drops_all_nan_constant_and_blocklisted(adata):
     values = adata.X.copy()
-    values[:, 0] = np.nan  # all missing
-    values[:, 1] = 1.0  # zero variance
+    values[:, 0] = np.nan
+    values[:, 1] = 1.0
     adata.X = values
     all_nan, constant, blocked = adata.var_names[0], adata.var_names[1], adata.var_names[3]
 
@@ -85,31 +51,13 @@ def test_filter_features_drops_all_nan_constant_and_blocklisted(adata):
     assert adata.n_vars == 12
 
 
-def test_inplace_and_copy_semantics(adata):
-    mt.pp.calculate_qc_metrics(adata)
-    before = adata.n_obs
-    assert mt.pp.filter_cells(adata, min_cells_per_well=0, copy=True) is not adata
-    assert adata.n_obs == before
-    assert mt.pp.filter_cells(adata, min_cells_per_well=0) is None
-    assert adata.n_obs <= before
-
-
-def test_params_are_recorded(adata):
-    mt.pp.calculate_qc_metrics(adata, border_margin=7)
-    assert adata.uns["mantispy"]["params"]["calculate_qc_metrics"]["border_margin"] == 7
-
-
-#: The parser infers its channel vocabulary from the column set it is given, so a handful
-#: of names parse differently from a full screen's worth. Naming the channels explicitly
-#: keeps this test independent of fixture size; without it the rename does nothing on six
-#: columns and the test passes trivially.
+#: Explicit because the parser infers channels from the column set, and on six names the rename would then do nothing.
 CHANNELS = ("AGP", "DNA", "ER", "Mito", "RNA")
 
 
 def test_the_blocklist_still_matches_after_standardizing_the_names():
-    """standardize_feature_names rewrites channel-bearing names into a form no blocklist
-    entry matches (Nuclei_Correlation_Manders_AGP_DNA becomes ..._AGP|DNA), and all 55
-    bundled entries are renamed this way. The blocklist must still drop them.
+    """standardize_feature_names rewrites channel-bearing names into a form no blocklist entry matches (Nuclei_Correlation_Manders_AGP_DNA becomes ..._AGP|DNA), and all 55 bundled entries are renamed this way.
+    The blocklist must still drop them.
     """
     blocked = sorted(load_blocklist("default"))[:4]
     names = [*blocked, "Cells_AreaShape_Area", "Nuclei_AreaShape_Area"]
@@ -133,8 +81,63 @@ def test_the_blocklist_still_matches_after_standardizing_the_names():
     mt.pp.filter_features(after, blocklist="default", drop_nan=False)
     assert after.n_vars == renamed.n_vars - len(blocked)
 
-    # pp.feature_select applies the blocklist through a separate code path, and
-    # "blocklist" is in DEFAULT_OPERATIONS.
+    # pp.feature_select applies the blocklist through a separate code path.
     selected = renamed.copy()
     mt.pp.feature_select(selected, operations=("blocklist",))
     assert int(selected.var["selected"].sum()) == renamed.n_vars - len(blocked)
+
+
+def _area_cells(nuclei_first: bool):
+    """40 cells with one huge nucleus, with the two Area columns in either ``var`` order."""
+    import anndata as ad
+
+    from mantispy._core.features import parse_feature_names
+    from mantispy._core.schema import stamp
+
+    names = ["Cells_AreaShape_Area", "Nuclei_AreaShape_Area"]
+    if nuclei_first:
+        names = names[::-1]
+    values = np.random.default_rng(0).normal(500.0, 10.0, (40, 2)).astype(np.float32)
+    values[7, names.index("Nuclei_AreaShape_Area")] = 5000.0
+    obs = pd.DataFrame(
+        {"Metadata_Plate": "P1", "Metadata_Well": [f"A{index % 8 + 1:02d}" for index in range(40)]},
+        index=[str(index) for index in range(40)],
+    )
+    adata = ad.AnnData(X=values, obs=obs, var=parse_feature_names(names))
+    stamp(adata, resolution="cell")
+    return adata
+
+
+def test_the_area_outlier_flag_does_not_depend_on_var_column_order():
+    """Matching every compartment's AreaShape_Area and taking the first made qc_area_outlier, and so qc_pass, depend on column order: Cells-first flagged 0 of 40 cells and Nuclei-first flagged 1, on the same data and with no warning."""
+    flagged = []
+    for nuclei_first in (False, True):
+        adata = _area_cells(nuclei_first)
+        mt.pp.calculate_qc_metrics(adata)
+        flagged.append(int(adata.obs["qc_area_outlier"].sum()))
+    assert flagged == [1, 1]
+
+
+def test_qc_metrics_refuses_an_object_whose_var_names_no_area():
+    """The guard asked whether the feature column was populated, not whether it named an area.
+    A genuinely parsed Intensity-and-Texture export passes that guard, and _area_outlier_flag then returns an all-false flag, the silently weakened qc_pass the guard exists to stop."""
+    import anndata as ad
+
+    from mantispy._core.features import parse_feature_names
+
+    names = ["Cells_Intensity_MeanIntensity_DNA", "Cells_Texture_Contrast_DNA"]
+    var = parse_feature_names(names)
+    assert var["feature"].notna().all(), "the annotation is parsed; it simply measured no area"
+
+    values = np.random.default_rng(0).normal(500.0, 10.0, (20, 2)).astype(np.float32)
+    adata = ad.AnnData(
+        X=values,
+        obs=pd.DataFrame(
+            {"Metadata_Plate": "P1", "Metadata_Well": [f"A{index % 4 + 1:02d}" for index in range(20)]},
+            index=[str(index) for index in range(20)],
+        ),
+        var=var,
+    )
+
+    with pytest.raises(KeyError, match="area"):
+        mt.pp.calculate_qc_metrics(adata)

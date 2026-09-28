@@ -1,10 +1,13 @@
-"""BBBC021, the classic MOA benchmark. Network-dependent, so marked."""
+"""BBBC021, the classic MOA benchmark.
+
+Network-dependent, so marked.
+"""
 
 import numpy as np
 import pytest
 
 import mantispy as mt
-from mantispy._core._utils import as_frame
+from mantispy._core.frames import as_frame
 
 
 @pytest.fixture(scope="module")
@@ -24,7 +27,12 @@ def test_loads_annotated_and_valid(bbbc021):
         "Metadata_MOA",
         "Metadata_Control",
         "Metadata_Perturbation",
+        "Metadata_CellCount",
+        "Metadata_SiteCount",
     }
+    # Summed from the well's Image.csv; the profile's mean Cells_Number_Object_Number is exactly what these give.
+    well = bbbc021.obs[(bbbc021.obs["Metadata_Plate"] == "Week1_22123") & (bbbc021.obs["Metadata_Well"] == "B02")]
+    assert well[["Metadata_CellCount", "Metadata_SiteCount"]].values.tolist() == [[874.0, 4.0]]
     # The mode= shorthands of mt.tl.map read this column, so it must exist here too.
     assert bbbc021.obs["Metadata_Perturbation"].nunique() == 104
     assert bbbc021.obs["Metadata_Compound"].nunique() == 39
@@ -33,7 +41,6 @@ def test_loads_annotated_and_valid(bbbc021):
 
 
 def _treatment_consensus(bbbc021, sphere: bool):
-    """Normalize, select features, optionally sphere, then one profile per treatment."""
     adata = bbbc021.copy()
     mt.pp.normalize(adata, method="mad_robustize", by="Metadata_Plate", reference="negcon")
     mt.pp.feature_select(adata)
@@ -48,7 +55,7 @@ def _treatment_consensus(bbbc021, sphere: bool):
 
 
 def _not_same_compound_accuracy(consensus) -> float:
-    """Ljosa 2013's NSC rule: the nearest neighbour of a different compound must share the MOA."""
+    """The NSC rule of :cite:t:`Ljosa_2013`: the nearest neighbour of a different compound must share the MOA."""
     mt.tl.similarity(consensus, metric="cosine")
     similarity = np.asarray(consensus.obsp["similarity"]).copy()
     np.fill_diagonal(similarity, -np.inf)
@@ -63,7 +70,7 @@ def _not_same_compound_accuracy(consensus) -> float:
 def test_the_recipe_reproduces_the_moa_benchmark(bbbc021):
     """The published benchmark's shape, and MOA retrieval far above chance."""
     consensus = _treatment_consensus(bbbc021, sphere=False)
-    assert consensus.n_obs == 103  # the 103 treatments of Ljosa et al. 2013
+    assert consensus.n_obs == 103  # the 103 treatments of :cite:t:`Ljosa_2013`
     assert consensus.obs["Metadata_MOA"].nunique() == 12
 
     accuracy = _not_same_compound_accuracy(consensus)
@@ -85,10 +92,11 @@ def test_the_recipe_reproduces_the_moa_benchmark(bbbc021):
 @pytest.mark.network
 @pytest.mark.slow
 def test_sphering_hurts_this_dataset(bbbc021):
-    """With 330 DMSO wells against 346 features, sphering is underdetermined and amplifies
-    noise. pycytominer gives the same result, so the loss comes from the method itself.
-    This is why evaluate_correction compares corrections instead of applying a fixed
-    recipe."""
+    """With 330 DMSO wells against 346 features, sphering is underdetermined and amplifies noise.
+
+    pycytominer gives the same result, so the loss comes from the method itself.
+    This is why evaluate_correction compares corrections instead of applying a fixed recipe.
+    """
     without = _not_same_compound_accuracy(_treatment_consensus(bbbc021, sphere=False))
     with pytest.warns(UserWarning, match="fewer rows than features"):
         sphered = _treatment_consensus(bbbc021, sphere=True)

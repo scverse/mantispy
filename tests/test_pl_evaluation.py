@@ -72,6 +72,17 @@ def test_metrics_plot_marks_which_direction_is_better(evaluated):
     assert any("better" in label.get_text() for label in ax.get_xticklabels())
 
 
+def test_metrics_plot_claims_no_direction_for_a_covariate(evaluated):
+    """A covariate row has no direction, because whether its share of the variance should be small depends on what the covariate is.
+    Reading the column back without checking it labelled the bar '(nan is better)'."""
+    evaluated.obs["Metadata_CellCount"] = np.arange(evaluated.n_obs, dtype=float)
+    table = mt.metrics.evaluate_correction(evaluated, reps=("X_pca",), covariates=("Metadata_CellCount",))
+
+    labels = {label.get_text() for label in mt.pl.metrics(table).get_xticklabels()}
+    assert "pc_regression:Metadata_CellCount" in labels
+    assert not any("nan" in label for label in labels)
+
+
 def test_similarity_subsamples_a_large_object(evaluated):
     ax = mt.pl.similarity(evaluated, max_obs=50)
     assert ax.images[0].get_array().shape == (50, 50)
@@ -85,19 +96,20 @@ def test_plots_say_what_to_run_first():
         mt.pl.similarity(fresh)
 
 
-def test_similarity_keeps_the_group_ordering_when_it_subsamples():
-    """Subsampling must keep rows in group order. Sorting sampled row indices numerically
-    would scatter the groups and hide the blocks the plot shows."""
+def test_similarity_draws_one_block_per_group_when_it_subsamples():
+    """The drawn image holds one block per group; sorting sampled row indices instead of their positions in the group ordering scatters the same 50 rows into 41 blocks."""
     profiles = mt.tl.aggregate(
         mt.ds.synthetic_plate(n_plates=2, n_wells=96, n_cells=4, n_features=10, n_perturbations=3, seed=0),
         min_cells=0,
     )
-    mt.tl.similarity(profiles, metric="cosine")
-    ax = mt.pl.similarity(profiles, max_obs=50)
-    assert isinstance(ax, matplotlib.axes.Axes)
+    labels = profiles.obs["Metadata_Perturbation"].astype(str).to_numpy()
+    # A same-group indicator makes the drawn image exactly block diagonal whenever the rows reach it grouped.
+    profiles.obsp["similarity"] = (labels[:, None] == labels[None, :]).astype(np.float32)
 
-    # Reproduce the plot's ordering and check that it is grouped.
-    order = np.argsort(profiles.obs["Metadata_Perturbation"].astype(str).to_numpy(), kind="stable")
-    picked = np.sort(np.random.default_rng(0).choice(order.size, size=50, replace=False))
-    labels = profiles.obs["Metadata_Perturbation"].astype(str).to_numpy()[order[picked]]
-    assert list(labels) == sorted(labels)
+    drawn = np.asarray(mt.pl.similarity(profiles, max_obs=50).images[0].get_array())
+    assert drawn.shape == (50, 50)
+
+    # Each drop to zero on the first off-diagonal starts a new block of consecutive rows.
+    blocks = np.cumsum(np.r_[0, drawn.diagonal(offset=1) == 0])
+    assert int(blocks[-1]) + 1 == len(np.unique(labels))
+    np.testing.assert_array_equal(drawn, (blocks[:, None] == blocks[None, :]).astype(drawn.dtype))

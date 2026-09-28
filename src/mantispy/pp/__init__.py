@@ -11,7 +11,7 @@ from mantispy.pp._outliers import outliers
 from mantispy.pp._qc import calculate_qc_metrics, filter_cells, filter_features
 from mantispy.pp._sample import downsample
 from mantispy.pp._select import feature_select, subset_features
-from mantispy.pp._sphere import sphere
+from mantispy.pp._sphere import sphere, tvn
 from mantispy.pp._transform import rank_int
 from mantispy.pp._well_qc import well_qc
 
@@ -32,11 +32,12 @@ __all__ = [
     "harmony",
     "image_qc",
     "normalize",
-    "rank_int",
     "outliers",
+    "rank_int",
     "regress_out",
     "sphere",
     "standardize_feature_names",
     "subset_features",
+    "tvn",
     "well_qc",
 ]

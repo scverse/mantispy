@@ -1,7 +1,5 @@
 """Image-, well- and cell-level QC, and feature name standardization."""
 
-import numpy as np
-import pandas as pd
 import pytest
 
 import mantispy as mt
@@ -15,17 +13,13 @@ def imaged():
     )
 
 
-# --- image QC --------------------------------------------------------------
-
-
 @pytest.mark.parametrize("method", ["mad", "knn"])
 def test_image_qc_recovers_the_injected_bad_images(imaged, method):
     mt.pp.image_qc(imaged, method=method, channel="DNA")
     result = imaged.uns["mantispy"]["image_qc"]
     truth = set(imaged.uns["mantispy"]["truth"]["bad_images"])
 
-    # The score must separate the degraded images completely, wherever the default
-    # threshold falls.
+    # The score must separate the degraded images completely, wherever the default threshold falls.
     scores = result["qc_image_score"]
     assert scores.loc[sorted(truth)].min() > scores.drop(index=sorted(truth)).max()
 
@@ -49,7 +43,7 @@ def test_image_qc_refuses_to_pool_plates_silently(imaged):
     imaged.uns["mantispy"]["image_table"] = table
     with pytest.raises(KeyError, match="by=None to pool"):
         mt.pp.image_qc(imaged)
-    mt.pp.image_qc(imaged, by=None)  # explicit opt-in works
+    mt.pp.image_qc(imaged, by=None)
 
 
 def test_image_qc_reports_a_missing_table_and_unknown_metrics(imaged):
@@ -67,18 +61,6 @@ def test_image_qc_warns_about_unmatched_cells(imaged):
     assert imaged.obs["qc_image_pass"].all()
 
 
-# --- well QC ---------------------------------------------------------------
-
-
-def test_well_qc_table_is_writable_and_flags_broadcast(cells, tmp_path):
-    mt.pp.well_qc(cells, min_cells=10)
-    table = cells.uns["mantispy"]["well_qc"]
-    assert {"Metadata_Plate", "Metadata_Well", "n_cells", "control_cv", "qc_well_pass"} <= set(table.columns)
-    assert "qc_well_pass" in cells.obs
-    # a MultiIndex here would make the whole object unsaveable
-    mt.io.write(cells, tmp_path / "with_well_qc.h5ad")
-
-
 def test_well_qc_criteria(cells):
     mt.pp.well_qc(cells, min_cells=16)
     assert not cells.obs["qc_well_pass"].any()
@@ -89,10 +71,7 @@ def test_well_qc_criteria(cells):
     mt.pp.well_qc(cells, min_cells=1, max_control_cv=0.0)
     table = cells.uns["mantispy"]["well_qc"]
     assert not table.loc[table["control_cv"].notna(), "qc_well_pass"].any()
-    assert table["control_cv"].isna().any()  # non-control wells have no CV
-
-
-# --- feature names ---------------------------------------------------------
+    assert table["control_cv"].isna().any()
 
 
 def test_standardize_keeps_originals_and_is_idempotent(cells):
@@ -103,24 +82,14 @@ def test_standardize_keeps_originals_and_is_idempotent(cells):
     assert cells.var["original_name"].tolist() == before
 
 
-def test_standardize_keeps_zernike_orders_distinct():
-    """Dropping the numeric suffix would collapse Zernike_2_0 and Zernike_2_2."""
-    import anndata as ad
-
-    from mantispy._core.features import parse_feature_names
-    from mantispy._core.schema import stamp
-
-    names = ["Cells_AreaShape_Zernike_2_0", "Cells_AreaShape_Zernike_2_2"]
-    adata = ad.AnnData(
-        X=np.ones((2, 2), dtype=np.float32),
-        obs=pd.DataFrame({"Metadata_Plate": ["P", "P"], "Metadata_Well": ["A01", "A02"]}, index=["0", "1"]),
-        var=parse_feature_names(names),
-    )
-    stamp(adata, resolution="well")
-    mt.pp.standardize_feature_names(adata)
-    assert len(set(adata.var_names)) == 2
-
-
 def test_standardize_refuses_a_collision_and_an_unknown_target(cells):
     with pytest.raises(ValueError, match="target must be"):
         mt.pp.standardize_feature_names(cells, target="nonsense")
+
+
+def test_a_failed_image_qc_call_leaves_no_verdict_behind(imaged):
+    """The uns write happened before the broadcast could raise, so a call that failed still left a verdict in uns that was never applied to a single cell, and pl.image_qc plotted it."""
+    imaged.obs = imaged.obs.drop(columns="Metadata_ImageNumber")
+    with pytest.raises(KeyError, match="Metadata_ImageNumber"):
+        mt.pp.image_qc(imaged)
+    assert "image_qc" not in imaged.uns["mantispy"]

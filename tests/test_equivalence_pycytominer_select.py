@@ -1,9 +1,9 @@
 """feature_select equivalence against pycytominer.
 
-Semantics follow the pinned pycytominer source rather than its docs. Two points are easy
-to get wrong, and both are covered below. `variance_threshold` is an sklearn variance cut;
-the frequency/uniqueness rule is `frequency_threshold`. `correlation_threshold` judges
-each pair independently against a ranking computed once, using the signed correlation.
+Semantics follow the pinned pycytominer source rather than its docs.
+Two points are easy to get wrong, and both are covered below.
+`variance_threshold` is an sklearn variance cut; the frequency/uniqueness rule is `frequency_threshold`.
+`correlation_threshold` judges each pair independently against a ranking computed once, using the signed correlation.
 """
 
 import numpy as np
@@ -89,12 +89,14 @@ def test_negatively_correlated_pair_is_kept(wells):
 
 
 def test_default_pipeline_equivalence(wells):
+    """The default is pycytominer's own plus drop_degenerate, which removes nothing normalize did not flag."""
+    assert "degenerate_scale" not in wells.var or not wells.var["degenerate_scale"].any()
     frame = mt.get.to_dataframe(wells)
-    operations = list(mt.pp._select.DEFAULT_OPERATIONS)
+    operations = [operation for operation in mt.pp._select.DEFAULT_OPERATIONS if operation != "drop_degenerate"]
     expected = pycytominer.feature_select(profiles=frame, features=list(wells.var_names), operation=operations)
     expected_kept = {c for c in expected.columns if not c.startswith("Metadata_")}
 
-    mt.pp.feature_select(wells, operations=tuple(operations))
+    mt.pp.feature_select(wells)
     actual = set(wells.var_names[wells.var["selected"]])
     assert actual == expected_kept, {
         "only_ours": sorted(actual - expected_kept),

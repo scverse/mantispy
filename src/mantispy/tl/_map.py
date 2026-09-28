@@ -1,13 +1,7 @@
-"""Mean average precision, computed with copairs.
-
-mAP measures retrieval. Profiles are ranked by similarity to a query profile, and the score
-is high when its positive pairs, such as replicates, rank above its negative pairs. It is
-rank-based, so it needs no correlation threshold, and a permutation null gives each group a
-p-value.
-"""
-
 from __future__ import annotations
 
+import math
+import tempfile
 import warnings
 from collections.abc import Sequence
 
@@ -16,43 +10,33 @@ import pandas as pd
 from anndata import AnnData
 
 from mantispy._core._reduce import representation
-from mantispy._core._utils import as_frame, inplace_or_copy, reference_mask
+from mantispy._core.frames import as_frame
+from mantispy._core.masks import reference_mask
+from mantispy._core.mutation import inplace_or_copy
 
-#: Column added under ``mode="activity"``, holding the row index for each control and -1 for
-#: every other row. It keeps controls out of the queries and makes a perturbation's
-#: replicates retrieve against controls only.
+#: Row index for each control and -1 elsewhere, so under ``mode="activity"`` replicates retrieve against controls only.
 REFERENCE_COLUMN = "Metadata_reference_index"
 
-#: copairs pair definitions for each ``mode`` of :func:`map`.
 MODES = {
-    # Phenotypic activity (Kalinin et al., 2025), as in copairs' own example. Is this
-    # perturbation distinguishable from the negative controls?
+    # Other plates' controls are beaten trivially yet count in the null, so pooling them inflates activity.
     "activity": {
         "pos_sameby": ["Metadata_Perturbation", REFERENCE_COLUMN],
         "pos_diffby": [],
-        "neg_sameby": [],
+        "neg_sameby": ["Metadata_Plate"],
         "neg_diffby": ["Metadata_Perturbation", REFERENCE_COLUMN],
     },
-    # Phenotypic consistency (Kalinin et al.). Do perturbations sharing an annotation, such
-    # as a mechanism, target or gene, look more alike than those that do not? Needs
-    # `annotation_key`; meant for consensus profiles of active perturbations.
     "consistency": {
         "pos_sameby": ["__annotation__"],
-        # A positive pair must be two different perturbations, so replicate wells of one
-        # treatment do not count as annotation agreement. On consensus input this excludes nothing.
         "pos_diffby": ["Metadata_Perturbation"],
         "neg_sameby": [],
         "neg_diffby": ["__annotation__"],
     },
-    # Do a perturbation's replicates retrieve each other against all other profiles? The
-    # "mAP-nonrep" of the batch-correction benchmark of Arevalo et al. (2024).
     "replicability": {
         "pos_sameby": ["Metadata_Perturbation"],
         "pos_diffby": [],
-        "neg_sameby": [],
+        "neg_sameby": ["Metadata_Plate"],
         "neg_diffby": ["Metadata_Perturbation"],
     },
-    # The same, but a replicate only counts if it comes from a different plate.
     "cross_plate": {
         "pos_sameby": ["Metadata_Perturbation"],
         "pos_diffby": ["Metadata_Plate"],
@@ -61,8 +45,7 @@ MODES = {
     },
 }
 
-#: copairs output columns that are dropped. The ragged per-group row indices cannot be
-#: written to h5ad and can be recomputed from the inputs.
+#: The ragged per-group row indices cannot be written to h5ad.
 _UNWRITABLE = ("indices",)
 
 
@@ -88,34 +71,33 @@ def map(
 
     Args:
         adata: Profiles to score, normally well-level.
-        pos_sameby: ``obs`` columns a positive pair must share, in copairs' terms. Pass the four
-            pair arguments or ``mode``, not both.
+        pos_sameby: ``obs`` columns a positive pair must share, in copairs' terms.
+            Pass the four pair arguments or ``mode``, not both.
         pos_diffby: ``obs`` columns in which a positive pair must differ.
         neg_sameby: ``obs`` columns a negative pair must share.
         neg_diffby: ``obs`` columns in which a negative pair must differ.
         mode: A preset for the pair definitions, one of the following.
 
             ``"activity"``
-                Is this perturbation distinguishable from the negative controls? Its
-                replicates are retrieved against control profiles only. This is the phenotypic
-                activity of Kalinin et al. (2025), the number published JUMP results quote.
-                Needs ``reference``.
+                Is this perturbation distinguishable from the negative controls it was plated with?
+                Its replicates are retrieved against the control profiles on the query's own plate only.
+                This is the phenotypic activity of :cite:t:`Kalinin_2025`.
+                Needs ``reference`` and ``Metadata_Plate``; queries on a plate without controls are left out, with a warning.
             ``"consistency"``
                 Do perturbations sharing an annotation look more alike than those that do not?
-                This is the phenotypic consistency of Kalinin et al. Needs ``annotation_key``
-                (a mechanism, target or gene column) and is meant for consensus profiles of
-                perturbations already known to be active.
+                This is the phenotypic consistency of :cite:t:`Kalinin_2025`.
+                Needs ``annotation_key`` (a mechanism, target or gene column) and is meant for consensus profiles of perturbations already known to be active.
             ``"replicability"``
-                Do a perturbation's replicates retrieve each other against all other profiles?
-                The ``mAP-nonrep`` of the batch-correction benchmark of Arevalo et al. (2024).
+                Do a perturbation's replicates retrieve each other against the other perturbations on the query's plate?
+                This is the ``mAP-nonrep`` of :cite:t:`Arevalo_2024`, which leaves the controls out; ``reference=None`` keeps them in.
             ``"cross_plate"``
-                As ``"replicability"``, but a replicate counts only if it is on a different
-                plate, which separates reproducible biology from plate effects.
+                Do a perturbation's replicates on other plates retrieve each other against all other profiles?
+                A replicate counts only if it is on a different plate, which separates reproducible biology from plate effects.
         annotation_key: The ``obs`` column ``mode="consistency"`` groups by.
-        reference: Which rows are the negative controls for ``mode="activity"``, either
-            ``"negcon"`` or the name of a boolean ``obs`` column.
+        reference: Which rows are the negative controls, which ``mode="activity"`` retrieves against and ``mode="replicability"`` leaves out: ``"negcon"``, the name of a boolean ``obs`` column, or ``None`` for none.
         use_rep: Score ``obsm[use_rep]`` instead of ``X``.
         null_size: Size of the permutation null.
+            No p-value falls below ``1 / (null_size + 1)``, so the correction over many groups needs a large one, and a warning says when it is too small to call a group on its own.
         threshold: Significance threshold passed to copairs.
         seed: Seed for the permutation null.
         distance: Distance copairs ranks by.
@@ -123,9 +105,13 @@ def map(
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes the per-group table to
-        ``uns["mantispy"][key_added]`` and joins ``obs[key_added]`` and
-        ``obs[key_added + "_qvalue"]`` back onto the rows.
+        ``None``, or the modified copy.
+        Writes the per-group table to ``uns["mantispy"][key_added]`` and joins ``obs[key_added]`` and ``obs[key_added + "_qvalue"]`` back onto the rows.
+
+    Raises:
+        ImportError: copairs is not installed, which it is not by default because it needs Python < 3.13.
+        ValueError: ``mode`` was passed together with explicit pair arguments or neither was passed, ``mode`` is not one of ``MODES``, ``mode="consistency"`` came without ``annotation_key``, ``mode="activity"`` found no controls, no profile has a negative pair to be ranked against, or the profiles hold missing values, which cannot be ranked.
+        KeyError: ``obs`` is missing a column the pair definitions or ``reference`` name.
     """
     try:
         from copairs import map as copairs_map
@@ -152,8 +138,6 @@ def map(
                 key: [annotation_key if column == "__annotation__" else column for column in value]
                 for key, value in settings.items()
             }
-            # Consistency is defined on consensus profiles. With replicate rows, perturbations
-            # with more wells dominate their annotation groups.
             perturbations = adata.obs["Metadata_Perturbation"].nunique() if "Metadata_Perturbation" in adata.obs else 0
             if perturbations and adata.n_obs > perturbations:
                 warnings.warn(
@@ -174,7 +158,6 @@ def map(
     else:
         raise ValueError("pass pos_sameby= or mode=")
 
-    # The reference column is built below, not supplied by the caller.
     needed = {column for group in settings.values() for column in group} - {REFERENCE_COLUMN}
     missing = sorted(needed - set(adata.obs.columns))
     if missing:
@@ -190,7 +173,6 @@ def map(
     obs = as_frame(adata.obs)
     meta = obs[[c for c in obs.columns if c.startswith("Metadata_")]].reset_index(drop=True)
     if mode == "activity":
-        # See REFERENCE_COLUMN.
         is_control = reference_mask(adata, reference)
         if not is_control.any():
             raise ValueError(
@@ -198,28 +180,62 @@ def map(
                 "Run mt.pp.annotate_controls, or use mode='replicability', which needs no controls."
             )
         meta[REFERENCE_COLUMN] = np.where(is_control, np.arange(adata.n_obs), -1)
+    elif mode == "replicability" and reference is not None:
+        treated = ~reference_mask(adata, reference)
+        meta, features = meta[treated].reset_index(drop=True), features[treated]
 
     precision = copairs_map.average_precision(meta, features, **settings, distance=distance, progress_bar=False)
     if mode == "activity":
         precision = precision[~precision.index.isin(np.flatnonzero(is_control))]
-    table = copairs_map.mean_average_precision(
-        precision,
-        sameby=[c for c in settings["pos_sameby"] if c != REFERENCE_COLUMN],
-        null_size=null_size,
-        threshold=threshold,
-        seed=seed,
-        progress_bar=False,
-    ).drop(columns=list(_UNWRITABLE), errors="ignore")
+    group_columns = [c for c in settings["pos_sameby"] if c != REFERENCE_COLUMN]
+
+    # copairs scores a query with replicates but no negatives AP = 1 at the smallest p-value.
+    queries = precision["n_pos_pairs"] > 0
+    stranded = queries & (precision["n_total_pairs"] == precision["n_pos_pairs"])
+    if stranded.any():
+        if stranded.sum() == queries.sum():
+            raise ValueError(
+                "no profile has a negative pair to rank its replicates against, so there is nothing to score"
+            )
+        scope = settings["neg_sameby"] or group_columns
+        warnings.warn(
+            f"{int(stranded.sum())} profile(s) have replicates but no negative pair to rank them against, and are "
+            f"left out. They are in {precision.loc[stranded, scope].drop_duplicates().to_dict('records')}.",
+            UserWarning,
+            stacklevel=3,
+        )
+        precision = precision[~stranded]
+
+    groups = len(precision.loc[precision["n_pos_pairs"] > 0, group_columns].drop_duplicates())
+    sharing = groups / ((null_size + 1) * threshold)
+    if sharing >= 1:
+        warnings.warn(
+            f"with null_size={null_size} no p-value can fall below 1/{null_size + 1}, so the correction over "
+            f"{groups} groups calls none of them unless at least {math.floor(sharing) + 1} reach that floor "
+            f"together. Raise null_size above {groups / threshold:.0f} for one group to be callable on its own.",
+            UserWarning,
+            stacklevel=3,
+        )
+
+    # copairs keys its on-disk null cache without the seed, so a shared cache leaks nulls between calls.
+    with tempfile.TemporaryDirectory() as cache:
+        table = copairs_map.mean_average_precision(
+            precision,
+            sameby=group_columns,
+            null_size=null_size,
+            threshold=threshold,
+            seed=seed,
+            progress_bar=False,
+            cache_dir=cache,
+        ).drop(columns=list(_UNWRITABLE), errors="ignore")
 
     if mode == "activity":
-        # Activity is reported for treatments only.
         control_groups = set(np.asarray(meta.loc[is_control, "Metadata_Perturbation"], dtype=object))
         table = table[~table["Metadata_Perturbation"].isin(control_groups)].reset_index(drop=True)
         table = table.drop(columns=[REFERENCE_COLUMN], errors="ignore")
 
     adata.uns.setdefault("mantispy", {})[key_added] = table
 
-    group_columns = [c for c in settings["pos_sameby"] if c != REFERENCE_COLUMN]
     lookup = table.set_index(group_columns)
     index = pd.MultiIndex.from_frame(obs[group_columns]) if len(group_columns) > 1 else pd.Index(obs[group_columns[0]])
     adata.obs[key_added] = lookup["mean_average_precision"].reindex(index).to_numpy()

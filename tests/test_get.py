@@ -57,3 +57,8 @@ def test_controls(cells):
 
 def test_scanpy_reexports_are_available():
     assert callable(mt.get.obs_df) and callable(mt.get.var_df)
+
+
+def test_an_unknown_name_is_still_an_attribute_error():
+    with pytest.raises(AttributeError, match="nope"):
+        _ = mt.get.nope

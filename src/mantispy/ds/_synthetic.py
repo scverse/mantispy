@@ -1,12 +1,3 @@
-"""A synthetic plate whose every injected effect is recorded as ground truth.
-
-Used by the test suite and the tutorials, so both run offline and can check that a
-method recovers a known effect.
-
-The default channel names are the Cell Painting ones, but any ``channels`` work,
-including a single channel.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -15,12 +6,12 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
-from mantispy._core._utils import categorize_metadata
 from mantispy._core.features import parse_feature_names
+from mantispy._core.frames import categorize_metadata
 from mantispy._core.plate import PLATE_FORMATS, well_col, well_name, well_row
 from mantispy._core.schema import stamp
 
-#: Default channel vocabulary (Cell Painting). No other code assumes these names.
+#: The Cell Painting channels; no other code assumes these names.
 DEFAULT_CHANNELS = ("DNA", "ER", "RNA", "AGP", "Mito")
 
 _OBJECTS = ("Cells", "Nuclei", "Cytoplasm")
@@ -29,7 +20,6 @@ _INTENSITY_FEATURES = ("MeanIntensity", "MaxIntensity", "IntegratedIntensity", "
 _TEXTURE_FEATURES = ("Contrast", "Correlation", "Entropy", "Variance")
 
 #: How many robust standard deviations a degraded image's metrics are shifted by.
-#: Large, because an out-of-focus image lies far from the rest.
 BAD_IMAGE_SHIFT = 8.0
 
 _IMAGE_QC_METRICS = {
@@ -95,15 +85,15 @@ def synthetic_plate(
 ) -> ad.AnnData:
     """Generate a synthetic plate with known ground truth.
 
-    Every injected effect is recorded under ``uns["mantispy"]["truth"]`` so tests and
-    tutorials can check that a method recovers it.
+    Every injected effect is recorded under ``uns["mantispy"]["truth"]`` so tests and tutorials can check that a method recovers it.
 
     Args:
         n_plates: Number of plates.
         n_wells: Wells per plate.
         n_cells: Cells per well, or the Poisson mean of that count when ``confounder_effect`` is set.
         n_features: Number of features, before correlated copies are added.
-        channels: Channel vocabulary used to build feature names. Any names work.
+        channels: Channel vocabulary used to build feature names.
+            Any names work.
         n_perturbations: Number of treatments; a ``DMSO`` negative control is always added.
         effect_size: Shift applied to the features affected by each perturbation.
         n_images_per_well: Fields of view per well, which sets ``Metadata_ImageNumber``.
@@ -121,7 +111,10 @@ def synthetic_plate(
         seed: Seed for reproducibility.
 
     Returns:
-        An :class:`~anndata.AnnData` at cell resolution.
+        An :class:`~anndata.AnnData` at cell resolution, carrying every injected effect under ``uns["mantispy"]["truth"]``, the channel vocabulary under ``channels`` and the per-image quality metrics under ``image_table``.
+
+    Raises:
+        ValueError: `n_features` needs more distinct names than `channels` can spell, or `n_wells` exceeds the largest standard plate format.
     """
     rng = np.random.default_rng(seed)
     channels = list(channels)

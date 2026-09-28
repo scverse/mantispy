@@ -1,9 +1,7 @@
 """Join a CellProfiler ``ExportToSpreadsheet`` directory into one table.
 
-The module writes ``Image.csv`` beside one CSV per object, all behind the file-name prefix
-a run was configured with (``MyExpt_Image.csv``, ``MyExpt_Cells.csv``). Inside an object
-table the columns do not carry the object's name, so they are prefixed with it before the
-objects are joined. :func:`~mantispy.io.read_profiles` turns the table into AnnData.
+The module writes ``Image.csv`` beside one CSV per object, all behind the file-name prefix a run was configured with (``MyExpt_Image.csv``, ``MyExpt_Cells.csv``).
+Inside an object table the columns do not carry the object's name, so they are prefixed with it before the objects are joined.
 """
 
 from __future__ import annotations
@@ -14,26 +12,50 @@ from pathlib import Path
 
 import pandas as pd
 
+from mantispy._core.logging import get_logger
+
 _KEYS = ("ImageNumber", "ObjectNumber")
 _FILENAME_RE = re.compile(r"^(?:Image_)?FileName_(.+)$")
 _NOT_OBJECTS = ("Image", "Experiment")
 
 
 def export_prefix(path: Path) -> str | None:
-    """The file-name prefix an ``ExportToSpreadsheet`` run used, or ``None`` if `path` is not such a directory."""
+    """The file-name prefix an ``ExportToSpreadsheet`` run used, or ``None`` if `path` is not such a directory.
+
+    Args:
+        path: The directory to look in, which such a run writes ``<prefix>Image.csv`` into.
+
+    Returns:
+        The shortest prefix a ``*Image.csv`` in `path` carries, which is ``""`` for a run configured without one, and ``None`` when `path` is not a directory or holds no such file.
+    """
     if not path.is_dir():
         return None
     prefixes = sorted((file.name.removesuffix("Image.csv") for file in path.glob("*Image.csv")), key=len)
     return prefixes[0] if prefixes else None
 
 
-def infer_channels(image: pd.DataFrame) -> list[str]:
-    """Channel names, taken from the ``FileName_<channel>`` columns.
+def infer_channels(image: pd.DataFrame, features: Sequence[str] = ()) -> list[str]:
+    """Channel names, taken from the features and otherwise from the ``FileName_<channel>`` columns.
 
-    Falls back to an empty list, in which case the parser infers the channels from the
-    feature names. No channel vocabulary is assumed.
+    CellProfiler writes one ``Intensity_MeanIntensity_<channel>`` measurement per channel it measured, under the name the features carry.
+    The file names can differ from it: a pipeline loads ``OrigDNA``, corrects it with ``IllumDNA`` and saves ``CellOutlines``, and measures the corrected image as ``DNA``.
+
+    Args:
+        image: The ``Image.csv`` table of an export.
+        features: The feature columns of the export.
+
+    Returns:
+        The channels the features were measured in, sorted.
+        Without an intensity feature, the names the ``FileName_`` or ``Image_FileName_`` columns carry, with the ``Orig`` and ``Illum`` prefixes stripped and saved outlines left out.
+        An empty list when neither is present, in which case the parser infers the channels from the feature names instead.
     """
-    return sorted({match.group(1) for match in map(_FILENAME_RE.match, image.columns) if match})
+    measured = {
+        name.split("_Intensity_MeanIntensity_", 1)[1] for name in features if "_Intensity_MeanIntensity_" in name
+    }
+    if measured:
+        return sorted(measured)
+    names = {match.group(1) for match in map(_FILENAME_RE.match, image.columns) if match}
+    return sorted({name.removeprefix("Orig").removeprefix("Illum") for name in names if not name.endswith("Outlines")})
 
 
 def _prefix(frame: pd.DataFrame, obj: str) -> pd.DataFrame:
@@ -42,13 +64,13 @@ def _prefix(frame: pd.DataFrame, obj: str) -> pd.DataFrame:
     return frame.rename(columns={c: c if c in _KEYS or c.startswith(keep) else f"{obj}_{c}" for c in frame.columns})
 
 
-def _link_columns(primary_frame: pd.DataFrame, child_frame: pd.DataFrame, primary: str, obj: str):
+def _link_columns(
+    primary_frame: pd.DataFrame, child_frame: pd.DataFrame, primary: str, obj: str
+) -> tuple[pd.Series, pd.Series]:
     """Locate the parent/child link, which may be on either table.
 
-    CellProfiler writes ``Cells_Parent_Nuclei`` on the primary table when cells were
-    identified from nuclei, and ``Cytoplasm_Parent_Cells`` on the child table for a
-    tertiary object. Both cases are handled; using the wrong column would silently pair
-    unrelated objects that share an object number.
+    CellProfiler writes ``Cells_Parent_Nuclei`` on the primary table when cells were identified from nuclei, and ``Cytoplasm_Parent_Cells`` on the child table for a tertiary object.
+    Using the wrong column would silently pair unrelated objects that share an object number.
     """
     on_child = f"{obj}_Parent_{primary}"
     on_primary = f"{primary}_Parent_{obj}"
@@ -63,7 +85,6 @@ def _link_columns(primary_frame: pd.DataFrame, child_frame: pd.DataFrame, primar
 
 
 def _join_child(merged: pd.DataFrame, child: pd.DataFrame, primary: str, obj: str, strict: bool) -> pd.DataFrame:
-    """Attach one child object's columns to the primary table."""
     primary_link, child_link = _link_columns(merged, child, primary, obj)
 
     left = pd.DataFrame({"ImageNumber": merged["ImageNumber"], "_link": primary_link.to_numpy()})
@@ -99,9 +120,8 @@ def read_export(
         strict_one_to_one: Raise when an object does not match the primary object exactly once.
 
     Returns:
-        The joined table, with identifiers, image metadata and the primary object's centroid as ``Metadata_``
-        columns and every measurement prefixed by its object; the ``Image.csv`` table; and the channels its
-        ``FileName_`` columns name.
+        The joined table, with identifiers, image metadata and the primary object's centroid as ``Metadata_`` columns and every measurement prefixed by its object; the ``Image.csv`` table; and the channels its ``FileName_`` columns name.
+        Where an object table and ``Image.csv`` both carry the same ``Metadata_`` column, the ``Image.csv`` value is the one kept.
 
     Raises:
         FileNotFoundError: There is no table for `primary_object`.
@@ -131,9 +151,19 @@ def read_export(
     }
     renames |= {c: c for c in image.columns if c.startswith("Metadata_")}
     per_image = image[["ImageNumber", *renames]].rename(columns=renames)
+    # ExportToSpreadsheet can also copy the image metadata into the object tables, and merging both copies would suffix them _x/_y.
+    if shared := [c for c in per_image.columns if c != "ImageNumber" and c in merged.columns]:
+        get_logger().info("%s are on both the object tables and Image.csv; keeping the Image.csv value", shared)
+        merged = merged.drop(columns=shared)
     table = merged.merge(per_image, on="ImageNumber", how="left", validate="m:1")
-    # Centroids are not profile features, but qc_is_border needs them.
+    # CellProfiler 4 writes centroids under AreaShape, older versions under Location.
     for axis in ("X", "Y"):
-        if (source := f"{primary_object}_Location_Center_{axis}") in table.columns:
-            table[f"Metadata_Center_{axis}"] = table[source].to_numpy()
-    return table.rename(columns={key: f"Metadata_{key}" for key in _KEYS}), image, infer_channels(image)
+        for source in (f"{primary_object}_Location_Center_{axis}", f"{primary_object}_AreaShape_Center_{axis}"):
+            if source in table.columns:
+                table[f"Metadata_Center_{axis}"] = table[source].to_numpy()
+                break
+    return (
+        table.rename(columns={key: f"Metadata_{key}" for key in _KEYS}),
+        image,
+        infer_channels(image, list(table.columns)),
+    )

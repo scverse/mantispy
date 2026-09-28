@@ -1,10 +1,3 @@
-# Configuration file for the Sphinx documentation builder.
-
-# This file only contains a selection of the most common options. For a full
-# list see the documentation:
-# https://www.sphinx-doc.org/page/usage/configuration.html
-
-# -- Path setup --------------------------------------------------------------
 import shutil
 import sys
 from datetime import datetime
@@ -16,11 +9,6 @@ from sphinxcontrib import katex
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE / "extensions"))
 
-
-# -- Project information -----------------------------------------------------
-
-# NOTE: If you installed your project in editable mode, this might be stale.
-#       If this is the case, reinstall it to refresh the metadata
 info = metadata("mantispy")
 project = info["Name"]
 author = info["Author"]
@@ -29,26 +17,22 @@ version = info["Version"]
 urls = dict(pu.split(", ") for pu in info.get_all("Project-URL"))
 repository_url = urls["Source"]
 
-# The full version, including alpha/beta/rc tags
 release = info["Version"]
 
 bibtex_bibfiles = ["references.bib"]
+bibtex_reference_style = "author_year"
 templates_path = ["_templates"]
-nitpicky = True  # Warn about broken links
+nitpicky = True
 needs_sphinx = "4.0"
 
 html_context = {
-    "display_github": True,  # Integrate GitHub
+    "display_github": True,
     "github_user": "scverse",
     "github_repo": project,
     "github_version": "main",
     "conf_py_path": "/docs/",
 }
 
-# -- General configuration ---------------------------------------------------
-
-# Add any Sphinx extension module names here, as strings.
-# They can be extensions coming with Sphinx (named 'sphinx.ext.*') or your custom ones.
 extensions = [
     "myst_nb",
     "sphinx_copybutton",
@@ -73,9 +57,9 @@ default_role = "literal"
 napoleon_google_docstring = True
 napoleon_numpy_docstring = False
 napoleon_include_init_with_doc = False
-napoleon_use_rtype = True  # having a separate entry generally helps readability
+napoleon_use_rtype = True
 napoleon_use_param = True
-myst_heading_anchors = 6  # create anchors for h1-h6
+myst_heading_anchors = 6
 myst_enable_extensions = [
     "amsmath",
     "colon_fence",
@@ -86,16 +70,14 @@ myst_enable_extensions = [
 ]
 myst_url_schemes = ("http", "https", "mailto")
 nb_output_stderr = "remove"
-# The tutorials claim things -- "it found exactly the images that were degraded" -- that the reader can only
-# believe if the output is there, so the outputs are committed and rendered as they are, and the Read the Docs
-# build downloads nothing. CI's "Tutorials run" job executes every notebook (-D nb_execution_mode=cache), so a
-# committed output cannot silently stop matching the code.
+# Outputs are committed; CI's "Tutorials run" job re-executes the tutorials (-D nb_execution_mode=cache), except the ~3 GB dataset pages.
 nb_execution_mode = "off"
+nb_execution_excludepatterns = ["datasets/*"]
 nb_execution_timeout = 900
 nb_execution_raise_on_error = True
 nb_merge_streams = True
 typehints_defaults = "braces"
-always_use_bars_union = True  # use `|` instead of `Union` in types even when building with Python ≤3.14
+always_use_bars_union = True
 
 source_suffix = {
     ".rst": "restructuredtext",
@@ -113,37 +95,39 @@ intersphinx_mapping = {
     "matplotlib": ("https://matplotlib.org/stable/", None),
 }
 
-# List of patterns, relative to source directory, that match files and
-# directories to ignore when looking for source files.
-# This pattern also affects html_static_path and html_extra_path.
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "**.ipynb_checkpoints"]
 
-
-# -- Options for HTML output -------------------------------------------------
-
-# The theme to use for HTML and HTML Help pages.  See the documentation for
-# a list of builtin themes.
-#
-html_theme = "sphinx_book_theme"
+html_theme = "scanpydoc"
 html_static_path = ["_static"]
 html_css_files = ["css/custom.css"]
+html_js_files = ["https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"]
 
 html_title = project
 
 html_theme_options = {
     "repository_url": repository_url,
+    "repository_branch": "main",
     "use_repository_button": True,
+    "use_issues_button": True,
     "path_to_docs": "docs/",
     "navigation_with_keys": False,
+    "accent_color": "#1a878a",
+    "logo": {
+        "image_light": "_static/mantispy-logo.png",
+        "image_dark": "_static/mantispy-logo.png",
+        "alt_text": "mantispy",
+    },
+    "show_toc_level": 2,
 }
+html_show_sphinx = False
+ogp_image = "_static/mantispy-logo.png"
 
 pygments_style = "default"
 katex_prerender = shutil.which(katex.NODEJS_BINARY) is not None
 
 nitpick_ignore = [
-    # If building the documentation fails because of a missing link that is outside your control,
-    # you can add an exception to this list.
-    #     ("py:class", "igraph.Graph"),
     # scverse-misc 0.1.6 renders `optional` as a type in the Settings.reset signature it generates
     ("py:class", "optional"),
+    # Python 3.14 moved pathlib internals into pathlib._local, so this xref cannot resolve
+    ("py:class", "pathlib._local.Path"),
 ]

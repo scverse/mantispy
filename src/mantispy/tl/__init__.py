@@ -1,11 +1,12 @@
 """Tools."""
 
 from mantispy.tl._aggregate import aggregate
+from mantispy.tl._cluster import cluster
 from mantispy.tl._consensus import consensus
 from mantispy.tl._design import cytotoxicity, replicate_saturation
 from mantispy.tl._differential import differential_features
 from mantispy.tl._distance import edistance
-from mantispy.tl._dose import dose_response
+from mantispy.tl._dose import dose_direction, dose_features, dose_response, dose_trajectory
 from mantispy.tl._effect import effect_size, wasserstein_features
 from mantispy.tl._enrich import enrich, feature_sets, rank_features, rank_sets
 from mantispy.tl._heterogeneity import (
@@ -18,6 +19,8 @@ from mantispy.tl._hits import hit_calling
 from mantispy.tl._knowledge import enrich_hits, gene_sets, pathway_coherence
 from mantispy.tl._map import map
 from mantispy.tl._moa import moa_enrichment, nn_moa_classify
+from mantispy.tl._network import network_enrichment
+from mantispy.tl._ora import ora
 from mantispy.tl._signature import feature_signature
 from mantispy.tl._similarity import grit, percent_replicating, similarity
 from mantispy.tl._transport import transport
@@ -25,10 +28,14 @@ from mantispy.tl._transport import transport
 __all__ = [
     "aggregate",
     "cell_cycle_phase",
+    "cluster",
     "cluster_composition",
     "consensus",
     "cytotoxicity",
+    "dose_direction",
+    "dose_features",
     "dose_response",
+    "dose_trajectory",
     "differential_features",
     "edistance",
     "effect_size",
@@ -42,7 +49,9 @@ __all__ = [
     "map",
     "moa_enrichment",
     "neighbors_local_density",
+    "network_enrichment",
     "nn_moa_classify",
+    "ora",
     "pathway_coherence",
     "percent_replicating",
     "rank_features",
