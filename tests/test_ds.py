@@ -78,6 +78,13 @@ def test_the_downloads_read_back_at_the_shape_the_registry_claims(name: str) -> 
 
     assert list(adata.shape) == _DATASETS[name].metadata["shape"]
     assert adata.obs_names.is_unique
+    # A loader that names the perturbation unit also says what kind it is, from the fixed vocabulary, with a
+    # sane cardinality. neuropainting and amish set neither: they vary a design factor, not a reagent.
+    if name in ("neuropainting", "amish"):
+        assert "Metadata_Perturbation" not in adata.obs
+    else:
+        assert adata.obs["Metadata_Perturbation"].nunique() >= 2
+        assert set(adata.obs["Metadata_Perturbation_Type"].astype(str)) <= {"compound", "orf", "crispr", "untreated"}
     if name == "bbbc021":
         assert adata.obs["Metadata_MOA"].notna().all()
         assert adata.obs["Metadata_Control"].sum() == 330
@@ -357,6 +364,8 @@ def test_scallops_arv471_maps_controls_and_guides(tmp_path, monkeypatch):
     assert obs["Metadata_Gene"].nunique() == 4  # nontargeting, ESR1, CRBN, OR1L4
     assert obs["Metadata_sgRNA"].nunique() == 7
     assert list(obs["Metadata_Perturbation"].astype(str)) == list(obs["Metadata_sgRNA"].astype(str))
+    assert set(obs["Metadata_Perturbation_Type"].astype(str)) == {"crispr"}
+    # Both control and targeted cells are present, and only the NTC cells are marked control.
     control = obs["Metadata_Control"].to_numpy()
     assert control.dtype == bool
     assert control.any() and not control.all()
@@ -461,6 +470,8 @@ def test_cp_posh_maps_controls_and_guides(tmp_path, monkeypatch):
     assert obs["Metadata_Gene"].nunique() == 5  # nontargeting, intergenic, KIF18A, PSMB1, ARPC4
     assert obs["Metadata_sgRNA"].nunique() == 8
     assert list(obs["Metadata_Perturbation"].astype(str)) == list(obs["Metadata_sgRNA"].astype(str))
+    assert set(obs["Metadata_Perturbation_Type"].astype(str)) == {"crispr"}
+    # Both control classes and a targeted gene are present.
     genes = set(obs["Metadata_Gene"].astype(str))
     assert {"nontargeting", "intergenic"} <= genes
     assert genes - {"nontargeting", "intergenic"}
