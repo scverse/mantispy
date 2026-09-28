@@ -61,8 +61,6 @@ def _stability_cut(
     linkage_matrix: np.ndarray,
     max_clusters: int,
     window: tuple[float, float] | None = None,
-    n_steps: int = 200,
-    ma_frac: float = 0.05,
 ) -> tuple[np.ndarray, float, float]:
     """The cut height whose cluster membership is most stable across nearby heights.
 
@@ -79,6 +77,7 @@ def _stability_cut(
     """
     from scipy.cluster.hierarchy import fcluster
 
+    n_steps, ma_frac = 200, 0.05
     n_obs = int(linkage_matrix.shape[0]) + 1
     heights = linkage_matrix[:, 2]
     lo, hi = float(heights.min()), float(heights.max())
@@ -212,6 +211,7 @@ def cluster(
 
     silhouette = float("nan")
     stability = float("nan")
+    max_clusters = min(adata.n_obs - 1, 25)
     if n_clusters is not None:
         labels = fcluster(linkage_matrix, n_clusters, criterion="maxclust")
         cut = float("nan")
@@ -219,15 +219,15 @@ def cluster(
         labels = fcluster(linkage_matrix, distance_cut, criterion="distance")
         cut = float(distance_cut)
     elif criterion == "silhouette":
-        labels, cut, silhouette = _auto_cut(linkage_matrix, distances, min(adata.n_obs - 1, 25))
+        labels, cut, silhouette = _auto_cut(linkage_matrix, distances, max_clusters)
     else:
-        labels, cut, stability = _stability_cut(linkage_matrix, min(adata.n_obs - 1, 25), window=stability_window)
+        labels, cut, stability = _stability_cut(linkage_matrix, max_clusters, window=stability_window)
     chosen = int(len(set(labels)))
 
     adata.obs[key_added] = pd.Categorical([str(label) for label in labels])
     store = adata.uns.setdefault("mantispy", {})
     store[f"{key_added}_linkage"] = np.asarray(linkage_matrix, dtype=float)
-    summary = {
+    store[key_added] = {
         "n_clusters": chosen,
         "distance_cut": cut,
         "metric": metric,
@@ -236,6 +236,5 @@ def cluster(
         "stability": stability,
         "labels": [str(name) for name in adata.obs_names],
     }
-    store[key_added] = summary
     get_logger().info("cluster(hierarchical): %d cluster(s) over %d profile(s)", chosen, adata.n_obs)
     return None
