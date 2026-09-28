@@ -23,15 +23,6 @@ import mantispy as mt
 if TYPE_CHECKING:
     from anndata import AnnData
 
-# pycytominer's own feature-selection operations, matching mt.pp.feature_select's default set.
-_SELECTED_OPERATIONS = (
-    "drop_degenerate",
-    "variance_threshold",
-    "correlation_threshold",
-    "drop_na_columns",
-    "blocklist",
-)
-
 
 def _zero_nonfinite(adata: AnnData) -> AnnData:
     """Replace NaN and +-inf in ``X`` with zero, in place, and return the object."""
@@ -59,8 +50,8 @@ def build_rohban_variants(cache_dir: str | Path | None = None) -> dict[str, AnnD
     mt.pp.normalize(adata, method="mad_robustize", by="Metadata_Plate", reference="is_untreated")
     _zero_nonfinite(adata)
 
-    # Well-level feature-selected block.
-    mt.pp.feature_select(adata, operations=_SELECTED_OPERATIONS)
+    # Well-level feature-selected block, pycytominer's default operations.
+    mt.pp.feature_select(adata)
     selected = _zero_nonfinite(mt.pp.subset_features(adata))
 
     # Gene-level consensus over the screened wells: untreated and transfection controls dropped.

@@ -58,7 +58,6 @@ def test_rohban_aggregated_variants_are_gene_level():
     assert gene_selected.shape == (190, 751)
 
 
-@pytest.mark.network
 def test_rohban_variants_reject_plate_subsetting():
     with pytest.raises(ValueError, match="plates only applies"):
         mt.ds.rohban(plates=["41744"], aggregated=True)
