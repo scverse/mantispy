@@ -39,6 +39,7 @@ compounds/dose_response
 :caption: Tutorials — genetic screens
 
 genetics/crispr
+genetics/interpreting_a_screen
 ```
 
 ```{toctree}

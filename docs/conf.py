@@ -127,4 +127,6 @@ katex_prerender = shutil.which(katex.NODEJS_BINARY) is not None
 nitpick_ignore = [
     # scverse-misc 0.1.6 renders `optional` as a type in the Settings.reset signature it generates
     ("py:class", "optional"),
+    # Python 3.14 moved pathlib internals into pathlib._local, so this xref cannot resolve
+    ("py:class", "pathlib._local.Path"),
 ]
