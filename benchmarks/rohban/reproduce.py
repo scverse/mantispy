@@ -38,8 +38,6 @@ warnings.filterwarnings("ignore")
 RNG_SEED = 0
 HERE = Path(__file__).resolve().parent
 
-# The distance the paper cut its average-linkage tree at (Methods; chosen by a stability sweep).
-PAPER_CUT = 0.522
 # RAS-RAF-MEK-ERK cascade genes to look for co-clustering (the subset present in these pilot plates).
 RAS_CASCADE = {"KRAS", "HRAS", "NRAS", "BRAF", "RAF1", "MAP2K1", "MAP2K3", "MAP2K4", "MAPK1", "MAPK3", "SOS1"}
 # NF-kB / TRAF2 module: TRAF2 is the paper's cluster-11 anchor; the rest are its fallbacks if inactive.
@@ -159,9 +157,13 @@ print(f"  consensus profiles: {cons.n_obs} constructs x {cons.n_vars} features")
 # =============================================================================================
 banner("Step 7: average-linkage clustering (1-Pearson) + Pearson similarity [G4]")
 mt.tl.cluster(
-    cons, use_rep=None, method="hierarchical", linkage="average", metric="correlation", distance_cut=PAPER_CUT
+    cons, use_rep=None, method="hierarchical", linkage="average", metric="correlation", criterion="stability"
 )
 mt.tl.similarity(cons, metric="pearson", use_rep=None)
+
+stability_cut = float(cons.uns["mantispy"]["cluster"]["distance_cut"])
+stability_score = cons.uns["mantispy"]["cluster"].get("stability")
+stab_str = f"{stability_score:.3f}" if stability_score is not None and np.isfinite(stability_score) else "n/a"
 
 lab = cons.obs["cluster"].astype(str)
 gene = cons.obs["Metadata_Gene"].astype(str)
@@ -171,12 +173,15 @@ genes_per_cluster = gene.groupby(lab, observed=True).nunique()
 multigene = set(genes_per_cluster[genes_per_cluster >= 2].index)
 n_multigene = len(multigene)
 
-# The mantispy-native default cut (silhouette sweep), reported alongside the paper's fixed cut.
+# The mantispy-native silhouette cut, reported alongside the stability cut for comparison.
 auto = cons.copy()
 mt.tl.cluster(auto, use_rep=None, method="hierarchical", linkage="average", metric="correlation")
 n_auto = int(auto.obs["cluster"].nunique())
-print(f"  cut {PAPER_CUT}: {n_clusters_ge2} clusters with >=2 constructs, {n_multigene} multi-gene (paper: 25, 22)")
-print(f"  auto-cut (silhouette): {n_auto} clusters at height {auto.uns['mantispy']['cluster']['distance_cut']:.3f}")
+print(
+    f"  stability cut {stability_cut:.3f} (stability {stab_str}): {n_clusters_ge2} clusters with >=2 constructs, "
+    f"{n_multigene} multi-gene (paper: 25, 22)"
+)
+print(f"  comparison silhouette cut: {n_auto} clusters at height {auto.uns['mantispy']['cluster']['distance_cut']:.3f}")
 
 # =============================================================================================
 # Step 8: pathway biology from the cluster labels + similarity [G5-G7]
@@ -250,15 +255,15 @@ for name, prefix in [("GO_BP", "GO"), ("CORUM", "CORUM"), ("Reactome", "REACTOME
 net = pd.concat(nets, ignore_index=True)
 print(f"  gene-set network: {net['source'].nunique()} sets over {len(net)} edges (GO-BP + CORUM + Reactome)")
 
-mt.tl.ora(cons, groupby="cluster", net=net, gene_key="Metadata_Gene", tmin=5)
+mt.tl.ora(cons, groupby="cluster", net=net, gene_key="Metadata_Gene", tmin=5, padj_by="group")
 ora = cons.uns["mantispy"]["ora"]
 enriched_q = set(ora.loc[ora["qvalue"] < 0.05, "group"].astype(str)) & multigene
 enriched_nominal = set(ora.loc[ora["pvalue"] < 0.05, "group"].astype(str)) & multigene
 n_enriched_q = len(enriched_q)
 n_enriched_nominal = len(enriched_nominal)
 print(
-    f"  mt.tl.ora ({len(ora)} tests, one global BH): multi-gene clusters enriched at q<0.05 = "
-    f"{n_enriched_q}/{n_multigene}; at nominal p<0.05 = {n_enriched_nominal}/{n_multigene}"
+    f"  mt.tl.ora ({len(ora)} tests, per-cluster BH via padj_by='group'): multi-gene clusters enriched at "
+    f"q<0.05 = {n_enriched_q}/{n_multigene}; at nominal p<0.05 = {n_enriched_nominal}/{n_multigene}"
 )
 
 # =============================================================================================
@@ -314,11 +319,14 @@ row(
     "G4",
     "# clusters (>=2 constructs)",
     "25",
-    f"{n_clusters_ge2} (auto-cut: {n_auto})",
+    f"{n_clusters_ge2} (stability cut {stability_cut:.3f}; silhouette-cut comparison: {n_auto})",
     g4_pass,
-    f"average linkage, 1-Pearson, cut {PAPER_CUT}; the absolute cut is not portable to mantispy's more "
-    "redundant 751-feature space (distances compress, so it cuts finer), and we cluster all 323 screened "
-    "constructs vs the paper's 110 active; the auto silhouette cut instead over-merges",
+    f"average linkage, 1-Pearson, cut by the stability criterion at {stability_cut:.3f} (Rohban's own "
+    "dendrogram-cutting approach, replacing the earlier hardcoded 0.522 height). On this construct-level tree "
+    f"the sweep finds the coarse split most stable and collapses to {n_clusters_ge2} clusters, well short of "
+    "the paper's 25; the silhouette comparison cut and the previous hardcoded 0.522 cut both give far more, "
+    "so the granularity the paper reports is not recovered by any automatic cut here (we also cluster all 323 "
+    "screened constructs vs the paper's 220 QC-passing signatures)",
 )
 row(
     "G5",
@@ -343,9 +351,10 @@ row(
     "19/22",
     f"{n_enriched_q}/{n_multigene} at q<0.05 ({n_enriched_nominal}/{n_multigene} nominal)",
     n_enriched_q >= 5,
-    "mt.tl.ora applies one global Benjamini-Hochberg across all cluster x set tests, far stricter than the "
-    "paper's per-cluster FDR; over a 194-gene universe no test survives, though the signal is present at "
-    "nominal p (the v1 script used hand-rolled per-cluster BH)",
+    "mt.tl.ora now corrects per cluster (padj_by='group') rather than once globally, but this does not recover "
+    "q<0.05 on this data: ora tests every set in the 194-gene universe per cluster (~1870 sets), so per-cluster "
+    "BH still divides by ~1870 and the strongest cluster enrichment (nominal p~1e-4) only reaches q~0.2; the "
+    "nominal signal is present but no test clears per-cluster FDR",
 )
 g9_pass = ne["odds_ratio"] > 1.0 and ne["pvalue"] < 0.10
 row(
@@ -386,8 +395,9 @@ md = [
     "",
     f"**Pipeline:** normalize per plate to the untreated (EMPTY) wells -> feature select "
     f"({adata.n_vars} features) -> PCA ({n_pcs} PCs, >=99% variance) -> `percent_replicating` active "
-    f"call -> modz consensus per construct -> `cluster` (average linkage, 1-Pearson, cut {PAPER_CUT}) -> "
-    "`ora` GO/complex enrichment -> `network_enrichment` CORUM interaction enrichment.",
+    f"call -> modz consensus per construct -> `cluster` (average linkage, 1-Pearson, stability cut "
+    f"{stability_cut:.3f}) -> `ora` GO/complex enrichment (per-cluster FDR) -> `network_enrichment` CORUM "
+    "interaction enrichment.",
     "",
     "| ID | Quantity | Published | v1 mantispy (gene level) | v2 mantispy (construct level) | Agreement | Note |",
     "|----|----------|-----------|--------------------------|-------------------------------|-----------|------|",
@@ -414,30 +424,47 @@ md += [
     "`fisher_exact`. The interaction reference is now a pinned, offline CORUM snapshot rather than a live "
     "BioGRID release, so the run is reproducible without any external fetch beyond the pinned resources.",
     "",
+    "- **Method changes since the previous v2 run:** two package gaps that the previous run documented are now "
+    "addressed in mantispy, and both are used here. (G4) `tl.cluster(..., criterion=\"stability\")` cuts the "
+    f"dendrogram by the recurrence of cluster membership across nearby heights (Rohban's own method) at "
+    f"{stability_cut:.3f}, replacing the earlier hardcoded 0.522 height. That 0.522 was **not** a value the "
+    "paper reports; it was fabricated and has been removed. (G8) `tl.ora(..., padj_by=\"group\")` now corrects "
+    "the FDR within each cluster rather than once across all clusters. Neither change moves its target to the "
+    f"paper's value on this data (see the divergences below): the stability sweep collapses to "
+    f"{n_clusters_ge2} clusters, and per-cluster FDR still finds {n_enriched_q}/{n_multigene} at q<0.05, "
+    "because `tl.ora` tests every set in the 194-gene universe per cluster.",
+    "",
     f"- **Diverged, with named reasons:** (G1/G2) `percent_replicating` calls {100 * frac_active:.0f}% of "
     "constructs active, over the paper's 50%, because its matched-median non-replicate null is more "
     "permissive than the paper's literal per-pair 95th-percentile criterion, and the pilot compresses to "
-    f"{n_pcs} PCs vs 158; (G4) at the paper's {PAPER_CUT} cut we get {n_clusters_ge2} multi-construct "
-    "clusters, because that absolute height is not portable to mantispy's more redundant 751-feature "
-    "space and we cluster all 323 screened constructs rather than the paper's 110 active; (G8) "
-    f"`tl.ora` finds {n_enriched_q} clusters enriched at q<0.05 because it applies one global "
-    f"Benjamini-Hochberg across all cluster x set tests (the signal is present at nominal p in "
-    f"{n_enriched_nominal}/{n_multigene} multi-gene clusters, but no test clears the global FDR over a "
-    "194-gene universe); (G10) the top-5% correlation cut sits at "
+    f"{n_pcs} PCs vs 158; (G4) the stability criterion (Rohban's own dendrogram-cutting approach) cuts the "
+    f"tree at {stability_cut:.3f} into only {n_clusters_ge2} multi-construct clusters against the paper's 25, "
+    "because on this construct-level tree the sweep finds the coarse top-level split most stable and the finer "
+    "structure the paper cut at is not the stability optimum here (the silhouette and previous 0.522 cuts give "
+    "far more clusters); (G8) `tl.ora(padj_by=\"group\")` corrects the FDR within each cluster but still finds "
+    f"{n_enriched_q}/{n_multigene} enriched at q<0.05, because `tl.ora` tests every set in the 194-gene "
+    "universe per cluster (~1870 tests), so per-cluster BH still divides by ~1870 and the strongest cluster "
+    f"enrichment (nominal p~1e-4, present in {n_enriched_nominal}/{n_multigene} clusters) only reaches q~0.2; "
+    "recovering the paper's per-cluster enrichment would need ora to restrict each cluster's tests to the sets "
+    "its genes actually hit; (G10) the top-5% correlation cut sits at "
     f"{threshold:.2f} rather than 0.43 because modz consensus denoises the profiles, raising pairwise "
     "correlations.",
     "",
     "- **Out of scope:** (G11) the NF-kB -> YAP/TAZ-target GSEA needs external L1000 signatures, not the "
     "Cell Painting profiles.",
     "",
-    "- **Capability gaps for maintainers:** (1) `tl.ora` corrects globally, so per-cluster enrichment of "
-    "many small clusters over a small screen universe yields nothing at q<0.05; a per-group correction "
-    "option (or a documented recipe) would match the standard cluster-enrichment workflow. (2) `tl.cluster` "
-    "cuts at an absolute height or a fixed count; a stability-based cut (the paper's approach) is not "
-    "available, and the silhouette auto-cut over-merges here. (3) No PCA in `pp` (used `scanpy.pp.pca`); "
-    "99% variance is only ~36 PCs on these redundant augmented profiles. (4) `network_enrichment`'s default "
-    "reference is CORUM co-membership, a proxy for a real PPI network; a BioGRID/STRING edge list must be "
-    "passed as `edges` for the paper's exact test.",
+    "- **Capability gaps for maintainers:** two gaps the previous run flagged now have APIs "
+    "(`tl.ora(padj_by=\"group\")` and `tl.cluster(criterion=\"stability\")`), but on this data neither moves "
+    "its target to the paper's value, and the reruns expose why. (1) `tl.ora` tests every set in the gene "
+    "universe for every group, so even per-cluster FDR divides by ~1870 tests and no cluster clears q<0.05; a "
+    "conventional ORA restricts each group's tests to the sets its genes actually hit, which is what would "
+    "recover the paper's per-cluster enrichment. (2) `tl.cluster(criterion=\"stability\")` finds the coarse "
+    "top-level split most stable on this tree and collapses to a handful of clusters, so it does not by itself "
+    "reproduce the paper's finer 25-cluster granularity; exposing the stability-vs-height curve (or a "
+    "min-cluster-count floor) would let a user pick the stable cut within a target range. (3) No PCA in `pp` "
+    "(used `scanpy.pp.pca`); 99% variance is only ~36 PCs on these redundant augmented profiles. "
+    "(4) `network_enrichment`'s default reference is CORUM co-membership, a proxy for a real PPI network; a "
+    "BioGRID/STRING edge list must be passed as `edges` for the paper's exact test.",
     "",
 ]
 (HERE / "REPRODUCTION.md").write_text("\n".join(md) + "\n")
@@ -455,15 +482,20 @@ assert 0.55 <= frac_active <= 0.90, (
 assert len(pr) >= 200 and "median_replicate_correlation" in pr, (
     "G3: percent_replicating did not produce a per-construct table"
 )
-# G4: clustering produced a sane number of multi-construct clusters at the paper's cut (regression guard).
-assert 30 <= n_clusters_ge2 <= 70, f"G4: {n_clusters_ge2} multi-construct clusters outside the documented band"
+# G4: the stability criterion collapses to the coarse top-level split here; guard that documented behavior.
+assert 2 <= n_clusters_ge2 <= 10, (
+    f"G4: stability cut gave {n_clusters_ge2} multi-construct clusters, outside the documented collapse band "
+    "(the sweep should find the coarse split most stable on this tree)"
+)
 # G5-G7: the clustering biology (the core reproduction).
 assert hippo_co, "G5 FAIL: YAP1 and WWTR1 not co-clustered"
 assert ras_co, "G6 FAIL: <2 RAS-RAF-MEK-ERK cascade genes co-clustered"
 assert anti_corr, f"G7 FAIL: YAP vs NF-kB mean r={yap_nfkb:.3f} not among the most negative inter-cluster means"
-# G8: the signal is present at nominal p even though the global FDR suppresses it (regression guard).
-assert n_enriched_nominal >= 10, (
-    f"G8: only {n_enriched_nominal} clusters enriched at nominal p (expected the signal to be present)"
+# G8: per-cluster FDR (padj_by='group') is exercised and the nominal signal is present, but ora's full-universe
+# per-cluster test count keeps every q above 0.05 here; guard that documented divergence.
+assert n_enriched_nominal >= 1 and n_enriched_q == 0, (
+    f"G8: expected the nominal enrichment signal present ({n_enriched_nominal}) with no per-group q<0.05 hit "
+    f"(got {n_enriched_q}); the documented per-cluster-FDR divergence changed"
 )
 # G9: the interaction enrichment of top pairs (direction + significance).
 assert ne["odds_ratio"] > 1.0 and ne["pvalue"] < 0.10, "G9 FAIL: top pairs not enriched for CORUM co-membership"
