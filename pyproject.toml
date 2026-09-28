@@ -116,6 +116,7 @@ typecheck = [
 ]
 
 [tool.hatch]
+build.targets.sdist.exclude = [ "/docs", "/tests" ]
 envs.data.features = [ "spatial" ]
 envs.data.scripts.download = "python .scripts/ci/download_data.py {args}"
 envs.data.scripts.drift-check = "python scripts/check_staged_drift.py {args}"

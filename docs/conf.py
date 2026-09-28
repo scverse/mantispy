@@ -39,6 +39,7 @@ extensions = [
     "sphinx.ext.autodoc",
     "sphinx.ext.intersphinx",
     "sphinx.ext.autosummary",
+    "sphinx.ext.viewcode",
     "sphinx.ext.napoleon",
     "sphinxcontrib.bibtex",
     "sphinxcontrib.katex",
