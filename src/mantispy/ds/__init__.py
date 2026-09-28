@@ -3,8 +3,6 @@
 from mantispy.ds._blobs import blobs
 from mantispy.ds._datasets import (
     JUMP_LITE_MODELS,
-    agnp,
-    amish,
     bbbc021,
     chroma,
     corum,
@@ -16,8 +14,6 @@ from mantispy.ds._datasets import (
     jump_lite_targets,
     jump_plate,
     jump_target2,
-    luad,
-    miami,
     neuropainting,
     oasis_pilot,
     pki,
@@ -30,8 +26,6 @@ from mantispy.ds._synthetic import DEFAULT_CHANNELS, synthetic_plate
 
 __all__ = [
     "DEFAULT_CHANNELS",
-    "agnp",
-    "amish",
     "bbbc021",
     "blobs",
     "chroma",
@@ -47,8 +41,6 @@ __all__ = [
     "jump_export",
     "jump_plate",
     "jump_target2",
-    "luad",
-    "miami",
     "neuropainting",
     "oasis_pilot",
     "pki",
