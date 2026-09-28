@@ -168,7 +168,14 @@ def test_min_overlap_scopes_the_tested_and_corrected_sets():
     grp2 = grp2[grp2["group"] == "grp"]
     assert set(grp2["source"]) == {"X"}
 
-    # 3. A min_overlap below 1, or not an integer, is rejected.
+    # 3. A numpy integer is accepted and behaves like the equivalent Python int (common in scientific code).
+    npint = adata.copy()
+    mt.tl.ora(npint, groupby="cluster", net=net, tmin=1, padj_by="group", min_overlap=np.int64(2))
+    grp_npint = npint.uns["mantispy"]["ora"]
+    grp_npint = grp_npint[grp_npint["group"] == "grp"]
+    assert set(grp_npint["source"]) == {"X"}  # same as the plain int 2 above
+
+    # 4. A min_overlap below 1, or not an integer, is rejected.
     with pytest.raises(ValueError, match="min_overlap must be an int >= 1"):
         mt.tl.ora(adata.copy(), groupby="cluster", net=net, tmin=1, min_overlap=0)
     with pytest.raises(ValueError, match="min_overlap must be an int >= 1"):

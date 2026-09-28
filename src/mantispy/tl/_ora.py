@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numbers
 from typing import Literal
 
 import numpy as np
@@ -46,7 +47,8 @@ def ora(
             ``"group"`` corrects within each group's tests, so a group's modest enrichment is not penalized by unrelated groups (use this when many groups are tested at once).
             Because the scope is chosen per call, q-values from an ``"all"`` run and a ``"group"`` run are not directly comparable, so keep one scope within a single comparison.
         min_overlap: Smallest number of a group's genes a set must contain to be tested for that group.
-            ``1`` (default) is conventional over-representation: a set that contains none of the group's genes can never be over-represented and is dropped from the group's rows, so it does not enlarge the correction denominator.
+            ``1`` (default) drops only the sets a group's genes do not hit at all (``a == 0``), so a set that shares no gene with the group is not tested and does not enlarge the correction denominator.
+            The test is two-tailed, so a retained set may come out over- OR under-represented (read the sign of ``odds_ratio``); ``min_overlap`` bounds only how many of the group's genes a set must contain, not the direction of the result.
             Values ``>= 2`` require stronger overlap before a set is tested.
 
     Returns:
@@ -62,14 +64,14 @@ def ora(
         The universe is the set of distinct genes in ``obs[gene_key]``, so a set is tested only on its genes that the screen measured, and sets with fewer than ``tmin`` measured genes are skipped.
         Each group and set is tested with a two-tailed Fisher exact test over that universe.
 
-        The correction is applied only over the sets a group's genes actually hit, so the family size is the number of relevant sets (overlap ``>= min_overlap``), not the whole collection.
-        Sets a group does not touch cannot be over-represented, so keeping them out of the table keeps the per-group FDR from being inflated by hypotheses that were never in play.
+        ``min_overlap`` shrinks the set of tested hypotheses to the sets a group's genes actually hit (overlap ``>= min_overlap``), rather than the whole collection.
+        Sets a group does not touch are never tested, so they do not weigh on the correction under either scope: with ``padj_by="group"`` they stay out of that group's own Benjamini-Hochberg family, and with ``padj_by="all"`` (default) they are absent from the single pooled family shared across groups.
     """
     from scipy.stats import fisher_exact
 
     if padj_by not in ("all", "group"):
         raise ValueError(f"padj_by must be 'all' or 'group', got {padj_by!r}")
-    if not isinstance(min_overlap, int) or isinstance(min_overlap, bool) or min_overlap < 1:
+    if isinstance(min_overlap, bool) or not isinstance(min_overlap, numbers.Integral) or min_overlap < 1:
         raise ValueError(f"min_overlap must be an int >= 1, got {min_overlap!r}")
     obs = as_frame(adata.obs)
     for column in (groupby, gene_key):
