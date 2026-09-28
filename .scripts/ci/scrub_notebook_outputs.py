@@ -1,20 +1,16 @@
 #!/usr/bin/env python3
 """Scrub build-environment leaks out of committed notebook outputs.
 
-Notebooks under docs/ are committed with their executed outputs, and those
-outputs are public. Captured warnings and error tracebacks print absolute
-source paths, leaking the build environment (username, cluster layout,
-virtualenv, kernel temp files); the tqdm/ipywidgets ``IProgress not found``
-warning is pure noise. For each ``.ipynb`` given, in every code cell's outputs:
+Notebooks under docs/ are committed with their executed outputs, and those outputs are public.
+Captured warnings and error tracebacks print absolute source paths, leaking the build environment (username, cluster layout, virtualenv, kernel temp files); the tqdm/ipywidgets ``IProgress not found`` warning is pure noise.
+For each ``.ipynb`` given, in every code cell's outputs:
 
-* In ``stream`` outputs, ``data["text/plain"]`` and ``error`` tracebacks,
-  replace any absolute build-environment path with ``<path>``.
-* Drop a ``stderr`` stream whose whole content is tqdm/ipywidgets noise or the
-  "running over TCP" kernel notice; if it also carries real content, keep it
-  and only scrub the paths.
+* In ``stream`` outputs, ``data["text/plain"]`` and ``error`` tracebacks, replace any absolute build-environment path with ``<path>``.
+* Drop a ``stderr`` stream whose whole content is tqdm/ipywidgets noise or the "running over TCP" kernel notice; if it also carries real content, keep it and only scrub the paths.
 
-Image data, execution counts, source and prose are left untouched. The pass is
-idempotent. Default is FIX (rewrite changed files); ``--check`` writes nothing.
+Image data, execution counts, source and prose are left untouched.
+The pass is idempotent.
+Default is FIX (rewrite changed files); ``--check`` writes nothing.
 Either way the exit code is non-zero when a file changed, the pre-commit idiom.
 """
 
@@ -27,24 +23,10 @@ from pathlib import Path
 
 PLACEHOLDER = "<path>"
 
-# A run of path characters: slashes and the usual filename characters, but not
-# whitespace, quotes, a colon (which ends the "<path>:<lineno>:" warning prefix)
-# or angle brackets (so we never re-match a placeholder we already wrote).
+# No colon, which ends the "<path>:<lineno>:" prefix, and no angle brackets, so a placeholder never re-matches.
 _BODY = r"[^\s:'\"<>]"
 
-# Absolute build-environment paths an executed notebook's warnings and
-# tracebacks print. Matched three ways so the pattern never accretes one
-# machine's root at a time (the reason it kept needing a commit per leak):
-#   * a known storage or OS-temp root (``/home`` and ``/Users`` consume the
-#     user segment so an empty root cannot match);
-#   * any path naming an ``ipykernel_<pid>`` temp file, on whatever root, which
-#     is what the degenerate-scale and similar UserWarnings actually carry;
-#   * an interpreter path carrying a ``site-packages`` or ``.venv`` segment
-#     (the Library/"Application Support" paths break at the space, leaving this
-#     tail).
-# The leading boundary keeps a root from biting into a URL such as
-# ``https://example.org/home/x``; the trailing lookbehind backtracks off
-# sentence punctuation the path never owns.
+# /home and /Users consume the user segment so an empty root cannot match.
 _ROOTS = (
     "/ictstr01",
     "/lustre",
@@ -57,6 +39,7 @@ _ROOTS = (
     rf"/home/{_BODY}+",
     rf"/Users/{_BODY}+",
 )
+# The leading lookbehind keeps a root from biting into a URL such as https://example.org/home/x.
 _PATH = re.compile(
     r"(?<![A-Za-z0-9._-])"
     r"(?:"
@@ -67,11 +50,7 @@ _PATH = re.compile(
     + rf"{_BODY}*(?<![.,;)])"
 )
 
-# Whole lines that are pure environment noise. Used only to decide whether a
-# stderr block is droppable; kept blocks are never edited line-by-line. The
-# tqdm line is matched by its full ``TqdmWarning: IProgress not found`` text,
-# not a bare ``ipywidgets`` substring, so a genuine diagnostic that merely
-# names ipywidgets is not silently dropped.
+# The full TqdmWarning text, not a bare "ipywidgets", so a real diagnostic that names ipywidgets is not dropped.
 _NOISE_LINES = [
     re.compile(r"(?m)^.*TqdmWarning: IProgress not found.*$"),
     re.compile(r"(?m)^\s*from \.autonotebook import tqdm as notebook_tqdm\s*$"),

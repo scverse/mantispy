@@ -51,17 +51,23 @@ def outliers(
     Args:
         adata: Object to flag.
         method: ``"ecod"`` :cite:p:`Li_2023` needs no tuning and is interpretable per feature, ``"isolation_forest"`` catches outliers defined by feature interactions, and ``"mad"`` takes the largest robust z-score across features, which is easy to explain but sees each feature alone.
-        contamination: Fraction of cells to flag, rounded up to a whole cell within each ``by`` group, so a non-empty group always flags its most outlying cell and the flagged fraction is higher than asked for in a group smaller than ``1 / contamination``. Ignored when ``score_cutoff`` is given.
-        score_cutoff: Threshold the score absolutely instead of by quantile. With ``method="mad"`` the score is a robust z-score, so ``score_cutoff=5`` gives the usual rule.
-        key: Restrict to features flagged by this boolean ``var`` column, usually ``"selected"``. Falls back to every feature when the column is absent.
+        contamination: Fraction of cells to flag, rounded up to a whole cell within each ``by`` group, so a non-empty group always flags its most outlying cell and the flagged fraction is higher than asked for in a group smaller than ``1 / contamination``.
+            Ignored when ``score_cutoff`` is given.
+        score_cutoff: Threshold the score absolutely instead of by quantile.
+            With ``method="mad"`` the score is a robust z-score, so ``score_cutoff=5`` gives the usual rule.
+        key: Restrict to features flagged by this boolean ``var`` column, usually ``"selected"``.
+            Falls back to every feature when the column is absent.
         by: Threshold within each group of this ``obs`` column, e.g. per plate, rather than globally.
         seed: Seed for ``isolation_forest``.
-        ecod_aggregation: How ``"ecod"`` combines features. ``"pyod"`` sums each feature's larger tail, or both tails where its skewness is zero or undefined, as pyod and scmorph do, so no score depends on which way round a feature is measured. ``"paper"`` is Algorithm 1 of :cite:t:`Li_2023`, the largest of the left-tail, right-tail and skew-directed sums.
+        ecod_aggregation: How ``"ecod"`` combines features.
+            ``"pyod"`` sums each feature's larger tail, or both tails where its skewness is zero or undefined, as pyod and scmorph do, so no score depends on which way round a feature is measured.
+            ``"paper"`` is Algorithm 1 of :cite:t:`Li_2023`, the largest of the left-tail, right-tail and skew-directed sums.
         key_added: Prefix for the outputs: ``obs[key_added]`` and ``obs[key_added + "_score"]``.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy. Writes the boolean ``obs[key_added]`` and the score itself to ``obs[key_added + "_score"]``.
+        ``None``, or the modified copy.
+        Writes the boolean ``obs[key_added]`` and the score itself to ``obs[key_added + "_score"]``.
 
     Raises:
         ValueError: If ``method`` or ``ecod_aggregation`` is unknown, or ``contamination`` is outside ``(0, 1)`` and no ``score_cutoff`` is given.
@@ -90,11 +96,7 @@ def outliers(
         if score_cutoff is not None:
             flagged[rows] = block > score_cutoff
         else:
-            # Flag by rank: `> quantile` flags too few cells when scores tie, and none when an
-            # infinite feature value makes the quantile infinite. The count is rounded up, so a
-            # contamination the group is too small to express asks for the most outlying cell
-            # rather than for none at all; pyod's threshold at the `1 - contamination`
-            # percentile likewise flags the top cell of a sample that small.
+            # Flag by rank: `> quantile` flags too few cells on ties, and none when an infinite value makes the quantile infinite.
             k = math.ceil(contamination * rows.size)
             flagged[rows[np.argsort(block)[::-1][:k]]] = True
 

@@ -8,9 +8,6 @@ import mantispy as mt
 
 SRC = pathlib.Path(mt.__file__).parent
 
-#: Libraries mantispy is checked against rather than built on. They are test-time
-#: dependencies: importing one from src would make it a runtime dependency of a package
-#: that reimplements what it does, and would make the equivalence tests circular.
 #: harmonypy is absent because pp.harmony imports it as an optional runtime dependency.
 REFERENCE_LIBRARIES = {
     "pycytominer",
@@ -21,8 +18,6 @@ REFERENCE_LIBRARIES = {
     "scmorph",
 }
 
-#: Functions scanpy provides and users call directly. A thin wrapper would add a name to
-#: learn, a signature to keep in sync, and a place for defaults to drift.
 SCANPY_TERRITORY = {"pca", "neighbors", "umap", "tsne", "leiden", "louvain", "draw_graph", "harmony_integrate"}
 
 
@@ -46,8 +41,7 @@ def test_src_never_imports_a_reference_library():
 
 
 def test_only_core_reads_the_matrix_directly():
-    """Outside _core every read of X or of a layer goes through get_matrix, so a streaming
-    backend has one place to change."""
+    """Outside _core every read of X or of a layer goes through get_matrix, so a streaming backend has one place to change."""
     offending = {}
     for path in sorted(SRC.rglob("*.py")):
         if path.parent.name == "_core":
@@ -63,8 +57,7 @@ def test_only_core_reads_the_matrix_directly():
             if source.endswith((".X", ".layers")) and "self" not in source:
                 offending.setdefault(str(path.relative_to(SRC)), set()).add(source)
 
-    # Writes through subscripts (adata.layers[key] = ...) and membership tests are allowed;
-    # reads of the values are not.
+    # Writes through subscripts (adata.layers[key] = ...) and membership tests are allowed; reads of the values are not.
     reads = {
         path: sorted(names) for path, names in offending.items() if any(not name.endswith(".layers") for name in names)
     }

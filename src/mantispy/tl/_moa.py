@@ -57,7 +57,9 @@ def nn_moa_classify(
         adata: Profiles to classify, one row per treatment or per well.
         moa_key: ``obs`` column holding the known mechanism.
         metric: Similarity between profiles, ``"cosine"`` or ``"pearson"``.
-        scheme: ``"nn"`` allows any neighbor, which is usually optimistic because a compound can match itself at another dose. ``"nsc"`` (not-same-compound) excludes neighbors of the same compound, as in the published BBBC021 benchmark. ``"nscb"`` also excludes neighbors from the same batch, so a batch effect cannot produce the match.
+        scheme: ``"nn"`` allows any neighbor, which is usually optimistic because a compound can match itself at another dose.
+            ``"nsc"`` (not-same-compound) excludes neighbors of the same compound, as in the published BBBC021 benchmark.
+            ``"nscb"`` also excludes neighbors from the same batch, so a batch effect cannot produce the match.
         compound_key: ``obs`` column read for the ``nsc`` and ``nscb`` exclusions.
         batch_key: ``obs`` column read for the ``nscb`` exclusion.
         use_rep: Classify ``obsm[use_rep]`` instead of ``X``.
@@ -86,7 +88,6 @@ def nn_moa_classify(
     similarity = _blocked_similarity(adata, metric, use_rep, scheme, compound_key, batch_key)
     truth = as_frame(adata.obs)[moa_key].to_numpy(dtype=object)
     annotated = pd.notna(truth)
-    # Unannotated profiles cannot be neighbors, so the nearest annotated profile is used even when an unannotated one is closer.
     similarity[:, ~annotated] = -np.inf
 
     usable = np.isfinite(similarity).any(axis=1) & annotated
@@ -143,7 +144,8 @@ def moa_enrichment(
         adata: Profiles to test, one row per treatment or per well.
         moa_key: ``obs`` column holding the mechanism labels.
         groupby: ``obs`` column naming each profile in the output table.
-        k: Number of neighbors considered, capped at ``n_obs - 1``. Smaller values are more local and less powerful.
+        k: Number of neighbors considered, capped at ``n_obs - 1``.
+            Smaller values are more local and less powerful.
         metric: As in :func:`nn_moa_classify`.
         use_rep: As in :func:`nn_moa_classify`.
         key_added: Name for the output table.
@@ -170,7 +172,6 @@ def moa_enrichment(
 
     obs = as_frame(adata.obs)
     # No .astype(str), which turns missing labels into a "nan" mechanism on pandas < 3.
-    # Missing labels get code -1 and are masked out with `annotated`.
     labels = pd.Categorical(obs[moa_key])
     annotated = labels.codes >= 0
     if not annotated.any():
@@ -184,13 +185,11 @@ def moa_enrichment(
     k = min(k, adata.n_obs - 1)
     top = np.argpartition(-similarity, kth=k - 1, axis=1)[:, :k]
 
-    # Unannotated neighbors take up one of the k places but add to no mechanism's count.
     votes = codes[top[scored]]
     valid = (votes >= 0).ravel()
     found = np.zeros((scored.size, n_labels), dtype=np.int64)
     np.add.at(found, (np.repeat(np.arange(scored.size), k)[valid], votes.ravel()[valid]), 1)
 
-    # The population matches the pool `top` draws from: every other profile, annotated or not.
     population = adata.n_obs - 1
     totals = (
         np.bincount(codes[annotated], minlength=n_labels)[None, :] - np.eye(n_labels, dtype=np.int64)[codes[scored]]

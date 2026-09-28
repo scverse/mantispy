@@ -73,9 +73,8 @@ def test_metrics_plot_marks_which_direction_is_better(evaluated):
 
 
 def test_metrics_plot_claims_no_direction_for_a_covariate(evaluated):
-    """A covariate row has no direction, because whether its share of the variance should be small
-    depends on what the covariate is. Reading the column back without checking it labelled the
-    bar '(nan is better)'."""
+    """A covariate row has no direction, because whether its share of the variance should be small depends on what the covariate is.
+    Reading the column back without checking it labelled the bar '(nan is better)'."""
     evaluated.obs["Metadata_CellCount"] = np.arange(evaluated.n_obs, dtype=float)
     table = mt.metrics.evaluate_correction(evaluated, reps=("X_pca",), covariates=("Metadata_CellCount",))
 
@@ -104,8 +103,7 @@ def test_similarity_draws_one_block_per_group_when_it_subsamples():
         min_cells=0,
     )
     labels = profiles.obs["Metadata_Perturbation"].astype(str).to_numpy()
-    # A same-group indicator makes the drawn image exactly block diagonal whenever the rows
-    # reach it grouped, whatever the profiles themselves look like.
+    # A same-group indicator makes the drawn image exactly block diagonal whenever the rows reach it grouped.
     profiles.obsp["similarity"] = (labels[:, None] == labels[None, :]).astype(np.float32)
 
     drawn = np.asarray(mt.pl.similarity(profiles, max_obs=50).images[0].get_array())

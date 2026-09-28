@@ -1,7 +1,7 @@
 """Correctness of the column-blocked kernels: block iteration and float32 correlation.
 
-Chunking is a re-association of the same math, so the result must equal the whole-matrix
-reference. float32 correlation only diverges near the threshold, which these tests keep clear of.
+Chunking is a re-association of the same math, so the result must equal the whole-matrix reference.
+float32 correlation only diverges near the threshold, which these tests keep clear of.
 """
 
 import numpy as np
@@ -12,7 +12,6 @@ from mantispy._core._corr import correlated_pairs
 
 
 def test_windowed_rejects_bad_window_and_stride():
-    """The fast path validates its knobs: window and stride must be positive integers."""
     rng = np.random.default_rng(13)
     X = rng.standard_normal((50, 6))
     for bad_window in (0, -1):
@@ -24,7 +23,6 @@ def test_windowed_rejects_bad_window_and_stride():
 
 
 def test_feature_select_corr_window_drops_one_of_a_pair():
-    """The windowed correlation path actually drops a redundant feature and writes a boolean var column."""
     from anndata import AnnData
 
     import mantispy as mt
@@ -40,5 +38,5 @@ def test_feature_select_corr_window_drops_one_of_a_pair():
     selected = adata.var["selected"]
     assert selected.dtype == bool
     assert selected.shape == (6,)
-    assert int(selected.sum()) == 5  # one of the correlated pair is dropped
-    assert not (bool(selected.iloc[0]) and bool(selected.iloc[1]))  # not both members kept
+    assert int(selected.sum()) == 5
+    assert not (bool(selected.iloc[0]) and bool(selected.iloc[1]))

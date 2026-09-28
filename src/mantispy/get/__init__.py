@@ -9,8 +9,6 @@ from mantispy.get._accessors import controls, features, to_dataframe
 if TYPE_CHECKING:
     from scanpy.get import obs_df, var_df
 
-#: Names re-exported from :mod:`scanpy.get`, fetched on first access rather than at import.
-#: Importing them eagerly pulls in scanpy, and with it sklearn and matplotlib, so the first access pays that cost instead of every ``import mantispy``.
 _SCANPY_NAMES = ("obs_df", "var_df")
 
 __all__ = ["controls", "features", "obs_df", "to_dataframe", "var_df"]

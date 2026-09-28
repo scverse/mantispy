@@ -32,11 +32,8 @@ def test_stratifying_keeps_the_rare_group_represented(plate):
 
 
 def test_chatterjee_does_not_read_missingness_as_a_dependence(plate):
-    """Ranking sorts NaN last, so a feature that is merely unmeasured in one group is read as a
-    step function of the group: pure noise missing in one of four groups scored 0.34, above the
-    0.1 threshold and in reach of the largest score a real screen produces, so selection kept a
-    feature for being absent. Scoring only the rows where it was measured is what the coefficient
-    is defined on."""
+    """Ranking sorts NaN last, so a feature that is merely unmeasured in one group is read as a step function of the group: pure noise missing in one of four groups scored 0.34, above the 0.1 threshold and in reach of the largest score a real screen produces, so selection kept a feature for being absent.
+    Scoring only the rows where it was measured is what the coefficient is defined on."""
     codes = plate.obs["Metadata_Perturbation"].cat.codes.to_numpy()
     generator = np.random.default_rng(2)
     values = plate.X.copy()
@@ -55,8 +52,7 @@ def test_chatterjee_does_not_read_missingness_as_a_dependence(plate):
 
 
 def test_chatterjee_handles_ties_in_y_as_chatterjee_does():
-    """Regression test for #71: breaking y's ties at random made the score depend on the seed,
-    and scored a step function of x at 0.51."""
+    """Regression test for #71: breaking y's ties at random made the score depend on the seed, and scored a step function of x at 0.51."""
     from scipy.stats import rankdata
 
     from mantispy.pp._chatterjee import chatterjee_xi

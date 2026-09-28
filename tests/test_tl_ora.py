@@ -39,7 +39,7 @@ def test_the_seeded_set_is_the_top_hit(screen, net):
     assert {"group", "source", "n", "odds_ratio", "pvalue", "qvalue"} == set(table.columns)
 
     top = table[table["group"] == "1"].sort_values("pvalue").iloc[0]
-    assert top["source"] == "A"  # cluster 1 is exactly set A's genes
+    assert top["source"] == "A"
     assert top["n"] == 10
     assert top["odds_ratio"] > 0
     assert top["pvalue"] < 0.05
@@ -49,7 +49,6 @@ def test_a_set_the_group_avoids_is_depleted_not_over_represented(screen, net):
     mt.tl.ora(screen, groupby="cluster", net=net, tmin=1)
     table = screen.uns["mantispy"]["ora"]
     other = table[(table["group"] == "1") & (table["source"] == "B")].iloc[0]
-    # No genes overlap and the odds ratio is negative: the set is depleted, the opposite of over-represented.
     # The Fisher test is two-tailed (as decoupler's is), so depletion is significant too; the sign, not the p, marks direction.
     assert other["n"] == 0
     assert other["odds_ratio"] < 0
@@ -67,7 +66,7 @@ def test_ora_handles_a_control_with_no_gene(net):
     adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "perturbation"}
     mt.tl.ora(adata, groupby="cluster", net=net, tmin=1)
     table = adata.uns["mantispy"]["ora"]
-    assert "ctrl" not in set(table["group"])  # no gene, so no tests
+    assert "ctrl" not in set(table["group"])
     assert table[table["group"] == "1"].sort_values("pvalue").iloc[0]["source"] == "A"
 
 
@@ -79,16 +78,15 @@ def test_sets_below_tmin_are_skipped_without_crashing(screen):
 
 
 def test_padj_by_group_is_less_conservative_than_pooling_every_group():
-    # One strongly enriched "hit" group among many null groups. Pooling every group x set test into a single
-    # Benjamini-Hochberg correction over-penalizes the hit; correcting within each group does not.
+    # One strongly enriched group among many null ones, so pooling all their tests into one BH correction over-penalizes it.
     genes = [f"g{i}" for i in range(200)]
     set_genes = genes[:20]
     net = pd.DataFrame({"source": ["S"] * 20, "target": set_genes})
 
-    gene_col = set_genes[:10]  # hit group: ten genes, all from set S
+    gene_col = set_genes[:10]
     clusters = ["hit"] * 10
     nonset = genes[20:]
-    for g in range(45):  # 45 null groups drawn from non-set genes, so many groups are pooled
+    for g in range(45):
         gene_col += nonset[g * 4 : g * 4 + 4]
         clusters += [f"n{g}"] * 4
 
@@ -107,16 +105,13 @@ def test_padj_by_group_is_less_conservative_than_pooling_every_group():
     t_all = pooled.uns["mantispy"]["ora"]
     t_grp = per_group.uns["mantispy"]["ora"]
 
-    # 1. The correction scope does not change the test itself, so the p-values are identical.
     merged = t_all.merge(t_grp, on=["group", "source"], suffixes=("_all", "_grp"))
     assert np.allclose(merged["pvalue_all"], merged["pvalue_grp"])
 
-    # 2. The hit group's best q is strictly smaller when the other groups do not weigh on its correction.
     q_all = t_all.loc[t_all["group"] == "hit", "qvalue"].min()
     q_grp = t_grp.loc[t_grp["group"] == "hit", "qvalue"].min()
     assert q_grp < q_all
 
-    # 3. An unknown scope is rejected.
     with pytest.raises(ValueError, match="padj_by must be 'all' or 'group'"):
         mt.tl.ora(adata.copy(), groupby="cluster", net=net, tmin=1, padj_by="within")
 

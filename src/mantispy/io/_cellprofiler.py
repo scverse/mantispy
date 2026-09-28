@@ -2,7 +2,6 @@
 
 The module writes ``Image.csv`` beside one CSV per object, all behind the file-name prefix a run was configured with (``MyExpt_Image.csv``, ``MyExpt_Cells.csv``).
 Inside an object table the columns do not carry the object's name, so they are prefixed with it before the objects are joined.
-:func:`~mantispy.io.read_profiles` turns the table into AnnData.
 """
 
 from __future__ import annotations
@@ -38,16 +37,17 @@ def export_prefix(path: Path) -> str | None:
 def infer_channels(image: pd.DataFrame, features: Sequence[str] = ()) -> list[str]:
     """Channel names, taken from the features and otherwise from the ``FileName_<channel>`` columns.
 
-    CellProfiler writes one ``Intensity_MeanIntensity_<channel>`` measurement per channel it measured, under the name
-    the features carry. The file names can differ from it: a pipeline loads ``OrigDNA``, corrects it with
-    ``IllumDNA`` and saves ``CellOutlines``, and measures the corrected image as ``DNA``.
+    CellProfiler writes one ``Intensity_MeanIntensity_<channel>`` measurement per channel it measured, under the name the features carry.
+    The file names can differ from it: a pipeline loads ``OrigDNA``, corrects it with ``IllumDNA`` and saves ``CellOutlines``, and measures the corrected image as ``DNA``.
 
     Args:
         image: The ``Image.csv`` table of an export.
         features: The feature columns of the export.
 
     Returns:
-        The channels the features were measured in, sorted. Without an intensity feature, the names the ``FileName_`` or ``Image_FileName_`` columns carry, with the ``Orig`` and ``Illum`` prefixes stripped and saved outlines left out. An empty list when neither is present, in which case the parser infers the channels from the feature names instead.
+        The channels the features were measured in, sorted.
+        Without an intensity feature, the names the ``FileName_`` or ``Image_FileName_`` columns carry, with the ``Orig`` and ``Illum`` prefixes stripped and saved outlines left out.
+        An empty list when neither is present, in which case the parser infers the channels from the feature names instead.
     """
     measured = {
         name.split("_Intensity_MeanIntensity_", 1)[1] for name in features if "_Intensity_MeanIntensity_" in name
@@ -70,7 +70,7 @@ def _link_columns(
     """Locate the parent/child link, which may be on either table.
 
     CellProfiler writes ``Cells_Parent_Nuclei`` on the primary table when cells were identified from nuclei, and ``Cytoplasm_Parent_Cells`` on the child table for a tertiary object.
-    Both cases are handled; using the wrong column would silently pair unrelated objects that share an object number.
+    Using the wrong column would silently pair unrelated objects that share an object number.
     """
     on_child = f"{obj}_Parent_{primary}"
     on_primary = f"{primary}_Parent_{obj}"
@@ -85,7 +85,6 @@ def _link_columns(
 
 
 def _join_child(merged: pd.DataFrame, child: pd.DataFrame, primary: str, obj: str, strict: bool) -> pd.DataFrame:
-    """Attach one child object's columns to the primary table."""
     primary_link, child_link = _link_columns(merged, child, primary, obj)
 
     left = pd.DataFrame({"ImageNumber": merged["ImageNumber"], "_link": primary_link.to_numpy()})
@@ -152,14 +151,12 @@ def read_export(
     }
     renames |= {c: c for c in image.columns if c.startswith("Metadata_")}
     per_image = image[["ImageNumber", *renames]].rename(columns=renames)
-    # ExportToSpreadsheet can copy the image metadata into the object tables as well.
-    # Merging both copies would suffix the pair Metadata_Plate_x/_y and leave the schema's own columns missing, so the object table's copy goes and the per-image value stays.
+    # ExportToSpreadsheet can also copy the image metadata into the object tables, and merging both copies would suffix them _x/_y.
     if shared := [c for c in per_image.columns if c != "ImageNumber" and c in merged.columns]:
         get_logger().info("%s are on both the object tables and Image.csv; keeping the Image.csv value", shared)
         merged = merged.drop(columns=shared)
     table = merged.merge(per_image, on="ImageNumber", how="left", validate="m:1")
-    # Centroids are not profile features, but qc_is_border and neighbors_local_density need them. CellProfiler 4
-    # writes them under AreaShape, older versions under Location.
+    # CellProfiler 4 writes centroids under AreaShape, older versions under Location.
     for axis in ("X", "Y"):
         for source in (f"{primary_object}_Location_Center_{axis}", f"{primary_object}_AreaShape_Center_{axis}"):
             if source in table.columns:

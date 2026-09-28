@@ -1,13 +1,3 @@
-"""Per-perturbation reproducibility across plates, batches or laboratories.
-
-Aggregate reproducibility describes a whole screen.
-This module tests each perturbation separately, so the result says which perturbations reproduced and which did not.
-
-The unit of comparison is the effect, a group's median profile minus the median of the controls in the same setting.
-Using each setting's own controls keeps a baseline offset between settings from counting as disagreement.
-``pp.normalize(by="Metadata_Plate", reference="negcon")`` usually removes that offset already, so the comparison is about whether features respond the same way.
-"""
-
 from __future__ import annotations
 
 import numpy as np
@@ -29,12 +19,11 @@ def _effects(
 ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray], list[str]]:
     """Per setting, a groups-by-features effect matrix and each group's effect magnitude.
 
-    Groups missing from a setting get NaN rows, so comparing two settings is one matrix product.
+    Groups missing from a setting get NaN rows.
     """
     effect: dict[str, np.ndarray] = {}
     activity: dict[str, np.ndarray] = {}
     usable = []
-    # Grouped once for every setting: the inner loop ran `codes == index` per (setting, group), an O(n_obs) scan each.
     order, offsets = group_offsets(codes, len(keys))
     for unit in sorted(set(units.tolist())):
         here = units == unit
@@ -70,7 +59,6 @@ def _standardize(block: np.ndarray) -> np.ndarray:
     Missing values are filled with zero after centering, as :func:`~mantispy.tl.hit_calling` does.
     Without missing values the result is the Pearson correlation.
     """
-    # Rows for groups missing from this setting are all-NaN and masked out downstream.
     with np.errstate(invalid="ignore"):
         centre = np.where(
             np.isfinite(block).any(axis=1, keepdims=True), np.nanmean(_quiet(block), axis=1, keepdims=True), 0.0
@@ -84,7 +72,7 @@ def _agreement_matrix(left: np.ndarray, right: np.ndarray) -> np.ndarray:
     """Correlation of every group's effect in one setting with every group's effect in another.
 
     Entry ``[i, j]`` correlates group ``i``'s effect at the left setting with group ``j``'s at the right.
-    The diagonal holds each group's statistic and the off-diagonal entries form the null, so the complete null costs one matrix product.
+    The diagonal holds each group's statistic and the off-diagonal entries form the null.
     """
     return _standardize(left) @ _standardize(right).T
 
@@ -92,9 +80,7 @@ def _agreement_matrix(left: np.ndarray, right: np.ndarray) -> np.ndarray:
 def _level_pairs(frame: pd.DataFrame, levels: list[str], unit_key: str) -> dict[str, list[tuple[str, str]]]:
     """Unit pairs assigned to each level, keyed in the order of ``levels``.
 
-    Each pair of units belongs to the coarsest level at which the two differ.
-    Two plates of one laboratory separate at the plate level, and two plates of different laboratories at the laboratory level.
-    Each pair is counted at one level only.
+    Each pair of units belongs only to the coarsest level at which the two differ.
     """
     # drop=False: with a single level, the unit column is also the level column.
     lookup = frame.drop_duplicates(unit_key).set_index(unit_key, drop=False)
@@ -125,14 +111,19 @@ def transport(
     """Test whether each perturbation's effect reproduces across settings.
 
     Args:
-        adata: Well-level profiles. Each setting needs its own reference wells, since effects are measured against them; settings with fewer than two are left out.
-        by: ``obs`` column defining the setting, or a list of columns from coarsest to finest. ``["Metadata_Source", "Metadata_Plate"]`` reports agreement between plates of one source separately from agreement between sources, and the difference shows what a change of laboratory costs beyond a change of plate. The finest level defines the units that are compared.
+        adata: Well-level profiles.
+            Each setting needs its own reference wells, since effects are measured against them; settings with fewer than two are left out.
+        by: ``obs`` column defining the setting, or a list of columns from coarsest to finest.
+            ``["Metadata_Source", "Metadata_Plate"]`` reports agreement between plates of one source separately from agreement between sources, and the difference shows what a change of laboratory costs beyond a change of plate.
+            The finest level defines the units that are compared.
         groupby: The perturbation column.
         reference: Which rows are the negative controls, per setting.
         use_rep: Score ``obsm[use_rep]`` instead of ``X``.
-        weight: ``"activity"`` weights each comparison by the smaller of the two effect magnitudes, since the correlation of an inactive perturbation is noise. ``"equal"`` weights all comparisons the same.
+        weight: ``"activity"`` weights each comparison by the smaller of the two effect magnitudes, since the correlation of an inactive perturbation is noise.
+            ``"equal"`` weights all comparisons the same.
         min_shared: Minimum number of shared perturbations for a pair of units to be compared.
-        threshold: q-value cutoff for ``transports``. The null uses every mismatched pair of perturbations, so there is no null size or seed to set.
+        threshold: q-value cutoff for ``transports``.
+            The null uses every mismatched pair of perturbations, so there is no null size or seed to set.
         key_added: Name for the outputs.
         copy: Return a modified copy instead of mutating in place.
 
@@ -195,8 +186,6 @@ def transport(
             get_logger().info("transport has no unit pair separating at %r; skipping that level", level)
             continue
 
-        # Average the agreement matrices over unit pairs.
-        # The diagonal is each group's statistic and the off-diagonal entries are the null.
         total = np.zeros((len(keys), len(keys)))
         weights = np.zeros_like(total)
         counted = np.zeros(len(keys), dtype=int)

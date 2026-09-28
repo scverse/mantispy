@@ -1,8 +1,4 @@
-"""Shared statistics: multiple-testing correction and permutation nulls.
-
-One implementation, so every metric in the package corrects the same way.
-Results from different metrics are compared routinely, and two FDR procedures would make those comparisons inconsistent.
-"""
+"""Shared statistics: multiple-testing correction and permutation nulls."""
 
 from __future__ import annotations
 
@@ -11,15 +7,16 @@ import numpy as np
 from mantispy._core._corr import _blockwise
 
 #: Scale factor that makes the median absolute deviation estimate the standard deviation of a normal distribution.
-#: Every robust z-score in the package uses this one value.
 MAD_TO_SIGMA = 1.4826
 
 
 def benjamini_hochberg(pvalues: np.ndarray) -> np.ndarray:
-    """Benjamini-Hochberg q-values. ``NaN`` in, ``NaN`` out, and excluded from the count."""
+    """Benjamini-Hochberg q-values.
+
+    ``NaN`` in, ``NaN`` out, and excluded from the count.
+    """
     pvalues = np.asarray(pvalues, dtype=np.float64)
     # Correct over every p-value whatever the shape, since a features-by-groups table is one family of tests.
-    # The output is filled flat and reshaped at the end.
     flat = pvalues.ravel()
     out = np.full(flat.shape, np.nan)
     finite = np.flatnonzero(np.isfinite(flat))
@@ -31,7 +28,6 @@ def benjamini_hochberg(pvalues: np.ndarray) -> np.ndarray:
     ranked = values[order]
     n = ranked.size
     # q_(i) = min over j >= i of p_(j) * n / j, with i the 1-based ascending rank.
-    # The running minimum taken from the largest p-value downwards enforces monotonicity.
     adjusted = np.minimum.accumulate((ranked * n / np.arange(1, n + 1))[::-1])[::-1]
     out[finite[order]] = np.clip(adjusted, 0.0, 1.0)
     return out.reshape(pvalues.shape)
@@ -73,9 +69,7 @@ def sorted_control(control: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndar
     """
     values = np.ascontiguousarray(np.asarray(control, dtype=np.float64).T)
     values = np.sort(values, axis=1)  # missing values sort to the end
-    # Everything that was measured counts, infinities included.
-    # `np.sort` puts -inf first, so counting only the finite values would leave the reference slice one short and cut the largest control off its end instead.
-    # scipy ranks an infinity as the extreme value it is, and `mannwhitney_pvalues` claims to match scipy.
+    # Infinities count as measured, because scipy ranks them as the extreme values they are.
     counts = (~np.isnan(values)).sum(axis=1)
 
     # sum(c ** 3 - c) over runs of equal values, the tie correction's reference half.
@@ -137,8 +131,7 @@ def split_reference(rows: np.ndarray, generator: np.random.Generator) -> tuple[n
 def nanvar(X: np.ndarray, ddof: int = 0) -> np.ndarray:
     """Per-feature variance, ignoring missing values.
 
-    A feature measured on no cell at all yields NaN rather than a warning: numpy raises "Degrees of freedom <= 0
-    for slice" through :mod:`warnings`, where ``np.errstate`` cannot reach it.
+    A feature measured on no cell at all yields NaN rather than a warning: numpy raises "Degrees of freedom <= 0 for slice" through :mod:`warnings`, where ``np.errstate`` cannot reach it.
     ``ddof=0`` is the population variance, which is what sklearn's ``VarianceThreshold`` and pycytominer compare.
     """
     out_dtype = X.dtype if np.issubdtype(X.dtype, np.inexact) else np.float64

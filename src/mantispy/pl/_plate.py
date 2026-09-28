@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from anndata import AnnData
     from matplotlib.axes import Axes
 
-#: How to combine several cells or sites falling in the same well. pandas skips NaN.
+#: How to combine rows falling in the same well; pandas skips NaN.
 AGGREGATIONS = ("median", "mean", "max", "min")
 
 
@@ -49,16 +49,20 @@ def plate(
     """Well-grid heatmap of ``color``, one panel per plate.
 
     Args:
-        adata: Object to draw. Works at cell or well resolution; several rows landing in the same well are combined with ``agg``.
+        adata: Object to draw.
+            Works at cell or well resolution; several rows landing in the same well are combined with ``agg``.
         color: A feature name or an ``obs`` column.
-        plate: Draw only this plate. By default every plate gets a panel.
+        plate: Draw only this plate.
+            By default every plate gets a panel.
         groupby: ``obs`` column, constant per plate, to order and title the panels by, such as ``"Metadata_Batch"``.
         agg: How to combine rows sharing a well: median, mean, max or min.
         ncols: Panels per row.
         share_colorbar: One color scale and colorbar for all panels, instead of one per panel.
-        ax: Axes to draw into. Only valid together with ``plate``.
+        ax: Axes to draw into.
+            Only valid together with ``plate``.
         cmap: Matplotlib colormap.
-        kwargs: Passed to :meth:`~matplotlib.axes.Axes.imshow`. ``vmin``, ``vmax`` or ``norm`` set the scale.
+        kwargs: Passed to :meth:`~matplotlib.axes.Axes.imshow`.
+            ``vmin``, ``vmax`` or ``norm`` set the scale.
 
     Returns:
         A single :class:`~matplotlib.axes.Axes`, or an array of them for several plates in panel order, each panel labeled with the plate's own well grid.
@@ -67,7 +71,6 @@ def plate(
         ValueError: ``agg`` is not one of ``AGGREGATIONS``, ``ax`` was passed for more than one plate, ``groupby`` varies within a drawn plate, or it or ``Metadata_Plate`` has missing values.
         KeyError: ``color`` is neither a feature name nor an ``obs`` column, ``groupby`` is not an ``obs`` column, or ``plate`` is not a plate of ``adata``.
     """
-    # Spatial well grid; deserves a bespoke interactive well-grid, deferred.
     import matplotlib.pyplot as plt
 
     if agg not in AGGREGATIONS:
@@ -84,7 +87,6 @@ def plate(
         raise ValueError("pass plate= when supplying a single ax, or leave ax=None")
     drawn.sort(key=lambda index: [_natural(str(part)) for part in panels[index]])
 
-    # Each distinct well is parsed once, and each plate reads only its own rows.
     wells = pd.Categorical(as_frame(adata.obs)["Metadata_Well"])
     positions = np.array([(well_row(well), well_col(well)) for well in wells.categories])[wells.codes]
     order, offsets = group_offsets(codes, len(keys))

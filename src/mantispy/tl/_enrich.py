@@ -1,11 +1,3 @@
-"""Feature-set enrichment over the parsed feature annotation.
-
-``var`` records the object, measurement family and channel of every feature, which defines a set-membership table.
-Scoring those sets reports which kinds of measurement changed, such as the mitochondrial texture features, instead of a list of individual columns.
-
-The sets are passed to decoupler, so the same call works for sets built from the feature names and for sets from prior knowledge.
-"""
-
 from __future__ import annotations
 
 import warnings
@@ -24,16 +16,11 @@ from mantispy._core.logging import get_logger
 from mantispy._core.mutation import inplace_or_copy
 from mantispy.get._accessors import to_dataframe
 
-#: The single decoupler scorers, one call each.
 SINGLE_METHODS = ("ulm", "mlm", "ora", "aucell", "gsea", "gsva", "zscore", "waggr", "viper")
-#: Every accepted ``method``: the single scorers plus the ``"consensus"`` meta-method.
 METHODS = (*SINGLE_METHODS, "consensus")
 
-#: Default panel for ``method="consensus"``. A mix of model families, so no single method's bias
-#: decides the call: a linear model, a z-score, a rank-based enrichment and an over-representation test.
 CONSENSUS_PANEL = ("ulm", "zscore", "aucell", "ora")
 
-#: Named shorthands for composite groupings.
 COMPOSITES = {"group_by_channel": ["feature_group", "channel"]}
 
 
@@ -41,7 +28,6 @@ def _ora_n_up(adata: AnnData, top_fraction: float) -> int:
     """The ``n_up`` that makes ORA test the top ``top_fraction`` of features against the rest.
 
     decoupler keeps features ranked above ``n_up``, so the top k of n needs ``n_up = n - k``.
-    Its own default would instead select the bottom 95%.
     """
     if not 0.0 < top_fraction < 1.0:
         raise ValueError(f"top_fraction must be in (0, 1), got {top_fraction!r}")
@@ -71,8 +57,7 @@ def feature_sets(adata: AnnData, by: str | Sequence[str] = "feature_group") -> p
         raise KeyError(f"var has no column(s) {missing}; available: {sorted(var.columns)}")
 
     known = var[columns].notna().all(axis=1).to_numpy()
-    # str.cat, not .agg(join, axis=1): the latter returns a frame rather than a Series over no rows,
-    # so an annotation that names no family needed a branch of its own to avoid failing below.
+    # str.cat, not .agg(join, axis=1), which returns a frame rather than a Series over no rows.
     named = var.loc[known, columns].astype(str)
     labels = named.iloc[:, 0].str.cat(named.iloc[:, 1:], sep="|")
     return pd.DataFrame(
@@ -87,9 +72,7 @@ def feature_sets(adata: AnnData, by: str | Sequence[str] = "feature_group") -> p
 def _score(dc: Any, frame: pd.DataFrame, network: pd.DataFrame, method: str, **decoupler_kwargs: Any) -> pd.DataFrame:
     """The (wells x sets) score frame for one method, off the matrix so no obsm score can leak in.
 
-    Keeps decouple's frame (index and source columns) so callers can align by set; ``decouple`` takes
-    per-method kwargs through ``args={method: {...}}``, so ``tmin`` and an ORA ``n_up`` reach the scorer only
-    when threaded that way.
+    ``decouple`` takes per-method kwargs through ``args={method: {...}}``, so ``tmin`` and an ORA ``n_up`` reach the scorer only when threaded that way.
     """
     return dc.mt.decouple(frame, network, methods=[method], args={method: dict(decoupler_kwargs)}, cons=False)[
         f"score_{method}"
@@ -106,13 +89,8 @@ def _permutation_padj(
 ) -> np.ndarray:
     """Two-sided permutation p-values for a single method, BH-adjusted per well.
 
-    Scores the net with its set membership shuffled ``n_permutations`` times, counting per (well, set) how
-    often a shuffled score is at least as extreme as the observed one; only the running count is kept, so
-    memory does not grow with ``n_permutations``. Each shuffle is realigned to the observed sets by column, so
-    a set the shuffle drops (its targets collapsed below ``tmin``) becomes NaN and counts nothing rather than
-    misaligning the null. The empirical two-sided p ``(1 + count) / (n_permutations + 1)`` is BH-adjusted
-    across each well's sets, the family decoupler's parametric padj also corrects over. The same
-    ``decoupler_kwargs`` score the null, so ``tmin`` and the ORA ``n_up`` hold across it.
+    Each shuffle is realigned to the observed sets by column, so a set the shuffle drops (its targets collapsed below ``tmin``) becomes NaN and counts nothing rather than misaligning the null.
+    The same ``decoupler_kwargs`` score the null, so ``tmin`` and the ORA ``n_up`` hold across it.
     """
     import decoupler as dc
 
@@ -128,10 +106,8 @@ def _permutation_padj(
     count = np.zeros(observed_abs.shape, dtype=np.int64)
     for seed in range(n_permutations):
         shuffled = dc.pp.shuffle_net(network, seed=seed)
-        # Align by source so a set the null could not score is NaN, not a shifted column; `nan >= x` is False.
         scored = _score(dc, frame, shuffled, method, **decoupler_kwargs).reindex(columns=observed.columns)
         count += np.abs(scored.to_numpy()) >= observed_abs
-    # A set the observed run could not score has no p-value; leave it NaN rather than the smallest one.
     pvalues = np.where(np.isnan(observed_abs), np.nan, (1.0 + count) / (n_permutations + 1.0))
     return np.vstack([benjamini_hochberg(row) for row in pvalues])
 
@@ -139,9 +115,7 @@ def _permutation_padj(
 def _warn_if_collinear(dc: Any, network: pd.DataFrame, tmin: int) -> None:
     """Warn when two feature sets are near-collinear, so their enrichment scores cannot be told apart.
 
-    Reads the collinearity from the network structure alone (``net_corr`` without ``data=``), so it needs no
-    dense obs x var frame. Uses the scoring ``tmin`` so it checks exactly the sets scoring will keep, not
-    net_corr's own default; a hygiene check only, skipped if net_corr refuses an unusual net.
+    Uses the scoring ``tmin`` so it checks exactly the sets scoring will keep, not net_corr's own default.
     """
     try:
         corr = dc.pp.net_corr(network, tmin=tmin)
@@ -159,13 +133,7 @@ def _warn_if_collinear(dc: Any, network: pd.DataFrame, tmin: int) -> None:
 
 
 def _clear_enrich_obsm(adata: AnnData) -> None:
-    """Drop EVERY ``score_*``/``padj_*`` frame, not only the method about to be written.
-
-    Deliberate: enrich owns that whole obsm namespace and resets it each run, so a rerun never mixes frames
-    from an earlier method or a wider panel (see ``test_enrich_clears_stale_scores_from_an_earlier_run``).
-    The cost is that chaining ``enrich(method="ulm"); enrich(method="mlm")`` keeps only the mlm frames; run
-    ``method="consensus"`` with a panel to hold several methods' scores side by side instead.
-    """
+    """Drop EVERY ``score_*``/``padj_*`` frame, not only the method about to be written."""
     for key in [key for key in adata.obsm if key.startswith("score_") or key.startswith("padj_")]:
         del adata.obsm[key]
 
@@ -173,8 +141,7 @@ def _clear_enrich_obsm(adata: AnnData) -> None:
 def _write_scores(adata: AnnData, results: dict[str, pd.DataFrame | None]) -> None:
     """Reset enrich's obsm namespace, then publish only the frames decouple produced.
 
-    decouple returns None for a score-only method's padj (aucell, gsva); a None value in obsm corrupts the
-    AnnData, so it is dropped rather than stored.
+    decouple returns None for a score-only method's padj (aucell, gsva); a None value in obsm corrupts the AnnData, so it is dropped rather than stored.
     """
     _clear_enrich_obsm(adata)
     adata.obsm.update({key: value for key, value in results.items() if value is not None})
@@ -196,21 +163,36 @@ def enrich(
     """Score every profile against every feature set.
 
     Args:
-        adata: Profiles to score. Normalize first, since the methods use the values as given.
-        net: A decoupler network with ``source``, ``target`` and ``weight``, for example prior-knowledge sets. Built from ``by`` when omitted.
+        adata: Profiles to score.
+            Normalize first, since the methods use the values as given.
+        net: A decoupler network with ``source``, ``target`` and ``weight``, for example prior-knowledge sets.
+            Built from ``by`` when omitted.
         by: Passed to :func:`feature_sets` when ``net`` is not given.
-        method: One of ``METHODS``. ``"ulm"`` fits a linear model per set and is the usual choice; ``"mlm"`` fits all sets jointly, which handles overlapping sets; ``"ora"`` is an over-representation test on the extremes; ``"aucell"``, ``"gsea"``, ``"gsva"``, ``"zscore"``, ``"waggr"`` and ``"viper"`` are the remaining decoupler scorers. ``"consensus"`` runs a panel of the single methods and combines their calls, decoupler's robustness feature.
-        methods: The panel for ``method="consensus"``, each entry one of the single methods (``METHODS`` without ``"consensus"``). Defaults to ``CONSENSUS_PANEL``. Only used with ``method="consensus"``.
-        top_fraction: Fraction of features, ranked by value, that ORA counts as extreme, whether ``method="ora"`` or ``"ora"`` sits in a consensus panel. The default 0.05 tests the top twentieth against the rest. Ignored when ``n_up`` is passed, and by the methods that use every feature.
-        n_permutations: 0 (the default) keeps the method's own parametric p-values. A positive count replaces ``padj_<method>`` with two-sided permutation p-values, obtained by shuffling the network that many times and comparing each score against the null, at ``n_permutations`` times the scoring cost. Single methods only; a positive count with ``method="consensus"`` raises.
-        check_collinearity: Warn when two feature sets are nearly collinear, since enrichment cannot then separate them. Off skips the check.
+        method: One of ``METHODS``.
+            ``"ulm"`` fits a linear model per set and is the usual choice; ``"mlm"`` fits all sets jointly, which handles overlapping sets; ``"ora"`` is an over-representation test on the extremes; ``"aucell"``, ``"gsea"``, ``"gsva"``, ``"zscore"``, ``"waggr"`` and ``"viper"`` are the remaining decoupler scorers.
+            ``"consensus"`` runs a panel of the single methods and combines their calls, decoupler's robustness feature.
+        methods: The panel for ``method="consensus"``, each entry one of the single methods (``METHODS`` without ``"consensus"``).
+            Defaults to ``CONSENSUS_PANEL``.
+            Only used with ``method="consensus"``.
+        top_fraction: Fraction of features, ranked by value, that ORA counts as extreme, whether ``method="ora"`` or ``"ora"`` sits in a consensus panel.
+            The default 0.05 tests the top twentieth against the rest.
+            Ignored when ``n_up`` is passed, and by the methods that use every feature.
+        n_permutations: 0 (the default) keeps the method's own parametric p-values.
+            A positive count replaces ``padj_<method>`` with two-sided permutation p-values, obtained by shuffling the network that many times and comparing each score against the null, at ``n_permutations`` times the scoring cost.
+            Single methods only; a positive count with ``method="consensus"`` raises.
+        check_collinearity: Warn when two feature sets are nearly collinear, since enrichment cannot then separate them.
+            Off skips the check.
         copy: Return a modified copy instead of mutating in place.
-        decoupler_kwargs: Passed through to decoupler, e.g. ``tmin`` for the smallest usable set. For ``method="consensus"`` an ``args`` mapping of per-method keyword arguments (as ``decoupler.mt.decouple`` takes) is merged with the computed ORA ``n_up``.
+        decoupler_kwargs: Passed through to decoupler, e.g. ``tmin`` for the smallest usable set.
+            For ``method="consensus"`` an ``args`` mapping of per-method keyword arguments (as ``decoupler.mt.decouple`` takes) is merged with the computed ORA ``n_up``.
 
     Returns:
         ``None``, or the modified copy.
-        decoupler writes ``obsm["score_<method>"]``, and ``obsm["padj_<method>"]`` for the methods that produce one (all but ``"aucell"`` and ``"gsva"``, which write only the score). ``method="consensus"`` writes ``obsm["score_consensus"]`` and ``obsm["padj_consensus"]`` alongside each panel member's own ``score_<method>`` (and its ``padj_<method>``, except for the score-only ``"aucell"`` and ``"gsva"``). All are frames indexed by set name.
-        Each call first clears **every** ``score_*``/``padj_*`` frame in ``obsm``: enrich owns that namespace and resets it, so chaining two single methods keeps only the last. Use ``method="consensus"`` with a panel to hold several methods' scores at once.
+        decoupler writes ``obsm["score_<method>"]``, and ``obsm["padj_<method>"]`` for the methods that produce one (all but ``"aucell"`` and ``"gsva"``, which write only the score).
+        ``method="consensus"`` writes ``obsm["score_consensus"]`` and ``obsm["padj_consensus"]`` alongside each panel member's own ``score_<method>`` (and its ``padj_<method>``, except for the score-only ``"aucell"`` and ``"gsva"``).
+        All are frames indexed by set name.
+        Each call first clears **every** ``score_*``/``padj_*`` frame in ``obsm``: enrich owns that namespace and resets it, so chaining two single methods keeps only the last.
+        Use ``method="consensus"`` with a panel to hold several methods' scores at once.
 
     Raises:
         ValueError: ``method`` is not one of ``METHODS``; ``methods`` is given with a non-consensus ``method``, or names an entry that is not a single method; ``n_permutations`` is negative, or positive with ``method="consensus"``; no feature set could be built from ``by``; or ``top_fraction`` is outside (0, 1).
@@ -229,7 +211,6 @@ def enrich(
     if not len(network):
         raise ValueError(f"no feature sets built from by={by!r}: every feature's annotation is missing")
 
-    # A structural check, off the network alone, so the common parametric path materializes no dense frame.
     if check_collinearity and network["source"].nunique() > 1:
         _warn_if_collinear(dc, network, decoupler_kwargs.get("tmin", 5))
 
@@ -246,13 +227,11 @@ def enrich(
             raise ValueError(f"methods entries must each be one of the single methods {SINGLE_METHODS}, got {invalid}")
         if not panel:
             raise ValueError("methods must name at least one single method for method='consensus'")
-        # Copy the inner dicts so setdefault never writes n_up into the caller's own mapping; args=None (an
-        # explicit pass-through) coerces to {}. _ora_n_up validates top_fraction before the dense frame is built.
+        # Copy the inner dicts so setdefault never writes n_up into the caller's own mapping.
         args = {name: dict(values) for name, values in (decoupler_kwargs.pop("args", None) or {}).items()}
         if "ora" in panel:
             args.setdefault("ora", {}).setdefault("n_up", _ora_n_up(adata, top_fraction))
-        # Scoring the matrix, not the AnnData, builds the consensus from only the panel: cons=True would else
-        # consolidate every score_* an earlier enrich left on obsm.
+        # The matrix, not the AnnData, or cons=True also consolidates every score_* an earlier enrich left on obsm.
         frame = to_dataframe(adata, metadata=False)
         scores = dc.mt.decouple(frame, network, methods=list(panel), args=args, cons=True, **decoupler_kwargs)
         _write_scores(adata, scores)
@@ -260,10 +239,8 @@ def enrich(
         return None
 
     if n_permutations > 0:
-        # ORA needs the same top-tail n_up in the null as in the observed run, so set it before scoring either.
         if method == "ora":
             decoupler_kwargs.setdefault("n_up", _ora_n_up(adata, top_fraction))
-        # Score off the matrix (stale-safe), then replace the parametric padj with the calibrated one.
         frame = to_dataframe(adata, metadata=False)
         observed = _score(dc, frame, network, method, **decoupler_kwargs)
         padj = _permutation_padj(frame, network, method, n_permutations, observed, **decoupler_kwargs)
@@ -280,8 +257,7 @@ def enrich(
 
     if method == "ora":
         decoupler_kwargs.setdefault("n_up", _ora_n_up(adata, top_fraction))
-    # Score off the matrix, then clear, so a scorer that raises leaves the earlier run's frames intact and no
-    # stale obsm score can leak in. decouple runs the same scorer as dc.mt.<method>, so the numbers match.
+    # Score before clearing, so a scorer that raises leaves the earlier run's frames intact.
     frame = to_dataframe(adata, metadata=False)
     scored = dc.mt.decouple(frame, network, methods=[method], args={method: dict(decoupler_kwargs)}, cons=False)
     _write_scores(adata, scored)
@@ -320,11 +296,9 @@ def rank_features(
     import scanpy as sc
 
     var = as_frame(adata.var)
-    # A shallow object: X is shared, so ranking a large matrix does not double memory.
     scratch = ad.AnnData(X=get_matrix(adata), obs=as_frame(adata.obs)[[groupby]].astype("category"), var=var[[]])
     with warnings.catch_warnings():
         # scanpy always computes log fold changes, which warn on the negative ratios of signed features.
-        # The column is dropped below.
         warnings.filterwarnings("ignore", "invalid value encountered in log2", RuntimeWarning)
         sc.tl.rank_genes_groups(scratch, groupby=groupby, method=method)
 

@@ -1,9 +1,3 @@
-"""Per-feature effect sizes against a reference.
-
-Where mAP asks whether a perturbation is active, these functions ask which features changed and by how much.
-:func:`effect_size` gives a standardized difference in location, and :func:`wasserstein_features` a distance between whole distributions, which also detects a change in spread.
-"""
-
 from __future__ import annotations
 
 from typing import Literal
@@ -27,8 +21,6 @@ def _mwu_small_samples(treated: np.ndarray, control: np.ndarray) -> np.ndarray:
 
     ``scipy.stats.mannwhitneyu`` chooses once per call.
     It uses the exact null only when the smaller sample has eight or fewer observations and no column has ties, so one tied feature sends every other feature to the normal approximation.
-    With three treated wells against 330 controls, an untied feature reaches 3.3e-07 under the exact null and 2.9e-03 under the approximation.
-    Splitting the columns by ties costs one more call than letting scipy choose once.
     """
     from scipy.stats import mannwhitneyu
 
@@ -73,12 +65,9 @@ def _robust_z(treated: np.ndarray, control: np.ndarray) -> np.ndarray:
 def _wasserstein_columns(treated: np.ndarray, control: np.ndarray, only: np.ndarray | None = None) -> np.ndarray:
     """Wasserstein-1 distance for every column at once.
 
-    Computes ``W1 = integral |F(x) - G(x)| dx`` over the merged support, vectorized across columns instead of one ``scipy.stats.wasserstein_distance`` call per feature per group (700k calls for 3600 features and 200 perturbations).
-
     Columns holding a non-finite value fall back to the scalar function, which drops those rows.
     The split is ``isfinite``, the same one :func:`wasserstein_features` uses to choose the columns it sends here.
-    Splitting on ``isnan`` instead left an infinite column in neither branch's remit, and it came back ``inf``.
-    ``only`` restricts the work to a subset of columns and leaves the rest ``NaN``; callers that handle the complete columns on the pre-sorted path use it for the remaining ones.
+    ``only`` restricts the work to a subset of columns and leaves the rest ``NaN``.
     """
     from scipy.stats import wasserstein_distance
 
@@ -103,7 +92,6 @@ def _wasserstein_columns(treated: np.ndarray, control: np.ndarray, only: np.ndar
     order = np.argsort(values, axis=0, kind="stable")
     ordered = np.take_along_axis(values, order, axis=0)
 
-    # Both empirical CDFs, stepped along the merged support.
     from_treated = np.cumsum(order < n, axis=0)[:-1]
     positions = np.arange(1, n + m, dtype=np.float64)[:, None]
     gap = np.abs(from_treated / n - (positions - from_treated) / m)
@@ -138,9 +126,12 @@ def effect_size(
     Args:
         adata: Object to score, at cell or profile resolution.
         groupby: Column defining the groups to score.
-        reference: Rows to compare against: ``"negcon"``, ``None`` for everything, or a boolean ``obs`` column. The reference group is also scored against itself as a calibration check; its effects should be near zero.
-        method: ``"cohens_d"`` is the difference in means over the pooled standard deviation. ``"robust_z"`` is the difference in medians in units of control MAD, which a few extreme cells cannot move.
-        pvalues: Compute a Mann-Whitney p-value for each effect. At single-cell resolution nearly every feature is significant, so turn them off when ranking by effect.
+        reference: Rows to compare against: ``"negcon"``, ``None`` for everything, or a boolean ``obs`` column.
+            The reference group is also scored against itself as a calibration check; its effects should be near zero.
+        method: ``"cohens_d"`` is the difference in means over the pooled standard deviation.
+            ``"robust_z"`` is the difference in medians in units of control MAD, which a few extreme cells cannot move.
+        pvalues: Compute a Mann-Whitney p-value for each effect.
+            At single-cell resolution nearly every feature is significant, so turn them off when ranking by effect.
         min_obs: Groups with fewer rows than this are left unscored as ``NaN``.
         key_added: Name for the outputs.
         copy: Return a modified copy instead of mutating in place.
@@ -170,9 +161,8 @@ def effect_size(
     codes, keys = group_codes(adata, groupby)
     estimate = _cohens_d if method == "cohens_d" else _robust_z
 
-    # Sorted once and searched by every group; scipy re-ranks the whole reference for every group it is handed.
     ranked = sorted_control(control) if pvalues else None
-    # Counted as sorted_control and scipy's nan_policy="omit" count, everything measured and infinities included, so that the branch chosen below is the branch scipy would choose.
+    # Infinities count as measured, as in scipy's nan_policy="omit", so the branch below is the one scipy would choose.
     control_smallest = int((~np.isnan(control)).sum(axis=0).min()) if pvalues else 0
 
     effects = np.full((adata.n_vars, len(keys)), np.nan)
@@ -188,7 +178,6 @@ def effect_size(
         if not pvalues:
             continue
         # scipy's method="auto" uses the exact distribution when the smaller sample has eight or fewer observations.
-        # Those groups go to scipy; larger ones, where "auto" would use the normal approximation, take the fast path.
         smallest = int((~np.isnan(treated)).sum(axis=0).min())
         if ranked is not None and smallest > 8 and control_smallest > 8:
             significance[:, index] = mannwhitney_pvalues(treated, ranked)
@@ -220,7 +209,8 @@ def wasserstein_features(
     """Wasserstein-1 distance per feature between each group and the reference.
 
     Args:
-        adata: Object to score. Most useful at single-cell resolution, where a group is a distribution rather than a point.
+        adata: Object to score.
+            Most useful at single-cell resolution, where a group is a distribution rather than a point.
         groupby: As in :func:`effect_size`.
         reference: As in :func:`effect_size`.
         key_added: Name for the outputs.
@@ -243,8 +233,6 @@ def wasserstein_features(
         raise ValueError(f"no reference rows selected by reference={reference!r}")
 
     codes, keys = group_codes(adata, groupby)
-    # The reference is sorted once and reused for every group, by the same helper effect_size uses, so the two paths through this module cannot count it differently.
-    # Columns holding a non-finite value take the general path, which drops those rows pairwise.
     ranked, counts, _ = sorted_control(control)
     clean = np.isfinite(control).all(axis=0)
 

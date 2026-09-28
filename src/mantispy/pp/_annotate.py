@@ -1,6 +1,6 @@
 """Annotate perturbations and controls.
 
-Several later steps (``pp.sphere``, ``tl.grit``) default to ``reference="negcon"``, which reads ``Metadata_Control``; :func:`annotate_controls` writes that column.
+Several later steps (:func:`~mantispy.pp.sphere`, :func:`~mantispy.tl.grit`) default to ``reference="negcon"``, which reads ``Metadata_Control``; :func:`annotate_controls` writes that column.
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ from mantispy._core.frames import as_frame, categorize_metadata
 from mantispy._core.logging import get_logger
 from mantispy._core.mutation import inplace_or_copy
 
-#: Columns checked, in order, when the perturbation column is not named explicitly.
 PERTURBATION_KEYS = (
     "Metadata_Perturbation",
     "Metadata_Compound",
@@ -28,7 +27,8 @@ def find_perturbation_key(adata: AnnData, perturbation_key: str | None = None) -
 
     Args:
         adata: Object whose ``obs`` columns are searched.
-        perturbation_key: Column to use, returned unchanged once it is known to be present. ``None`` takes the first column of ``PERTURBATION_KEYS`` that is there.
+        perturbation_key: Column to use, returned unchanged once it is known to be present.
+            ``None`` takes the first column of ``PERTURBATION_KEYS`` that is there.
 
     Returns:
         The name of the ``obs`` column that identifies the perturbation.
@@ -67,7 +67,8 @@ def annotate_controls(
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
-        ``None``, or the modified copy when ``copy=True``. Writes ``obs["Metadata_Control"]`` and, when ``poscon`` is given, ``obs["Metadata_Control_Type"]``.
+        ``None``, or the modified copy when ``copy=True``.
+        Writes ``obs["Metadata_Control"]`` and, when ``poscon`` is given, ``obs["Metadata_Control_Type"]``.
     """
     key = find_perturbation_key(adata, perturbation_key)
     values = adata.obs[key].astype(str)
@@ -102,7 +103,8 @@ def annotate_jump(adata: AnnData, kind: str = "compound", copy: bool = False) ->
         copy: Return an annotated copy instead of annotating in place.
 
     Returns:
-        ``None``, or the annotated copy. Adds ``Metadata_JCP2022`` (the perturbation identifier), ``Metadata_Perturbation`` and ``Metadata_Control``.
+        ``None``, or the annotated copy.
+        Adds ``Metadata_JCP2022`` (the perturbation identifier), ``Metadata_Perturbation`` and ``Metadata_Control``.
         For compounds it adds ``Metadata_InChIKey``, and the controls are JUMP's DMSO wells.
         For CRISPR ``Metadata_Perturbation`` is the gene symbol, the controls are the no-guide and non-targeting wells, and it adds ``Metadata_Gene``, ``Metadata_Control_Type`` (``"negcon"``, ``"poscon"`` or ``"trt"``) and ``Metadata_ChromosomeArm``, the arm the gene sits on.
 

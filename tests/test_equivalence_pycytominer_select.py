@@ -1,9 +1,9 @@
 """feature_select equivalence against pycytominer.
 
-Semantics follow the pinned pycytominer source rather than its docs. Two points are easy
-to get wrong, and both are covered below. `variance_threshold` is an sklearn variance cut;
-the frequency/uniqueness rule is `frequency_threshold`. `correlation_threshold` judges
-each pair independently against a ranking computed once, using the signed correlation.
+Semantics follow the pinned pycytominer source rather than its docs.
+Two points are easy to get wrong, and both are covered below.
+`variance_threshold` is an sklearn variance cut; the frequency/uniqueness rule is `frequency_threshold`.
+`correlation_threshold` judges each pair independently against a ranking computed once, using the signed correlation.
 """
 
 import numpy as np

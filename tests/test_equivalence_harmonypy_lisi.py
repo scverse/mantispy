@@ -1,8 +1,7 @@
 """LISI equivalence against harmonypy, the Python port of the Harmony and LISI code of :cite:t:`Korsunsky_2019`.
 
-Published LISI values come from this code, so an iLISI of 1.49 is only comparable with a
-paper if the values agree. A variant with the right monotonicity but different values
-would pass every internal sanity check.
+Published LISI values come from this code, so an iLISI of 1.49 is only comparable with a paper if the values agree.
+A variant with the right monotonicity but different values would pass every internal sanity check.
 """
 
 import anndata as ad
@@ -29,8 +28,7 @@ def _embedded(n_categories: float, separation: float, n_obs: int = 300, seed: in
     return adata
 
 
-# A squared-distance kernel fails in every regime here. A fixture with no batch overlap
-# would agree under either kernel, so none is used.
+# Every regime has batch overlap, since without it a squared-distance kernel would agree too.
 @pytest.mark.parametrize(
     ("n_categories", "separation"),
     [(3, 0.0), (2, 1.5), (3, 2.0), (5, 4.0)],

@@ -26,7 +26,6 @@ def _one_feature_per_operation():
         {"Metadata_Perturbation": np.repeat([f"g{group}" for group in range(n_groups)], per_group)},
         index=[str(index) for index in range(n_obs)],
     )
-    # Bound to their names here, so a column cannot drift away from the name the assertion reads.
     features = {
         "Cells_AreaShape_Plain": plain,
         "Cells_AreaShape_Sparse": sparse.ravel(),
@@ -80,9 +79,7 @@ def test_an_all_nan_feature_is_selected_on_without_a_warning():
 
 
 def test_selecting_nothing_warns_rather_than_emptying_the_object_silently(wells):
-    """noise_removal's cutoff is an absolute threshold on the scale normalize left the values on, so against
-    control-normalized values it drops every feature, and on its own that surfaces as an empty matrix in
-    whatever runs next."""
+    """noise_removal's cutoff is an absolute threshold on the scale normalize left the values on, so against control-normalized values it drops every feature, and on its own that surfaces as an empty matrix in whatever runs next."""
     with pytest.warns(UserWarning, match="flagged none of the"):
         mt.pp.feature_select(
             wells,
@@ -118,8 +115,7 @@ def _collinear_profiles():
 
 
 def test_decorrelate_removes_multivariate_redundancy_correlation_threshold_misses():
-    """Regression test for #131: d = a + b + c has no pairwise |r| > 0.9 with any single feature, so
-    correlation_threshold keeps it, but it carries no new information and decorrelate removes it."""
+    """Regression test for #131: d = a + b + c has no pairwise |r| > 0.9 with any single feature, so correlation_threshold keeps it, but it carries no new information and decorrelate removes it."""
     adata = _collinear_profiles()
 
     kept_corr = adata.copy()
@@ -134,8 +130,7 @@ def test_decorrelate_removes_multivariate_redundancy_correlation_threshold_misse
 
 
 def test_iterative_correlation_threshold_keeps_at_least_as_many_and_leaves_no_pair():
-    """On a correlated screen the iterative absolute path removes all over-threshold pairs and keeps at
-    least as many features as the single pass."""
+    """On a correlated screen the iterative absolute path removes all over-threshold pairs and keeps at least as many features as the single pass."""
     from mantispy._core._corr import correlated_pairs
 
     rng = np.random.default_rng(2)
@@ -166,8 +161,7 @@ def test_decorrelate_rejects_a_threshold_outside_the_unit_interval():
 
 
 def test_features_normalize_could_not_scale_are_dropped_before_the_rest_are_judged():
-    """drop_degenerate drops what normalize flagged, and the other operations never see it: judged alongside
-    the rest, the flagged feature here would push a healthy one out through the correlation ranking."""
+    """drop_degenerate drops what normalize flagged, and the other operations never see it: judged alongside the rest, the flagged feature here would push a healthy one out through the correlation ranking."""
     rng = np.random.default_rng(2)
     values = rng.normal(size=(60, 4)) @ rng.normal(size=(4, 4))
     adata = ad.AnnData(values.astype(np.float32), var=pd.DataFrame(index=[f"Cells_Intensity_f{i}" for i in range(4)]))

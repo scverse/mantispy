@@ -31,7 +31,6 @@ def clustered():
 def test_dendrogram_returns_axes_with_every_leaf(clustered):
     ax = mt.pl.dendrogram(clustered)
     assert isinstance(ax, Axes)
-    # One tick label per profile, and each is one of the profile names.
     ticks = [text.get_text() for text in ax.get_xticklabels()]
     assert len(ticks) == clustered.n_obs
     assert set(ticks) == set(clustered.obs_names)

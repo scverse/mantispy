@@ -135,7 +135,8 @@ def distance_heatmap(
     Args:
         adata: Object holding the pairwise matrix :func:`~mantispy.tl.edistance` wrote with ``reference=None``.
         key: Name that run's outputs were stored under, whose matrix is ``key + "_pairwise"``.
-        groupby: ``obs`` column to order the groups by, or ``None`` to keep the matrix's own order. Ordering also needs an ``obs`` column naming the groups of the matrix, and without one the matrix is drawn unordered rather than refused.
+        groupby: ``obs`` column to order the groups by, or ``None`` to keep the matrix's own order.
+            Ordering also needs an ``obs`` column naming the groups of the matrix, and without one the matrix is drawn unordered rather than refused.
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:

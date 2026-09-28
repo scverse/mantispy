@@ -1,7 +1,6 @@
 """Plot tests.
 
-One smoke test covering the whole namespace, plus assertions where a plot computes
-something (the plate grid, the QC dashboard).
+One smoke test covering the whole namespace, plus assertions where a plot computes something (the plate grid, the QC dashboard).
 """
 
 import matplotlib
@@ -52,7 +51,6 @@ def test_cell_counts_draws_the_count_profiles_carry(plotted):
     wells.obs["n"] = np.where(wells.obs_names == wells.obs_names[0], np.nan, 2.0)
     ax = mt.pl.cell_counts(wells, count_key="n")
     assert {float(y) for line in ax.get_lines() for y in line.get_ydata()} == {2.0}
-    # A missing label is a box of its own.
     wells.obs["group"] = pd.array(["a"] * (wells.n_obs - 1) + [None], dtype="string")
     ax = mt.pl.cell_counts(wells, groupby="group")
     assert [label.get_text() for label in ax.get_xticklabels()] == ["a", "<NA>"]
@@ -86,7 +84,6 @@ def test_plates_fill_a_grid_on_one_shared_scale():
     apart = mt.pl.plate(many, color=many.var_names[0], share_colorbar=False)
     assert len({axis.images[0].get_clim() for axis in apart}) == 5
 
-    # A plate with nothing measured leaves the others' scale alone, and a norm replaces it.
     values = many.X.copy()
     values[(many.obs["Metadata_Plate"] == "Plate01").to_numpy(), 0] = np.nan
     many.X = values

@@ -17,14 +17,11 @@ if TYPE_CHECKING:
     from anndata import AnnData
     from matplotlib.axes import Axes
 
-#: Fixed phase colors, so each phase has the same color in every figure.
 PHASE_COLOURS = {"G1": "tab:blue", "S": "tab:grey", "G2M": "tab:red"}
 
 
 def cluster_composition(composition: AnnData, groupby: str = "Metadata_Perturbation", ax: Axes | None = None) -> Axes:
     """Stacked bars of cell-state fractions, averaged within each group.
-
-    Takes the object :func:`~mantispy.tl.cluster_composition` returns.
 
     Args:
         composition: The well-level object :func:`~mantispy.tl.cluster_composition` returns, holding one cluster per feature.
@@ -83,7 +80,8 @@ def cell_cycle(
         dna_feature: The DNA intensity feature the phases were assigned from.
         by: ``obs`` column whose groups become panels, or ``None`` for a single panel over every row.
         key: ``obs`` column holding the assigned phase, whose values are matched against ``PHASE_COLOURS``, so a phase named anything else is not drawn.
-        layer: Layer to read the intensity from, or ``None`` for ``X``. Only positive values are drawn, since the plot takes their logarithm.
+        layer: Layer to read the intensity from, or ``None`` for ``X``.
+            Only positive values are drawn, since the plot takes their logarithm.
 
     Returns:
         A ``(1, n_groups)`` array of axes sharing an x axis, one panel per group of ``by``, each holding one filled histogram per phase.
@@ -92,7 +90,6 @@ def cell_cycle(
         KeyError: ``obs`` has no ``key`` column, or ``dna_feature`` is not one of ``var_names``.
         ValueError: The object has no layer named ``layer``.
     """
-    # Multi-panel (one histogram per group); interactive twin deferred.
     import matplotlib.pyplot as plt
 
     if key not in adata.obs:
@@ -184,7 +181,8 @@ def density(
         ax: Axes to draw on.
 
     Returns:
-        The axes drawn on, with a scatter and a fitted line per group and each group's Pearson correlation between density and the feature in the legend. A group with fewer than three usable points is left out.
+        The axes drawn on, with a scatter and a fitted line per group and each group's Pearson correlation between density and the feature in the legend.
+        A group with fewer than three usable points is left out.
 
     Raises:
         KeyError: ``obs`` has no ``key`` column, or ``feature`` is not one of ``var_names``.

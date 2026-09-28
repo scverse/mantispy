@@ -1,10 +1,3 @@
-"""A synthetic plate whose every injected effect is recorded as ground truth.
-
-Used by the test suite and the tutorials, so both run offline and can check that a method recovers a known effect.
-
-The default channel names are the Cell Painting ones, but any ``channels`` work, including a single channel.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -18,7 +11,7 @@ from mantispy._core.frames import categorize_metadata
 from mantispy._core.plate import PLATE_FORMATS, well_col, well_name, well_row
 from mantispy._core.schema import stamp
 
-#: Default channel vocabulary (Cell Painting). No other code assumes these names.
+#: The Cell Painting channels; no other code assumes these names.
 DEFAULT_CHANNELS = ("DNA", "ER", "RNA", "AGP", "Mito")
 
 _OBJECTS = ("Cells", "Nuclei", "Cytoplasm")
@@ -27,7 +20,6 @@ _INTENSITY_FEATURES = ("MeanIntensity", "MaxIntensity", "IntegratedIntensity", "
 _TEXTURE_FEATURES = ("Contrast", "Correlation", "Entropy", "Variance")
 
 #: How many robust standard deviations a degraded image's metrics are shifted by.
-#: Large, because an out-of-focus image lies far from the rest.
 BAD_IMAGE_SHIFT = 8.0
 
 _IMAGE_QC_METRICS = {
@@ -100,7 +92,8 @@ def synthetic_plate(
         n_wells: Wells per plate.
         n_cells: Cells per well, or the Poisson mean of that count when ``confounder_effect`` is set.
         n_features: Number of features, before correlated copies are added.
-        channels: Channel vocabulary used to build feature names. Any names work.
+        channels: Channel vocabulary used to build feature names.
+            Any names work.
         n_perturbations: Number of treatments; a ``DMSO`` negative control is always added.
         effect_size: Shift applied to the features affected by each perturbation.
         n_images_per_well: Fields of view per well, which sets ``Metadata_ImageNumber``.

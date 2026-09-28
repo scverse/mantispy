@@ -33,8 +33,7 @@ _BASE_URL, _DATASETS = parse_registry(Path(__file__).parent / "registry.yaml")
 # scverse-misc registers loaders by type name across all packages in the process, so ours uses the package name.
 _TYPE = "mantispy"
 
-#: One plate from each of the eleven sources that ran Target-2. Pinned rather than derived, so the default set
-#: cannot move when a plate is added to the registry or the rows are reordered.
+#: One plate from each of the eleven sources that ran Target-2, pinned so the default cannot move with the registry.
 TARGET2_DEFAULT = (
     "1053600674",  # source_2
     "JCPQC051",  # source_3
@@ -52,7 +51,6 @@ TARGET2_DEFAULT = (
 #: Bumped whenever the assembled jump_cells object changes, so an older cached assembly is not reused.
 _ASSEMBLY_VERSION = 3
 
-#: The field of view :func:`jump_export` hands out, a DMSO well of the plate :func:`jump_cells` reads.
 _EXPORT_FOV = "BR00121438-J04-1"
 
 
@@ -73,7 +71,6 @@ def _plate(file_name: str) -> str:
 
 
 def _plate_files(name: str, plates: Sequence[str] | None, cache_dir: str | Path | None) -> list[Path]:
-    # A set, because a plate contributes several files and would otherwise be listed once per file.
     known = {_plate(file.name) for file in _DATASETS[name].files}
     if plates is not None and (unknown := sorted(set(plates) - known)):
         raise KeyError(f"{name} has no plate(s) {unknown}; available: {sorted(known)}")
@@ -168,7 +165,6 @@ def bbbc021(cache_dir: str | Path | None = None) -> AnnData:
     adata = from_dataframe(merged, resolution="well")
     obs = as_frame(adata.obs)
     obs["Metadata_Control"] = (obs["Metadata_Compound"] == "DMSO").to_numpy()
-    # Replicates share a compound at a concentration; the mode= shorthands of mt.tl.map need this column.
     obs["Metadata_Perturbation"] = pd.Categorical(
         obs["Metadata_Compound"].astype(str) + "@" + obs["Metadata_Concentration"].astype(str)
     )
@@ -249,8 +245,7 @@ def pki(plates: Sequence[str] | None = None, cache_dir: str | Path | None = None
     obs = as_frame(adata.obs)
     control = (obs["Metadata_control_type"].astype(str) == "negcon").to_numpy()
     obs["Metadata_Control"] = control
-    # Control wells have no compound or dose; without this each would become its own "nan@nan" perturbation
-    # instead of joining one DMSO group.
+    # Control wells have no compound or dose, so without this each would become its own "nan@nan" perturbation.
     compound = np.where(control, "DMSO", obs["Metadata_broad_sample"].astype(str).to_numpy())
     dose = obs["Metadata_mmoles_per_liter"].to_numpy(dtype=float)
     obs["Metadata_Compound"] = pd.Categorical(compound)
@@ -413,8 +408,7 @@ def chroma(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
     return _profiles("chroma", cache_dir, **kwargs)
 
 
-#: What each OASIS batch calls the columns mantispy reads. The four batches were laid out by different people and
-#: none of them agree on a name, so each output column lists the spellings seen across them.
+#: The spellings the four OASIS batches use for each column mantispy reads, since no two of them agree.
 _OASIS_PLATEMAP_COLUMNS = {
     "Metadata_Compound": ("treatment", "Compound Name", "compound"),
     "Metadata_Concentration": ("concentration_uM", "assay_conc_uM", "compound_concentration"),
@@ -430,18 +424,11 @@ def _decimals(value: float) -> int:
 def _aligned_doses(doses: pd.Series, compounds: pd.Series) -> pd.Series:
     """The dose each well was meant to get, where plate maps record one concentration to several precisions.
 
-    The OASIS plate maps disagree on precision rather than on value: one batch writes the concentration the
-    dilution actually produced, ``0.0152416`` uM, and another writes it rounded, ``0.015``. A level written to
-    fewer decimals is therefore the same dose as the finer level that rounds to it, which is a statement about
-    how the number was recorded rather than a tolerance fitted to the data.
+    The OASIS plate maps disagree on precision rather than on value: one batch writes the concentration the dilution actually produced, ``0.0152416`` uM, and another writes it rounded, ``0.015``.
+    A level written to fewer decimals is therefore the same dose as the finer level that rounds to it.
 
     Matching runs within a compound, because a compound's levels are one dilution series and cannot collide.
-    Across the whole plate map they can: berberine's 25 uM and the main ladder's 33.3 uM are a third apart and
-    genuinely different doses, closer together than ``0.000762`` and ``0.001`` are, which are one dose.
-
-    Rounding every level to a fixed precision cannot do this, and neither can a relative tolerance. The one case
-    it would get wrong is a ladder with two rungs inside a rounding step of each other, which a series coarser
-    than two-fold never has.
+    The one case it would get wrong is a ladder with two rungs inside a rounding step of each other, which a series coarser than two-fold never has.
     """
 
     def align(block: pd.Series) -> pd.Series:
@@ -482,8 +469,7 @@ def _oasis_platemaps(cache_dir: str | Path | None) -> pd.DataFrame:
                 **{name: frame[column] if column else np.nan for name, column in found.items()},
             }
         )
-        # The batches that name compounds in "Compound Name" leave it blank for the wells that hold no compound and
-        # put DMSO or EMPTY in the identifier column instead. Without this the controls read as unannotated wells.
+        # Batches that name compounds in "Compound Name" leave it blank for controls and put DMSO or EMPTY in BROAD_ID.
         if "BROAD_ID" in frame:
             kept["Metadata_Compound"] = kept["Metadata_Compound"].fillna(frame["BROAD_ID"])
         frames.append(kept)
@@ -499,35 +485,28 @@ def _oasis_platemaps(cache_dir: str | Path | None) -> pd.DataFrame:
 def oasis_pilot(annotate: bool = True, cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
     """OASIS pilot, 4,604 wells in U2OS and HepaRG, most compounds over a ten-point dose range.
 
-    ``cpg0033-oasis-pilot``, twelve plates read down to the features they share, over four batches: two of assay
-    development and two that dose 36 compounds in each cell line. It is the dose-response dataset of the package:
-    28 of those compounds carry six or more concentrations in both U2OS and HepaRG.
+    ``cpg0033-oasis-pilot``, twelve plates read down to the features they share, over four batches: two of assay development and two that dose 36 compounds in each cell line.
+    It is the dose-response dataset of the package: 28 of those compounds carry six or more concentrations in both U2OS and HepaRG.
 
     Args:
-        annotate: Join the plate maps, which supply ``Metadata_Compound``, ``Metadata_Concentration``,
-            ``Metadata_CellLine``, ``Metadata_Control`` (the DMSO wells) and ``Metadata_Perturbation``.
+        annotate: Join the plate maps, which supply ``Metadata_Compound``, ``Metadata_Concentration``, ``Metadata_CellLine``, ``Metadata_Control`` (the DMSO wells) and ``Metadata_Perturbation``.
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
         kwargs: Passed to :func:`mantispy.io.read_profiles`.
 
     Returns:
-        Wells by features, indexed by plate and well, with ``Metadata_CellCount`` and ``Metadata_SiteCount``, and
-        the annotation columns above when ``annotate``.
+        Wells by features, indexed by plate and well, with ``Metadata_CellCount`` and ``Metadata_SiteCount``, and the annotation columns above when ``annotate``.
 
     Notes:
-        The four batches name their plate-map columns differently, so the join reads whichever of
-        ``treatment``/``Compound Name``/``compound`` and ``concentration_uM``/``assay_conc_uM``/``compound_concentration``
-        each one carries. Concentrations are micromolar.
+        The four batches name their plate-map columns differently, so the join reads whichever of ``treatment``/``Compound Name``/``compound`` and ``concentration_uM``/``assay_conc_uM``/``compound_concentration`` each one carries.
+        Concentrations are micromolar.
 
         The assay-development batch doses DMSO itself, so a control well there carries a concentration.
         ``Metadata_Control`` marks the compound, not the dose.
 
-        The plate maps disagree on precision: one batch writes the concentration the dilution produced,
-        ``0.0152416`` uM, and another writes it rounded, ``0.015``. ``Metadata_Concentration`` is the dose the
-        well was meant to get, reading a coarser spelling as the finer level it rounds to within each compound,
-        and it names the replicate groups. ``Metadata_ConcentrationRecorded`` keeps what the plate map wrote:
-        read against that column, every dosed compound here carries eighteen levels where ten were plated, and a
-        treatment's wells split across two spellings.
+        The plate maps disagree on precision: one batch writes the concentration the dilution produced, ``0.0152416`` uM, and another writes it rounded, ``0.015``.
+        ``Metadata_Concentration`` is the dose the well was meant to get, reading a coarser spelling as the finer level it rounds to within each compound, and it names the replicate groups.
+        ``Metadata_ConcentrationRecorded`` keeps what the plate map wrote: read against that column, every dosed compound here carries eighteen levels where ten were plated, and a treatment's wells split across two spellings.
     """
     adata = _profiles("oasis_pilot", cache_dir, select=lambda name: name.endswith(".csv.gz"), **kwargs)
     if not annotate:
@@ -543,7 +522,6 @@ def oasis_pilot(annotate: bool = True, cache_dir: str | Path | None = None, **kw
     adata.obs["Metadata_ConcentrationRecorded"] = merged["Metadata_ConcentrationRecorded"].to_numpy(dtype=float)
     adata.obs["Metadata_CellLine"] = merged["Metadata_CellLine"].to_numpy()
     adata.obs["Metadata_Control"] = merged["Metadata_Compound"].astype(str).str.upper().eq("DMSO").to_numpy()
-    # Replicates share a compound at a concentration, which is what the mode= shorthands of mt.tl.map compare.
     is_control = np.asarray(adata.obs["Metadata_Control"], dtype=bool)
     adata.obs["Metadata_Perturbation"] = pd.Categorical(
         np.where(
@@ -579,8 +557,7 @@ def miami(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
     return _profiles("miami", cache_dir, **kwargs)
 
 
-#: The feature sets JUMP-Lite publishes for one set of wells: five learned embeddings, and the
-#: CellProfiler-equivalent measurements of ``cp_measure`` for comparison on the same rows.
+#: The feature sets JUMP-Lite publishes for one set of wells: five learned embeddings and the CellProfiler-equivalent ``cp_measure``.
 JUMP_LITE_MODELS = ("openphenom", "dinov2", "dinov2_random", "subcell", "morphem", "cp_measure")
 
 
@@ -589,12 +566,16 @@ def jump_lite(
 ) -> AnnData:
     """JUMP-Lite Target-2: 1,536 wells, four imaging sites, one feature set at a time.
 
-    ``cpg0016-jump``, the compact benchmark of :cite:t:`Munoz_2026`. Four plates of the JUMP Target-2 plate map, one from each of ``source_3``, ``source_4``, ``source_5`` and ``source_6``, so the four batches are four different laboratories running the same 302 compounds with 64 DMSO wells each.
+    ``cpg0016-jump``, the compact benchmark of :cite:t:`Munoz_2026`.
+    Four plates of the JUMP Target-2 plate map, one from each of ``source_3``, ``source_4``, ``source_5`` and ``source_6``, so the four batches are four different laboratories running the same 302 compounds with 64 DMSO wells each.
 
-    Every ``model`` covers the same 1,536 wells, which is what makes this a comparison rather than six datasets: the rows, their order and the metadata are identical and only the feature block changes. The files list the wells in a different order for every model, so the rows are sorted by source, plate and well. Five are learned embeddings and one, ``"cp_measure"``, is the CellProfiler-equivalent measurement of the same images.
+    Every ``model`` covers the same 1,536 wells, which is what makes this a comparison rather than six datasets: the rows, their order and the metadata are identical and only the feature block changes.
+    The files list the wells in a different order for every model, so the rows are sorted by source, plate and well.
+    Five are learned embeddings and one, ``"cp_measure"``, is the CellProfiler-equivalent measurement of the same images.
 
     Args:
-        model: Which feature set to read, one of ``ds.JUMP_LITE_MODELS``. ``"dinov2_random"`` is the same architecture with untrained weights, which is the null model the benchmark scores the others against.
+        model: Which feature set to read, one of ``ds.JUMP_LITE_MODELS``.
+            ``"dinov2_random"`` is the same architecture with untrained weights, which is the null model the benchmark scores the others against.
         annotate: Join the JUMP well and compound tables, which name the compound of each well.
             Downloads about 14 MB once and caches it.
         cache_dir: Where to keep the download.
@@ -608,13 +589,18 @@ def jump_lite(
         ValueError: ``model`` is not one of ``ds.JUMP_LITE_MODELS``.
 
     Notes:
-        A dimension of a learned embedding is a coordinate in the model's own basis, not a measurement with a name to parse, so for every model but ``"cp_measure"`` the annotation columns of ``var`` are supplied empty. Anything that reads ``var["feature_group"]`` or ``var["channel"]``, such as the feature families :func:`~mantispy.pl.effect_sizes` colours by, has nothing to work with on those.
+        A dimension of a learned embedding is a coordinate in the model's own basis, not a measurement with a name to parse, so for every model but ``"cp_measure"`` the annotation columns of ``var`` are supplied empty.
+        Anything that reads ``var["feature_group"]`` or ``var["channel"]``, such as the feature families :func:`~mantispy.pl.effect_sizes` colours by, has nothing to work with on those.
 
-        ``"cp_measure"`` is CellProfiler-style measurements and keeps its parsed compartment, feature group and channel. Its channel is the index cp_measure numbered its inputs by rather than the name of a stain, because the name lives in the acquisition metadata and not in the feature name.
+        ``"cp_measure"`` is CellProfiler-style measurements and keeps its parsed compartment, feature group and channel.
+        Its channel is the index cp_measure numbered its inputs by rather than the name of a stain, because the name lives in the acquisition metadata and not in the feature name.
 
-        The embeddings are not normalized. They are the model's output on each well's images, so a per-plate control normalization is still the first step.
+        The embeddings are not normalized.
+        They are the model's output on each well's images, so a per-plate control normalization is still the first step.
 
-        The trained embeddings here carry the cell count in their leading components, where it can account for more of the variance than either the laboratory or the imaging site. The untrained ``"dinov2_random"`` does not, and neither does ``"cp_measure"``, whose per-cell measurements are averaged over the well. Measure it with :func:`~mantispy.metrics.evaluate_correction` before correcting for anything else, and read :doc:`/tutorials/multisite/learned_embeddings` on why removing it is not obviously right.
+        The trained embeddings here carry the cell count in their leading components, where it can account for more of the variance than either the laboratory or the imaging site.
+        The untrained ``"dinov2_random"`` does not, and neither does ``"cp_measure"``, whose per-cell measurements are averaged over the well.
+        Measure it with :func:`~mantispy.metrics.evaluate_correction` before correcting for anything else, and read :doc:`/tutorials/multisite/learned_embeddings` on why removing it is not obviously right.
 
     References:
         :cite:t:`Munoz_2026`, :cite:t:`Chandrasekaran_2023`, :cite:t:`Weisbart_2024`.
@@ -624,9 +610,6 @@ def jump_lite(
 
     adata = _profiles("jump_lite", cache_dir, select=lambda name: name == f"{model}.parquet", **kwargs)
     if model != "cp_measure":
-        # An embedding dimension is a coordinate in a learned basis, not a measurement with a name
-        # to parse. Left alone, the parser reads "openphenom_nahualX_17" as the "nahualX" feature
-        # group of an "openphenom" object, and the model's own tensor names become feature families.
         empty = empty_annotation(adata.var_names)
         adata.var[empty.columns] = empty
 
@@ -637,12 +620,9 @@ def jump_lite(
     joined = obs.merge(counts, on="Metadata_id", how="left", validate="1:1")
     joined.index = obs.index
     if unmatched := int(joined["cell_count"].isna().sum()):
-        # A left join leaves the count missing rather than failing, and everything that reads it downstream,
-        # from cytotoxicity to the well filters, would quietly treat those wells as having no cells.
+        # Downstream, a missing count reads as a well with no cells.
         get_logger().warning("jump_lite(%s): %d well(s) have no cell count in the count table", model, unmatched)
     adata.obs = joined.rename(columns={"cell_count": "Metadata_CellCount"})
-    # Each file lists the wells in its own order, so two feature sets stacked by position would pair one well's
-    # features with another's.
     order = as_frame(adata.obs).sort_values(["Metadata_Source", "Metadata_Plate", "Metadata_Well"], kind="stable").index
     adata = adata[order].copy()
 
@@ -670,7 +650,8 @@ def jump_lite_targets(cache_dir: str | Path | None = None) -> pd.DataFrame:
             Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Returns:
-        A frame with ``source``, the gene symbol, and ``target``, the ``Metadata_JCP2022`` of a compound annotated to it. One row per annotated pairing, over every JUMP compound rather than only those of :func:`jump_lite`.
+        A frame with ``source``, the gene symbol, and ``target``, the ``Metadata_JCP2022`` of a compound annotated to it.
+        One row per annotated pairing, over every JUMP compound rather than only those of :func:`jump_lite`.
 
     Notes:
         The annotation is sparse against a plate map: most compounds on the JUMP-Lite plates carry none, and only the targets shared by more than one compound contribute a pair, so the recall is computed over a minority of the plate.
@@ -680,8 +661,7 @@ def jump_lite_targets(cache_dir: str | Path | None = None) -> pd.DataFrame:
     """
     (path,) = _files("jump_lite", cache_dir, select=lambda name: name == "refchem_annotations.parquet")
     frame = pd.read_parquet(path, columns=["target", "Metadata_JCP2022"])
-    # Dropped before the cast, or an unannotated compound becomes the literal string "nan" and
-    # every one of them is then related to every other.
+    # Dropped before the cast, or every unannotated compound becomes the string "nan" and relates to every other.
     frame = frame.dropna().rename(columns={"target": "source", "Metadata_JCP2022": "target"}).astype(str)
     return frame.drop_duplicates().reset_index(drop=True)
 
@@ -728,9 +708,7 @@ def _finish_guide_screen(adata: AnnData, name: str) -> AnnData:
     return adata
 
 
-#: The phenotype features :func:`scallops_arv471` keeps as ``X``: the ER stain and the two DAPI acquisitions
-#: (the DNA FISH round and the immunofluorescence round) as nuclear median intensities, and the ESR1, CCND1
-#: and GREB1 transcript spot counts in the nucleus and over the whole cell.
+#: ``DAPI_FISH`` and ``DAPI_IF`` are the DAPI acquisitions of the DNA FISH and the immunofluorescence rounds.
 _SCALLOPS_FEATURES = (
     "Nuclei_Intensity_MedianIntensity_ER",
     "Nuclei_Intensity_MedianIntensity_DAPI_IF",
@@ -743,7 +721,6 @@ _SCALLOPS_FEATURES = (
     "Cells_Spots_Count_GREB1",
 )
 
-#: The raw columns :func:`scallops_arv471` reads beside the features, to build ``obs`` and to filter on.
 _SCALLOPS_SOURCE = (
     "gene_symbol",
     "sgRNA_id",
@@ -758,17 +735,14 @@ _SCALLOPS_SOURCE = (
 def scallops_arv471(cache_dir: str | Path | None = None) -> AnnData:
     """SCALLOPS ARV-471, single cells of an optical pooled screen under an estrogen-receptor degrader.
 
-    The drug arm of a genome-scale optical pooled CRISPR screen from ``Genentech/scallops-manuscript``, its
-    Figure 3 table. Cells express a guide library and are treated with ARV-471 (vepdegestrant), a PROTAC that recruits
-    the CRL4-CRBN E3 ligase to the estrogen receptor and drives its degradation, then read by in-situ sequencing of
-    the guide barcodes and a phenotype round that stains DNA and the estrogen receptor and counts ESR1, CCND1 and
-    GREB1 transcripts. A guide that knocks out a gene the drug needs rescues the receptor, so cells carrying it keep
-    the phenotype of an untreated cell. The genes with that known mechanism are the members of the ligase the PROTAC
-    hijacks, ``CRBN``, ``DDB1``, ``CUL4A`` and ``CUL4B``, and ``ESR1`` itself, the drug's target.
+    The drug arm of a genome-scale optical pooled CRISPR screen from ``Genentech/scallops-manuscript``, its Figure 3 table.
+    Cells express a guide library and are treated with ARV-471 (vepdegestrant), a PROTAC that recruits the CRL4-CRBN E3 ligase to the estrogen receptor and drives its degradation, then read by in-situ sequencing of the guide barcodes and a phenotype round that stains DNA and the estrogen receptor and counts ESR1, CCND1 and GREB1 transcripts.
+    A guide that knocks out a gene the drug needs rescues the receptor, so cells carrying it keep the phenotype of an untreated cell.
+    The genes with that known mechanism are the members of the ligase the PROTAC hijacks, ``CRBN``, ``DDB1``, ``CUL4A`` and ``CUL4B``, and ``ESR1`` itself, the drug's target.
 
-    This loads only the ARV-471 condition, at single-cell resolution, so a hit is a guide whose cells sit away from
-    the non-targeting cells in the phenotype space. The matched DMSO condition and the barcode-calling columns are
-    left in the upstream file. Downloads about 205 MB once, checked against a pinned sha256, and subsets it on read.
+    This loads only the ARV-471 condition, at single-cell resolution, so a hit is a guide whose cells sit away from the non-targeting cells in the phenotype space.
+    The matched DMSO condition and the barcode-calling columns are left in the upstream file.
+    Downloads about 205 MB once, checked against a pinned sha256, and subsets it on read.
 
     Args:
         cache_dir: Where to keep the download.
@@ -777,38 +751,33 @@ def scallops_arv471(cache_dir: str | Path | None = None) -> AnnData:
     Returns:
         Cells by nine phenotype features at cell resolution, with:
 
-        ``Metadata_Gene``: the gene the cell's guide targets, with the non-targeting guides written as
-        ``"nontargeting"`` (the upstream ``NTC``), the spelling the analysis functions read.
+        ``Metadata_Gene``: the gene the cell's guide targets, with the non-targeting guides written as ``"nontargeting"`` (the upstream ``NTC``), the spelling the analysis functions read.
 
         ``Metadata_sgRNA``: the guide identifier.
 
         ``Metadata_Perturbation``: the guide, so each guide is its own perturbation.
 
-        ``Metadata_Control_Type``: the schema's reserved control-type column, carrying the upstream ``type``, one of
-        ``"target"`` (a screened gene), ``"ntc"`` (a non-targeting guide) or ``"neg"`` (a guide against an
-        olfactory-receptor gene, a targeting negative control). The raw classes are kept rather than folded onto the
-        reserved ``negcon``/``poscon``/``trt`` vocabulary, none of which fits the targeting negative cleanly.
+        ``Metadata_Control_Type``: the schema's reserved control-type column, carrying the upstream ``type``, one of ``"target"`` (a screened gene), ``"ntc"`` (a non-targeting guide) or ``"neg"`` (a guide against an olfactory-receptor gene, a targeting negative control).
+        The raw classes are kept rather than folded onto the reserved ``negcon``/``poscon``/``trt`` vocabulary, none of which fits the targeting negative cleanly.
 
-        ``Metadata_Control``: ``True`` for the non-targeting guides, the reference :func:`~mantispy.tl.hit_calling`
-        and normalization test against. The olfactory-receptor negatives are not flagged, so they can be scored as
-        perturbations that should not move.
+        ``Metadata_Control``: ``True`` for the non-targeting guides, the reference :func:`~mantispy.tl.hit_calling` and normalization test against.
+        The olfactory-receptor negatives are not flagged, so they can be scored as perturbations that should not move.
 
         ``Metadata_Plate``: the plate, ``A`` or ``B``.
 
-        ``Metadata_Well``: the physical well, written as ``W03``. The raw well is an integer that the well vocabulary
-        cannot parse, so it is padded and prefixed. The ARV-471 arm sits in one well per plate, so this is constant.
+        ``Metadata_Well``: the physical well, written as ``W03``.
+        The raw well is an integer that the well vocabulary cannot parse, so it is padded and prefixed.
+        The ARV-471 arm sits in one well per plate, so this is constant.
 
-        The nine features are the ER and the two DAPI median intensities and the ESR1, CCND1 and GREB1 spot counts in
-        the nucleus and the whole cell. The barcode, geometry (nucleus centers) and quality columns of the upstream
-        table are dropped.
+        The nine features are the ER and the two DAPI median intensities and the ESR1, CCND1 and GREB1 spot counts in the nucleus and the whole cell.
+        The barcode, geometry (nucleus centers) and quality columns of the upstream table are dropped.
 
     Notes:
-        Cells whose segmentation touches the field boundary (``Cells_Location_IntersectsBoundary_IF``) are cut off, so
-        their intensities and spot counts undercount, and are dropped. Cells missing any phenotype feature are dropped
-        too, so every returned cell has a full feature vector.
+        Cells whose segmentation touches the field boundary (``Cells_Location_IntersectsBoundary_IF``) are cut off, so their intensities and spot counts undercount, and are dropped.
+        Cells missing any phenotype feature are dropped too, so every returned cell has a full feature vector.
 
-        A cell carries no count. Aggregate to a guide-level profile with
-        ``mt.tl.aggregate(adata, by=("Metadata_Gene", "Metadata_sgRNA"))``, which writes ``Metadata_CellCount``.
+        A cell carries no count.
+        Aggregate to a guide-level profile with ``mt.tl.aggregate(adata, by=("Metadata_Gene", "Metadata_sgRNA"))``, which writes ``Metadata_CellCount``.
     """
     (path,) = _files("scallops_arv471", cache_dir)
     df = pd.read_parquet(path, columns=[*_SCALLOPS_FEATURES, *_SCALLOPS_SOURCE])
@@ -822,11 +791,8 @@ def scallops_arv471(cache_dir: str | Path | None = None) -> AnnData:
     guide = df["sgRNA_id"].astype(str).to_numpy()
     is_ntc = gene == "NTC"
     frame = df[list(_SCALLOPS_FEATURES)].reset_index(drop=True)
-    # NTC is the non-targeting guide set; hit_calling and the control normalization read the "nontargeting" spelling.
     frame["Metadata_Gene"] = np.where(is_ntc, "nontargeting", gene)
     frame["Metadata_sgRNA"] = guide
-    # The upstream "type" under the schema's reserved control-type column. None of the reserved values
-    # (negcon/poscon/trt) fits the olfactory-receptor targeting negative cleanly, so the raw classes are kept.
     frame["Metadata_Control_Type"] = df["type"].astype(str).to_numpy()
     frame["Metadata_Control"] = is_ntc
     frame["Metadata_Perturbation"] = guide
@@ -838,68 +804,52 @@ def scallops_arv471(cache_dir: str | Path | None = None) -> AnnData:
     return _finish_guide_screen(adata, "scallops_arv471")
 
 
-#: The upstream columns :func:`cp_posh` reads into ``obs``. They are the pandas MultiIndex of the parquet, so
-#: they come back with ``reset_index``; every other column is a CellStats morphology feature and goes to ``X``.
+#: The upstream parquet stores these as its MultiIndex; every other column is a CellStats morphology feature.
 _CP_POSH_METADATA = ("barcode", "gene_id", "treatment", "plate_well", "plate", "ID")
 
-#: The ``gene_id`` values that mark a control guide rather than a targeted gene: the non-targeting guides and the
-#: guides that cut an intergenic region. Both are the reference :func:`~mantispy.tl.hit_calling` scores against.
+#: Upstream ``gene_id`` values of the non-targeting guides and the guides that cut an intergenic region.
 _CP_POSH_CONTROLS = ("nontargeting", "intergenic")
 
 
 def cp_posh(cache_dir: str | Path | None = None) -> AnnData:
     """Single cells of insitro cp-POSH, a broad-morphology pooled CRISPR Cell Painting screen.
 
-    The 124-gene proof-of-concept dataset from ``insitro/cp-posh``: A549 cells carrying a pooled CRISPR-knockout
-    library, stained with a six-channel Cell Painting panel (WGA, a mitochondrial probe, phalloidin, concanavalin A,
-    DAPI and a marker round) and read by in-situ sequencing of the guide barcodes. Each cell gets a broad, untargeted
-    morphology profile of about 1,278 CellStats features rather than the handful of hand-picked readouts a targeted
-    screen keeps, so it is the broad-morphology complement to :func:`scallops_arv471`.
+    The 124-gene proof-of-concept dataset from ``insitro/cp-posh``: A549 cells carrying a pooled CRISPR-knockout library, stained with a six-channel Cell Painting panel (WGA, a mitochondrial probe, phalloidin, concanavalin A, DAPI and a marker round) and read by in-situ sequencing of the guide barcodes.
+    Each cell gets a broad, untargeted morphology profile of about 1,278 CellStats features rather than the handful of hand-picked readouts a targeted screen keeps, so it is the broad-morphology complement to :func:`scallops_arv471`.
 
-    The features are already well-normalized by the authors, so :func:`~mantispy.pp.normalize` is not needed before
-    analysis; a per-plate control normalization would re-do work already done. Downloads about 1.6 GB once, checked
-    against a pinned sha256.
+    The features are already well-normalized by the authors, so :func:`~mantispy.pp.normalize` is not needed before analysis; a per-plate control normalization would re-do work already done.
+    Downloads about 1.6 GB once, checked against a pinned sha256.
 
     Args:
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Returns:
-        Cells by about 1,278 CellStats morphology features at cell resolution, indexed by the upstream cell ``ID``,
-        with:
+        Cells by about 1,278 CellStats morphology features at cell resolution, indexed by the upstream cell ``ID``, with:
 
-        ``Metadata_Gene``: the gene the cell's guide targets, taken from the upstream ``gene_id``. The two control
-        classes keep their upstream spellings, ``"nontargeting"`` (the non-targeting guides) and ``"intergenic"``
-        (guides against intergenic regions); ``"nontargeting"`` is the spelling the analysis functions read.
+        ``Metadata_Gene``: the gene the cell's guide targets, taken from the upstream ``gene_id``.
+        The two control classes keep their upstream spellings, ``"nontargeting"`` (the non-targeting guides) and ``"intergenic"`` (guides against intergenic regions); ``"nontargeting"`` is the spelling the analysis functions read.
 
         ``Metadata_sgRNA``: the guide, the upstream ``barcode``.
 
-        ``Metadata_Perturbation``: the guide again, so each guide is its own perturbation, matching
-        :func:`scallops_arv471`.
+        ``Metadata_Perturbation``: the guide again, so each guide is its own perturbation, matching :func:`scallops_arv471`.
 
         ``Metadata_Plate``: the plate, the upstream ``plate`` (``"EL37"``).
 
-        ``Metadata_Well``: the physical well, such as ``"B04"``, taken from the upstream ``plate_well`` (``"EL37_B04"``)
-        by dropping the plate prefix so the well vocabulary can parse it.
+        ``Metadata_Well``: the physical well, such as ``"B04"``, taken from the upstream ``plate_well`` (``"EL37_B04"``) by dropping the plate prefix so the well vocabulary can parse it.
 
-        ``Metadata_Control``: ``True`` for the non-targeting and intergenic guides, the reference
-        :func:`~mantispy.tl.hit_calling` and the control normalization test against.
+        ``Metadata_Control``: ``True`` for the non-targeting and intergenic guides, the reference :func:`~mantispy.tl.hit_calling` and the control normalization test against.
 
-        The upstream ``treatment`` column is a constant (no small molecule) and is dropped, and the ``ID`` becomes the
-        observation index. The known-mechanism genes, whose knockout moves cells away from the controls, are
-        ``KIF18A``, the proteasome (``PSMB1``, ``PSMD4``), the mitochondrial ribosome (``MRPL43``, ``MRPS5``), the
-        ARP2/3 complex (``ARPC4``, ``ACTR6``) and COPI (``COPE``, ``ARCN1``), scored against ``nontargeting`` and
-        ``intergenic``.
+        The upstream ``treatment`` column is a constant (no small molecule) and is dropped, and the ``ID`` becomes the observation index.
+        The known-mechanism genes, whose knockout moves cells away from the controls, are ``KIF18A``, the proteasome (``PSMB1``, ``PSMD4``), the mitochondrial ribosome (``MRPL43``, ``MRPS5``), the ARP2/3 complex (``ARPC4``, ``ACTR6``) and COPI (``COPE``, ``ARCN1``), scored against ``nontargeting`` and ``intergenic``.
 
     Notes:
-        The CellStats feature names are insitro's own, not CellProfiler's ``<Object>_<Group>_<Feature>_<Channel>``, so
-        the annotation columns of ``var`` are supplied empty rather than parsed. Left to the parser, a name such as
-        ``nucleus_mask_height`` would read as the ``mask`` feature group of a ``nucleus`` object and invent feature
-        families that are not there, the same reason the learned embeddings of :func:`jump_lite` carry an empty
-        annotation. Anything that reads ``var["feature_group"]`` or ``var["channel"]`` has nothing to work with here.
+        The CellStats feature names are insitro's own, not CellProfiler's ``<Object>_<Group>_<Feature>_<Channel>``, so the annotation columns of ``var`` are supplied empty rather than parsed.
+        Left to the parser, a name such as ``nucleus_mask_height`` would read as the ``mask`` feature group of a ``nucleus`` object and invent feature families that are not there, the same reason the learned embeddings of :func:`jump_lite` carry an empty annotation.
+        Anything that reads ``var["feature_group"]`` or ``var["channel"]`` has nothing to work with here.
 
-        A cell carries no count. Aggregate to a guide-level profile with
-        ``mt.tl.aggregate(adata, by=("Metadata_Gene", "Metadata_sgRNA"))``, which writes ``Metadata_CellCount``.
+        A cell carries no count.
+        Aggregate to a guide-level profile with ``mt.tl.aggregate(adata, by=("Metadata_Gene", "Metadata_sgRNA"))``, which writes ``Metadata_CellCount``.
     """
     import anndata as ad
 
@@ -955,7 +905,8 @@ def corum(cache_dir: str | Path | None = None) -> pd.DataFrame:
 def _read_site(directory: Path, source: str, channels: Sequence[str]) -> AnnData:
     """One analysis directory as cells, checked against the ``<plate>-<well>-<site>`` name it is filed under.
 
-    The JUMP pipeline gives ``Cytoplasm`` a ``Parent_Cells`` and a ``Parent_Nuclei`` and gives ``Cells`` no parent at all, so ``Cytoplasm`` is the only primary object that joins all three tables. One cytoplasm is one cell here, and the three tables have equal length.
+    The JUMP pipeline gives ``Cytoplasm`` a ``Parent_Cells`` and a ``Parent_Nuclei`` and gives ``Cells`` no parent at all, so ``Cytoplasm`` is the only primary object that joins all three tables.
+    One cytoplasm is one cell here, and the three tables have equal length.
     """
     adata = read_profiles(
         directory,
@@ -981,8 +932,7 @@ def _assemble_cells(entry: DatasetEntry, cache_dir: str | Path | None, *, annota
     channels = [str(channel) for channel in entry.metadata["channels"]]
     paths = _files("jump_cells", cache_dir)
     parts = [_read_site(directory, source, channels) for directory in sorted({path.parent for path in paths})]
-    # Every field of view numbers its own images from one, so each part's numbers are shifted past the ones before
-    # it, and the image tables are stacked rather than merged, which kept only the first field's.
+    # Every field of view numbers its own images from one, so each part's numbers are shifted past the ones before it.
     images, offset = [], 0
     for part in parts:
         table = part.uns["mantispy"]["image_table"]
@@ -992,7 +942,6 @@ def _assemble_cells(entry: DatasetEntry, cache_dir: str | Path | None, *, annota
         offset += len(table)
     adata = ad.concat(parts, join="inner", merge="first", uns_merge="first")
     adata.uns["mantispy"]["image_table"] = pd.concat(images)
-    # The parts hold as much again as the result, and nothing below needs them.
     n_parts, widest = len(parts), max(part.n_vars for part in parts)
     del parts
     report_drop("features measured in only some fields of view", widest - adata.n_vars, widest)
@@ -1022,7 +971,9 @@ def _select(adata: AnnData, path: Path) -> AnnData:
 def _mark_selected(adata: AnnData) -> None:
     """Write the feature-selection mask into ``var["selected"]``, as :func:`mantispy.pp.feature_select` does.
 
-    The mask is computed on a normalized copy, because variance and correlation are only comparable between features once each is on its own plate's control scale, and the values on `adata` stay as CellProfiler measured them. The recipe is the one the tutorials use: ``pp.normalize`` against the negative controls, drop what ``var["degenerate_scale"]`` flags, then ``pp.feature_select``. No step of it draws a random number, so the same pinned files always give the same mask.
+    The mask is computed on a normalized copy, so the values on `adata` stay as CellProfiler measured them.
+    The recipe is the one the tutorials use.
+    No step of it draws a random number, so the same pinned files always give the same mask.
     """
     from mantispy.pp._normalize import normalize
     from mantispy.pp._select import feature_select
@@ -1038,12 +989,14 @@ def _mark_selected(adata: AnnData) -> None:
 def jump_export(cache_dir: str | Path | None = None) -> Path:
     """One real ``ExportToSpreadsheet`` directory, as CellProfiler wrote it.
 
-    A single field of view of a DMSO well of ``BR00121438``: ``Image.csv`` plus the ``Cells``, ``Cytoplasm`` and ``Nuclei`` tables, unmodified, for reading with :func:`mantispy.io.read_profiles`. About 18 MB, and part of the download :func:`jump_cells` makes, so asking for both costs nothing extra.
+    A single field of view of a DMSO well of ``BR00121438``: ``Image.csv`` plus the ``Cells``, ``Cytoplasm`` and ``Nuclei`` tables, unmodified, for reading with :func:`mantispy.io.read_profiles`.
+    About 18 MB, and part of the download :func:`jump_cells` makes, so asking for both costs nothing extra.
 
     The images this was measured from are in :func:`jump_plate`, and the well-level profiles of the same plate are in :func:`jump_target2`.
 
     Args:
-        cache_dir: Where to keep the download. Defaults to :attr:`mantispy.settings.cache_dir`.
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Returns:
         The directory, to pass to :func:`mantispy.io.read_profiles`.
@@ -1060,25 +1013,31 @@ def jump_export(cache_dir: str | Path | None = None) -> Path:
 def jump_cells(annotate: bool = True, selected: bool = False, cache_dir: str | Path | None = None) -> AnnData:
     """Single cells from one JUMP plate, as CellProfiler measured them.
 
-    Twenty-four wells of ``BR00121438`` at four fields of view each: eight DMSO wells, four compounds with both of their replicate wells, and eight more compounds at one well. The strongest movers on this plate are cytotoxic, so ranking wells by distance alone selects for empty wells; every well here holds more than 120 cells in its first field.
+    Twenty-four wells of ``BR00121438`` at four fields of view each: eight DMSO wells, four compounds with both of their replicate wells, and eight more compounds at one well.
+    The strongest movers on this plate are cytotoxic, so ranking wells by distance alone selects for empty wells; every well here holds more than 120 cells in its first field.
 
     The same plate's well-level profiles are :func:`jump_target2`, so a profile aggregated from these cells can be compared with the one the consortium published.
 
-    The first call downloads about 1.5 GB of CellProfiler output, reads 480 tables and writes the assembled object next to them, which takes a few minutes. Later calls read that one file.
+    The first call downloads about 1.5 GB of CellProfiler output, reads 480 tables and writes the assembled object next to them, which takes a few minutes.
+    Later calls read that one file.
 
     Args:
         annotate: Join the JUMP annotation, which supplies ``Metadata_Perturbation`` and ``Metadata_Control``.
-            Downloads another 14 MB. Needed for `selected`, which is computed against the controls.
-        selected: Return only the features ``var["selected"]`` marks, as
-            :func:`mantispy.pp.subset_features` would. The subset is kept beside the whole object, so a notebook that only wants the reduced one reads 87 MB instead of 308 MB.
-        cache_dir: Where to keep the download. Defaults to :attr:`mantispy.settings.cache_dir`.
+            Downloads another 14 MB.
+            Needed for `selected`, which is computed against the controls.
+        selected: Return only the features ``var["selected"]`` marks, as :func:`mantispy.pp.subset_features` would.
+            The subset is kept beside the whole object, so a notebook that only wants the reduced one reads 87 MB instead of 308 MB.
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Raises:
         KeyError: `selected` was asked for without `annotate`, so there are no controls to select against.
 
     Returns:
-        Cells by features at cell resolution, carrying ``Metadata_Source``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Site`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_InChIKey`` and ``Metadata_Control``. When annotated, ``var["selected"]`` marks the features feature selection keeps, so the object can be reduced with ``adata[:, adata.var["selected"]]`` the way scanpy's ``highly_variable`` is used.
-        A cell carries no count. :func:`mantispy.tl.aggregate` writes ``Metadata_CellCount`` over the four fields read and a ``Metadata_SiteCount`` of four, so a well counts about four ninths of the cells :func:`jump_target2` gives it over all nine.
+        Cells by features at cell resolution, carrying ``Metadata_Source``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Site`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_InChIKey`` and ``Metadata_Control``.
+        When annotated, ``var["selected"]`` marks the features feature selection keeps, so the object can be reduced with ``adata[:, adata.var["selected"]]`` the way scanpy's ``highly_variable`` is used.
+        A cell carries no count.
+        :func:`mantispy.tl.aggregate` writes ``Metadata_CellCount`` over the four fields read and a ``Metadata_SiteCount`` of four, so a well counts about four ninths of the cells :func:`jump_target2` gives it over all nine.
 
     References:
         :cite:t:`Chandrasekaran_2023`.
@@ -1088,9 +1047,7 @@ def jump_cells(annotate: bool = True, selected: bool = False, cache_dir: str | P
 
     entry = _DATASETS["jump_cells"]
     root = Path(cache_dir or settings.cache_dir)
-    # The name carries the schema version and a fingerprint of the files the entry pins and of how they are
-    # assembled, so no change to the schema, to which wells are read, or to what assembly produces can be
-    # answered from a stale file.
+    # The name fingerprints the schema, the pinned files and the assembly version, so a stale file is never read.
     material = f"{_ASSEMBLY_VERSION}:" + "".join(str(file.sha256) for file in entry.files)
     fingerprint = hashlib.sha256(material.encode()).hexdigest()[:12]
     stem = f"jump_cells-{SCHEMA_VERSION}-{fingerprint}-{'annotated' if annotate else 'raw'}"
@@ -1108,12 +1065,14 @@ def jump_cells(annotate: bool = True, selected: bool = False, cache_dir: str | P
 def jump_plate(cache_dir: str | Path | None = None, **kwargs: Any) -> SpatialData:
     """The images and segmentations behind one well of ``BR00121438``.
 
-    Two fields of view of well ``O09``, a compound that changed the cells without killing them: the eight channel images of each field, the CellProfiler outlines they were segmented with, and the plate's ``load_data.csv``. About 44 MB, and needs the spatial extra.
+    Two fields of view of well ``O09``, a compound that changed the cells without killing them: the eight channel images of each field, the CellProfiler outlines they were segmented with, and the plate's ``load_data.csv``.
+    About 44 MB, and needs the spatial extra.
 
     The cells measured from these fields are in :func:`jump_cells`, and the well-level profiles of the same plate in :func:`jump_target2`.
 
     Args:
-        cache_dir: Where to keep the download. Defaults to :attr:`mantispy.settings.cache_dir`.
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
         kwargs: Passed to :func:`mantispy.io.read_plate`.
 
     Returns:
@@ -1126,9 +1085,7 @@ def jump_plate(cache_dir: str | Path | None = None, **kwargs: Any) -> SpatialDat
 
     entry = _DATASETS["jump_plate"]
     paths = _files("jump_plate", cache_dir)
-    # Every file is named by its gallery key, so the download reconstructs the source tree and read_plate
-    # reads it as it would read the bucket. Stripping that key off a downloaded path gives the tree's root,
-    # rather than assuming where fetch put it.
+    # Every file is named by its gallery key, so stripping that key off a downloaded path gives the source tree's root.
     downloaded = Path(str(paths[0]).removesuffix(entry.files[0].name))
     root = downloaded / str(entry.metadata["accession"]) / str(entry.metadata["source"])
     return read_plate(

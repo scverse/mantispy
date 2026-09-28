@@ -1,8 +1,4 @@
-"""Single-cell heterogeneity beyond the well median.
-
-A perturbation that strongly shifts ten percent of cells looks like a small change in the average.
-These tools work on the distribution of cells instead, so they need single-cell profiles.
-"""
+"""Single-cell heterogeneity beyond the well median."""
 
 from __future__ import annotations
 
@@ -28,23 +24,13 @@ from mantispy.tl._hits import ks_statistic
 
 PHASES = ("G1", "S", "G2M")
 
-#: Control wells needed before the spread between them estimates the dispersion the composition test divides by.
-#: Below this the estimate is itself noise, and the test stays anti-conservative.
 _DISPERSION_MIN_CONTROLS = 8
 
 
 def _cluster_labels(obs: pd.DataFrame, cluster_key: str) -> tuple[pd.Series, np.ndarray]:
     """The cluster column as strings, and which cells the clustering actually assigned.
 
-    Read through here rather than ``astype(str)`` directly: a missing value becomes a cluster
-    literally called ``"nan"`` on pandas 2, and makes ``sorted`` raise on pandas 3.
-
-    Args:
-        obs: The observation frame.
-        cluster_key: Column holding the cluster of each cell.
-
-    Returns:
-        The stringified column, and a boolean mask of the assigned cells.
+    Read through here rather than ``astype(str)`` directly: a missing value becomes a cluster literally called ``"nan"`` on pandas 2, and makes ``sorted`` raise on pandas 3.
     """
     assigned = obs[cluster_key].notna().to_numpy()
     return obs[cluster_key].astype(str), assigned
@@ -80,28 +66,20 @@ def cluster_composition(
         The chi-square test is computed on counts and accounts for this, but the fractions in ``X`` do not.
         Filter with :func:`~mantispy.pp.well_qc` first.
 
-        Chi-square alone asks whether a well's cells are a multinomial draw from the control composition, and wells
-        vary beyond that: seeding, position and edge effects all move a composition without any perturbation.
-        The statistic is therefore divided by the dispersion the control wells show, ``mean(control statistic) / df``,
-        floored at one. Without that correction, wells drawn from a single composition with mild jitter were called
-        at q = 9e-10, 10 of 20 of them.
+        Chi-square alone asks whether a well's cells are a multinomial draw from the control composition, and wells vary beyond that: seeding, position and edge effects all move a composition without any perturbation.
+        The statistic is therefore divided by the dispersion the control wells show, ``mean(control statistic) / df``, floored at one.
+        Without that correction, wells drawn from a single composition with mild jitter were called at q = 9e-10, 10 of 20 of them.
 
-        The dispersion is estimated leave-one-out — each control well is scored against the pooled composition of
-        the *other* controls, never one that includes itself — and the scaled statistic is referred to an F
-        distribution rather than chi-square, so the uncertainty in that estimate widens the tail (issue #89).
-        Without either, the pure-null false positive rate ran above nominal and worse with fewer controls
-        (0.138, 0.092, 0.070, 0.059 at 8, 16, 32, 64 control wells against a nominal 0.05); with both it sits at
-        or below nominal. Below ``_DISPERSION_MIN_CONTROLS`` wells the estimate is too noisy to trust and the
-        function warns. Power falls accordingly: a composition shift of a few percentage points is not separable
-        from well-to-well variation, and reporting it as significant was the bug.
+        The dispersion is estimated leave-one-out (each control well is scored against the pooled composition of the *other* controls, never one that includes itself), and the scaled statistic is referred to an F distribution rather than chi-square, so the uncertainty in that estimate widens the tail.
+        Without either, the pure-null false positive rate ran above nominal and worse with fewer controls (0.138, 0.092, 0.070, 0.059 at 8, 16, 32, 64 control wells against a nominal 0.05); with both it sits at or below nominal.
+        Below 8 wells the estimate is too noisy to trust and the function warns.
+        Power falls accordingly: a composition shift of a few percentage points is not separable from well-to-well variation, and reporting it as significant was the bug.
 
         Clusters no control cell reached are left out of the test, since the controls give them no expected frequency.
         Their fractions stay in ``X``, and :func:`subpopulation_hits` compares within a cluster.
 
-        ``Metadata_CellCount`` is every cell of the well, since :func:`~mantispy.tl.cytotoxicity` reads it
-        to tell a hit from cell loss. The fractions are over the cells the clustering assigned, counted in
-        ``Metadata_ClusteredCellCount``; the two differ when the clustering left cells out, so recovering
-        the counts from ``X`` needs the latter.
+        ``Metadata_CellCount`` is every cell of the well, since :func:`~mantispy.tl.cytotoxicity` reads it to tell a hit from cell loss.
+        The fractions are over the cells the clustering assigned, counted in ``Metadata_ClusteredCellCount``; the two differ when the clustering left cells out, so recovering the counts from ``X`` needs the latter.
 
         The test holds one row per well, in the order of the rows of the returned object.
         A well with no cells in the clusters the controls occupy gets ``NaN``.
@@ -128,12 +106,8 @@ def cluster_composition(
     )
 
     counts = np.zeros((len(keys), len(labels)))
-    # membership needs no mask of its own: an unassigned cell is outside the categories already.
     np.add.at(counts, (codes[assigned], pd.Categorical(named, categories=labels).codes[assigned]), 1)
 
-    # A group none of whose cells were assigned has no composition. Zero everywhere would say it was
-    # measured and found empty, and NaN would make the result something tl.map refuses although the
-    # Returns clause promises tl.map takes it, so the group is dropped like any other empty one.
     totals = counts.sum(axis=1)
     measured = totals > 0
     report_drop(
@@ -145,8 +119,7 @@ def cluster_composition(
     counts, totals = counts[measured], totals[measured]
     fractions = counts / totals[:, None]
 
-    # Every cell of the group, not only the clustered ones: Metadata_CellCount is tl.cytotoxicity's
-    # default count_key, and a group that merely lost cluster labels must not read as cell loss.
+    # Every cell, not only the clustered ones, or a group that merely lost cluster labels reads as cell loss in tl.cytotoxicity.
     cell_count = np.bincount(codes, minlength=len(keys)).astype(int)
     obs = _group_obs(adata, columns, keys, codes, {"Metadata_CellCount": cell_count})[measured]
     obs["Metadata_ClusteredCellCount"] = totals.astype(int)
@@ -176,8 +149,7 @@ def _composition_test(composition: AnnData, counts: np.ndarray, reference: str |
     if not is_control.any():
         return empty, np.nan
 
-    # A cluster no control cell reached has no expected frequency.
-    # Flooring it at epsilon made a single treated cell there a chi-square of 1e10 and p exactly zero, and with enough such clusters the expected counts stopped summing to the observed ones, which scipy refuses.
+    # Flooring unreached clusters at epsilon instead gives p exactly zero and expected counts scipy refuses.
     pooled = counts[is_control].sum(axis=0)
     reached = pooled > 0
     comparable = int(reached.sum()) >= 2
@@ -208,33 +180,20 @@ def _composition_test(composition: AnnData, counts: np.ndarray, reference: str |
 
     dof = max(int(reached.sum()) - 1, 1)
 
-    # The reported statistic scores every well against the full pooled control composition. A treated well is
-    # not in that pool, so its statistic is a clean draw; a control well is, but the reported value is only
-    # informational and the calibration below scores the controls leave-one-out instead.
+    # A control well is in the pool it is scored against here, so its reported statistic is informational only.
     statistics = np.full(composition.n_obs, np.nan)
     for row in range(composition.n_obs):
         observed = counts[row][reached]
-        # A well with no cells in the clusters the controls occupy has no composition to set against theirs.
-        # Its fractions are still in X.
         if comparable and observed.sum() >= 1:
             statistics[row] = chisquare(observed, share * observed.sum()).statistic
 
-    # Chi-square asks whether a well's cells are a multinomial draw from the control composition. Wells also
-    # differ from one another, so the counts are overdispersed and the raw test is anti-conservative: on wells
-    # drawn from one composition with mild jitter it called 10 of 20 at q < 0.05, down to q = 9e-10. The
-    # controls measure that extra spread, and dividing by it is the usual quasi-likelihood correction.
-    #
-    # A control well scored against a pool that includes itself pulls that pool toward its own counts, shrinking
-    # its chi-square and biasing the dispersion low, the more so with fewer controls (issue #89). Each control
-    # well's calibration statistic is therefore leave-one-out: scored against the pooled composition of the
-    # *other* controls, so it is an honest draw from the null rather than a well compared with part of itself.
+    # Leave-one-out, because a control scored against a pool that includes itself biases the dispersion low.
     control_rows = np.flatnonzero(is_control)
     calibration = np.full(control_rows.size, np.nan)
     if comparable:
         for position, control_row in enumerate(control_rows):
             observed = counts[control_row][reached]
             others = pooled[reached] - counts[control_row][reached]
-            # A cluster only this control reached leaves the others no expected frequency there; skip the well.
             if observed.sum() >= 1 and others.min() > 0:
                 calibration[position] = chisquare(observed, others / others.sum() * observed.sum()).statistic
     calibration = calibration[np.isfinite(calibration)]
@@ -250,14 +209,7 @@ def _composition_test(composition: AnnData, counts: np.ndarray, reference: str |
             stacklevel=3,
         )
 
-    # The dispersion is estimated, not known, so referring statistic / dispersion to chi-square treats an
-    # uncertain denominator as certain and keeps the tail too thin (the second half of issue #89). A
-    # quasi-likelihood F-test accounts for that estimation: statistic / dof is the numerator mean square with
-    # `dof` numerator degrees of freedom, and the dispersion is the denominator mean square. Each of the
-    # `calibration.size` finite control statistics contributes ~dof to it (sum(control chi-square) / dispersion
-    # is ~chi-square on that many degrees of freedom), so the denominator df is calibration.size * dof, and as
-    # the controls multiply the F reference approaches the chi-square one. With dispersion =
-    # mean(control chi-square) / dof, F = statistic / (dof * dispersion) = (statistic / dispersion) / dof.
+    # Quasi-likelihood F-test, since the dispersion is estimated; each finite control statistic adds ~dof denominator df.
     residual_df = int(calibration.size) * dof
     pvalues = (
         f.sf(statistics / (dof * dispersion), dof, residual_df)
@@ -288,7 +240,8 @@ def cell_cycle_phase(
 
     Args:
         adata: Single-cell object holding raw, unnormalized intensities.
-        dna_feature: The integrated DNA intensity feature. Found from the feature names and ``var["channel"]`` when omitted.
+        dna_feature: The integrated DNA intensity feature.
+            Found from the feature names and ``var["channel"]`` when omitted.
         by: Fit separately within each group, normally the plate, since staining intensity does not carry across plates.
         layer: Read this layer instead of ``X``, for example ``"raw"`` after ``normalize(keep_raw=True)``.
         key_added: ``obs`` column written.
@@ -327,7 +280,6 @@ def cell_cycle_phase(
 
     values = get_matrix(adata, layer)[:, adata.var_names.get_loc(dna_feature)].astype(np.float64)
     positive = np.isfinite(values) & (values > 0)
-    # Raw integrated intensities are positive, so many non-positive values mean normalized data.
     if positive.sum() < 0.95 * adata.n_obs:
         raise ValueError(
             f"{int((~positive).sum())} of {adata.n_obs} values of {dna_feature!r} are not positive, so their "
@@ -381,7 +333,9 @@ def subpopulation_hits(
         groupby: ``obs`` column holding the perturbation.
         reference: Which rows are the controls, ``"negcon"`` or the name of a boolean ``obs`` column.
         use_rep: Measure in ``obsm[use_rep]`` instead of ``X``.
-        min_cells: Skip a (cluster, group) pair with fewer cells than this on either side. A cluster needs twice as many controls, and at least four, since half of them place the centroid and half supply the distances tested against. The reference group's own row needs four times as many, since it comes from a second split of the held-out half.
+        min_cells: Skip a (cluster, group) pair with fewer cells than this on either side.
+            A cluster needs twice as many controls, and at least four, since half of them place the centroid and half supply the distances tested against.
+            The reference group's own row needs four times as many, since it comes from a second split of the held-out half.
         seed: Seed for the split of a cluster's controls.
         key_added: Name for the output table.
         copy: Return a modified copy instead of mutating in place.
@@ -420,9 +374,8 @@ def subpopulation_hits(
     groups = obs[groupby].astype(str).to_numpy()
 
     generator = np.random.default_rng(seed)
-    # Halving the reference group's held-out cells draws from a child of the seeded generator, so that it leaves the stream the cluster splits come from where it was.
+    # A child generator, so halving the reference group leaves the stream the cluster splits draw from untouched.
     half_generator = generator.spawn(1)[0]
-    # Half the controls place the centroid and half form the distances tested against, so the null is out of sample like every group (see Notes).
     needed = max(2 * min_cells, 4)
 
     records = []
@@ -436,14 +389,11 @@ def subpopulation_hits(
         centre = np.nanmean(values[fit_rows], axis=0, keepdims=True)
         distance = np.sqrt(pairwise_sqeuclidean(np.nan_to_num(values[in_cluster]), np.nan_to_num(centre))).ravel()
         fitted = np.isin(in_cluster, fit_rows)
-        # The split partitions the cluster's control cells, so the held-out half is the controls that did not place the centroid.
         held_out = is_control[in_cluster] & ~fitted
 
         for group in pd.unique(groups[in_cluster]):
-            # A cell that placed the centroid sits closer to it than one that did not, so it stays off the tested side.
             in_group = (groups[in_cluster] == group) & ~fitted
-            # The reference group is the controls under their own perturbation label.
-            # Half its held-out cells are the sample and half are what it is tested against, drawn at random because the cells are ordered by plate and well.
+            # The reference group's held-out cells are halved at random because cells are ordered by plate and well.
             shared = np.flatnonzero(in_group & held_out)
             in_group[half_generator.permutation(shared)[: shared.size // 2]] = False
             treated, control_distance = distance[in_group], distance[held_out & ~in_group]
@@ -494,7 +444,8 @@ def neighbors_local_density(
     Args:
         adata: Single-cell object carrying ``Metadata_Center_X`` and ``Metadata_Center_Y``.
         k: Number of neighbors averaged over.
-        by: ``obs`` column identifying the field of view. Neighbors are searched within each field only, since coordinates from different images are not comparable.
+        by: ``obs`` column identifying the field of view.
+            Neighbors are searched within each field only, since coordinates from different images are not comparable.
         key_added: ``obs`` column written.
         copy: Return a modified copy instead of mutating in place.
 

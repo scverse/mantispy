@@ -1,1 +1,1 @@
-"""Internal helpers. Not part of the public API."""
+"""Internal helpers, not part of the public API."""

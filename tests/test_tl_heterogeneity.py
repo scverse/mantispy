@@ -50,22 +50,19 @@ def test_round_trip(clustered, tmp_path):
     loaded = mt.io.read(tmp_path / "composition.h5ad")
     assert loaded.n_vars == composition.n_vars
     assert len(loaded.uns["mantispy"]["composition_test"]) == composition.n_obs
-    # The annotation columns come from _core.features.empty_annotation (#103), which supplies the
-    # empty ones as categoricals precisely so that the h5ad writer keeps them.
+    # empty_annotation supplies the empty columns as categoricals so that the h5ad writer keeps them (#103).
     assert list(loaded.var.columns) == list(composition.var.columns)
     assert set(loaded.var["feature_group"]) == {"Composition"}
     for column in ("channel", "radial_bin", "params"):
         assert loaded.var[column].isna().all(), column
-        # The dtype is the point of the comment above, so assert it: the float-NaN construction this
-        # replaced round-trips identically and would otherwise pass.
         assert isinstance(loaded.var[column].dtype, pd.CategoricalDtype), column
 
 
 def _null_wells(layout, n_controls):
     """Every well drawn from one composition, no real hits: the first ``n_controls`` are the controls.
 
-    The rest carry a perturbation label but the same null composition, so any of them called at p < 0.05
-    is a false positive. This is the issue #89 reproduction as a well-level object.
+    The rest carry a perturbation label but the same null composition, so any of them called at p < 0.05 is a false positive.
+    This is the issue #89 reproduction as a well-level object.
     """
     rows = [
         {
@@ -111,12 +108,11 @@ def _null_plate_fpr(n_controls, trials=200):
 
 @pytest.mark.parametrize("n_controls", [8, 16, 32, 64])
 def test_a_null_plate_is_called_at_most_at_the_nominal_rate(n_controls):
-    """Issue #89: with every well drawn from one composition and no real hits, the pure-null false positive
-    rate ran above the nominal 0.05 and worse with fewer controls (0.138, 0.092, 0.070, 0.059 at 8, 16, 32,
-    64 controls). Two causes: the dispersion was estimated from control wells each scored against a pool that
-    included itself, which shrank their statistics and biased it low; and statistic / dispersion was referred
-    to chi-square, treating the estimated dispersion as known. Leave-one-out calibration and an F reference
-    each address one, and together bring the false positive rate to nominal for every control count."""
+    """Issue #89: with every well drawn from one composition and no real hits, the pure-null false positive rate ran above the nominal 0.05 and worse with fewer controls (0.138, 0.092, 0.070, 0.059 at 8, 16, 32, 64 controls).
+
+    Two causes: the dispersion was estimated from control wells each scored against a pool that included itself, which shrank their statistics and biased it low; and statistic / dispersion was referred to chi-square, treating the estimated dispersion as known.
+    Leave-one-out calibration and an F reference each address one, and together bring the false positive rate to nominal for every control count.
+    """
     assert _null_plate_fpr(n_controls) <= 0.06
 
 
@@ -160,16 +156,16 @@ def test_a_cluster_the_controls_never_reached_does_not_fabricate_a_hit():
     assert float(test.loc["P1/B01", "statistic"]) < 1e3
     assert float(test.loc["P1/B01", "pvalue"]) > 0.0
     assert float(test.loc["P1/B01", "qvalue"]) > 0.0
-    # The fractions still show the cluster, which is where a treatment-only state belongs.
     row = composition.obs_names[composition.obs["Metadata_Well"].astype(str).to_numpy() == "B01"][0]
     assert float(composition[row, "2"].X[0, 0]) == pytest.approx(0.05)
 
 
 @pytest.mark.filterwarnings("ignore:the controls occupy")
 def test_a_well_with_no_assigned_cell_is_left_out(clustered):
-    """Zero in every cluster said the well was measured and found empty everywhere; NaN said it was
-    unknown, and tl.map refuses an object with missing values although the Returns clause promises
-    tl.map accepts it. A well with nothing to measure is dropped, like any other empty group."""
+    """Zero in every cluster said the well was measured and found empty everywhere; NaN said it was unknown, and tl.map refuses an object with missing values although the Returns clause promises tl.map accepts it.
+
+    A well with nothing to measure is dropped, like any other empty group.
+    """
     clustered = clustered.copy()  # module-scoped fixture; this test rewrites obs["leiden"]
     clusters = clustered.obs["leiden"].astype(str)
     wells = clustered.obs["Metadata_Well"].to_numpy()
@@ -185,8 +181,7 @@ def test_a_well_with_no_assigned_cell_is_left_out(clustered):
 
 
 def test_the_drop_is_reported_only_when_something_is_dropped(clustered, caplog):
-    """report_drop ran before the no-cluster refusal, so an unclustered object was told its cells
-    were 'left out of the fractions' immediately before being told there are no fractions."""
+    """report_drop ran before the no-cluster refusal, so an unclustered object was told its cells were 'left out of the fractions' immediately before being told there are no fractions."""
     clustered = clustered.copy()  # module-scoped fixture; this test rewrites obs["leiden"]
     clustered.obs["leiden"] = pd.Categorical([None] * clustered.n_obs)
     with caplog.at_level(logging.INFO, logger="mantispy"), pytest.raises(ValueError, match="no cell"):

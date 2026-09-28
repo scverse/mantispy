@@ -36,8 +36,10 @@ def test_rejects_a_bad_method_or_contamination(adata):
 
 
 def test_ecod_does_not_depend_on_which_way_round_a_feature_is_measured(adata):
-    """#72: CellProfiler's feature directions are arbitrary, so the default aggregation must not
-    care about them. ecod_aggregation="paper" does, and fails this."""
+    """#72: CellProfiler's feature directions are arbitrary, so the default aggregation must not care about them.
+
+    ecod_aggregation="paper" does, and fails this.
+    """
     flipped = adata.copy()
     flipped.X[:, ::2] *= -1
     mt.pp.outliers(adata)

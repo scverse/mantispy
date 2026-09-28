@@ -82,8 +82,10 @@ def setting_agreement(
     Args:
         adata: Object :func:`~mantispy.tl.transport` has run on.
         key: The key it was stored under.
-        by: ``obs`` column to annotate the settings with, e.g. ``"Metadata_Source"`` when the units are plates. Settings are ordered by it with a line at each boundary, so a laboratory whose plates disagree shows as a broken block.
-        cluster: Order the settings by similarity instead. Ignored when ``by`` is given.
+        by: ``obs`` column to annotate the settings with, e.g. ``"Metadata_Source"`` when the units are plates.
+            Settings are ordered by it with a line at each boundary, so a laboratory whose plates disagree shows as a broken block.
+        cluster: Order the settings by similarity instead.
+            Ignored when ``by`` is given.
         ax: Axes to draw into.
 
     Returns:
@@ -114,8 +116,7 @@ def setting_agreement(
         from scipy.spatial.distance import squareform
 
         values = matrix.to_numpy(dtype=float)
-        # A missing pair shared too few perturbations to compare. The median fill keeps the
-        # linkage defined without favoring any pair.
+        # A missing pair shared too few perturbations to compare; the median fill favors no pair.
         filled = np.nan_to_num(values, nan=float(np.nanmedian(values)))
         distance = np.clip(1.0 - (filled + filled.T) / 2.0, 0.0, None)
         np.fill_diagonal(distance, 0.0)

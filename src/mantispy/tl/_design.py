@@ -25,12 +25,11 @@ def viability(
 ) -> np.ndarray:
     """Each row's cell count against the controls', per field of view where the fields are known.
 
-    ``levels`` names a grouping each row is scored inside, normally the plate. Plates are seeded and imaged
-    separately, and on the OASIS pilot their control counts differ by half, so a sparse plate otherwise reads as
-    one whose treated wells are dying. ``None`` pools every control row.
+    ``levels`` names a grouping each row is scored inside, normally the plate.
+    Plates are seeded and imaged separately, and on the OASIS pilot their control counts differ by half, so a sparse plate otherwise reads as one whose treated wells are dying.
+    ``None`` pools every control row.
 
-    A level whose controls carry no usable count gets NaN rather than an error, so the caller decides whether
-    that is fatal.
+    A level whose controls carry no usable count gets NaN rather than an error, so the caller decides whether that is fatal.
     """
     counts = obs[count_key].to_numpy(dtype=float)
     if site_key is not None and site_key in obs:
@@ -70,8 +69,6 @@ def signature_stability(
         if rows.size < 2 * depth:
             continue
         drawn = generator.choice(rows, size=2 * depth, replace=False)
-        # Both halves in one grouped-median call.
-        # np.nanmedian dispatches per feature slice, and this runs n_draws times for every depth of every group.
         halves = grouped_stat(profiles[drawn], np.repeat([0, 1], depth).astype(np.int32), 2, MEDIAN)
         left, right = halves[0], halves[1]
         usable = np.isfinite(left) & np.isfinite(right)
@@ -135,10 +132,19 @@ def replicate_saturation(
     Args:
         adata: Well-level profiles with several replicates per group.
         groupby: The column whose groups are the replicate sets.
-        metric: ``"signature_stability"`` correlates two disjoint subsets of this depth. It is unbiased but needs ``2 * depth`` replicates, so it stops early on a screen with three. ``"convergence"`` correlates a subset of this depth with the group's full signature. It is defined up to one less than the group size and optimistic by construction. A callable ``(profiles, codes, depth, generator) -> float`` can score anything else, such as MOA retrieval or mAP.
-        max_replicates: Deepest subset to try. ``None`` derives it from ``min_groups``.
-        min_groups: Number of groups that must be able to supply a depth for it to be scored. The statistic is a median over the contributing groups, and the largest group is usually the negative controls. On 132 JUMP plates, taking the range from the largest group gives 4252 depths, and past about 66 only DMSO contributes. ``min_groups=1`` takes the range from the largest group.
-        n_draws: Random subsets per depth. The spread across draws is reported as ``std``.
+        metric: ``"signature_stability"`` correlates two disjoint subsets of this depth.
+            It is unbiased but needs ``2 * depth`` replicates, so it stops early on a screen with three.
+            ``"convergence"`` correlates a subset of this depth with the group's full signature.
+            It is defined up to one less than the group size and optimistic by construction.
+            A callable ``(profiles, codes, depth, generator) -> float`` can score anything else, such as MOA retrieval or mAP.
+        max_replicates: Deepest subset to try.
+            ``None`` derives it from ``min_groups``.
+        min_groups: Number of groups that must be able to supply a depth for it to be scored.
+            The statistic is a median over the contributing groups, and the largest group is usually the negative controls.
+            On 132 JUMP plates, taking the range from the largest group gives 4252 depths, and past about 66 only DMSO contributes.
+            ``min_groups=1`` takes the range from the largest group.
+        n_draws: Random subsets per depth.
+            The spread across draws is reported as ``std``.
         use_rep: Score ``obsm[use_rep]`` instead of ``X``.
         seed: Seed for reproducibility.
         key_added: Name for the output table.
@@ -165,13 +171,10 @@ def replicate_saturation(
     if max_replicates is not None:
         deepest = max_replicates
     else:
-        # The deepest depth that `min_groups` groups can still supply.
-        # The largest group is usually the negative controls, 8505 wells on JUMP against a median group size of 132.
         ranked = np.sort(sizes)[::-1]
         pivot = int(ranked[min(min_groups, ranked.size) - 1]) if ranked.size else 0
         deepest = max(pivot - 1 if metric == "convergence" else pivot // 2, 1)
 
-    # Group the rows once; `codes == group` inside the loop is an O(n_obs) scan per group, repeated n_draws * deepest times.
     members = group_rows(codes, len(keys))
 
     records = []
@@ -219,8 +222,10 @@ def cytotoxicity(
         reference: Rows whose median cell count defines a viability of 1.0.
         count_key: ``obs`` column holding the cell count.
         site_key: ``obs`` column holding the number of fields of view that count covers.
-            Where present, viability compares cells per field, so a well missing a field does not read as cell loss. ``None`` compares the counts as they are.
-        distance_key: ``obs`` column holding the per-row distance from the controls, as written by :func:`~mantispy.tl.hit_calling`. Its group-level sibling ``hits_distance`` is one number repeated over each group's rows, so the median below would return the value it was handed.
+            Where present, viability compares cells per field, so a well missing a field does not read as cell loss.
+            ``None`` compares the counts as they are.
+        distance_key: ``obs`` column holding the per-row distance from the controls, as written by :func:`~mantispy.tl.hit_calling`.
+            Its group-level sibling ``hits_distance`` is one number repeated over each group's rows, so the median below would return the value it was handed.
         min_viability: Fraction of the control cell count below which a group counts as having lost cells.
         key_added: Name for the outputs.
         copy: Return a modified copy instead of mutating in place.
@@ -239,9 +244,12 @@ def cytotoxicity(
         Together they are suspect because a well with a fifth of its cells has a noisier median and drifts from the controls regardless of the biology.
         On a synthetic plate with one purely cytotoxic perturbation and its morphology effect removed, that perturbation's distance was 21.1 against 7.0 for the controls.
 
-        Run it whichever feature block a hit was read off. Cell loss moves a profile away from the controls however it is measured, so a screen's most distant perturbations are partly a cytotoxicity ranking on CellProfiler features and on learned embeddings alike.
+        Run it whichever feature block a hit was read off.
+        Cell loss moves a profile away from the controls however it is measured, so a screen's most distant perturbations are partly a cytotoxicity ranking on CellProfiler features and on learned embeddings alike.
 
-        Where the two differ is the geometry rather than the ranking. An embedding of the whole field encodes how full the well is, and on every trained model of :func:`~mantispy.ds.jump_lite` the cell count lands on the first component, while averaging per-cell measurements over a well leaves it as one signal among many. That costs distances, neighbourhoods and batch correction rather than this flag, and :doc:`/tutorials/multisite/learned_embeddings` measures both.
+        Where the two differ is the geometry rather than the ranking.
+        An embedding of the whole field encodes how full the well is, and on every trained model of :func:`~mantispy.ds.jump_lite` the cell count lands on the first component, while averaging per-cell measurements over a well leaves it as one signal among many.
+        That costs distances, neighbourhoods and batch correction rather than this flag, and :doc:`/tutorials/multisite/learned_embeddings` measures both.
 
         The flag is a diagnostic and does not correct the distances.
         How much cytotoxicity confounds a screen varies.
@@ -249,7 +257,8 @@ def cytotoxicity(
         Over rohban2017's ORF overexpression the same correlation is +0.00 (p = 0.95).
         Measure it on your own screen.
 
-        The cell count is a baseline in its own right. Across three bioactivity benchmarks, a model given only the cell count often matched one given the whole Cell Painting profile, because many assays' actives simply lower it :cite:p:`Seal_2025`.
+        The cell count is a baseline in its own right.
+        Across three bioactivity benchmarks, a model given only the cell count often matched one given the whole Cell Painting profile, because many assays' actives simply lower it :cite:p:`Seal_2025`.
         Predicting two cytotoxicity readouts in hepatocytes, the profiles did no better than cell count, plate and well position on LDH release :cite:p:`Ewald_2026`.
 
     References:
@@ -269,7 +278,6 @@ def cytotoxicity(
         )
 
     is_control = reference_mask(adata, reference)
-    # Pooled: cytotoxicity reads one screen-wide control level, where dose_direction reads one per plate.
     scored = viability(obs, count_key, site_key, is_control)
     distances = obs[distance_key].to_numpy(dtype=float)
     control_distance = float(np.nanmedian(distances[held_out_reference(adata, is_control, distance_key)]))

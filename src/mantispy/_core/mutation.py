@@ -54,8 +54,7 @@ def inplace_or_copy(expects: str | tuple[str, ...] | None = None) -> Callable[[F
             raise TypeError(f"{func.__name__} must take an AnnData as its first argument")
         first = parameters[0].name
         var_keyword = next((p.name for p in parameters if p.kind is p.VAR_KEYWORD), None)
-        # `key_added: str | None = None` means "write to this layer instead of X", so two calls with different layers produce two different matrices and need two provenance entries.
-        # `key_added: str = "something"` names a column and does not.
+        # `key_added: str | None = None` names a layer to write instead of X, and each layer needs its own provenance entry.
         layer_key = signature.parameters.get("key_added")
         writes_layer = layer_key is not None and layer_key.default is None
         if "copy" not in signature.parameters:
@@ -95,7 +94,7 @@ def inplace_or_copy(expects: str | tuple[str, ...] | None = None) -> Callable[[F
             try:
                 func(target, **params, **extra)
             except ValueError as error:
-                # A function that drops rows or features cannot declare that in its signature, so anndata is the one that refuses it, and its message names .to_memory() but not this decorator's own way out.
+                # anndata raises this when a backed object loses rows or features, and its message does not mention copy=True.
                 if backed and not copy and "backed mode" in str(error):
                     raise ValueError(
                         f"{func.__name__} drops rows or features, which a backed object cannot do in "

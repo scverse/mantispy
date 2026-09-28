@@ -1,7 +1,6 @@
 """Read and write profile tables.
 
-The design of :func:`read_profiles` follows ``scverse/cell-painting-io`` (MIT), whose readers were developed against 44 Cell Painting Gallery accessions.
-What differs between real datasets is a parameter here rather than an assumption: metadata prefixes, missing-value sentinels, columns that disagree between files, and metadata that exists only in the directory name.
+The design of :func:`read_profiles` follows ``scverse/cell-painting-io`` (MIT).
 """
 
 from __future__ import annotations
@@ -31,19 +30,16 @@ from mantispy._core.schema import (
 from mantispy._core.schema import stamp as _record
 from mantispy.io._cellprofiler import export_prefix, read_export
 
-#: Column-name prefixes that mark metadata. Real accessions use all four.
+#: Real accessions use all four.
 METADATA_PREFIXES: tuple[str, ...] = ("Image_Metadata_", "Metadata_", "metadata_", "meta_")
 
 #: When fewer features than this survive the default object filter, the drop is logged as a warning instead of at info level.
 THIN_FEATURE_SET = 10
 
-#: CellProfiler objects treated as features by default: the three compartments, as in ``pycytominer.infer_cp_features``.
-#: ``Image`` is excluded because its measurements are whole-field, not per-cell.
+#: The three compartments, as in ``pycytominer.infer_cp_features``.
 DEFAULT_OBJECTS: tuple[str, ...] = ("Cells", "Cytoplasm", "Nuclei")
 
 #: pycytominer's per-well counts and the names mantispy reads them under, the first one present winning.
-#: ``Metadata_Object_Count``, the cells it aggregated, equals ``Metadata_Count_Cells`` wherever both are published.
-#: ``Metadata_Site_Count`` counts the fields of view that contributed cells, as :func:`mantispy.tl.aggregate` does, which need not be all those imaged.
 _UPSTREAM_COUNTS = {
     "Metadata_Count_Cells": "Metadata_CellCount",
     "Metadata_Object_Count": "Metadata_CellCount",
@@ -76,7 +72,7 @@ def _strip_prefix(name: str, prefixes: Sequence[str]) -> str:
 
 def _stack(files: list[Path], on_column_mismatch: str) -> tuple[pd.DataFrame, list[int], list[Path]]:
     frames = [_read_frame(path) for path in files]
-    # An empty file reads as all-object columns and would turn the other frames' columns to object in concat, so empty files are dropped first.
+    # An empty file reads as all-object columns and would turn the other frames' columns to object in concat.
     kept = [index for index, frame in enumerate(frames) if len(frame)]
     if kept and len(kept) < len(frames):
         files = [files[index] for index in kept]
@@ -150,8 +146,6 @@ def from_dataframe(
     meta_columns = [c for c in df.columns if c.startswith(prefixes) or c in named or c not in numeric]
     candidates = [c for c in df.columns if c not in set(meta_columns)]
 
-    # Resolve the vocabulary here so the object can record what it was parsed with.
-    # Inference reads channels off the columns it is given, so a subset of a plate can infer a smaller vocabulary and parse a column differently: on a six-column sample `Cells_Correlation_Correlation_AGP_DNA` parses as channel 'DNA', feature 'Correlation_AGP', where the full plate gives channel 'AGP|DNA', feature 'Correlation'.
     vocabulary = list(channels) if channels is not None else sorted(_infer_channels(candidates))
     parsed = parse_feature_names(candidates, channels=vocabulary)
     if channels is None and vocabulary:
@@ -170,8 +164,7 @@ def from_dataframe(
                 int((keep & excluded).sum()),
                 int(keep.sum()),
                 remedy="pass objects=None to keep every object",
-                # Warn when too few features remain, not when a large fraction is dropped.
-                # This filter is the default, and on a small export the whole-field Image_ columns often outnumber the per-cell ones.
+                # On a small export the whole-field Image_ columns often outnumber the per-cell ones.
                 escalate=int((keep & ~excluded).sum()) < THIN_FEATURE_SET,
             )
         keep = keep & ~excluded
@@ -242,7 +235,6 @@ def _join_platemap(obs: pd.DataFrame, platemap: str | Path | pd.DataFrame) -> pd
     on = ["Metadata_Well"] + (["Metadata_Plate"] if "Metadata_Plate" in frame and "Metadata_Plate" in obs else [])
     left = obs.astype(dict.fromkeys(on, str))
     frame = frame.astype(dict.fromkeys(on, str))
-    # validate="m:1": a duplicated well in the platemap would otherwise multiply that well's rows.
     try:
         joined = left.merge(
             frame, on=on, how="left", suffixes=("", "_platemap"), validate="m:1", indicator="_platemap_match"
@@ -254,7 +246,6 @@ def _join_platemap(obs: pd.DataFrame, platemap: str | Path | pd.DataFrame) -> pd
             f"such as {duplicated.head(3).to_dict('records')}, which would multiply the rows of those "
             "wells. De-duplicate the platemap first."
         ) from error
-    # A platemap that names the wrong wells joins onto nothing and leaves every column it was read for missing, which otherwise looks exactly like a successful read.
     unmatched = int((joined.pop("_platemap_match") == "left_only").sum())
     if unmatched:
         get_logger().warning(
@@ -270,7 +261,7 @@ def _join_platemap(obs: pd.DataFrame, platemap: str | Path | pd.DataFrame) -> pd
 def _image_table(image: pd.DataFrame, obs: pd.DataFrame) -> pd.DataFrame:
     """Per-image quality measurements, keyed by ImageNumber and carrying plate/well.
 
-    The plate and well columns let ``pp.image_qc`` threshold per plate instead of pooling every plate together.
+    The plate and well columns let :func:`~mantispy.pp.image_qc` threshold per plate instead of pooling every plate together.
     """
     quality = [c for c in image.columns if "ImageQuality" in c]
     table = image[["ImageNumber", *quality]].set_index("ImageNumber")
@@ -343,7 +334,6 @@ def read_profiles(
         >>> wells = mt.io.read_profiles("BR00116991_augmented.csv.gz", sentinels=-999)  # doctest: +SKIP
         >>> cells = mt.io.read_profiles("analysis/", platemap="platemap.csv")  # doctest: +SKIP
     """
-    # Checked before anything is read: an unrecognized value used to fall through to the intersect branch, so a typo quietly dropped every column the files disagreed on.
     if on_column_mismatch not in {"raise", "intersect"}:
         raise ValueError(f"on_column_mismatch must be 'raise' or 'intersect', got {on_column_mismatch!r}")
     files = [Path(paths)] if isinstance(paths, str | Path) else [Path(p) for p in paths]
@@ -483,11 +473,14 @@ def write(adata: ad.AnnData, path: str | Path) -> None:
 def stamp(adata: ad.AnnData, resolution: str | None = None, copy: bool = False) -> ad.AnnData | None:
     """Mark an :class:`~anndata.AnnData` built elsewhere as a mantispy object.
 
-    Every reader here, and every tool that returns a new object, records this already. This is the entry point for an object that did not come from one of them: a published ``h5ad``, another pipeline's output, a subset assembled in a notebook, or a matrix of learned embeddings with its metadata alongside.
+    Every reader here, and every tool that returns a new object, records this already.
+    This is the entry point for an object that did not come from one of them: a published ``h5ad``, another pipeline's output, a subset assembled in a notebook, or a matrix of learned embeddings with its metadata alongside.
 
     Args:
         adata: The object to stamp.
-        resolution: What one row is: ``"cell"``, ``"well"`` or ``"perturbation"``. ``obs`` has to carry the columns that resolution requires. The default keeps whatever resolution the object already records, and falls back to ``"well"`` for an object that records none, so re-stamping a subset does not quietly demote it.
+        resolution: What one row is: ``"cell"``, ``"well"`` or ``"perturbation"``.
+            ``obs`` has to carry the columns that resolution requires.
+            The default keeps whatever resolution the object already records, and falls back to ``"well"`` for an object that records none, so re-stamping a subset does not quietly demote it.
         copy: Return a stamped copy instead of stamping in place.
 
     Returns:
@@ -498,9 +491,13 @@ def stamp(adata: ad.AnnData, resolution: str | None = None, copy: bool = False) 
         ValueError: ``resolution`` is not one of the three, or ``obs`` lacks a column that resolution requires.
 
     Notes:
-        Only the ``obs`` columns the resolution requires are checked, because that is what the rest of the package dispatches on. :func:`validate` gives the full report, including what it warns about rather than blocks. ``X`` is one of the things it rather than this checks: the package stores features as ``float32``, and a matrix that came out of scikit-learn or :func:`numpy.load` is ``float64``, so an embedding usually wants ``adata.X = adata.X.astype("float32")`` before it is written.
+        Only the ``obs`` columns the resolution requires are checked, because that is what the rest of the package dispatches on.
+        :func:`validate` gives the full report, including what it warns about rather than blocks.
+        ``X`` is one of the things it rather than this checks: the package stores features as ``float32``, and a matrix that came out of scikit-learn or :func:`numpy.load` is ``float64``, so an embedding usually wants ``adata.X = adata.X.astype("float32")`` before it is written.
 
-        Any of the feature-annotation columns the schema requires that ``var`` does not already have are added empty, and columns already present are left as they are. They are not filled by parsing the feature names: the parser finds structure in names that have none — it reads ``openphenom_nahualX_17`` as the ``nahualX`` group of an ``openphenom`` object — and an embedding would then carry feature families named after the model's own tensors. An object read by :func:`read_profiles` already has the parsed annotation and keeps it.
+        Any of the feature-annotation columns the schema requires that ``var`` does not already have are added empty, and columns already present are left as they are.
+        They are not filled by parsing the feature names: the parser finds structure in names that have none (it reads ``openphenom_nahualX_17`` as the ``nahualX`` group of an ``openphenom`` object), and an embedding would then carry feature families named after the model's own tensors.
+        An object read by :func:`read_profiles` already has the parsed annotation and keeps it.
 
     Examples:
         Bringing in a matrix of learned embeddings, one row per well:

@@ -1,5 +1,3 @@
-"""Dose response per compound: a monotonic trend test, a four-parameter logistic fit, and the response per feature."""
-
 from __future__ import annotations
 
 import warnings
@@ -57,8 +55,7 @@ def four_parameter_logistic(
     """
     from scipy.special import expit
 
-    # The same sigmoid written through expit, which is overflow-safe: an optimizer exploring steep slopes far from
-    # the data drives 10**((log_ec50 - log_dose) * hill) past the float range, and the naive form warns there.
+    # expit, not the naive 10**(...) form, which overflows when the optimizer explores steep slopes.
     return bottom + (top - bottom) * expit(log(10.0) * (log_dose - log_ec50) * hill)
 
 
@@ -68,8 +65,7 @@ def _fit_curve(
     """Fit the logistic and return ``(ec50, hill_slope, bottom, top, r_squared, fit_ok)``.
 
     A failed fit returns NaNs and ``fit_ok=False`` instead of raising.
-    ``fit_ok`` also requires ``r_squared >= min_r_squared`` and an EC50 inside the tested doses, because four parameters converge on almost any five or six points.
-    On pure noise at six doses the optimizer succeeds 59 times in 60; with these checks 12 in 200 fits pass, and real curves still do.
+    ``fit_ok`` also requires ``r_squared >= min_r_squared`` and an EC50 inside the tested doses.
     """
     from scipy.optimize import OptimizeWarning, curve_fit
 
@@ -99,9 +95,6 @@ _ERROR_DF = 4
 #: Multiple of the baseline MAD that sets the cutoff when one is not given, as in the ToxCast pipeline's ``3 * bmad``.
 _CUTOFF_MADS = 3.0
 
-#: Normalizing constant of the Student-t log-density at ``_ERROR_DF``. It does not depend on the data, and
-#: ``scipy.stats.t.logpdf`` spends ten times the arithmetic re-deriving it on every one of the thousand objective
-#: evaluations a single curve costs.
 _T_LOG_CONSTANT = lgamma((_ERROR_DF + 1) / 2) - lgamma(_ERROR_DF / 2) - 0.5 * log(_ERROR_DF * pi)
 
 
@@ -133,11 +126,9 @@ class _Fit:
         if self.name == "logistic":
             return four_parameter_logistic(log_dose, *self.parameters[:-1])
         if self.name == "constant":
-            # No response at any dose, once the baseline is subtracted. Its parameter vector is the error scale
-            # alone, which is what makes it the null the curves are scored against.
+            # The null: no response once the baseline is subtracted, with the error scale as its only parameter.
             return np.zeros_like(log_dose)
-        # tcplfit2's poly1 runs through the origin of baseline-corrected response, so its top is a rescaling of
-        # the one slope. Anchoring at the lowest tested dose is the same shape in log space.
+        # tcplfit2's poly1 runs through the origin; anchoring at the lowest tested dose is that shape in log space.
         return self.parameters[0] * (log_dose - log_dose.min())
 
     def _top_axis(self, log_dose: np.ndarray) -> tuple[int, float]:
@@ -181,8 +172,7 @@ def _fit_maximum_likelihood(name: str, log_dose: np.ndarray, response: np.ndarra
 def _profile_at_top(fit: _Fit, log_dose: np.ndarray, response: np.ndarray, target: float) -> float | None:
     """Largest log-likelihood the model reaches with its top held at ``target``, tcplfit2's ``toplikelihood``.
 
-    Every other parameter, the error scale included, is fitted again around the pinned top. Leaving them where the
-    unconstrained fit put them would understate this likelihood, and so overstate the confidence read from the drop.
+    Every other parameter, the error scale included, is fitted again around the pinned top.
     """
     from scipy.optimize import minimize
 
@@ -202,12 +192,7 @@ def _profile_at_top(fit: _Fit, log_dose: np.ndarray, response: np.ndarray, targe
 
 
 def _winning_model(log_dose: np.ndarray, response: np.ndarray) -> _Fit | None:
-    """Fit both models and keep the one with the lower AIC, as tcplfit2 keeps the best of its ten.
-
-    Each model starts from its own heuristic rather than from the least-squares fit in the table. Seeding the
-    logistic from that fit tied the two together: where it failed to converge the start was NaN, the logistic was
-    skipped, and the model set silently collapsed to the line because a different estimator had given up.
-    """
+    """Fit both models and keep the one with the lower AIC, as tcplfit2 keeps the best of its ten."""
     slope = float(np.polyfit(log_dose, response, 1)[0]) if len(np.unique(log_dose)) > 1 else 0.0
     starts = {
         "logistic": np.array([float(response.min()), float(response.max()), float(np.median(log_dose)), 1.0]),
@@ -224,12 +209,10 @@ def _winning_model(log_dose: np.ndarray, response: np.ndarray) -> _Fit | None:
 def _hitcall(fit: _Fit, log_dose: np.ndarray, response: np.ndarray, cutoff: float) -> float:
     """Continuous hit call: the three weights of Feshuk et al. 2023, multiplied.
 
-    The weights are the confidence that the curve beats a constant fit, that at least one concentration's median
-    response passes the cutoff, and that the fitted asymptote passes it. Ported from tcplfit2's ``hitcontinner``
-    and ``toplikelihood``.
+    The weights are the confidence that the curve beats a constant fit, that at least one concentration's median response passes the cutoff, and that the fitted asymptote passes it.
+    Ported from tcplfit2's ``hitcontinner`` and ``toplikelihood``.
 
-    mantispy picks between a logistic and a line in log dose; tcplfit2 picks among ten models, so the Akaike
-    weight behind the first term is taken over a smaller set and a number from here will not match one from there.
+    The Akaike weight behind the first term is taken over two models rather than tcplfit2's ten, so a number from here will not match one from there.
     """
     from scipy.special import expit
     from scipy.stats import chi2, t
@@ -237,22 +220,17 @@ def _hitcall(fit: _Fit, log_dose: np.ndarray, response: np.ndarray, cutoff: floa
     top = fit.top(log_dose)
     log_scale = fit.log_scale
 
-    # P1: the Akaike weight of the winning curve against the constant model, which fits the error scale only.
     constant = _fit_maximum_likelihood("constant", log_dose, response, np.empty(0))
     if constant is None:
         return float("nan")
     p1 = 1.0 - float(expit((fit.aic - constant.aic) / 2.0))
 
-    # P2: one minus the odds of every concentration's median response falling short of the cutoff.
-    # Each factor is the chance that a response this far out still came from a truth below the cutoff, which for a
-    # response above it is the upper tail: tcplfit2 writes this as pt(..., lower.tail = top < 0).
+    # The upper tail for a rising curve, as tcplfit2's pt(..., lower.tail = top < 0).
     medians = pd.Series(response).groupby(log_dose).median().to_numpy()
     standardized = (medians - np.sign(top) * cutoff) / np.exp(log_scale)
     below = t.sf(standardized, _ERROR_DF) if top >= 0 else t.cdf(standardized, _ERROR_DF)
     p2 = 1.0 - float(np.prod(below))
 
-    # P3: a likelihood profile on the asymptote. The top is pinned to the cutoff and the rest of the curve is
-    # fitted again around it, and the drop in log-likelihood is read as a chi-square on one degree of freedom.
     profile = _profile_at_top(fit, log_dose, response, float(np.sign(top) * cutoff))
     if profile is None:
         return float("nan")
@@ -268,11 +246,10 @@ def _baseline_and_cutoff(
     """Level the controls sit at, and the response a curve has to clear to be called active.
 
     Both come from the control rows, as the ToxCast pipeline's ``bmed`` and ``3 * bmad`` do.
-    Without controls there is no scale to call activity on, so the hit call is left out rather than guessed at.
+    Without controls there is no scale to call activity on, so the hit call is left out.
     """
     control = np.empty(0)
-    # reference_mask raises when negcon is asked for and the column is absent. Here that is not fatal: the curve
-    # and the trend need no controls, so only the hit call is left out.
+    # reference_mask raises without Metadata_Control, which is not fatal here: only the hit call needs controls.
     if reference is not None and not (reference == "negcon" and "Metadata_Control" not in adata.obs):
         values = as_frame(adata.obs)[response].to_numpy(dtype=float)
         control = values[held_out_reference(adata, reference_mask(adata, reference), response)]
@@ -319,26 +296,28 @@ def dose_response(
     Read ``spearman`` and its q-value first.
 
     ``hitcall`` grades the curve on the scale the controls set, rather than only asking whether the optimizer converged.
-    It is the product of the three weights of the ToxCast pipeline (Feshuk et al. 2023): the confidence that the
-    curve beats a constant fit, that at least one concentration's median response clears the cutoff, and that the
-    fitted asymptote clears it. The EPA reads ``hitcall >= 0.9`` as active. It needs controls to set a baseline and
-    a cutoff, or an explicit ``cutoff``, and is ``NaN`` without them.
+    It is the product of the three weights of the ToxCast pipeline (Feshuk et al. 2023): the confidence that the curve beats a constant fit, that at least one concentration's median response clears the cutoff, and that the fitted asymptote clears it.
+    The EPA reads ``hitcall >= 0.9`` as active.
+    It needs controls to set a baseline and a cutoff, or an explicit ``cutoff``, and is ``NaN`` without them.
 
-    The arithmetic is ported from ``tcplfit2``'s ``hitcontinner`` and ``toplikelihood``, including its Student-t
-    error model on four degrees of freedom. The model set is where the numbers will differ: ``tcplfit2`` picks a
-    winner among ten models, mantispy between two, the logistic and a line in log dose anchored at the lowest dose.
-    The line is there for the same reason tcplfit2 carries ``poly1``: most real curves are still climbing at the top
-    concentration, and a logistic with no plateau to find reports no EC50 at all. ``hitcall_model`` names the winner.
+    The arithmetic is ported from ``tcplfit2``'s ``hitcontinner`` and ``toplikelihood``, including its Student-t error model on four degrees of freedom.
+    The model set is where the numbers will differ: ``tcplfit2`` picks a winner among ten models, mantispy between two, the logistic and a line in log dose anchored at the lowest dose.
+    The line is there for the same reason tcplfit2 carries ``poly1``: most real curves are still climbing at the top concentration, and a logistic with no plateau to find reports no EC50 at all.
+    ``hitcall_model`` names the winner.
 
     Args:
         adata: Object carrying a compound, a dose and a per-row response.
         compound_key: ``obs`` column holding the compound identity.
-        dose_key: ``obs`` column holding the concentration. Doses must be positive; rows with a zero dose, such as vehicle, are dropped, since the fit is in log dose.
-        response: ``obs`` column holding the per-row response, normally ``hits_row_distance`` from :func:`~mantispy.tl.hit_calling`. Its group-level sibling ``hits_distance`` is one number repeated over each group's rows, so the controls show no spread and no cutoff can be read from them.
+        dose_key: ``obs`` column holding the concentration.
+            Doses must be positive; rows with a zero dose, such as vehicle, are dropped, since the fit is in log dose.
+        response: ``obs`` column holding the per-row response, normally ``hits_row_distance`` from :func:`~mantispy.tl.hit_calling`.
+            Its group-level sibling ``hits_distance`` is one number repeated over each group's rows, so the controls show no spread and no cutoff can be read from them.
         min_doses: Distinct doses below which the curve is skipped and only the trend is reported.
         min_r_squared: Coefficient of determination a fit needs before it is marked ok.
-        reference: Rows that set the baseline the response is read against and the spread the cutoff comes from. ``None`` leaves the hit call out unless ``cutoff`` is given.
-        cutoff: Response a curve has to clear to count as active. The default takes three times the controls' MAD, the ToxCast pipeline's ``3 * bmad``, over the controls :func:`~mantispy.tl.hit_calling` held out of its own fit rather than over all of them.
+        reference: Rows that set the baseline the response is read against and the spread the cutoff comes from.
+            ``None`` leaves the hit call out unless ``cutoff`` is given.
+        cutoff: Response a curve has to clear to count as active.
+            The default takes three times the controls' MAD, the ToxCast pipeline's ``3 * bmad``, over the controls :func:`~mantispy.tl.hit_calling` held out of its own fit rather than over all of them.
         key_added: Name for the output table.
         copy: Return a modified copy instead of mutating in place.
 
@@ -353,13 +332,10 @@ def dose_response(
     Notes:
         Compounds with fewer than two usable doses are left out of the table.
 
-        ``dose_key`` is read as given. A plate map that records one concentration to several precisions splits
-        a ladder, which is a property of how the dataset was written rather than of the fit, so the loader
-        resolves it: :func:`~mantispy.ds.oasis_pilot` writes the dose each well was meant to get to
-        ``Metadata_Concentration`` and keeps the recorded one under ``Metadata_ConcentrationRecorded``.
+        ``dose_key`` is read as given.
+        A plate map that records one concentration to several precisions splits a ladder, which is a property of how the dataset was written rather than of the fit, so the loader resolves it: :func:`~mantispy.ds.oasis_pilot` writes the dose each well was meant to get to ``Metadata_Concentration`` and keeps the recorded one under ``Metadata_ConcentrationRecorded``.
 
-        :func:`dose_features` asks the same question of every feature rather than of one response column, and
-        :func:`dose_direction` asks whether the phenotype stays the same one as the concentration rises.
+        :func:`dose_features` asks the same question of every feature rather than of one response column, and :func:`dose_direction` asks whether the phenotype stays the same one as the concentration rises.
 
         An EC50 outside the tested doses is an extrapolation, usually from a curve that has not plateaued within the tested range, and its row has ``fit_ok=False``.
         Compare ``ec50`` against the dose range before quoting it.
@@ -398,7 +374,6 @@ def dose_response(
             log_dose = np.log10(doses)
             ec50, hill, bottom, top, r_squared, fit_ok = _fit_curve(log_dose, values, min_r_squared)
             if np.isfinite(activity_cutoff):
-                # The hit call reads the response against the baseline the controls sit at, as tcpl's bmed does.
                 centred = values - baseline
                 if (fit := _winning_model(log_dose, centred)) is not None:
                     hitcall, hitcall_model = _hitcall(fit, log_dose, centred, activity_cutoff), fit.name
@@ -427,7 +402,6 @@ def dose_response(
     return None
 
 
-#: Column order of the per-feature table.
 _FEATURE_COLUMNS = (
     "compound",
     "feature",
@@ -439,7 +413,6 @@ _FEATURE_COLUMNS = (
     "pvalue",
 )
 
-#: Column order of the per-dose table.
 _DIRECTION_COLUMNS = (
     "compound",
     "dose",
@@ -453,8 +426,7 @@ _DIRECTION_COLUMNS = (
     "phase",
 )
 
-#: What a concentration is doing, in the order they normally appear along a ladder. Not exported, as
-#: tl._heterogeneity.PHASES is not: the categories travel with obs[key_added + "_phase"].
+#: In the order the phases normally appear along a dose ladder.
 DOSE_PHASES = ("silent", "responding", "saturated", "cytotoxic")
 
 
@@ -485,7 +457,10 @@ class _Scale:
 
 
 def _control_scale(adata: AnnData, reference: str | None) -> _Scale:
-    """Read the scale off the control rows. A feature whose controls show no spread is left out."""
+    """Read the scale off the control rows.
+
+    A feature whose controls show no spread is left out.
+    """
     rows = reference_mask(adata, reference)
     if int(rows.sum()) < 2:
         raise ValueError(
@@ -495,7 +470,6 @@ def _control_scale(adata: AnnData, reference: str | None) -> _Scale:
         )
     control = get_matrix(adata, rows=np.flatnonzero(rows)).astype(np.float64)
     baseline = np.nanmedian(control, axis=0)
-    # In place: two more copies of the control block would be the largest allocation here.
     control -= baseline
     np.abs(control, out=control)
     spread = MAD_TO_SIGMA * np.nanmedian(control, axis=0)
@@ -510,11 +484,7 @@ def _control_scale(adata: AnnData, reference: str | None) -> _Scale:
 
 
 def _spearman_against(values: np.ndarray, block: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Spearman of ``values`` against every column of ``block``, with the two-sided p-value scipy reports.
-
-    ``scipy.stats.spearmanr`` builds the whole square of correlations between the features to return one row of
-    it, which on a full feature set is far more work and memory than this needs.
-    """
+    """Spearman of ``values`` against every column of ``block``, with the two-sided p-value scipy reports."""
     from scipy.stats import t
 
     from mantispy._core._corr import _rank_columns
@@ -530,15 +500,9 @@ def _spearman_against(values: np.ndarray, block: np.ndarray) -> tuple[np.ndarray
 
 
 def _nanmedian(block: np.ndarray) -> np.ndarray:
-    """Median down the rows, skipping missing values, for the short and wide blocks this module works on.
+    """Median down the rows, skipping missing values.
 
-    ``np.nanmedian`` routes anything under 600 rows through a masked array and ``np.ma.median``, which is pure
-    Python; a dose group is four to eight rows, so every median here would take that path, where the wrapper
-    costs far more than the median. Sorting puts the missing values last, so the median is the middle of however
-    many were measured.
-
-    ``_core._numba``'s grouped kernels are not the cheaper answer at these shapes either: one group gives
-    ``prange`` nothing to parallelize, and their dispatch costs more than the median they would replace.
+    Sorting puts the missing values last, so the median is the middle of however many were measured.
     """
     ordered = np.sort(block, axis=0)
     measured = block.shape[0] - np.isnan(block).sum(axis=0)
@@ -558,9 +522,8 @@ def _dose_medians(block: np.ndarray, doses: np.ndarray) -> tuple[np.ndarray, np.
 def _benchmark_dose(doses: np.ndarray, z: np.ndarray, cutoff: float) -> np.ndarray:
     """Lowest dose at which each feature reaches ``cutoff``, interpolated between the doses either side of it.
 
-    A feature that never reaches the cutoff has no benchmark dose and comes back NaN. One already past it at the
-    lowest dose tested gets that dose, which is a bound rather than an estimate: clamping ``previous`` to the
-    first dose leaves it no span to interpolate across, so the crossing falls on the dose itself.
+    A feature that never reaches the cutoff has no benchmark dose and comes back NaN.
+    One already past it at the lowest dose tested gets that dose.
     """
     over = np.abs(z) >= cutoff
     first = np.argmax(over, axis=0)
@@ -608,46 +571,45 @@ def dose_features(
 ) -> AnnData | None:
     """Which features respond to a compound's concentration, and at what concentration each one starts.
 
-    :func:`dose_response` grades one number per well against the dose. This grades every feature, which answers a
-    different question: not whether the compound did something, but what it did and in what order.
+    :func:`dose_response` grades one number per well against the dose.
+    This grades every feature, which answers a different question: not whether the compound did something, but what it did and in what order.
 
-    Each feature gets a benchmark dose, the lowest concentration at which its median response reaches
-    ``cutoff_mads`` times the spread the controls show on it. This is the ToxCast pipeline's ``3 * bmad`` read as a
-    dose rather than as a yes or no, and it is defined for a feature that is still climbing at the top
-    concentration, which an EC50 is not. Sorting the table by ``bmd`` gives the order the phenotype arrives in.
+    Each feature gets a benchmark dose, the lowest concentration at which its median response reaches ``cutoff_mads`` times the spread the controls show on it.
+    This is the ToxCast pipeline's ``3 * bmad`` read as a dose rather than as a yes or no, and it is defined for a feature that is still climbing at the top concentration, which an EC50 is not.
+    Sorting the table by ``bmd`` gives the order the phenotype arrives in.
 
     Args:
         adata: Object carrying a compound and a dose per row, at well resolution.
         compound_key: ``obs`` column holding the compound identity.
-        dose_key: ``obs`` column holding the concentration. Rows with a zero or missing dose are left out, since the doses are read in log space.
-        reference: Rows that set each feature's baseline and spread. ``"negcon"`` reads ``Metadata_Control``.
-        cutoff_mads: Multiples of the controls' MAD a feature has to reach to get a benchmark dose. The ToxCast pipeline uses three.
+        dose_key: ``obs`` column holding the concentration.
+            Rows with a zero or missing dose are left out, since the doses are read in log space.
+        reference: Rows that set each feature's baseline and spread.
+            ``"negcon"`` reads ``Metadata_Control``.
+        cutoff_mads: Multiples of the controls' MAD a feature has to reach to get a benchmark dose.
+            The ToxCast pipeline uses three.
         min_doses: Distinct doses below which a compound is left out of the table.
         key_added: Name for the output table.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
         ``None``, or the modified copy.
-        Writes ``uns["mantispy"][key_added]``, one row per compound and feature, with ``compound``, ``feature``,
-        ``n_doses``, ``bmd``, ``max_z``, ``direction``, ``spearman``, ``pvalue`` and ``qvalue``.
+        Writes ``uns["mantispy"][key_added]``, one row per compound and feature, with ``compound``, ``feature``, ``n_doses``, ``bmd``, ``max_z``, ``direction``, ``spearman``, ``pvalue`` and ``qvalue``.
         ``bmd`` is NaN for a feature that never reaches the cutoff, which is the table's activity call.
-        ``max_z`` is the largest response any concentration reached, in MADs of the controls, and ``direction`` is
-        its sign. ``qvalue`` corrects the Spearman p-values within each compound, which is the experiment.
+        ``max_z`` is the largest response any concentration reached, in MADs of the controls, and ``direction`` is its sign.
+        ``qvalue`` corrects the Spearman p-values within each compound, which is the experiment.
 
     Raises:
         KeyError: ``obs`` has no ``compound_key`` or no ``dose_key``.
         ValueError: Fewer than two reference rows, so there is no scale to read a response against.
 
     Notes:
-        A benchmark dose at the lowest concentration tested is a bound, not an estimate: the feature was already
-        past the cutoff before the series began.
+        A benchmark dose at the lowest concentration tested is a bound, not an estimate: the feature was already past the cutoff before the series began.
 
-        The Spearman correlation runs over the compound's wells, not over the per-dose medians, so it uses the
-        replicates. A feature with a missing value in any of those wells has no Spearman and no q-value; its
-        benchmark dose is still read, because the medians skip missing wells.
+        The Spearman correlation runs over the compound's wells, not over the per-dose medians, so it uses the replicates.
+        A feature with a missing value in any of those wells has no Spearman and no q-value; its benchmark dose is still read, because the medians skip missing wells.
 
-        Features whose controls show no spread are left out entirely. Run :func:`mantispy.pp.normalize` and drop
-        ``var["degenerate_scale"]`` first and there will be none.
+        Features whose controls show no spread are left out entirely.
+        Run :func:`mantispy.pp.normalize` and drop ``var["degenerate_scale"]`` first and there will be none.
     """
     obs = as_frame(adata.obs)
     _require_columns(obs, compound_key, dose_key)
@@ -663,7 +625,6 @@ def dose_features(
         block = scale.z(adata, rows)
         order, z = _dose_medians(block, doses)
         rho, pvalue = _spearman_against(np.log10(doses), block)
-        # The concentration each feature reached furthest at, and which way it went.
         peak = z[np.argmax(np.abs(np.nan_to_num(z, nan=0.0)), axis=0), np.arange(z.shape[1])]
         frame = pd.DataFrame(
             {
@@ -709,21 +670,18 @@ def _amplitude(profile: np.ndarray) -> float:
 def _split_half_cosine(block: np.ndarray, labels: np.ndarray) -> float:
     """Cosine between the two halves' median profiles, split by alternate levels of ``labels``.
 
-    Halving by plate asks whether the direction survives a different plate, which is the harder and more useful
-    question. A column with one level falls back to splitting by position, and one well at a concentration has no
-    halves to compare, so it comes back NaN.
+    A column with one level falls back to splitting by position, and one well at a concentration has no halves to compare, so it comes back NaN.
     """
     if labels.size < 2:
         return np.nan
     left = np.isin(labels, pd.unique(labels)[::2])
-    if left.all():  # one level of the split: halve by position instead
+    if left.all():
         left = np.arange(labels.size) % 2 == 0
     if not left.any():  # a level that matches nothing against itself, such as NaN
         return np.nan
     return _cosine(_nanmedian(block[left]), _nanmedian(block[~left]))
 
 
-#: Control groups drawn per layout to estimate the amplitude floor.
 _NULL_DRAWS = 25
 
 
@@ -731,13 +689,7 @@ _NULL_DRAWS = 25
 class _Floor:
     """The scale the amplitude floor is read in, and the control rows a draw may come from.
 
-    The drawn wells have to be held out of the scale they are then measured in, as a treated well is. Scored
-    against a baseline they helped define, control groups sit closer to it than any treated group can, so the
-    floor reads low, and the fewer the controls the further out it is.
-
-    One split serves the whole run. Refitting the scale around every draw gives the same statistic, but it
-    repeats for each distinct plate layout, and the number of those is combinatorial in the plates rather than
-    bounded by the compounds.
+    The drawn wells have to be held out of the scale they are then measured in, as a treated well is.
     """
 
     baseline: np.ndarray
@@ -749,9 +701,7 @@ class _Floor:
 def _floor_scale(control: np.ndarray, levels: np.ndarray) -> _Floor | None:
     """Fit the floor's scale on half the controls, leaving the other half to draw from.
 
-    Halved within each level, not across all the controls at once. A blind half can take most of its rows from
-    one plate, and the scale it then fits is that plate's, which is the bias the layout matching exists to
-    avoid.
+    Halved within each level, not across all the controls at once.
     """
     generator = np.random.default_rng(0)
     halves = []
@@ -771,9 +721,7 @@ def _floor_scale(control: np.ndarray, levels: np.ndarray) -> _Floor | None:
 def _null_amplitude(control: np.ndarray, floor: _Floor | None, wanted: dict[object, int]) -> float:
     """Amplitude reached by control wells laid out the way ``wanted`` counts them, level by level.
 
-    The layout has to match, because per-plate normalization puts each plate's control median at zero: a group
-    drawn from one plate starts out at the centre while a group spread over eight of them does not, and a group
-    as large as a plate's control set would read a floor of zero.
+    The layout has to match, because per-plate normalization puts each plate's control median at zero.
     """
     if floor is None:
         return np.nan
@@ -817,20 +765,12 @@ def _viability(
 def _label_phases(ladder: list[dict], min_viability: float, reproducible: float | None) -> list[str]:
     """Label one compound's whole ladder at once.
 
-    The window is a run, not a scatter. ``split_half_cosine`` over a handful of replicate wells is itself noisy,
-    and thresholding each concentration on its own lets one lucky concentration open a window several steps below
-    where the compound actually engages: on the OASIS pilot that put amperozide's onset at 3.7 uM instead of 33.
-    A response that has started does not stop, so the window is the run of concentrations reaching the highest one
-    that is not cytotoxic, and anything below the run is silent whatever its own cosine says.
-
-    Cell loss is read first and separately. A concentration that has lost its cells reports the morphology of
-    dying cells whatever else is true of it, which is why the US EPA's phenotypic pipeline drops those
-    concentrations before fitting anything.
+    The window is the run of concentrations reaching the highest one that is not cytotoxic, and anything below the run is silent whatever its own cosine says.
+    Cell loss is read first and separately.
     """
 
     def active(row: dict) -> bool:
-        # A comparison against NaN is False, so a concentration with no amplitude or no reproducible direction
-        # fails these without a guard of its own.
+        # A comparison against NaN is False, so a missing amplitude or cosine fails without a guard of its own.
         return bool(row["amplitude"] > row["amplitude_null"]) and (
             reproducible is None or bool(row["split_half_cosine"] >= reproducible)
         )
@@ -864,46 +804,46 @@ def dose_direction(
     """Whether a compound's phenotype only grows with concentration, or turns into a different one.
 
     A dose series is usually summarised by one number per concentration, how far the wells sit from the controls.
-    That number cannot tell a phenotype that is getting louder from a phenotype that is being replaced. This reads
-    the direction as well as the distance: each concentration gets an ``amplitude``, its ``cosine_to_top`` against
-    the highest concentration's profile, and a ``split_half_cosine`` that says whether its direction reproduces
-    across replicates at all.
+    That number cannot tell a phenotype that is getting louder from a phenotype that is being replaced.
+    This reads the direction as well as the distance: each concentration gets an ``amplitude``, its ``cosine_to_top`` against the highest concentration's profile, and a ``split_half_cosine`` that says whether its direction reproduces across replicates at all.
 
-    The three read together. A concentration whose ``split_half_cosine`` is near zero has no direction to speak of,
-    only noise, however large its amplitude. One that reproduces but sits at a low ``cosine_to_top`` is a real
-    phenotype, and a different one from the top concentration's.
+    The three read together.
+    A concentration whose ``split_half_cosine`` is near zero has no direction to speak of, only noise, however large its amplitude.
+    One that reproduces but sits at a low ``cosine_to_top`` is a real phenotype, and a different one from the top concentration's.
 
-    ``phase`` turns that reading into a label, so the stretch of the ladder worth analysing can be subset out
-    rather than described. A concentration is ``silent`` while nothing reproducible is happening, ``responding``
-    while the profile is still moving from the concentration below it, ``saturated`` once it has stopped, and
-    ``cytotoxic`` once the cells are gone and the profile is the morphology of dying cells. The label is
-    broadcast to ``obs``, so ``adata[adata.obs["dose_direction_phase"] == "responding"]`` is the window, and
-    :func:`dose_features`, :func:`~mantispy.tl.differential_features` and the rest work on it unchanged.
+    ``phase`` turns that reading into a label, so the stretch of the ladder worth analysing can be subset out rather than described.
+    A concentration is ``silent`` while nothing reproducible is happening, ``responding`` while the profile is still moving from the concentration below it, ``saturated`` once it has stopped, and ``cytotoxic`` once the cells are gone and the profile is the morphology of dying cells.
+    The label is broadcast to ``obs``, so ``adata[adata.obs["dose_direction_phase"] == "responding"]`` is the window, and :func:`dose_features`, :func:`~mantispy.tl.differential_features` and the rest work on it unchanged.
 
     Args:
         adata: Object carrying a compound and a dose per row, at well resolution.
         compound_key: ``obs`` column holding the compound identity.
-        dose_key: ``obs`` column holding the concentration. Rows with a zero or missing dose are left out.
-        reference: Rows that set each feature's baseline and spread. ``"negcon"`` reads ``Metadata_Control``.
-        split_by: ``obs`` column whose levels split the replicates in two for ``split_half_cosine``, normally the plate. It also lays out the control groups ``amplitude_null`` is drawn from. ``None``, or a column with one level, splits the wells by position instead.
-        min_doses: Distinct doses below which a compound is left out of the table. One concentration says nothing about how a response changes with concentration.
-        count_key: ``obs`` column holding the cell count, which sets ``viability``. Without it no concentration is marked cytotoxic.
-        site_key: ``obs`` column holding the number of fields that count covers, so a well missing a field does not read as cell loss. ``None`` compares the counts as they are.
-        min_viability: Fraction of its own plate's control cell count below which a concentration is ``cytotoxic``. The US EPA's phenotypic pipeline drops a concentration that has lost more than half its cells before fitting anything.
-        reproducible: ``split_half_cosine`` a concentration needs before it can be anything but ``silent``. ``None`` drops the requirement, which is what a screen with one well per concentration has to do, at the cost of calling noise a phenotype.
+        dose_key: ``obs`` column holding the concentration.
+            Rows with a zero or missing dose are left out.
+        reference: Rows that set each feature's baseline and spread.
+            ``"negcon"`` reads ``Metadata_Control``.
+        split_by: ``obs`` column whose levels split the replicates in two for ``split_half_cosine``, normally the plate.
+            It also lays out the control groups ``amplitude_null`` is drawn from.
+            ``None``, or a column with one level, splits the wells by position instead.
+        min_doses: Distinct doses below which a compound is left out of the table.
+            One concentration says nothing about how a response changes with concentration.
+        count_key: ``obs`` column holding the cell count, which sets ``viability``.
+            Without it no concentration is marked cytotoxic.
+        site_key: ``obs`` column holding the number of fields that count covers, so a well missing a field does not read as cell loss.
+            ``None`` compares the counts as they are.
+        min_viability: Fraction of its own plate's control cell count below which a concentration is ``cytotoxic``.
+            The US EPA's phenotypic pipeline drops a concentration that has lost more than half its cells before fitting anything.
+        reproducible: ``split_half_cosine`` a concentration needs before it can be anything but ``silent``.
+            ``None`` drops the requirement, which is what a screen with one well per concentration has to do, at the cost of calling noise a phenotype.
         key_added: Name for the output table.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
         ``None``, or the modified copy.
-        Writes ``uns["mantispy"][key_added]``, one row per compound and concentration, with ``compound``, ``dose``,
-        ``n_wells``, ``amplitude``, ``amplitude_null``, ``step_amplitude``, ``split_half_cosine``,
-        ``cosine_to_top``, ``viability`` and ``phase``. The phase is broadcast to ``obs[key_added + "_phase"]``
-        so the window can be subset like any other annotation.
-        ``amplitude`` is the root-mean-square response over the features, in MADs of the controls, and
-        ``amplitude_null`` is what control wells spread over the same plates in the same numbers reach, so the two
-        are read against each other. ``step_amplitude`` is the same measure applied to the change from the
-        concentration below, which is what tells a response that is still moving from one that has arrived.
+        Writes ``uns["mantispy"][key_added]``, one row per compound and concentration, with ``compound``, ``dose``, ``n_wells``, ``amplitude``, ``amplitude_null``, ``step_amplitude``, ``split_half_cosine``, ``cosine_to_top``, ``viability`` and ``phase``.
+        The phase is broadcast to ``obs[key_added + "_phase"]`` so the window can be subset like any other annotation.
+        ``amplitude`` is the root-mean-square response over the features, in MADs of the controls, and ``amplitude_null`` is what control wells spread over the same plates in the same numbers reach, so the two are read against each other.
+        ``step_amplitude`` is the same measure applied to the change from the concentration below, which is what tells a response that is still moving from one that has arrived.
         ``phase`` is one of ``DOSE_PHASES``.
 
     Raises:
@@ -911,16 +851,13 @@ def dose_direction(
         ValueError: Fewer than two reference rows, so there is no scale to read a direction in.
 
     Notes:
-        The cosines are taken over the features scaled by the controls' spread, so a feature the controls happen to
-        measure loosely does not set the direction on its own. Features whose controls show no spread are left out.
+        The cosines are taken over the features scaled by the controls' spread, so a feature the controls happen to measure loosely does not set the direction on its own.
+        Features whose controls show no spread are left out.
 
-        ``amplitude_null`` is the median over twenty-five draws, and is NaN when the controls cannot fill the
-        layout, for instance when a plate carries treated wells but no vehicle.
+        ``amplitude_null`` is the median over twenty-five draws, and is NaN when the controls cannot fill the layout, for instance when a plate carries treated wells but no vehicle.
 
-        ``split_half_cosine`` needs at least two wells at a concentration, and reproduces the plate structure when
-        ``split_by`` names it: halving by plate answers whether the direction survives a different plate, which is
-        the harder and more useful question. With one well per concentration it is NaN, and the table then says
-        nothing about whether any single concentration's direction is real.
+        ``split_half_cosine`` needs at least two wells at a concentration, and reproduces the plate structure when ``split_by`` names it: halving by plate answers whether the direction survives a different plate, which is the harder and more useful question.
+        With one well per concentration it is NaN, and the table then says nothing about whether any single concentration's direction is real.
     """
     obs = as_frame(adata.obs)
     _require_columns(obs, compound_key, dose_key, *([split_by] if split_by is not None else []))
@@ -945,15 +882,12 @@ def dose_direction(
         ladder = []
         for index, dose in enumerate(order):
             at = doses == dose
-            # The floor is drawn with this concentration's own spread over plates, not from any group of that
-            # size. np.unique sorts, so the layout is its own memo key; setdefault would evaluate the draw
-            # whether or not the layout had been seen before.
+            # np.unique sorts, so the layout is its own memo key.
             layout = dict(zip(*np.unique(levels[at], return_counts=True), strict=True))
             key = tuple(layout.items())
             if key not in nulls:
                 nulls[key] = _null_amplitude(control_values, floor, layout)
-            # The step from the concentration below is what "still changing" means. The first one steps from the
-            # controls, so its step is how far it has already come.
+            # The first concentration steps from the controls, so its step is how far it has already come.
             amplitude = _amplitude(medians[index])
             here = well_viability[at]
             ladder.append(
@@ -973,13 +907,11 @@ def dose_direction(
         labels = _label_phases(ladder, min_viability, reproducible)
         for row, phase in zip(ladder, labels, strict=True):
             row["phase"] = phase
-        # Every well of a concentration carries that concentration's phase; `order` is sorted, so this is its rung.
         phases[rows] = np.asarray(labels, dtype=object)[np.searchsorted(order, doses)]
         records.extend(ladder)
 
     table = pd.DataFrame(records, columns=list(_DIRECTION_COLUMNS))
     adata.uns.setdefault("mantispy", {})[key_added] = table
-    # A row that no concentration covers, a control or an unannotated well, is in no phase at all.
     phases[phases == ""] = None
     adata.obs[f"{key_added}_phase"] = pd.Categorical(phases, categories=list(DOSE_PHASES), ordered=False)
     get_logger().info(
@@ -991,7 +923,7 @@ def dose_direction(
     return None
 
 
-#: Decimals in a trajectory column's position suffix. Fixed, so one position keeps one name.
+#: Fixed rather than chosen per grid, so one position keeps one name across runs.
 POSITION_DECIMALS = 4
 
 
@@ -1007,23 +939,21 @@ def dose_trajectory(
     """Each compound's whole path through its own responding window, on one comparable axis.
 
     Comparing two compounds at the same concentration compares one that has engaged against one that has not.
-    Comparing them at their own strongest concentration throws away everything on the way there, which for a
-    compound whose phenotype turns along its window is most of what it did. This reads each compound's window
-    onto the same relative axis instead: position 0 is where it starts responding, position 1 is the top of its
-    window, and the profile is interpolated in log concentration in between.
+    Comparing them at their own strongest concentration throws away everything on the way there, which for a compound whose phenotype turns along its window is most of what it did.
+    This reads each compound's window onto the same relative axis instead: position 0 is where it starts responding, position 1 is the top of its window, and the profile is interpolated in log concentration in between.
 
-    The result is one row per compound and one column per feature and position, so the usual tools apply to it:
-    :func:`~mantispy.tl.similarity` gives the compound-to-compound matrix, and a PCA or a clustering groups
-    compounds by the shape of their response rather than by its size.
+    The result is one row per compound and one column per feature and position, so the usual tools apply to it: :func:`~mantispy.tl.similarity` gives the compound-to-compound matrix, and a PCA or a clustering groups compounds by the shape of their response rather than by its size.
 
     Args:
         adata: Object carrying a compound, a dose and, normally, the phase column :func:`dose_direction` wrote.
         compound_key: ``obs`` column holding the compound identity.
         dose_key: ``obs`` column holding the concentration.
         reference: Rows that set each feature's baseline and spread.
-        phase_key: ``obs`` column holding the phase, so the path is read over the window rather than the whole ladder. ``None``, or a column that is absent, uses every concentration the compound was dosed at.
+        phase_key: ``obs`` column holding the phase, so the path is read over the window rather than the whole ladder.
+            ``None``, or a column that is absent, uses every concentration the compound was dosed at.
         phases: Which phases count as the window.
-        n_positions: Points the window is resampled to. Two is its ends; more describes the path between them, and cannot add detail a short window does not have.
+        n_positions: Points the window is resampled to.
+            Two is its ends; more describes the path between them, and cannot add detail a short window does not have.
 
     Returns:
         A new object of compounds by features-and-positions, at ``"perturbation"`` resolution.
@@ -1035,14 +965,12 @@ def dose_trajectory(
         ValueError: ``n_positions`` is below two, spaces the window more finely than the position suffix can name, or there are fewer than two reference rows.
 
     Notes:
-        The axis is relative, so position 0 means a different concentration for every compound. That is the
-        point, and it is also the caveat: two compounds matched here are matched on what they do in their own
-        effective range, which is a claim about mechanism rather than about potency. Read it beside the benchmark
-        doses from :func:`dose_features`, which is where the potency lives.
+        The axis is relative, so position 0 means a different concentration for every compound.
+        That is the point, and it is also the caveat: two compounds matched here are matched on what they do in their own effective range, which is a claim about mechanism rather than about potency.
+        Read it beside the benchmark doses from :func:`dose_features`, which is where the potency lives.
 
-        How much this says over comparing the top of each window alone depends on how long the windows are. On
-        the OASIS pilot, where most compounds respond over two or three of the ten concentrations, the two
-        agree closely; the pairs they disagree on are the ones with long windows.
+        How much this says over comparing the top of each window alone depends on how long the windows are.
+        On the OASIS pilot, where most compounds respond over two or three of the ten concentrations, the two agree closely; the pairs they disagree on are the ones with long windows.
     """
     if n_positions < 2:
         raise ValueError(f"n_positions must be at least two, got {n_positions}")
@@ -1070,11 +998,8 @@ def dose_trajectory(
         order, z = _dose_medians(scale.z(adata, rows), doses)
         if len(order) < 2:
             continue
-        # Relative position through the window in log concentration, so the ends are 0 and 1 for every compound.
         position = np.log10(order)
         position = (position - position[0]) / (position[-1] - position[0])
-        # One interval and weight per grid point serves every feature; np.interp per feature is the same
-        # arithmetic done n_vars times over.
         below = np.clip(np.searchsorted(position, grid, side="right") - 1, 0, position.size - 2)
         weight = ((grid - position[below]) / (position[below + 1] - position[below]))[:, None]
         paths.append((z[below] * (1.0 - weight) + z[below + 1] * weight).ravel())
@@ -1090,8 +1015,6 @@ def dose_trajectory(
     names = scale.features(adata)
     # Position-major, to mirror the ravel of each compound's (n_positions, n_features) path above.
     position = np.repeat(grid, names.size)
-    # A fixed width, not one chosen from the grid: choosing it per call named the endpoints every grid
-    # shares "@0.00" at 101 positions and "@0.000" at 102, so no two runs of one screen lined up.
     labelled = pd.Index(names).astype(str)
     index = pd.Index(np.concatenate([labelled + f"@{point:.{POSITION_DECIMALS}f}" for point in grid]))
     if index.has_duplicates:

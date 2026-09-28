@@ -23,8 +23,10 @@ def labelled():
 
 
 def test_nscb_on_a_single_batch_classifies_nothing_and_says_so(labelled):
-    """Every neighbour shares the batch, so there is nowhere to look. Returning an
-    accuracy of 0.0 without a warning would read as a failed method rather than an impossible split."""
+    """Every neighbour shares the batch, so there is nowhere to look.
+
+    Returning an accuracy of 0.0 without a warning would read as a failed method rather than an impossible split.
+    """
     single = labelled.copy()
     single.obs["Metadata_Batch"] = "one"
     with pytest.warns(UserWarning, match="excluded every neighbour"):

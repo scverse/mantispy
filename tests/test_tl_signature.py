@@ -28,8 +28,7 @@ def annotated(well_profiles):
 
 
 def test_the_signature_is_an_object_io_accepts(tmp_path, annotated):
-    """Regression test for #103: var held only the columns that name a family, so the stamped result
-    failed validation on the seven annotation columns the schema requires and could not be written."""
+    """Regression test for #103: var held only the columns that name a family, so the stamped result failed validation on the seven annotation columns the schema requires and could not be written."""
     adata = annotated()
     mt.tl.differential_features(adata, block=None, key_added="d")
     signature = mt.tl.feature_signature(adata, key="d")
@@ -40,7 +39,6 @@ def test_the_signature_is_an_object_io_accepts(tmp_path, annotated):
     for column in ("feature", "scale", "angle", "gray_levels", "radial_bin", "params"):
         assert signature.var[column].isna().all(), column
     assert signature.var["is_feature"].all()
-    # The columns that do name it keep their values.
     assert set(signature.var["feature_group"]) <= {"AreaShape", "Intensity", "Texture"}
     assert set(signature.var["object"]) <= {"Cells", "Nuclei"}
     assert int(signature.var["n_features"].sum()) == adata.n_vars
@@ -50,8 +48,7 @@ def test_the_signature_is_an_object_io_accepts(tmp_path, annotated):
     loaded = mt.io.read(path)
     assert list(loaded.var_names) == list(signature.var_names)
     assert list(loaded.var.columns) == list(signature.var.columns)
-    # The empty annotation columns are category dtype for exactly this reason: an object-dtype
-    # column holding only None does not survive the h5ad writer.
+    # The empty annotation columns are category dtype because an object-dtype column of only None does not survive the h5ad writer.
     for column in ("feature", "radial_bin", "params"):
         assert loaded.var[column].isna().all(), column
 
@@ -96,9 +93,8 @@ def test_the_heatmap_reads_an_infinity_as_missing():
 
 
 def test_two_components_that_name_the_same_family_are_refused(annotated):
-    """The separator can appear inside a component -- rohban2017's feature groups do -- so
-    ('A | B', 'C') and ('A', 'B | C') join to one name. They were averaged into a single column and
-    var reported whichever tuple came first, which flips when var is reordered."""
+    """The separator can appear inside a component -- rohban2017's feature groups do -- so ('A | B', 'C') and ('A', 'B | C') join to one name.
+    They were averaged into a single column and var reported whichever tuple came first, which flips when var is reordered."""
     adata = annotated(n_features=4)
     adata.var["feature_group"] = ["A | B", "A", "A | B", "A"]
     adata.var["channel"] = ["C", "B | C", "C", "B | C"]
@@ -110,8 +106,7 @@ def test_two_components_that_name_the_same_family_are_refused(annotated):
 
 
 def test_a_signature_over_an_annotation_that_names_nothing_is_refused(annotated):
-    """Every by column empty makes one family called "none | none | none", averaging every feature
-    in the object into a single column and reporting nothing about any of them."""
+    """Every by column empty makes one family called "none | none | none", averaging every feature in the object into a single column and reporting nothing about any of them."""
     adata = annotated(n_features=20)
     for column in ("feature_group", "channel", "object"):
         adata.var[column] = pd.Categorical([None] * adata.n_vars)

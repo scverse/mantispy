@@ -139,7 +139,6 @@ def test_published_spec_matches_the_constants():
 
 
 def test_an_object_from_the_previous_schema_migrates(adata, tmp_path):
-    """An object written under the previous schema migrates to the current one."""
     import mantispy as mt
 
     mt.io.write(adata, tmp_path / "old.h5ad")

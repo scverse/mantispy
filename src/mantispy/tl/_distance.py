@@ -1,5 +1,3 @@
-"""Energy distance between perturbation populations."""
-
 from __future__ import annotations
 
 import warnings
@@ -20,7 +18,6 @@ def _energy_from_membership(membership: np.ndarray, distances: np.ndarray, size:
     """Energy distance between each 0/1 row of ``membership`` and its complement.
 
     Computes ``2E|a-b| - E|a-a'| - E|b-b'|`` over a pooled distance matrix for a batch of labelings at once.
-    As a membership matrix the null is three matrix products, instead of ``n_permutations * n**2`` gathers to index out each permutation's blocks.
     """
     n = distances.shape[0]
     other = 1.0 - membership
@@ -49,13 +46,19 @@ def edistance(
     It makes no distributional assumption and responds to changes in spread or shape as well as shifts, which suits single-cell resolution, where a perturbation is a population.
 
     Args:
-        adata: Object to score. Most informative at cell resolution.
+        adata: Object to score.
+            Most informative at cell resolution.
         groupby: Column defining the populations.
-        reference: Rows to compare against. Each group is compared with them and gets a permutation p-value in ``uns["mantispy"][key_added]``. With ``None``, the group-by-group distance matrix is written to ``uns["mantispy"][key_added + "_pairwise"]`` as a square frame labeled by group, without p-values. Its cost is quadratic in the number of groups, which is expensive for a whole screen at cell level. ``max_reference`` and ``seed`` apply on this path too, capping the rows taken from each group.
+        reference: Rows to compare against.
+            Each group is compared with them and gets a permutation p-value in ``uns["mantispy"][key_added]``.
+            With ``None``, the group-by-group distance matrix is written to ``uns["mantispy"][key_added + "_pairwise"]`` as a square frame labeled by group, without p-values.
+            Its cost is quadratic in the number of groups, which is expensive for a whole screen at cell level.
+            ``max_reference`` and ``seed`` apply on this path too, capping the rows taken from each group.
         use_rep: Score ``obsm[use_rep]`` instead of ``X``.
         n_permutations: Number of label permutations in the null.
         threshold: q-value below which a group is marked ``is_hit``.
-        max_reference: Maximum number of rows sampled from the reference and, separately, from each group. The pooled distance matrix is quadratic in their sum; 2000 of each takes 128 MB.
+        max_reference: Maximum number of rows sampled from the reference and, separately, from each group.
+            The pooled distance matrix is quadratic in their sum; 2000 of each takes 128 MB.
         seed: Seed for the subsampling and the permutations.
         key_added: Name for the outputs.
         copy: Return a modified copy instead of mutating in place.
@@ -85,7 +88,6 @@ def edistance(
         blocks = []
         for index in range(len(keys)):
             rows = order[offsets[index] : offsets[index + 1]]
-            # Each pair builds a distance matrix quadratic in the two groups, so the cap applies here as well; without it this path had no memory bound.
             if rows.size > max_reference:
                 get_logger().info(
                     "edistance sampled %d of %d rows of %r for the pairwise matrix",
@@ -123,7 +125,6 @@ def edistance(
     unscorable_size = []
     for index in range(len(keys)):
         rows = order[offsets[index] : offsets[index + 1]]
-        # n_obs is the number of rows the statistic uses, so it is updated after sampling and after splitting the reference.
         sizes[index] = rows.size
         if rows.size > max_reference:
             get_logger().info(
@@ -133,8 +134,6 @@ def edistance(
             sizes[index] = rows.size
         against = np.setdiff1d(control_rows, rows)
         if against.size < 2:
-            # The reference group has no other reference rows to compare against, so its own rows are split in half.
-            # That needs at least four rows.
             if rows.size < 4:
                 unscorable_reference.append(str(keys[index]))
                 continue
@@ -144,12 +143,9 @@ def edistance(
         pooled = np.vstack([values[rows], values[against]])
         size, total = rows.size, pooled.shape[0]
         if size < 2 or total - size < 2:
-            # Energy distance needs at least two rows on each side.
-            # One-row groups are common (single-well screens, tl.consensus output), so they are collected for a warning.
             unscorable_size.append(str(keys[index]))
             continue
 
-        # Permuting labels over the pooled rows gives the null the same arithmetic as the statistic and works when a group is as large as the reference.
         distances = np.sqrt(pairwise_sqeuclidean(pooled, pooled))
         membership = np.zeros((n_permutations + 1, total))
         membership[0, :size] = 1.0

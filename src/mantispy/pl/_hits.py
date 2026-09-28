@@ -17,7 +17,6 @@ if TYPE_CHECKING:
     from anndata import AnnData
     from matplotlib.axes import Axes
 
-#: Values below this are clipped so they stay on the plot.
 _FLOOR = 1e-12
 
 
@@ -63,8 +62,7 @@ def hits(adata: AnnData, key: str = "hits", label_top: int = 10, ax: Axes | None
     """Distance from the controls against significance, with the most distant groups labeled.
 
     A point in the upper right moved far from the controls and is significant under the permutation null.
-    The dashed line is the q-value threshold the run used, so every point colored as a hit sits on or above it,
-    and the counts beside it say how many groups sit on either side.
+    The dashed line is the q-value threshold the run used, so every point colored as a hit sits on or above it, and the counts beside it say how many groups sit on either side.
 
     Args:
         adata: Object holding the table :func:`~mantispy.tl.hit_calling` wrote.
@@ -86,8 +84,7 @@ def hits(adata: AnnData, key: str = "hits", label_top: int = 10, ax: Axes | None
     ax.scatter(table["distance"][~called], significance[~called], s=14, color="lightgrey", label="not called")
     ax.scatter(table["distance"][called], significance[called], s=14, color="crimson", label="hit")
 
-    # The threshold is recorded under the name of the function, not under the name of the table
-    # it wrote, so reading it under `key` drew every run against the default of 0.05.
+    # Params are stored under the function name, not the table's `key`.
     threshold = _threshold(adata, "hit_calling")
     ax.axhline(-np.log10(threshold), color="grey", ls="--", lw=1, label=f"q = {threshold}")
     _count_either_side(ax, significance, -np.log10(threshold))
@@ -290,7 +287,8 @@ def dose_response(
         key: Name of that table in ``uns["mantispy"]``.
         compound_key: ``obs`` column naming the compound of each well.
         dose_key: ``obs`` column holding the dose of each well.
-        response: ``obs`` column drawn against the dose. ``None`` reads the column :func:`~mantispy.tl.dose_response` was given, so a plot cannot silently draw a different one than the table was fitted from.
+        response: ``obs`` column drawn against the dose.
+            ``None`` reads the column :func:`~mantispy.tl.dose_response` was given, so a plot cannot silently draw a different one than the table was fitted from.
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
@@ -317,8 +315,6 @@ def dose_response(
     ax = _axes(ax, (5, 4))
     ax.scatter(doses[usable], values[usable], s=18, label="wells")
     ax.set_xscale("log")
-    # A distance from the controls has a long right tail, and one stray well is enough to flatten every
-    # other point onto the baseline. A response that reaches zero or below is drawn on a linear scale.
     if usable.any() and values[usable].min() > 0:
         ax.set_yscale("log")
 
@@ -346,7 +342,6 @@ def dose_response(
     return ax
 
 
-#: Background colour of each phase, keyed by :data:`~mantispy.tl._dose.DOSE_PHASES` so the two cannot drift.
 #: Grey where nothing happens, warm where it does, green where it has arrived, red where the cells are gone.
 DOSE_PHASE_COLOURS = dict(zip(DOSE_PHASES, ("#f2f2f2", "#fde6c4", "#dbe8d4", "#f6d2d2"), strict=True))
 
@@ -359,10 +354,9 @@ def dose_direction(
 ) -> Axes:
     """One compound's ladder, with the background banded by what each concentration is doing.
 
-    The solid line is how far the profile sits from the controls, and the dashed line is how far it moved from
-    the concentration below it. The second is what says where the action is: a response that is still changing
-    has a large step, one that has arrived has a small one however high the solid line sits. The two dotted
-    horizontals are the floors those lines are read against, which control wells laid out the same way reach.
+    The solid line is how far the profile sits from the controls, and the dashed line is how far it moved from the concentration below it.
+    The second is what says where the action is: a response that is still changing has a large step, one that has arrived has a small one however high the solid line sits.
+    The two dotted horizontals are the floors those lines are read against, which control wells laid out the same way reach.
 
     Args:
         adata: Object holding the table :func:`~mantispy.tl.dose_direction` wrote.
@@ -381,8 +375,7 @@ def dose_direction(
 
     ax = _axes(ax, (5.2, 3.6))
     doses = block["dose"].to_numpy(dtype=float)
-    # Each concentration owns the ladder up to halfway to its neighbours, measured in log dose, and half a step
-    # past the two ends.
+    # Each concentration's band reaches halfway to its neighbours in log dose, and half a step past the two ends.
     log_dose = np.log10(doses)
     gaps = np.diff(log_dose) if len(doses) > 1 else np.array([0.6])
     padded = np.concatenate([[log_dose[0] - gaps[0]], log_dose, [log_dose[-1] + gaps[-1]]])

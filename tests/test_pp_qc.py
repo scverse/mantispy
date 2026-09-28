@@ -40,8 +40,8 @@ def test_filter_cells_without_metrics_says_what_to_run(adata):
 
 def test_filter_features_drops_all_nan_constant_and_blocklisted(adata):
     values = adata.X.copy()
-    values[:, 0] = np.nan  # all missing
-    values[:, 1] = 1.0  # zero variance
+    values[:, 0] = np.nan
+    values[:, 1] = 1.0
     adata.X = values
     all_nan, constant, blocked = adata.var_names[0], adata.var_names[1], adata.var_names[3]
 
@@ -51,17 +51,13 @@ def test_filter_features_drops_all_nan_constant_and_blocklisted(adata):
     assert adata.n_vars == 12
 
 
-#: The parser infers its channel vocabulary from the column set it is given, so a handful
-#: of names parse differently from a full screen's worth. Naming the channels explicitly
-#: keeps this test independent of fixture size; without it the rename does nothing on six
-#: columns and the test passes trivially.
+#: Explicit because the parser infers channels from the column set, and on six names the rename would then do nothing.
 CHANNELS = ("AGP", "DNA", "ER", "Mito", "RNA")
 
 
 def test_the_blocklist_still_matches_after_standardizing_the_names():
-    """standardize_feature_names rewrites channel-bearing names into a form no blocklist
-    entry matches (Nuclei_Correlation_Manders_AGP_DNA becomes ..._AGP|DNA), and all 55
-    bundled entries are renamed this way. The blocklist must still drop them.
+    """standardize_feature_names rewrites channel-bearing names into a form no blocklist entry matches (Nuclei_Correlation_Manders_AGP_DNA becomes ..._AGP|DNA), and all 55 bundled entries are renamed this way.
+    The blocklist must still drop them.
     """
     blocked = sorted(load_blocklist("default"))[:4]
     names = [*blocked, "Cells_AreaShape_Area", "Nuclei_AreaShape_Area"]
@@ -85,8 +81,7 @@ def test_the_blocklist_still_matches_after_standardizing_the_names():
     mt.pp.filter_features(after, blocklist="default", drop_nan=False)
     assert after.n_vars == renamed.n_vars - len(blocked)
 
-    # pp.feature_select applies the blocklist through a separate code path, and
-    # "blocklist" is in DEFAULT_OPERATIONS.
+    # pp.feature_select applies the blocklist through a separate code path.
     selected = renamed.copy()
     mt.pp.feature_select(selected, operations=("blocklist",))
     assert int(selected.var["selected"].sum()) == renamed.n_vars - len(blocked)
@@ -114,9 +109,7 @@ def _area_cells(nuclei_first: bool):
 
 
 def test_the_area_outlier_flag_does_not_depend_on_var_column_order():
-    """Matching every compartment's AreaShape_Area and taking the first made qc_area_outlier,
-    and so qc_pass, depend on column order: Cells-first flagged 0 of 40 cells and
-    Nuclei-first flagged 1, on the same data and with no warning."""
+    """Matching every compartment's AreaShape_Area and taking the first made qc_area_outlier, and so qc_pass, depend on column order: Cells-first flagged 0 of 40 cells and Nuclei-first flagged 1, on the same data and with no warning."""
     flagged = []
     for nuclei_first in (False, True):
         adata = _area_cells(nuclei_first)
@@ -127,8 +120,7 @@ def test_the_area_outlier_flag_does_not_depend_on_var_column_order():
 
 def test_qc_metrics_refuses_an_object_whose_var_names_no_area():
     """The guard asked whether the feature column was populated, not whether it named an area.
-    A genuinely parsed Intensity-and-Texture export passes that guard, and _area_outlier_flag
-    then returns an all-false flag — the silently weakened qc_pass the guard exists to stop."""
+    A genuinely parsed Intensity-and-Texture export passes that guard, and _area_outlier_flag then returns an all-false flag, the silently weakened qc_pass the guard exists to stop."""
     import anndata as ad
 
     from mantispy._core.features import parse_feature_names

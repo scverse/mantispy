@@ -1,14 +1,7 @@
 """NaN-skipping grouped reduction kernels.
 
-Two design choices matter at JUMP scale:
-
-* The row permutation is passed as an index array and applied inside the kernel.
-  Materializing ``X[order]`` would copy the whole matrix for every statistic, twice for ``mad_robustize`` and four times for ``robustize``.
-* Parallelism is over groups, not over (group, feature) pairs, so the per-column scratch buffer is allocated once per group instead of once per output cell.
-  Allocating inside a hot ``prange`` body serializes the loop on numba's allocator lock.
-* A median and a robust spread come out of one sorted buffer (:func:`grouped_median_spread`).
-  Asking for them in separate passes sorted every slice three times where two sorts serve ``mad_robustize`` and one serves ``robustize``.
-
+The row permutation is passed as an index array and applied inside the kernel, never materialized as ``X[order]``.
+Scratch buffers are allocated once per group, because allocating inside a ``prange`` body serializes the loop on numba's allocator lock.
 Input stays ``float32``; accumulation is in ``float64`` scalars.
 """
 
@@ -25,10 +18,8 @@ if TYPE_CHECKING:
 else:
     from numba import prange
 
-# Statistic selectors, kept as ints so one kernel serves all of them.
 MEAN, MEDIAN, MAD, STD, QUANTILE = 0, 1, 2, 3, 4
 #: Spread selector for :func:`grouped_median_spread` only, alongside :data:`MAD`.
-#: It is not a :func:`grouped_stat` selector, because the interquartile range is two quantiles of one slice and that function returns one statistic.
 IQR = 5
 
 
@@ -48,10 +39,7 @@ def group_counts(codes: np.ndarray, n_groups: int) -> np.ndarray:
 
 @njit(cache=True, nogil=True)
 def _longest_group(offsets: np.ndarray) -> int:
-    """Rows in the largest group, which is how wide a per-thread gather buffer has to be.
-
-    Both parallel kernels size their buffer from this, and two copies of the scan could diverge into a buffer one group too small.
-    """
+    """Rows in the largest group, which is how wide a per-thread gather buffer has to be."""
     longest = 0
     for group in range(offsets.size - 1):
         length = offsets[group + 1] - offsets[group]
@@ -62,10 +50,7 @@ def _longest_group(offsets: np.ndarray) -> int:
 
 @njit(cache=True, nogil=True)
 def _median_sorted(values: np.ndarray) -> float:
-    """Median of ``values``, already sorted ascending.
-
-    The arithmetic lives here rather than in :func:`_median_of` so that a caller holding a sorted buffer gets the same value without sorting it again.
-    """
+    """Median of ``values``, already sorted ascending."""
     n = values.size
     if n == 0:
         return np.nan
@@ -190,7 +175,7 @@ def _grouped_median_spread(
             middle = _median_sorted(values)
             centre[group, j] = middle
             if spread == MAD:
-                # Deviations taken in sorted order rather than in gather order are a permutation of the same numbers, and the median of them sorts again either way, so this is the value the separate MAD pass produced.
+                # Deviations taken in sorted order rather than in gather order are a permutation of the same numbers, so their median is the same.
                 for k in range(n):
                     buffer[k] = abs(values[k] - middle)
                 scale[group, j] = _median_of(buffer, n)
@@ -255,9 +240,6 @@ def _mwu_moments(
 
     ``treated`` and ``control`` are ``(n_vars, n_obs)``, feature-major so each row is contiguous for the binary search.
     ``control`` is sorted ascending with missing values last, ``n_control`` is how many of each row were measured, and ``control_ties`` is that row's ``sum(c ** 3 - c)`` over its runs of equal values.
-
-    The control is the same for every group, but ``scipy.stats.mannwhitneyu`` called per group re-ranks it each time.
-    Ranked once and searched into, each group costs its own size rather than the reference's.
     """
     n_vars, n_treated = treated.shape
     statistic = np.empty(n_vars, dtype=np.float64)
@@ -303,7 +285,6 @@ def _polish_planes(planes: np.ndarray, max_iter: int, tol: float) -> tuple[np.nd
     Returns the fitted row and column effects with the grand level held out of both, as ``(n_features, n_rows)`` and ``(n_features, n_columns)``.
 
     The arithmetic matches ``np.median`` over a stacked array.
-    The medians here are over 16 and 24 values, where numpy's per-slice dispatch costs more than the median.
     """
     n_features, n_rows, n_columns = planes.shape
     row_out = np.zeros((n_features, n_rows), dtype=np.float64)
@@ -376,8 +357,7 @@ def _polish_planes(planes: np.ndarray, max_iter: int, tol: float) -> tuple[np.nd
 def _wasserstein_against(treated: np.ndarray, control: np.ndarray, n_control: np.ndarray) -> np.ndarray:
     """Wasserstein-1 distance per feature, against a reference sorted once.
 
-    ``W1`` is the integral of ``|F_treated - F_control|`` over the merged support, computed in one walk through both sorted samples.
-    A per-group ``argsort`` of the concatenation re-sorts the reference each time, which dominates the cost when the reference is the eight thousand control wells of a screen.
+    ``W1`` is the integral of ``|F_treated - F_control|`` over the merged support.
 
     Args:
         treated: ``(n_vars, n_treated)`` float64 sample, feature-major so each row is contiguous, and holding no missing value: every entry of a row counts towards that feature's treated CDF.
@@ -404,8 +384,7 @@ def _wasserstein_against(treated: np.ndarray, control: np.ndarray, n_control: np
         seen_control = 0
         previous = min(control[j, 0], values[0])
         while i < m or k < n_treated:
-            # Ties go to the treated sample, matching a stable sort of the concatenation
-            # with the treated block first. The gap is zero either way.
+            # Ties go to the treated sample, as in a stable sort with the treated block first; the gap is zero either way.
             if k < n_treated and (i >= m or values[k] <= control[j, i]):
                 current = values[k]
                 k += 1
@@ -414,8 +393,7 @@ def _wasserstein_against(treated: np.ndarray, control: np.ndarray, n_control: np
                 current = control[j, i]
                 i += 1
                 from_treated = False
-            # The step from the previous point to this one is weighted by the two CDFs
-            # as they stood at the previous point, so the counts advance afterwards.
+            # The step is weighted by the CDFs as they stood at the previous point, so the counts advance afterwards.
             total += abs(seen_treated / n_treated - seen_control / m) * (current - previous)
             if from_treated:
                 seen_treated += 1

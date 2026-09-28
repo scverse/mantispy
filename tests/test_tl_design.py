@@ -27,8 +27,7 @@ def test_a_custom_metric_is_accepted(profiles):
 def test_cytotoxicity_medians_the_rows_rather_than_a_group_statistic(profiles):
     """Regression for #84.
 
-    ``hits_distance`` is one number repeated over a group's rows, so the median this function
-    documents returned the value it was handed, and no genuinely per-row response could be given.
+    ``hits_distance`` is one number repeated over a group's rows, so the median this function documents returned the value it was handed, and no genuinely per-row response could be given.
     """
     toxic = (profiles.obs["Metadata_Perturbation"] == "pert00").to_numpy()
     counts = profiles.obs["Metadata_CellCount"].to_numpy().copy()
@@ -73,8 +72,7 @@ def test_viability_compares_cells_per_field(profiles):
 
 
 def test_convergence_reaches_deeper_than_disjoint_halves(profiles):
-    """Convergence reaches n - 1 replicates where disjoint halves stop at n // 2, so three
-    replicates give a curve of two points instead of one."""
+    """Convergence reaches n - 1 replicates where disjoint halves stop at n // 2, so three replicates give a curve of two points instead of one."""
     mt.tl.replicate_saturation(profiles, metric="convergence", n_draws=3, key_added="converging")
     mt.tl.replicate_saturation(profiles, n_draws=3)
     deepest = profiles.obs["Metadata_Perturbation"].value_counts().max()
@@ -93,15 +91,13 @@ def test_an_unknown_metric_lists_the_known_ones(profiles):
 def test_saturation_depth_comes_from_the_replicates_not_the_controls():
     """A screen's largest group is its negative control, and it must not set the range.
 
-    JUMP TARGET2 has 8505 DMSO wells against a median group of 132. Taking the deepest
-    depth from the largest group would ask for 4252 wells, and past about 66 only DMSO can
-    supply them, so the reported median would be one group correlated with itself.
+    JUMP TARGET2 has 8505 DMSO wells against a median group of 132.
+    Taking the deepest depth from the largest group would ask for 4252 wells, and past about 66 only DMSO can supply them, so the reported median would be one group correlated with itself.
     """
     import anndata as ad
     import pandas as pd
 
     rng = np.random.default_rng(0)
-    # Twelve treatments with six wells each, and one enormous control group.
     labels = ["negcon"] * 400 + [f"pert{i:02d}" for i in range(12) for _ in range(6)]
     obs = pd.DataFrame(
         {

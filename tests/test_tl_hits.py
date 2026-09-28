@@ -24,10 +24,8 @@ def scored():
 def test_treated_groups_are_hits_and_sit_further_out_than_the_controls(scored, method):
     """Whether the reference row is called is not asserted here.
 
-    It is an honest draw from the null, so it is called at about the nominal rate by
-    construction, and a single seed that happens not to call it would pin the bias rather
-    than the behaviour. Its distribution is pinned across seeds by
-    test_the_reference_row_is_not_scored_on_the_rows_that_fitted_the_covariance.
+    It is an honest draw from the null, so it is called at about the nominal rate by construction, and a single seed that happens not to call it would pin the bias rather than the behaviour.
+    Its distribution is pinned across seeds by test_the_reference_row_is_not_scored_on_the_rows_that_fitted_the_covariance.
     """
     mt.tl.hit_calling(scored, method=method, n_permutations=200)
     table = scored.uns["mantispy"]["hits"].set_index("group")
@@ -105,11 +103,10 @@ def test_results_round_trip(scored, tmp_path):
 
 
 def test_hit_calling_does_not_call_a_screen_of_pure_noise(pure_noise_screen):
-    """The null is drawn from control rows held out of the centroid and covariance fit, so
-    it is out-of-sample like every group. An in-sample null calls 12 of 12 groups here.
+    """The null is drawn from control rows held out of the centroid and covariance fit, so it is out-of-sample like every group.
 
-    The screen also warns, because splitting halves the rows that fit the covariance and
-    leaves 60 of them against 80 features.
+    An in-sample null calls 12 of 12 groups here.
+    The screen also warns, because splitting halves the rows that fit the covariance and leaves 60 of them against 80 features.
     """
     adata = pure_noise_screen()
     with pytest.warns(UserWarning, match="reference rows"):
@@ -134,8 +131,7 @@ def test_hit_calling_still_finds_a_real_effect(pure_noise_screen):
 
 @pytest.mark.filterwarnings("ignore:the covariance is estimated")
 def test_a_missing_feature_does_not_make_a_group_maximally_control_like(pure_noise_screen):
-    """nan_to_num after the matmul would turn one NaN feature into a whitened row of NaN and
-    then zeros, making the strongest hit the most control-like group."""
+    """nan_to_num after the matmul would turn one NaN feature into a whitened row of NaN and then zeros, making the strongest hit the most control-like group."""
     adata = pure_noise_screen()
     moved = adata.obs["Metadata_Perturbation"].to_numpy() == "p00"
     values = adata.X.copy()
@@ -156,16 +152,11 @@ def test_a_missing_feature_does_not_make_a_group_maximally_control_like(pure_noi
 def test_the_reference_row_is_not_scored_on_the_rows_that_fitted_the_covariance(pure_noise_screen):
     """The controls carry a perturbation label of their own, so one row of the table is the reference against itself.
 
-    Scoring that row on all of the control rows puts the covariance-fitting half, which sits
-    closer to the centroid than any other group's rows can, on the tested side. Its median
-    then comes out below the null it is compared with, and the row cannot reach significance
-    however the controls fall: its p-value is pinned near one instead of being a draw from
-    the null like every other group's.
+    Scoring that row on all of the control rows puts the covariance-fitting half, which sits closer to the centroid than any other group's rows can, on the tested side.
+    Its median then comes out below the null it is compared with, and the row cannot reach significance however the controls fall: its p-value is pinned near one instead of being a draw from the null like every other group's.
 
     The mean is bounded on both sides, so a row that is systematically small fails here too.
-    The bound is wide enough that a calibrated row passes it however the seeds fall; the
-    rate in the tail is what the row is for, and separating a 5% tail from a 1% one needs
-    more draws than a unit test can afford.
+    The bound is wide enough that a calibrated row passes it however the seeds fall; the rate in the tail is what the row is for, and separating a 5% tail from a 1% one needs more draws than a unit test can afford.
     """
     pvalues = []
     for seed in range(24):
@@ -180,12 +171,9 @@ def test_the_reference_row_is_not_scored_on_the_rows_that_fitted_the_covariance(
 def test_the_reference_row_is_not_halved_along_the_plate_order(well_profiles):
     """The reference group's held-out rows are halved at random, not by row order.
 
-    Rows arrive ordered by plate and well, so the first half in row order is one set of plates
-    and the second is another. With the controls carrying a between-plate offset, that makes
-    the reference row a comparison between plates rather than a draw from the null, and it is
-    called far above the nominal rate. Both methods draw that half from the same generator;
-    ``ks`` is used here because it reads the two halves against each other directly, which
-    separates a leaking split from a calibrated one in the fewest seeds.
+    Rows arrive ordered by plate and well, so the first half in row order is one set of plates and the second is another.
+    With the controls carrying a between-plate offset, that makes the reference row a comparison between plates rather than a draw from the null, and it is called far above the nominal rate.
+    Both methods draw that half from the same generator; ``ks`` is used here because it reads the two halves against each other directly, which separates a leaking split from a calibrated one in the fewest seeds.
     """
     called = 0
     for seed in range(30):
@@ -199,9 +187,7 @@ def test_the_reference_row_is_not_halved_along_the_plate_order(well_profiles):
 def test_edistance_does_not_call_a_screen_of_pure_noise(pure_noise_screen):
     """Pure noise calls at most one of twelve groups.
 
-    The null is too narrow, and calls most groups on this fixture, if its between-group
-    term includes each row's zero self-distance or if a group as large as the control set
-    draws every control on each permutation.
+    The null is too narrow, and calls most groups on this fixture, if its between-group term includes each row's zero self-distance or if a group as large as the control set draws every control on each permutation.
     """
     adata = pure_noise_screen()
     mt.tl.edistance(adata, n_permutations=500, seed=0)
@@ -213,16 +199,14 @@ def test_edistance_does_not_call_a_screen_of_pure_noise(pure_noise_screen):
 def test_edistance_scores_a_balanced_screen(pure_noise_screen):
     """Every group gets a p-value when groups are as large as the control set.
 
-    That is the normal shape of a screen with equal wells per treatment. A null drawn from
-    a subset of the controls cannot be formed there, while permuting labels over the pooled
-    rows can.
+    That is the normal shape of a screen with equal wells per treatment.
+    A null drawn from a subset of the controls cannot be formed there, while permuting labels over the pooled rows can.
     """
     adata = pure_noise_screen(n_control=60, n_groups=3, per_group=60, n_features=20)
     mt.tl.edistance(adata, n_permutations=500, seed=0)
     table = adata.uns["mantispy"]["edistance"]
     assert table["pvalue"].notna().all(), table
-    # A zero-variance null would put every group at 1/(n_permutations + 1), which passes
-    # the check above but calls every group.
+    # A zero-variance null puts every group at 1/(n_permutations + 1): it passes the check above but calls every group.
     treated = table[table["group"] != "DMSO"]
     assert int(treated["is_hit"].sum()) == 0, treated[["group", "pvalue", "qvalue"]]
 
@@ -238,8 +222,7 @@ def test_edistance_still_finds_a_real_effect(pure_noise_screen):
 
 
 def test_the_controls_are_not_a_hit_against_themselves(pure_noise_screen):
-    """The reference group has no other reference to be compared with, so it is scored
-    against half of its own rows and must come out as an ordinary non-hit."""
+    """The reference group has no other reference to be compared with, so it is scored against half of its own rows and must come out as an ordinary non-hit."""
     adata = pure_noise_screen()
     mt.tl.edistance(adata, n_permutations=500, seed=0)
     row = adata.uns["mantispy"]["edistance"].set_index("group").loc["DMSO"]
@@ -248,9 +231,9 @@ def test_the_controls_are_not_a_hit_against_themselves(pure_noise_screen):
 
 
 def test_a_reference_too_small_to_halve_is_unscored_rather_than_a_crash(pure_noise_screen):
-    """`split_reference` raises below four rows. With two or three control rows every
-    treated group can still be scored against the reference; only the reference against
-    itself cannot, so that row is left unscored.
+    """``split_reference`` raises below four rows.
+
+    With two or three control rows every treated group can still be scored against the reference; only the reference against itself cannot, so that row is left unscored.
     """
     adata = pure_noise_screen(n_control=3, n_groups=1, per_group=20)
     with pytest.warns(UserWarning, match="fewer than four rows"):
@@ -262,9 +245,9 @@ def test_a_reference_too_small_to_halve_is_unscored_rather_than_a_crash(pure_noi
 
 
 def test_single_row_groups_are_named_in_a_warning_not_silently_nan(pure_noise_screen):
-    """A group of one well has no within-group term for energy distance, so its p-value is
-    NaN. Those groups are named in a warning, since this is the shape of a single-well
-    primary screen or a tl.consensus output.
+    """A group of one well has no within-group term for energy distance, so its p-value is NaN.
+
+    Those groups are named in a warning, since this is the shape of a single-well primary screen or a tl.consensus output.
     """
     adata = pure_noise_screen(n_control=40, n_groups=5, per_group=1, n_features=10)
     moved = adata.obs["Metadata_Perturbation"].to_numpy() == "p00"
@@ -284,8 +267,7 @@ def test_single_row_groups_are_named_in_a_warning_not_silently_nan(pure_noise_sc
 def test_the_ks_method_is_calibrated_on_pure_noise():
     """Pseudo-groups for the null must not come from the rows that form their reference.
 
-    If they do, every draw is a subset of its own reference, the null statistic is too
-    small, and nearly half of pure-noise groups are called.
+    If they do, every draw is a subset of its own reference, the null statistic is too small, and nearly half of pure-noise groups are called.
     """
     called = total = 0
     for seed in range(8):
@@ -304,7 +286,6 @@ def test_the_ks_method_is_calibrated_on_pure_noise():
 
 
 def test_the_ks_method_still_sees_a_partial_responder():
-    """The calibrated KS test still calls a group in which a fifth of the cells respond."""
     cells = mt.ds.synthetic_plate(n_wells=96, n_cells=40, n_features=25, n_perturbations=2, effect_size=0.0, seed=0)
     mt.pp.normalize(cells, by="Metadata_Plate", reference="negcon")
     rng = np.random.default_rng(0)
@@ -323,8 +304,8 @@ def test_the_ks_method_still_sees_a_partial_responder():
 def test_edistance_n_obs_reports_the_rows_the_statistic_used(scored):
     """n_obs counts the rows the statistic used.
 
-    The reference group has no other reference, so it is scored against half of itself. A
-    60-vs-60 comparison reported as n_obs=120 would overstate its power twofold.
+    The reference group has no other reference, so it is scored against half of itself.
+    A 60-vs-60 comparison reported as n_obs=120 would overstate its power twofold.
     """
     wells = mt.tl.aggregate(scored, min_cells=0)
     mt.tl.edistance(wells, n_permutations=50, key_added="d")
@@ -337,7 +318,6 @@ def test_edistance_n_obs_reports_the_rows_the_statistic_used(scored):
 
 
 def test_edistance_caps_both_sides_and_says_so(scored, caplog):
-    """max_reference caps both the group and the reference, and sampling down is logged."""
     import logging
 
     wells = mt.tl.aggregate(scored, min_cells=0)
@@ -366,9 +346,8 @@ def test_the_pairwise_edistance_caps_its_groups_too(scored):
 def test_the_null_is_calibrated_on_pure_noise():
     """On data with no effect, p < 0.05 should happen about 5% of the time.
 
-    The null is the other ways to draw a group of this size from the group and the held-out controls
-    pooled. Bootstrapping the controls alone centres the null on that sample's own median and leaves
-    its error out of the spread, which called ~9% of nothing at n=24 against 48 held-out controls.
+    The null is the other ways to draw a group of this size from the group and the held-out controls pooled.
+    Bootstrapping the controls alone centres the null on that sample's own median and leaves its error out of the spread, which called ~9% of nothing at n=24 against 48 held-out controls.
     """
     rng = np.random.default_rng(0)
     pvalues = []
@@ -419,8 +398,8 @@ def test_a_replicated_screen_does_not_warn():
 def test_a_robust_covariance_still_calls_a_hit_that_stray_controls_would_hide():
     """A few wild control wells widen the empirical covariance along their own direction.
 
-    A real effect in that direction is then measured in units the outliers set and reads as
-    ordinary. The minimum covariance determinant subset ignores them, so the hit survives.
+    A real effect in that direction is then measured in units the outliers set and reads as ordinary.
+    The minimum covariance determinant subset ignores them, so the hit survives.
     """
     rng = np.random.default_rng(0)
     n_features = 6
@@ -428,7 +407,6 @@ def test_a_robust_covariance_still_calls_a_hit_that_stray_controls_would_hide():
     direction[0] = 1.0
 
     controls = rng.standard_normal((60, n_features))
-    # Six control wells blown out along one feature, as a pipetting or focus artifact does.
     controls[:6] += 12.0 * direction
     treated = rng.standard_normal((12, n_features)) + 4.0 * direction
 
@@ -499,12 +477,9 @@ def _cell_adata(values, plate, well, perturbation, control, n_features):
 def _well_effect_cells(n_control_wells=32, n_groups=10, wells_per_group=2, cells_per_well=200, n_features=12, seed=0):
     """A cell-level screen with a real well random effect and no treatment effect at all.
 
-    Every well carries a shared offset (sd 1) applied to all of its cells, plus per-cell noise
-    (sd 1), so the design's unit is the well and the cells within it are pseudoreplicates of it.
-    Whole wells are relabelled as pseudo-treatments against a DMSO reference; no group differs
-    from any other, so every hit called on this object is a false positive. Thirty-two control
-    wells give the well-block null enough exchangeable units on each half of the split to
-    calibrate (issue #68 was measured to need this many; twenty leave it anti-conservative).
+    Every well carries a shared offset (sd 1) applied to all of its cells, plus per-cell noise (sd 1), so the design's unit is the well and the cells within it are pseudoreplicates of it.
+    Whole wells are relabelled as pseudo-treatments against a DMSO reference; no group differs from any other, so every hit called on this object is a false positive.
+    Thirty-two control wells give the well-block null enough exchangeable units on each half of the split to calibrate (issue #68 was measured to need this many; twenty leave it anti-conservative).
     """
     rng = np.random.default_rng(seed)
     n_wells = n_control_wells + n_groups * wells_per_group
@@ -525,10 +500,8 @@ def _well_effect_cells(n_control_wells=32, n_groups=10, wells_per_group=2, cells
 def test_hit_calling_block_null_fixes_cell_resolution_pseudoreplication():
     """Regression for #68: cells within a well are pseudoreplicates, not independent draws.
 
-    A null that shuffles cells gives the group median far too little spread, since the shrink
-    goes as the cell count rather than the well count, so pure-null pseudo-treatments are
-    called well above nominal. Resampling whole wells (block="Metadata_Well") matches the
-    null's exchangeable unit to the design and brings the rate back to nominal.
+    A null that shuffles cells gives the group median far too little spread, since the shrink goes as the cell count rather than the well count, so pure-null pseudo-treatments are called well above nominal.
+    Resampling whole wells (block="Metadata_Well") matches the null's exchangeable unit to the design and brings the rate back to nominal.
     """
     block_hits = block_total = cell_hits = cell_total = 0
     for seed in range(12):
@@ -556,7 +529,6 @@ def test_hit_calling_block_null_fixes_cell_resolution_pseudoreplication():
 
 
 def test_hit_calling_defaults_to_the_well_block_at_cell_resolution():
-    """At cell resolution with a well column present, block=None resolves to Metadata_Well."""
     adata = _well_effect_cells(seed=0)
     default = mt.tl.hit_calling(adata, n_permutations=200, seed=0, copy=True)
     explicit = mt.tl.hit_calling(adata, block="Metadata_Well", n_permutations=200, seed=0, copy=True)
@@ -574,11 +546,9 @@ def test_hit_calling_warns_without_a_well_column_at_cell_resolution():
 def test_the_block_null_reference_group_is_not_systematically_called():
     """Regression for #68: the reference group's well-block null must not degenerate to a constant.
 
-    hit_calling scores the controls against themselves too. When the fit and null halves are split by
-    cell, the reference group's tested cells span essentially every control well, so the null draws the
-    whole pool on every permutation and collapses to the two values {1/(n+1), 1.0}: about half the seeds
-    then call the control a hit. Splitting whole wells into the two halves makes the reference draw a
-    strict subset of the wells like any other group, so its p-value is a genuine draw from the null.
+    hit_calling scores the controls against themselves too.
+    When the fit and null halves are split by cell, the reference group's tested cells span essentially every control well, so the null draws the whole pool on every permutation and collapses to the two values {1/(n+1), 1.0}: about half the seeds then call the control a hit.
+    Splitting whole wells into the two halves makes the reference draw a strict subset of the wells like any other group, so its p-value is a genuine draw from the null.
     """
     called = 0
     pvalues = []
@@ -596,9 +566,7 @@ def test_the_block_null_reference_group_is_not_systematically_called():
 def _two_plate_cells(cells_per_well=150, n_features=12, seed=0):
     """A cell-level screen on two plates that reuse the same well names, with a per-well random effect.
 
-    Sixteen control wells and eight treated wells per plate, the well names identical across the two
-    plates, so a block keyed on the bare well name would fold each pair of physically distinct wells
-    into one and halve the block count.
+    Sixteen control wells and eight treated wells per plate, the well names identical across the two plates, so a block keyed on the bare well name would fold each pair of physically distinct wells into one and halve the block count.
     """
     rng = np.random.default_rng(seed)
     names = [f"{chr(65 + w // 24)}{w % 24 + 1:02d}" for w in range(24)]
@@ -643,12 +611,12 @@ def test_hit_calling_blocks_on_the_physical_well_across_plates():
 def test_hit_calling_does_not_crash_on_missing_wells_at_cell_resolution():
     """A gap in Metadata_Well must warn and run the cell path, not crash a default hit_calling(adata).
 
-    group_codes raises on a missing value, so auto-detecting the block off the well column would turn a
-    call that worked before #68 into a crash. The block is left off and the cell-shuffle null runs instead.
+    group_codes raises on a missing value, so auto-detecting the block off the well column would turn a call that worked before #68 into a crash.
+    The block is left off and the cell-shuffle null runs instead.
     """
     adata = _well_effect_cells(seed=0)
     wells = adata.obs["Metadata_Well"].astype(object).to_numpy().copy()
-    wells[: 5 * 200] = np.nan  # the first few wells go missing, as an incomplete platemap leaves them
+    wells[: 5 * 200] = np.nan
     adata.obs["Metadata_Well"] = wells
     with pytest.warns(UserWarning, match="not independent replicates"):
         mt.tl.hit_calling(adata, n_permutations=100, seed=0)

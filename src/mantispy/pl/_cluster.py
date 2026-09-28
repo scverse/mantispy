@@ -1,5 +1,3 @@
-"""The clustering tree :func:`~mantispy.tl.cluster` builds, drawn as a dendrogram."""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -21,7 +19,8 @@ def dendrogram(
     Args:
         adata: Object holding the linkage matrix :func:`~mantispy.tl.cluster` wrote with ``method="hierarchical"``.
         key: The ``key_added`` that run used, whose summary (leaf labels and the chosen cut) is read from ``uns["mantispy"][key]``.
-        color_threshold: Height below which branches share a colour, marking the clusters. Defaults to the cut :func:`~mantispy.tl.cluster` chose, or scipy's own default when that run set the count directly.
+        color_threshold: Height below which branches share a colour, marking the clusters.
+            Defaults to the cut :func:`~mantispy.tl.cluster` chose, or scipy's own default when that run set the count directly.
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
@@ -51,7 +50,4 @@ def dendrogram(
         linkage_matrix, labels=labels, color_threshold=color_threshold, ax=ax, leaf_rotation=90, leaf_font_size=6
     )
     ax.set_ylabel("distance")
-
-    # Interactive twin deferred: plotly's figure_factory.create_dendrogram recomputes the tree from the data
-    # rather than a stored linkage, so it would diverge from the tree tl.cluster actually cut.
     return ax

@@ -1,5 +1,3 @@
-"""Accessors that turn a mantispy AnnData into plain Python objects."""
-
 from __future__ import annotations
 
 from collections.abc import Sequence

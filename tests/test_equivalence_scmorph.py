@@ -1,8 +1,7 @@
 """Chatterjee equivalence against scmorph, which is where this coefficient came from.
 
-scmorph uses the coefficient to filter features that are redundant with each other, while
-``pp.feature_select_chatterjee`` scores each feature against the perturbation. The
-statistic underneath is the same on input without ties, and these tests assert that.
+scmorph uses the coefficient to filter features that are redundant with each other, while ``pp.feature_select_chatterjee`` scores each feature against the perturbation.
+The statistic underneath is the same on input without ties, and these tests assert that.
 scmorph breaks ties in y at random, where mantispy handles them as Chatterjee does.
 """
 

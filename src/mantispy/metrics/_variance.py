@@ -70,7 +70,8 @@ def variance_carried(
 ) -> pd.DataFrame:
     """How much of a named feature block a learned embedding linearly carries.
 
-    A learned embedding has no ``var`` vocabulary, so a hit read off it is only a compound ID. This scores, per named feature, the out-of-fold R^2 of predicting that feature from the embedding with a cross-fit ridge, so a value near 1 means the embedding carries the feature and near 0 means it does not.
+    A learned embedding has no ``var`` vocabulary, so a hit read off it is only a compound ID.
+    This scores, per named feature, the out-of-fold R^2 of predicting that feature from the embedding with a cross-fit ridge, so a value near 1 means the embedding carries the feature and near 0 means it does not.
 
     Args:
         adata: Object holding the learned embedding in ``obsm``.
@@ -109,18 +110,14 @@ def variance_carried(
     targets = get_matrix(reference[shared]).astype(np.float64)
 
     splitter = KFold(n_splits=n_splits, shuffle=True, random_state=0)
-    # A column that drops no rows regresses on the whole predictor block, whose folds never change, so
-    # the common all-finite case reuses one split and the unmasked block instead of copying per column.
-    # The split is built lazily on the first such column, where the row-count guard below has already
-    # proved there are enough rows for it.
+    # Built lazily, once the row-count guard below has proved there are enough rows to split.
     full_split = None
     scores = np.full(targets.shape[1], np.nan)
     for column in range(targets.shape[1]):
-        # Drop rows whose target is missing or non-finite rather than impute; a per-feature mask is simpler and unbiased.
         finite = np.isfinite(targets[:, column])
         target = targets[finite, column]
         if target.size < n_splits or target.min() == target.max():
-            continue  # all-NaN, too few rows to cross-fit, or constant (SS_tot == 0): leave NaN
+            continue
         if finite.all():
             if full_split is None:
                 full_split = list(splitter.split(predictors))

@@ -1,8 +1,7 @@
 """Backed objects: the same numbers as in memory, without materialising X.
 
-A grouped operation on a backed object reads one group's rows at a time and gives the
-same numbers as the in-memory path. Functions that write X in place refuse backed objects
-with an error.
+A grouped operation on a backed object reads one group's rows at a time and gives the same numbers as the in-memory path.
+Functions that write X in place refuse backed objects with an error.
 """
 
 from types import SimpleNamespace
@@ -40,8 +39,7 @@ def reads(monkeypatch):
     """How every read through the matrix seam asked for its rows, in call order.
 
     An entry is the row index that was handed over, or ``None`` for a read of the whole matrix.
-    Which rows were asked for matters as much as how many: h5py takes a fancy index only in
-    increasing order, so get_matrix pays a full-size copy to restore any other one (#114).
+    Which rows were asked for matters as much as how many: h5py takes a fancy index only in increasing order, so get_matrix pays a full-size copy to restore any other one (#114).
     """
     from mantispy._core import _reduce
 
@@ -56,7 +54,6 @@ def reads(monkeypatch):
     return asked
 
 
-#: The two grouped paths, both built on iter_groups and both reading one group at a time.
 grouped_paths = pytest.mark.parametrize(
     "call",
     [
@@ -71,8 +68,7 @@ grouped_paths = pytest.mark.parametrize(
 def test_per_group_reads_never_ask_for_the_whole_matrix(backed, reads, call):
     """Both grouped paths read one group at a time.
 
-    transform_grouped used to size its output with ``np.empty_like(get_matrix(adata, layer))``, a full read
-    on top of the per-group ones (#67).
+    transform_grouped used to size its output with ``np.empty_like(get_matrix(adata, layer))``, a full read on top of the per-group ones (#67).
     """
     call(backed)
 
@@ -86,8 +82,7 @@ def test_a_groups_rows_are_asked_for_in_increasing_order(backed, reads, call):
     """Which is why get_matrix can hand the index to h5py as it stands (#114).
 
     Both paths take their rows from one stable ordering, so a group's rows come out ascending.
-    Should that ever stop being true, the sort in get_matrix is what keeps the read working, and
-    this test is what says the copy behind it is no longer dead weight.
+    Should that ever stop being true, the sort in get_matrix is what keeps the read working, and this test is what says the copy behind it is no longer dead weight.
     """
     call(backed)
 
@@ -99,10 +94,8 @@ def test_a_groups_rows_are_asked_for_in_increasing_order(backed, reads, call):
 class _Dataset:
     """An h5py dataset as get_matrix sees one: a shape and a dtype, no ``toarray``, and h5py's own rules.
 
-    Those rules are spelled out here element by element rather than with the expression get_matrix
-    branches on, so that the double and the code it stands in for cannot be wrong in the same way.
-    It records the index it was asked for and the block it gave back, so a test can say both how the
-    rows were requested and whether what get_matrix returned is that block or a copy of it.
+    Those rules are spelled out here element by element rather than with the expression get_matrix branches on, so that the double and the code it stands in for cannot be wrong in the same way.
+    It records the index it was asked for and the block it gave back, so a test can say both how the rows were requested and whether what get_matrix returned is that block or a copy of it.
     """
 
     def __init__(self, values):
@@ -128,18 +121,16 @@ class _Dataset:
 def _on_disk(values):
     """The least an object needs for get_matrix to treat its matrix as one on disk."""
     dataset = _Dataset(values)
-    # Both branches read `matrix[wanted]` for an in-order subset, so without this the tests below
-    # would go on passing if _reads_from_disk stopped recognising a dataset and every backed read
-    # quietly went back to point selection.
     assert _reads_from_disk(dataset), "the double must take the on-disk branch, or these tests watch the wrong one"
     return SimpleNamespace(X=dataset, layers={}), dataset
 
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64], ids=["float32 file", "float64 file"])
 def test_rows_already_in_order_are_read_without_a_second_copy(dtype):
-    """Regression test for #114: the index was sorted for h5py and the block gathered back into the
-    order asked for, but every caller asks in order, so the gather was a full-size copy of what had
-    just been read. At JUMP well scale that copy is a 720 MB allocation made to be thrown away."""
+    """Regression test for #114: the index was sorted for h5py and the block gathered back into the order asked for, but every caller asks in order, so the gather was a full-size copy of what had just been read.
+
+    At JUMP well scale that copy is a 720 MB allocation made to be thrown away.
+    """
     values = np.arange(40, dtype=dtype).reshape(10, 4)
     adata, dataset = _on_disk(values)
 
@@ -149,9 +140,7 @@ def test_rows_already_in_order_are_read_without_a_second_copy(dtype):
     assert len(dataset.asked) == 1, "the rows were read more than once"
     np.testing.assert_array_equal(dataset.asked[0], [1, 4, 7])
     if dtype is np.float32:
-        # The file's own dtype, so the float32 cast that ends get_matrix is the identity and what
-        # comes back is the block the dataset read. A float64 file still pays that cast, which is a
-        # copy of the same size: the gather is gone either way, this is what is left.
+        # Only a float32 file makes the closing float32 cast in get_matrix the identity.
         assert block is dataset.given[0], "the block the dataset returned was copied again"
 
 
@@ -184,9 +173,10 @@ def backed_sparse(tmp_path):
 
 @pytest.mark.parametrize("fmt", ["csr", "csc"])
 def test_a_sparse_matrix_on_disk_can_be_read_whole(backed_sparse, fmt):
-    """anndata's sparse datasets have no ``__array__``, so the float32 read that ends get_matrix saw a
-    sequence of sparse rows and raised `setting an array element with a sequence`. Every caller that
-    reads the matrix without naming rows took that path, `pp.calculate_qc_metrics` among them."""
+    """anndata's sparse datasets have no ``__array__``, so the float32 read that ends get_matrix saw a sequence of sparse rows and raised `setting an array element with a sequence`.
+
+    Every caller that reads the matrix without naming rows took that path, `pp.calculate_qc_metrics` among them.
+    """
     from_disk, in_memory = backed_sparse(fmt)
     expected = np.asarray(in_memory.X)
 
@@ -209,9 +199,10 @@ def test_a_sparse_matrix_on_disk_reduces_to_what_it_does_in_memory(backed_sparse
 
 @pytest.mark.parametrize("container", ["backed", "dense"])
 def test_a_mask_that_is_not_one_per_row_is_refused_on_both_paths(container, tmp_path):
-    """Each group's rows are selected out of the mask, which reads only the entries that group owns,
-    so a mask longer than the object went unnoticed on disk and raised in memory. A mask computed
-    against a pre-filter superset is the way that happens."""
+    """Each group's rows are selected out of the mask, which reads only the entries that group owns, so a mask longer than the object went unnoticed on disk and raised in memory.
+
+    A mask computed against a pre-filter superset is the way that happens.
+    """
     obs = pd.DataFrame({"g": ["a"] * 4 + ["b"] * 4 + ["c"] * 4}, index=[str(index) for index in range(12)])
     values = np.arange(24, dtype=np.float32).reshape(12, 2)
 
@@ -231,10 +222,8 @@ def test_a_mask_that_is_not_one_per_row_is_refused_on_both_paths(container, tmp_
 def many_groups(tmp_path):
     """The same rows backed and in memory, grouped far more finely than the other fixtures here.
 
-    Every other backed fixture has two plates. The scan `reduce_grouped` used to run per group was
-    two full-length passes over the codes each, so its cost is set by the group count and only shows
-    above a few hundred (#113) — a single plate's wells, and the grouping `tl.aggregate` takes on a
-    cell-level object.
+    Every other backed fixture has two plates.
+    The scan `reduce_grouped` used to run per group was two full-length passes over the codes each, so its cost is set by the group count and only shows above a few hundred (#113): a single plate's wells, and the grouping `tl.aggregate` takes on a cell-level object.
     """
     n_groups, per_group = 384, 3
     obs = pd.DataFrame(
@@ -249,8 +238,7 @@ def many_groups(tmp_path):
 
 @pytest.mark.parametrize("masked", [False, True], ids=["every row", "masked"])
 def test_many_groups_reduce_to_what_the_single_kernel_call_gives(many_groups, masked):
-    """Taking each group's rows from one ordering has to select exactly what the per-group scan did,
-    including the rows a mask leaves out and a group it empties."""
+    """Taking each group's rows from one ordering has to select exactly what the per-group scan did, including the rows a mask leaves out and a group it empties."""
     from_disk, in_memory = many_groups
 
     mask = None
@@ -274,8 +262,7 @@ def test_writing_x_in_place_is_refused_with_the_way_out(backed):
 
 
 def test_key_added_normalizes_a_backed_object_without_rewriting_x(backed):
-    """io.read documents key_added= as one of the two ways out for a backed object, and the
-    guard refused it for a call that writes a layer and never touches X."""
+    """io.read documents key_added= as one of the two ways out for a backed object, and the guard refused it for a call that writes a layer and never touches X."""
     mt.pp.normalize(backed, by="Metadata_Plate", reference="negcon", key_added="normalized")
 
     assert type(backed.X).__name__ == "Dataset", "X must still be the one on disk"
@@ -288,8 +275,7 @@ def test_key_added_normalizes_a_backed_object_without_rewriting_x(backed):
 
 @pytest.mark.parametrize("name", ["filter_cells", "filter_features", "filter_images"])
 def test_filtering_a_backed_object_names_the_way_out(backed, name):
-    """These take no key_added, so the guard skipped them and anndata refused the subset with
-    a message that names .to_memory() but not copy=True."""
+    """These take no key_added, so the guard skipped them and anndata refused the subset with a message that names .to_memory() but not copy=True."""
     mt.pp.calculate_qc_metrics(backed)
     backed.obs["qc_image_pass"] = True
 

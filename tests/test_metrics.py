@@ -100,9 +100,10 @@ def _gene_map(n_sets=4, per_set=3, n_background=24, n_features=16, noise=0.1, se
 
 
 def test_known_relationships_measures_chance_for_a_perturbation_in_many_sets():
-    """A compound annotated to many targets draws many of the pairs. This one points away from every other
-    profile, so its pairs sit in a tail whatever the annotation says: the recall is far above 2 x percentile,
-    and only a shuffle that keeps how many sets each perturbation belongs to shows that it is chance."""
+    """A compound annotated to many targets draws many of the pairs.
+
+    This one points away from every other profile, so its pairs sit in a tail whatever the annotation says: the recall is far above 2 x percentile, and only a shuffle that keeps how many sets each perturbation belongs to shows that it is chance.
+    """
     import anndata as ad
 
     values = 3.0 + np.random.default_rng(0).normal(size=(60, 16))
@@ -133,8 +134,7 @@ def test_known_relationships_refuses_input_it_cannot_score():
 
 
 def test_known_relationships_names_each_annotation_source():
-    """Every source is scored on its own, so stacking two unnamed rows gave a table that
-    pl.metrics could not pivot: 'Index contains duplicate entries'."""
+    """Every source is scored on its own, so stacking two unnamed rows gave a table that pl.metrics could not pivot: 'Index contains duplicate entries'."""
     adata, net = _gene_map(seed=7)
     rows = pd.concat(
         [
@@ -148,8 +148,10 @@ def test_known_relationships_names_each_annotation_source():
 
 
 def test_known_relationships_caps_what_one_set_expands_into(monkeypatch):
-    """A set of n members is n(n-1)/2 pairs, so one set naming every gene in a genome would both
-    dominate the recall and exhaust memory. The message has to name the way out."""
+    """A set of n members is n(n-1)/2 pairs, so one set naming every gene in a genome would both dominate the recall and exhaust memory.
+
+    The message has to name the way out.
+    """
     adata, _ = _gene_map(seed=6)
     genes = adata.obs["Metadata_Perturbation"].to_numpy()
     everything = pd.DataFrame({"source": "all", "target": genes})
@@ -160,8 +162,10 @@ def test_known_relationships_caps_what_one_set_expands_into(monkeypatch):
 
 
 def test_known_relationships_takes_a_pair_list_once_it_is_reshaped():
-    """The reference relationship sets ship one pair per row. There is one annotation shape, so
-    the conversion is the caller's, and it has to give the same answer as the sets do."""
+    """The reference relationship sets ship one pair per row.
+
+    There is one annotation shape, so the conversion is the caller's, and it has to give the same answer as the sets do.
+    """
     adata, _ = _gene_map(seed=5)
     genes = adata.obs["Metadata_Perturbation"].to_numpy()
     # Written both ways round, so the direction a pair appears in cannot change the answer.
@@ -263,21 +267,21 @@ def test_variance_carried_survives_an_inf_target():
     adata, reference = _carried_pair()
     reference = reference.copy()
     block = np.asarray(reference.X).copy()
-    block[0, 1] = np.inf  # a single non-finite entry in one signal feature
+    block[0, 1] = np.inf
     reference.X = block.astype(np.float32)
 
     frame = mt.metrics.variance_carried(adata, reference, use_rep="X_emb", groupby=None)
     carried = frame.set_index("feature")["variance_carried"]
-    assert carried["F0"] > 0.7  # a neighbouring signal feature still scores
+    assert carried["F0"] > 0.7
 
 
 def test_evaluate_correction_reports_a_covariate_nothing_else_would_catch(corrected):
     """A representation can be dominated by something that is neither the batch nor the label.
-    On the learned embeddings of `ds.jump_lite` the cell count explains several times more of the
-    variance than the source does, and no other row of this table would say so."""
+
+    On the learned embeddings of `ds.jump_lite` the cell count explains several times more of the variance than the source does, and no other row of this table would say so.
+    """
     generator = np.random.default_rng(0)
     embedding = np.asarray(corrected.obsm["X_pca"]).copy()
-    # A covariate written straight into the first component, and one that is pure noise.
     corrected.obs["Metadata_CellCount"] = embedding[:, 0] * 10 + generator.normal(scale=0.01, size=corrected.n_obs)
     corrected.obs["Metadata_Unrelated"] = generator.normal(size=corrected.n_obs)
 

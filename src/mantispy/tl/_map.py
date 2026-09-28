@@ -1,10 +1,3 @@
-"""Mean average precision, computed with copairs.
-
-mAP measures retrieval.
-Profiles are ranked by similarity to a query profile, and the score is high when its positive pairs, such as replicates, rank above its negative pairs.
-It is rank-based, so it needs no correlation threshold, and a permutation null gives each group a p-value.
-"""
-
 from __future__ import annotations
 
 import math
@@ -21,42 +14,29 @@ from mantispy._core.frames import as_frame
 from mantispy._core.masks import reference_mask
 from mantispy._core.mutation import inplace_or_copy
 
-#: Column added under ``mode="activity"``, holding the row index for each control and -1 for every other row.
-#: It keeps controls out of the queries and makes a perturbation's replicates retrieve against controls only.
+#: Row index for each control and -1 elsewhere, so under ``mode="activity"`` replicates retrieve against controls only.
 REFERENCE_COLUMN = "Metadata_reference_index"
 
-#: copairs pair definitions for each ``mode`` of :func:`map`.
 MODES = {
-    # Phenotypic activity :cite:p:`Kalinin_2025`.
-    # Is this perturbation distinguishable from the negative controls it was plated with?
-    # Other plates' controls are beaten trivially yet still count in the permutation null, so pooling them
-    # makes an inert perturbation look more active the more controls the other plates carry.
+    # Other plates' controls are beaten trivially yet count in the null, so pooling them inflates activity.
     "activity": {
         "pos_sameby": ["Metadata_Perturbation", REFERENCE_COLUMN],
         "pos_diffby": [],
         "neg_sameby": ["Metadata_Plate"],
         "neg_diffby": ["Metadata_Perturbation", REFERENCE_COLUMN],
     },
-    # Phenotypic consistency :cite:p:`Kalinin_2025`.
-    # Do perturbations sharing an annotation, such as a mechanism, target or gene, look more alike than those that do not?
-    # Needs `annotation_key`; meant for consensus profiles of active perturbations.
     "consistency": {
         "pos_sameby": ["__annotation__"],
-        # A positive pair must be two different perturbations, so replicate wells of one treatment do not count as annotation agreement.
-        # On consensus input this excludes nothing.
         "pos_diffby": ["Metadata_Perturbation"],
         "neg_sameby": [],
         "neg_diffby": ["__annotation__"],
     },
-    # Do a perturbation's replicates retrieve each other against the other perturbations on the query's plate?
-    # The "mAP-nonrep" of :cite:t:`Arevalo_2024`, which also leaves the controls out.
     "replicability": {
         "pos_sameby": ["Metadata_Perturbation"],
         "pos_diffby": [],
         "neg_sameby": ["Metadata_Plate"],
         "neg_diffby": ["Metadata_Perturbation"],
     },
-    # Do a perturbation's replicates on other plates retrieve each other against all other profiles?
     "cross_plate": {
         "pos_sameby": ["Metadata_Perturbation"],
         "pos_diffby": ["Metadata_Plate"],
@@ -65,8 +45,7 @@ MODES = {
     },
 }
 
-#: copairs output columns that are dropped.
-#: The ragged per-group row indices cannot be written to h5ad and can be recomputed from the inputs.
+#: The ragged per-group row indices cannot be written to h5ad.
 _UNWRITABLE = ("indices",)
 
 
@@ -92,7 +71,8 @@ def map(
 
     Args:
         adata: Profiles to score, normally well-level.
-        pos_sameby: ``obs`` columns a positive pair must share, in copairs' terms. Pass the four pair arguments or ``mode``, not both.
+        pos_sameby: ``obs`` columns a positive pair must share, in copairs' terms.
+            Pass the four pair arguments or ``mode``, not both.
         pos_diffby: ``obs`` columns in which a positive pair must differ.
         neg_sameby: ``obs`` columns a negative pair must share.
         neg_diffby: ``obs`` columns in which a negative pair must differ.
@@ -116,7 +96,8 @@ def map(
         annotation_key: The ``obs`` column ``mode="consistency"`` groups by.
         reference: Which rows are the negative controls, which ``mode="activity"`` retrieves against and ``mode="replicability"`` leaves out: ``"negcon"``, the name of a boolean ``obs`` column, or ``None`` for none.
         use_rep: Score ``obsm[use_rep]`` instead of ``X``.
-        null_size: Size of the permutation null. No p-value falls below ``1 / (null_size + 1)``, so the correction over many groups needs a large one, and a warning says when it is too small to call a group on its own.
+        null_size: Size of the permutation null.
+            No p-value falls below ``1 / (null_size + 1)``, so the correction over many groups needs a large one, and a warning says when it is too small to call a group on its own.
         threshold: Significance threshold passed to copairs.
         seed: Seed for the permutation null.
         distance: Distance copairs ranks by.
@@ -157,8 +138,6 @@ def map(
                 key: [annotation_key if column == "__annotation__" else column for column in value]
                 for key, value in settings.items()
             }
-            # Consistency is defined on consensus profiles.
-            # With replicate rows, perturbations with more wells dominate their annotation groups.
             perturbations = adata.obs["Metadata_Perturbation"].nunique() if "Metadata_Perturbation" in adata.obs else 0
             if perturbations and adata.n_obs > perturbations:
                 warnings.warn(
@@ -179,7 +158,6 @@ def map(
     else:
         raise ValueError("pass pos_sameby= or mode=")
 
-    # The reference column is built below, not supplied by the caller.
     needed = {column for group in settings.values() for column in group} - {REFERENCE_COLUMN}
     missing = sorted(needed - set(adata.obs.columns))
     if missing:
@@ -211,8 +189,7 @@ def map(
         precision = precision[~precision.index.isin(np.flatnonzero(is_control))]
     group_columns = [c for c in settings["pos_sameby"] if c != REFERENCE_COLUMN]
 
-    # A query with replicates but no negatives ranks them first by construction, so copairs would score it AP = 1 at
-    # the smallest p-value. Under mode="activity" that is every query on a plate without controls.
+    # copairs scores a query with replicates but no negatives AP = 1 at the smallest p-value.
     queries = precision["n_pos_pairs"] > 0
     stranded = queries & (precision["n_total_pairs"] == precision["n_pos_pairs"])
     if stranded.any():
@@ -229,8 +206,6 @@ def map(
         )
         precision = precision[~stranded]
 
-    # copairs cannot return a p-value below 1 / (null_size + 1), and Benjamini-Hochberg over m groups calls a group
-    # at that floor only when more than m / ((null_size + 1) * threshold) groups share it.
     groups = len(precision.loc[precision["n_pos_pairs"] > 0, group_columns].drop_duplicates())
     sharing = groups / ((null_size + 1) * threshold)
     if sharing >= 1:
@@ -242,8 +217,7 @@ def map(
             stacklevel=3,
         )
 
-    # copairs caches each null on disk, keyed without the seed it was drawn with, which depends on the other nulls in
-    # the same call. A shared cache would make a p-value depend on whichever earlier call wrote that null first.
+    # copairs keys its on-disk null cache without the seed, so a shared cache leaks nulls between calls.
     with tempfile.TemporaryDirectory() as cache:
         table = copairs_map.mean_average_precision(
             precision,
@@ -256,7 +230,6 @@ def map(
         ).drop(columns=list(_UNWRITABLE), errors="ignore")
 
     if mode == "activity":
-        # Activity is reported for treatments only.
         control_groups = set(np.asarray(meta.loc[is_control, "Metadata_Perturbation"], dtype=object))
         table = table[~table["Metadata_Perturbation"].isin(control_groups)].reset_index(drop=True)
         table = table.drop(columns=[REFERENCE_COLUMN], errors="ignore")

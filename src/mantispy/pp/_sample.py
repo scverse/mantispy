@@ -1,9 +1,3 @@
-"""Stratified subsampling.
-
-A screen of a million cells by four thousand features is 16 GB of float32 before any transform allocates its output.
-Exploring on a representative sample and confirming on the full data keeps memory use manageable.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -27,9 +21,12 @@ def downsample(
     """Return at most ``n_per_group`` rows from each group.
 
     Args:
-        adata: Object to sample from. Never modified.
-        n_per_group: Cap per group. Groups smaller than this are kept whole, so groups are capped but not balanced.
-        groupby: Columns defining a group. The default caps each well, so every well is represented instead of the densest wells filling the sample.
+        adata: Object to sample from.
+            Never modified.
+        n_per_group: Cap per group.
+            Groups smaller than this are kept whole, so groups are capped but not balanced.
+        groupby: Columns defining a group.
+            The default caps each well, so every well is represented instead of the densest wells filling the sample.
         stratify: Keep this column's proportions inside each group, so a rare perturbation is not lost to the sampling.
         seed: Seed for reproducibility.
 
@@ -64,9 +61,7 @@ def downsample(
                 )
                 for label in np.unique(inside)
             ]
-            # Rounding each share up to at least one can overshoot the cap. Trimming the
-            # tail of the concatenation would always drop the same labels, so trim at
-            # random instead.
+            # Trim an overshoot at random: trimming the tail would always drop the same labels.
             taken = np.concatenate(picked)
             chosen.append(taken if taken.size <= n_per_group else generator.choice(taken, n_per_group, replace=False))
 

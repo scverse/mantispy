@@ -121,8 +121,7 @@ def test_arrays_read_back_the_same_whatever_the_width_or_the_backing(make_export
 
 
 def test_a_lazy_read_holds_no_file_descriptor(export: Path) -> None:
-    """Each lazy element kept its own descriptor for as long as the object lived, and one
-    384-well plate holds about ten thousand elements, which exhausts the process limit."""
+    """Each lazy element kept its own descriptor for as long as the object lived, and one 384-well plate holds about ten thousand elements, which exhausts the process limit."""
     if not Path("/dev/fd").is_dir():
         pytest.skip("counting open descriptors needs /dev/fd")
     before = len(os.listdir("/dev/fd"))
@@ -130,7 +129,6 @@ def test_a_lazy_read_holds_no_file_descriptor(export: Path) -> None:
     sdata = mt.io.read_plate(export, lazy=True)
 
     assert len(os.listdir("/dev/fd")) <= before, "a lazy read must not keep the HDF5 files open"
-    # and the arrays must still be readable afterwards, which is the point of lazy
     assert np.asarray(sdata.images[f"{FIELDS[0]}_image"]).shape == (len(CELL_PAINTING_CHANNELS), *EXPORT_SHAPE)
 
 

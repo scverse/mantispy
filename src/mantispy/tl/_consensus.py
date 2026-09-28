@@ -1,16 +1,6 @@
 """Consensus signatures, one profile per perturbation.
 
-``tl.aggregate(by=("Metadata_Perturbation",))`` gives a median consensus.
-modz is the weighted version used in the field.
-Replicates that agree with the others count for more, so one bad well moves the signature less.
-
-The weighting follows ``pycytominer.cyto_utils.modz.modz_base``, which comes from cmapPy:
-
-1. correlate every replicate with every other over the features (Spearman by default);
-2. set the diagonal to NaN and clip negative correlations to zero, so a replicate that anticorrelates with the rest counts as uninformative;
-3. take a replicate's raw weight as its mean correlation with the others, floored at ``min_weight``;
-4. normalize the weights to sum to one (equal weights if they are all zero) and round them to ``precision`` decimals;
-5. take the weighted sum as the signature.
+The modz weighting follows ``pycytominer.cyto_utils.modz.modz_base``, which comes from cmapPy.
 """
 
 from __future__ import annotations
@@ -55,12 +45,10 @@ def modz_weights(
 
     values = np.asarray(block, dtype=np.float64)
     if correlation == "spearman":
-        # nan_policy="omit" ranks the present values and leaves NaN in place.
-        # The default, "propagate", turns a replicate with one missing feature into an all-NaN row, which drops its weight to min_weight.
+        # The default nan_policy, "propagate", turns a row with one missing feature into all NaN.
         values = rankdata(values, axis=1, nan_policy="omit")
 
-    # similarity_matrix fills a gap with zero, below every rank, so replicates sharing a gap would correlate there and take the largest weights.
-    # A replicate's own mean is the neutral fill: pearson centers the rows, so a filled feature then contributes nothing.
+    # Not similarity_matrix's zero fill: zero sits below every rank, so replicates sharing a gap would correlate.
     gaps = np.isnan(values)
     if gaps.any():
         present = np.maximum((~gaps).sum(axis=1, keepdims=True), 1)
@@ -92,12 +80,13 @@ def consensus(
     Args:
         adata: Profiles to summarize, normally well level.
         by: Column defining a perturbation.
-        method: ``"median"`` (the default, matching pycytominer and identical to ``tl.aggregate`` by the same column) or ``"modz"``, which weights replicates by their agreement so a single bad replicate moves the signature far less than a plain mean would.
+        method: ``"median"`` (the default, matching pycytominer and identical to :func:`~mantispy.tl.aggregate` by the same column) or ``"modz"``, which weights replicates by their agreement so a single bad replicate moves the signature far less than a plain mean would.
         correlation: How replicate agreement is measured: ``"spearman"`` (pycytominer's default, and insensitive to a few extreme features) or ``"pearson"``.
         min_replicates: Groups with fewer replicates are dropped.
-        min_weight: Floor on a replicate's weight. A group whose replicates all land on the floor becomes an unweighted mean.
+        min_weight: Floor on a replicate's weight.
+            A group whose replicates all land on the floor becomes an unweighted mean.
         precision: Decimals the weights are rounded to, as in pycytominer.
-        use_rep: Reduce this ``obsm`` representation (e.g. an embedding from ``pp.tvn``/``pp.harmony``) instead of ``X``; the result's ``X`` holds the reduced representation and ``var`` is a plain range index, since the axes are not named features.
+        use_rep: Reduce this ``obsm`` representation (e.g. an embedding from :func:`~mantispy.pp.tvn`/:func:`~mantispy.pp.harmony`) instead of ``X``; the result's ``X`` holds the reduced representation and ``var`` is a plain range index, since the axes are not named features.
 
     Returns:
         A new object at ``"perturbation"`` resolution, one row per group, with ``Metadata_ReplicateCount`` and the metadata that is constant within a group.
@@ -112,11 +101,10 @@ def consensus(
         Zero would be an extreme value among ranks, and two replicates sharing a gap would look alike.
         The signature itself is a weighted sum, so a NaN feature stays NaN.
 
-        median is the default, matching pycytominer, which aggregates by median unless told otherwise.
         modz is a weighted mean: with one outlying replicate it drifts about forty times less than the unweighted mean, but it does not beat a median.
         median is at least as robust as modz for consensus signatures, so compare both on your own data.
 
-        Normalize before taking a consensus, and first drop the features ``pp.normalize`` flags in ``var["degenerate_scale"]``.
+        Normalize before taking a consensus, and first drop the features :func:`~mantispy.pp.normalize` flags in ``var["degenerate_scale"]``.
         A feature that is constant among the controls is divided by epsilon, and a weighted mean carries the resulting values of order 1e17 into the signature, where a median would discard them.
     """
     if method not in METHODS:
