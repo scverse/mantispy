@@ -88,10 +88,10 @@ doc = [
   "ipython",                     # conf.py enables IPython.sphinxext.ipython_console_highlighting
   "mantispy[spatial]",           # autodoc imports io._plate
   "myst-nb>=1.1",
+  "scanpydoc[theme]>=0.15.3",
   "scverse-misc[sphinx]>=0.1.6",
   "sphinx>=8.1",
   "sphinx-autodoc-typehints",
-  "sphinx-book-theme>=1",
   "sphinx-copybutton",
   "sphinx-design",
   "sphinxcontrib-bibtex>=1",
