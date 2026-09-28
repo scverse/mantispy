@@ -45,13 +45,14 @@ def test_the_seeded_set_is_the_top_hit(screen, net):
     assert top["pvalue"] < 0.05
 
 
-def test_a_set_the_group_avoids_is_depleted_not_over_represented(screen, net):
+def test_a_set_the_group_avoids_is_not_a_tested_hypothesis(screen, net):
+    # By default (min_overlap=1) a set with none of the group's genes cannot be over-represented, so it is
+    # not a tested hypothesis: it is dropped from the group's rows rather than sitting there depleted.
     mt.tl.ora(screen, groupby="cluster", net=net, tmin=1)
     table = screen.uns["mantispy"]["ora"]
-    other = table[(table["group"] == "1") & (table["source"] == "B")].iloc[0]
-    # The Fisher test is two-tailed (as decoupler's is), so depletion is significant too; the sign, not the p, marks direction.
-    assert other["n"] == 0
-    assert other["odds_ratio"] < 0
+    group_one = table[table["group"] == "1"]
+    assert "B" not in set(group_one["source"])  # cluster 1 shares no gene with set B
+    assert (group_one["n"] >= 1).all()  # every set left in a group's rows overlaps that group
 
 
 def test_ora_handles_a_control_with_no_gene(net):
@@ -86,8 +87,9 @@ def test_padj_by_group_is_less_conservative_than_pooling_every_group():
     gene_col = set_genes[:10]
     clusters = ["hit"] * 10
     nonset = genes[20:]
-    for g in range(45):
-        gene_col += nonset[g * 4 : g * 4 + 4]
+    spare_set_genes = set_genes[10:]  # ten set-S genes the hit group does not use
+    for g in range(45):  # 45 null groups, each with one set-S gene so they stay tested (a>=1) but null
+        gene_col += [spare_set_genes[g % 10], *nonset[g * 3 : g * 3 + 3]]
         clusters += [f"n{g}"] * 4
 
     adata = ad.AnnData(
@@ -114,6 +116,70 @@ def test_padj_by_group_is_less_conservative_than_pooling_every_group():
 
     with pytest.raises(ValueError, match="padj_by must be 'all' or 'group'"):
         mt.tl.ora(adata.copy(), groupby="cluster", net=net, tmin=1, padj_by="within")
+
+
+def test_min_overlap_scopes_the_tested_and_corrected_sets():
+    # min_overlap bounds which sets are tested for a group, and the q-values are corrected only over the
+    # retained (overlapping) sets, so untested zero-overlap sets do not inflate the correction denominator.
+    genes = [f"g{i}" for i in range(30)]
+    net = pd.DataFrame({"source": sum([[s] * 10 for s in ["X", "Y", "Z"]], []), "target": genes})
+
+    grp_genes = ["g0", "g1", "g2", "g10"]  # three in set X, one in set Y, none in set Z
+    rest_genes = [g for g in genes if g not in grp_genes]  # fill the universe so every set has measured genes
+    gene_col = grp_genes + rest_genes
+    clusters = ["grp"] * len(grp_genes) + ["rest"] * len(rest_genes)
+    adata = ad.AnnData(
+        X=np.zeros((len(gene_col), 3), dtype=np.float32),
+        obs=pd.DataFrame(
+            {"Metadata_Gene": gene_col, "cluster": clusters}, index=[str(i) for i in range(len(gene_col))]
+        ),
+        var=pd.DataFrame(index=["a", "b", "c"]),
+    )
+    adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "perturbation"}
+
+    # 1. min_overlap=1 keeps only the sets grp's genes hit (X and Y), not the zero-overlap set Z.
+    one = adata.copy()
+    mt.tl.ora(one, groupby="cluster", net=net, tmin=1, padj_by="group", min_overlap=1)
+    grp = one.uns["mantispy"]["ora"]
+    grp = grp[grp["group"] == "grp"]
+    assert set(grp["source"]) == {"X", "Y"}  # set Z shares no gene with grp and is dropped
+    assert (grp["n"] >= 1).all()
+
+    from scipy.stats import fisher_exact
+
+    from mantispy._core._stats import benjamini_hochberg
+
+    p = dict(zip(grp["source"], grp["pvalue"], strict=True))
+    q = dict(zip(grp["source"], grp["qvalue"], strict=True))
+    # Set Z's two-tailed Fisher p-value, had the zero-overlap set stayed in the table: a=0, k=4, set size 10,
+    # universe 30, so b=4, c=10, d=16.
+    p_z = float(fisher_exact([[0, 4], [10, 16]], alternative="two-sided")[1])
+    q_reduced = benjamini_hochberg(np.array([p["X"], p["Y"]]))
+    q_all = benjamini_hochberg(np.array([p["X"], p["Y"], p_z]))
+    # The run corrected over the two overlapping sets, and X's q is strictly smaller than a manual all-sets
+    # correction that let the untested set Z enlarge the family.
+    assert np.isclose(q["X"], q_reduced[0])
+    assert q["X"] < q_all[0]
+
+    # 2. min_overlap=2 keeps only sets with at least two of grp's genes (X has three, Y has one).
+    two = adata.copy()
+    mt.tl.ora(two, groupby="cluster", net=net, tmin=1, padj_by="group", min_overlap=2)
+    grp2 = two.uns["mantispy"]["ora"]
+    grp2 = grp2[grp2["group"] == "grp"]
+    assert set(grp2["source"]) == {"X"}
+
+    # 3. A numpy integer is accepted and behaves like the equivalent Python int (common in scientific code).
+    npint = adata.copy()
+    mt.tl.ora(npint, groupby="cluster", net=net, tmin=1, padj_by="group", min_overlap=np.int64(2))
+    grp_npint = npint.uns["mantispy"]["ora"]
+    grp_npint = grp_npint[grp_npint["group"] == "grp"]
+    assert set(grp_npint["source"]) == {"X"}  # same as the plain int 2 above
+
+    # 4. A min_overlap below 1, or not an integer, is rejected.
+    with pytest.raises(ValueError, match="min_overlap must be an int >= 1"):
+        mt.tl.ora(adata.copy(), groupby="cluster", net=net, tmin=1, min_overlap=0)
+    with pytest.raises(ValueError, match="min_overlap must be an int >= 1"):
+        mt.tl.ora(adata.copy(), groupby="cluster", net=net, tmin=1, min_overlap=1.5)
 
 
 def test_net_is_required(screen):
