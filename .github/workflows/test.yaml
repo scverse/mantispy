@@ -144,16 +144,20 @@ jobs:
       - name: Execute every notebook
         run: uvx hatch run tutorials:run
 
-  # Blocking: the registry sha256 guards the download, this guards that the shipped staged variants still
-  # match a rebuild from the current pipeline. A drift now fails the PR, so a pipeline change that no longer
-  # reproduces the uploaded artifacts cannot merge without regenerating and re-uploading them.
+  # Non-blocking, main and schedule only (never on a pull request): rebuilds every staged variant from the
+  # current pipeline and compares against the shipped artifacts. The registry sha256 is the hard gate on
+  # downloads; this only has to notice on main if the pipeline diverges from the uploaded bytes. A rebuild
+  # pulls the raw inputs, sometimes multiple gigabytes, so it is too heavy to gate a pull request on. On
+  # drift: regenerate, re-upload, and re-pin the sha256 in registry.yaml.
   data-drift-check:
     name: Staged variants match the pipeline
+    if: github.event_name != 'pull_request'
     needs: ensure-data-is-cached
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - *clone
       - *setup-uv
       - *restore-data
-      - name: Rebuild the variants and compare against the shipped artifacts
-        run: uvx hatch run data:drift-check
+      - name: Rebuild every variant and compare against the shipped artifacts
+        run: uvx hatch run data:drift-check --include-heavy

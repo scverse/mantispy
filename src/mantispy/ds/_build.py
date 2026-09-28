@@ -2,10 +2,11 @@
 
 This is the single source of truth for the variants that the staged loaders fetch. Each entry in
 :data:`STAGED` pairs a *builder* (rebuilds the variants from the raw pipeline) with a *shipped loader*
-(returns the same filenames as loaded through the public ``mt.ds`` API). ``scripts/build_staged_datasets.py``
-writes what the builders produce; ``scripts/check_staged_drift.py`` compares each shipped variant against a
-rebuild, so the pipeline here and the uploaded bytes must not diverge. After a change to a builder, rebuild
-with ``--print-sha256``, re-upload to ``s3://scverse-exampledata/mantispy/<name>/`` and update the sha256 in
+(returns the same filenames as loaded through the public ``mt.ds`` API) and a ``heavy`` flag (whether the
+rebuild is too large to run on every pull request). ``scripts/build_staged_datasets.py`` writes what the
+builders produce; ``scripts/check_staged_drift.py`` compares each shipped variant against a rebuild, so the
+pipeline here and the uploaded bytes must not diverge. After a change to a builder, rebuild with
+``--print-sha256``, re-upload to ``s3://scverse-exampledata/mantispy/<name>/`` and update the sha256 in
 ``registry.yaml``.
 
 Imports of the public pipeline are deferred into the functions: this module lives inside the package, so a
@@ -19,9 +20,10 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
     from pathlib import Path
 
+    import pandas as pd
     from anndata import AnnData
 
 
@@ -48,13 +50,31 @@ def _gene_consensus(block: AnnData, screened: np.ndarray) -> AnnData:
     return _zero_nonfinite(gene)
 
 
+def _perturbation_consensus(block: AnnData) -> AnnData:
+    """One modz consensus per ``Metadata_Perturbation`` over every well of ``block``, NaN-zeroed.
+
+    Controls are kept: BBBC021's DMSO-at-a-concentration wells are legitimate perturbation units.
+    """
+    from mantispy.tl._consensus import consensus
+
+    agg = consensus(block, by="Metadata_Perturbation", method="modz", correlation="spearman", min_replicates=2)
+    return _zero_nonfinite(agg)
+
+
+def build_rohban_base(cache_dir: str | Path | None = None) -> dict[str, AnnData]:
+    """Returns {'rohban.h5ad': the raw wells the both-flags-False ``mt.ds.rohban`` used to assemble}."""
+    from mantispy.ds._datasets import _rohban_raw
+
+    return {"rohban.h5ad": _stable(_rohban_raw(cache_dir=cache_dir))}
+
+
 def build_rohban_variants(cache_dir: str | Path | None = None) -> dict[str, AnnData]:
     """Returns {'rohban_selected.h5ad': ad, 'rohban_gene.h5ad': ad, 'rohban_gene_selected.h5ad': ad}."""
-    from mantispy.ds._datasets import rohban
+    from mantispy.ds._datasets import _rohban_raw
     from mantispy.pp._normalize import normalize
     from mantispy.pp._select import feature_select, subset_features
 
-    adata = rohban(cache_dir=cache_dir)
+    adata = _rohban_raw(cache_dir=cache_dir)
     adata.obs["is_untreated"] = (adata.obs["Metadata_Perturbation_Type"].astype(str) == "untreated").to_numpy()
     normalize(adata, method="mad_robustize", by="Metadata_Plate", reference="is_untreated")
     _zero_nonfinite(adata)
@@ -72,6 +92,108 @@ def build_rohban_variants(cache_dir: str | Path | None = None) -> dict[str, AnnD
     }
 
 
+def _bbbc021_counts(paths: Sequence[Path]) -> pd.DataFrame:
+    """Cells, and the fields that contributed them, per well, from the per-field ``Image.csv`` of the run the ljosa_2013 profiles aggregate."""
+    import pandas as pd
+
+    rows = []
+    for path in paths:
+        cells = pd.read_csv(path, usecols=["Count_Cells"])["Count_Cells"]
+        rows.append((*path.parent.name.rsplit("-", 1), cells.sum(), (cells > 0).sum()))
+    return pd.DataFrame(rows, columns=["Metadata_Plate", "Metadata_Well", "Metadata_CellCount", "Metadata_SiteCount"])
+
+
+def _assemble_bbbc021(cache_dir: str | Path | None = None) -> AnnData:
+    """Assemble the BBBC021 base object from the raw ljosa_2013 profiles, image table, MOA table and counts.
+
+    This is the raw pipeline the both-flags-False ``mt.ds.bbbc021`` used to run before the base was staged; it
+    lives here so the drift check can rebuild the hosted base from the raw inputs.
+    """
+    import pandas as pd
+
+    from mantispy._core.frames import as_frame
+    from mantispy._core.logging import get_logger
+    from mantispy.ds._datasets import _files
+    from mantispy.io._profiles import from_dataframe
+
+    # The registry entry also lists the rehosted .h5ad variants the loader fetches; the rebuild needs only the
+    # raw inputs, so those are filtered out before the positional unpack (profiles, images, moa, per-well counts).
+    raw = _files("bbbc021", cache_dir, select=lambda name: not name.endswith(".h5ad"))
+    profiles_path, images_path, moa_path, *fields = raw
+    wells = (
+        pd.read_csv(images_path)[
+            [
+                "Image_Metadata_Plate_DAPI",
+                "Image_Metadata_Well_DAPI",
+                "Image_Metadata_Compound",
+                "Image_Metadata_Concentration",
+            ]
+        ]
+        .drop_duplicates()
+        .rename(
+            columns={
+                "Image_Metadata_Plate_DAPI": "Metadata_Plate",
+                "Image_Metadata_Well_DAPI": "Metadata_Well",
+                "Image_Metadata_Compound": "Metadata_Compound",
+                "Image_Metadata_Concentration": "Metadata_Concentration",
+            }
+        )
+    )
+    moa = pd.read_csv(moa_path).rename(
+        columns={"compound": "Metadata_Compound", "concentration": "Metadata_Concentration", "moa": "Metadata_MOA"}
+    )
+    annotations = wells.merge(moa, on=["Metadata_Compound", "Metadata_Concentration"], how="left")
+
+    profiles = pd.read_csv(profiles_path).rename(
+        columns={"Image_Metadata_Plate": "Metadata_Plate", "Image_Metadata_Well": "Metadata_Well"}
+    )
+    merged = profiles.merge(annotations, on=["Metadata_Plate", "Metadata_Well"], how="left").merge(
+        _bbbc021_counts(fields), on=["Metadata_Plate", "Metadata_Well"], how="left"
+    )
+    if unmatched := int(merged["Metadata_Compound"].isna().sum()):
+        get_logger().warning("%d wells have no compound annotation and are dropped", unmatched)
+        merged = merged[merged["Metadata_Compound"].notna()]
+
+    adata = from_dataframe(merged, resolution="well")
+    obs = as_frame(adata.obs)
+    obs["Metadata_Control"] = (obs["Metadata_Compound"] == "DMSO").to_numpy()
+    obs["Metadata_Perturbation"] = pd.Categorical(
+        obs["Metadata_Compound"].astype(str) + "@" + obs["Metadata_Concentration"].astype(str)
+    )
+    obs["Metadata_Perturbation_Type"] = pd.Series("compound", index=obs.index, dtype="category")
+    adata.uns["mantispy"]["dataset"] = "BBBC021"
+    get_logger().info("BBBC021: %d wells x %d features", adata.n_obs, adata.n_vars)
+    return adata
+
+
+def build_bbbc021_variants(cache_dir: str | Path | None = None) -> dict[str, AnnData]:
+    """Returns {'bbbc021.h5ad': ad, 'bbbc021_selected.h5ad': ad, 'bbbc021_agg.h5ad': ad, 'bbbc021_agg_selected.h5ad': ad}."""
+    from mantispy.pp._select import feature_select, subset_features
+
+    base = _stable(_assemble_bbbc021(cache_dir))
+
+    # Well-level feature-selected block, pycytominer's default operations, on the raw (author-normalized) base.
+    selected = base.copy()
+    feature_select(selected)
+    selected = _stable(subset_features(selected))
+
+    # One modz consensus per compound-at-concentration, on the full and on the feature-selected block. DMSO
+    # wells are kept: their concentration series are legitimate perturbation units, not a normalization control.
+    return {
+        "bbbc021.h5ad": base,
+        "bbbc021_selected.h5ad": selected,
+        "bbbc021_agg.h5ad": _stable(_perturbation_consensus(base)),
+        "bbbc021_agg_selected.h5ad": _stable(_perturbation_consensus(selected)),
+    }
+
+
+def _shipped_rohban_base() -> dict[str, AnnData]:
+    """The rohban base as fetched through the public ``mt.ds.rohban`` API (both flags False)."""
+    from mantispy.ds._datasets import rohban
+
+    return {"rohban.h5ad": rohban()}
+
+
 def _shipped_rohban() -> dict[str, AnnData]:
     """The three rohban variants as fetched through the public ``mt.ds.rohban`` API."""
     from mantispy.ds._datasets import rohban
@@ -83,9 +205,25 @@ def _shipped_rohban() -> dict[str, AnnData]:
     }
 
 
+def _shipped_bbbc021() -> dict[str, AnnData]:
+    """The four bbbc021 variants as fetched through the public ``mt.ds.bbbc021`` API."""
+    from mantispy.ds._datasets import bbbc021
+
+    return {
+        "bbbc021.h5ad": bbbc021(),
+        "bbbc021_selected.h5ad": bbbc021(feature_selected=True),
+        "bbbc021_agg.h5ad": bbbc021(aggregated=True),
+        "bbbc021_agg_selected.h5ad": bbbc021(aggregated=True, feature_selected=True),
+    }
+
+
 # One entry per staged dataset: (builder rebuilding the variants from the raw pipeline, loader returning the
-# shipped variants through the public ``mt.ds`` API, keyed by the same filenames). Later PRs stage a dataset
-# by adding one entry here; the build and drift scripts loop this registry and need no per-dataset edit.
-STAGED: dict[str, tuple[Callable[..., dict[str, AnnData]], Callable[[], dict[str, AnnData]]]] = {
-    "rohban": (build_rohban_variants, _shipped_rohban),
+# shipped variants through the public ``mt.ds`` API keyed by the same filenames, ``heavy`` marking a rebuild
+# too large to run on every pull request). Later PRs stage a dataset by adding one entry here; the build and
+# drift scripts loop this registry and need no per-dataset edit. ``heavy`` datasets rebuild on the cron drift
+# job only (``check_staged_drift.py --include-heavy``); the rest rebuild on every PR.
+STAGED: dict[str, tuple[Callable[..., dict[str, AnnData]], Callable[[], dict[str, AnnData]], bool]] = {
+    "rohban": (build_rohban_variants, _shipped_rohban, False),
+    "rohban_base": (build_rohban_base, _shipped_rohban_base, False),
+    "bbbc021": (build_bbbc021_variants, _shipped_bbbc021, True),
 }

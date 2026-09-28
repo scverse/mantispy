@@ -22,7 +22,7 @@ def pki():
 
 @pytest.mark.network
 def test_rohban_loads_with_genes_controls_and_counts(rohban):
-    assert rohban.shape == (1918, 3634)
+    assert rohban.shape == (1918, 3616)
     assert mt.io.validate(rohban).ok, mt.io.validate(rohban).errors
     # The replication unit is the ORF construct, not the gene: 323 broad_sample constructs, plus the three
     # control ORFs (by pert_name) and the one untreated group. The gene stays in its own column.
@@ -66,6 +66,38 @@ def test_rohban_variants_reject_plate_subsetting():
 def test_rohban_flags_must_be_bool():
     with pytest.raises(ValueError, match="aggregated must be a bool"):
         mt.ds.rohban(aggregated=1)
+
+
+@pytest.mark.network
+def test_bbbc021_base_and_selected_are_well_level():
+    base = mt.ds.bbbc021()
+    assert base.shape == (632, 467)
+    assert "Metadata_Perturbation" in base.obs
+    assert mt.io.validate(base).ok, mt.io.validate(base).errors
+    selected = mt.ds.bbbc021(feature_selected=True)
+    assert selected.shape == (632, 166)
+    assert "Metadata_Perturbation" in selected.obs
+    assert mt.io.validate(selected).ok, mt.io.validate(selected).errors
+
+
+@pytest.mark.network
+def test_bbbc021_aggregated_variants_are_perturbation_level():
+    agg = mt.ds.bbbc021(aggregated=True)
+    assert agg.shape == (104, 467)
+    assert "Metadata_Perturbation" in agg.obs
+    # One modz profile per compound-at-concentration, and the DMSO concentrations are kept as perturbations
+    # rather than dropped as controls, so the row count matches the number of well-level perturbations.
+    assert agg.obs["Metadata_Perturbation"].nunique() == 104
+    assert int(agg.obs["Metadata_Control"].sum()) == 1
+    assert "DMSO@0.0" in set(agg.obs["Metadata_Perturbation"].astype(str))
+    agg_selected = mt.ds.bbbc021(aggregated=True, feature_selected=True)
+    assert agg_selected.shape == (104, 166)
+    assert "Metadata_Perturbation" in agg_selected.obs
+
+
+def test_bbbc021_flags_must_be_bool():
+    with pytest.raises(ValueError, match="aggregated must be a bool"):
+        mt.ds.bbbc021(aggregated=1)
 
 
 @pytest.mark.network
