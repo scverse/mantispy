@@ -166,6 +166,44 @@ def test_stability_window_restricts_the_sweep_to_a_height_band():
         mt.tl.cluster(adata, use_rep=None, criterion="stability", stability_window=0.5, key_added="bad")
 
 
+def test_stability_window_lifts_the_cluster_ceiling():
+    """With more than 25 well-separated groups a window keeps the many-cluster cut the count ceiling would drop."""
+    from scipy.cluster.hierarchy import linkage as scipy_linkage
+    from scipy.spatial.distance import pdist
+
+    rng = np.random.default_rng(3)
+    centers = rng.normal(size=(30, 40)) * 5.0  # 30 distinct, near-uncorrelated directions
+    values = np.repeat(centers, 2, axis=0) + rng.normal(scale=0.01, size=(60, 40))  # 30 tight pairs, n_obs=60
+    adata = ad.AnnData(
+        X=values.astype(np.float32),
+        obs=pd.DataFrame({"Metadata_Perturbation": [f"p{i}" for i in range(60)]}, index=[str(i) for i in range(60)]),
+        var=pd.DataFrame(index=[f"f{i}" for i in range(40)]),
+    )
+    adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "perturbation"}
+
+    # Reproduce the default correlation/average tree to find the 30-cluster plateau: the 30 within-pair merges are the
+    # lowest heights, so between the 30th and 31st sorted merge exactly 30 clusters stand.
+    heights = np.sort(scipy_linkage(pdist(values, metric="correlation"), method="average")[:, 2])
+    span = float(heights[30] - heights[29])
+    lo, hi = float(heights[29]) + span * 0.2, float(heights[29]) + span * 0.8
+
+    unbounded = adata.copy()
+    mt.tl.cluster(unbounded, use_rep=None, criterion="stability")
+    n_unbounded = unbounded.uns["mantispy"]["cluster"]["n_clusters"]
+    assert 1 <= n_unbounded <= 25  # the count ceiling keeps the unbounded sweep at or below 25 clusters
+
+    windowed = adata.copy()
+    mt.tl.cluster(windowed, use_rep=None, criterion="stability", stability_window=(lo, hi))
+    summary = windowed.uns["mantispy"]["cluster"]
+    # The window brackets the 30-cluster plateau, so dropping the ceiling recovers a many-cluster cut instead of the
+    # 1-cluster fallback the ceiling forced when every in-window cut exceeded 25 clusters.
+    assert summary["n_clusters"] > 25
+    assert summary["n_clusters"] != 1
+    assert np.isfinite(summary["distance_cut"])
+    assert np.isfinite(summary["stability"])
+    assert lo <= summary["distance_cut"] <= hi
+
+
 def test_copy_leaves_the_input_alone(planted):
     result = mt.tl.cluster(planted, use_rep=None, copy=True)
     assert "cluster" in result.obs
