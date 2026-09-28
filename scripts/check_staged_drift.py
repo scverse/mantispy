@@ -1,10 +1,11 @@
-"""Check the shipped staged rohban variants against a rebuild from the current pipeline.
+"""Check the shipped staged variants against a rebuild from the current pipeline.
 
     python scripts/check_staged_drift.py
 
-Exit 1 on drift. The registry sha256 only guards the downloaded bytes; this guards that the code in
-``scripts/build_staged_datasets.py`` still reproduces what was uploaded, so a pipeline change that no longer
-matches the shipped artifacts is caught. It is wired into CI as a non-blocking job.
+Exit 1 on drift. The registry sha256 only guards the downloaded bytes; this guards that the builders in
+:mod:`mantispy.ds._build` still reproduce what was uploaded, so a pipeline change that no longer matches the
+shipped artifacts is caught. It loops the :data:`mantispy.ds._build.STAGED` registry, so a newly staged dataset
+is covered without editing this script. It is wired into CI as a blocking job.
 """
 
 from __future__ import annotations
@@ -13,9 +14,8 @@ import sys
 
 import numpy as np
 from anndata import AnnData
-from build_staged_datasets import build_rohban_variants
 
-import mantispy as mt
+from mantispy.ds._build import STAGED
 
 if __name__ != "__main__":  # pragma: no cover
     raise ImportError("check_staged_drift is a script, run it with `python scripts/check_staged_drift.py`")
@@ -35,24 +35,20 @@ def _drift(shipped: AnnData, rebuilt: AnnData) -> str | None:
     return None
 
 
-shipped = {
-    "rohban_selected.h5ad": mt.ds.rohban(feature_selected=True),
-    "rohban_gene.h5ad": mt.ds.rohban(aggregated=True),
-    "rohban_gene_selected.h5ad": mt.ds.rohban(aggregated=True, feature_selected=True),
-}
-rebuilt = build_rohban_variants()
-
 ok = True
-for name in shipped:
-    reason = _drift(shipped[name], rebuilt[name])
-    if reason is None:
-        print(f"{name}: matches the current pipeline")
-        continue
-    ok = False
-    print(
-        f"{name} has drifted from the current pipeline ({reason}); regenerate with "
-        "scripts/build_staged_datasets.py, re-upload to s3://scverse-exampledata/mantispy/rohban/, "
-        "and update the sha256 in registry.yaml."
-    )
+for name, (builder, shipped_loader) in STAGED.items():
+    shipped = shipped_loader()
+    rebuilt = builder()
+    for filename in shipped:
+        reason = _drift(shipped[filename], rebuilt[filename])
+        if reason is None:
+            print(f"{filename}: matches the current pipeline")
+            continue
+        ok = False
+        print(
+            f"{filename} has drifted from the current pipeline ({reason}); regenerate with "
+            f"scripts/build_staged_datasets.py, re-upload to s3://scverse-exampledata/mantispy/{name}/, "
+            "and update the sha256 in registry.yaml."
+        )
 
 sys.exit(0 if ok else 1)

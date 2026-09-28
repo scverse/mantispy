@@ -144,13 +144,12 @@ jobs:
       - name: Execute every notebook
         run: uvx hatch run tutorials:run
 
-  # Non-blocking: the registry sha256 guards the download, this guards that the shipped staged rohban
-  # variants still match a rebuild from the current pipeline. continue-on-error keeps a drift a warning
-  # rather than a merge blocker, and it is left out of the "check" alls-green gate on purpose.
+  # Blocking: the registry sha256 guards the download, this guards that the shipped staged variants still
+  # match a rebuild from the current pipeline. A drift now fails the PR, so a pipeline change that no longer
+  # reproduces the uploaded artifacts cannot merge without regenerating and re-uploading them.
   data-drift-check:
-    name: Staged rohban variants match the pipeline (non-blocking)
+    name: Staged variants match the pipeline
     needs: ensure-data-is-cached
-    continue-on-error: true
     runs-on: ubuntu-latest
     steps:
       - *clone
