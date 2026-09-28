@@ -17,7 +17,7 @@ def bbbc021():
 
 @pytest.mark.network
 def test_loads_annotated_and_valid(bbbc021):
-    assert bbbc021.shape == (632, 473)
+    assert bbbc021.shape == (632, 467)
     assert mt.io.validate(bbbc021).ok, mt.io.validate(bbbc021).errors
     assert set(bbbc021.obs.columns) == {
         "Metadata_Plate",
@@ -27,6 +27,7 @@ def test_loads_annotated_and_valid(bbbc021):
         "Metadata_MOA",
         "Metadata_Control",
         "Metadata_Perturbation",
+        "Metadata_Perturbation_Type",
         "Metadata_CellCount",
         "Metadata_SiteCount",
     }

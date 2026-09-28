@@ -33,7 +33,7 @@ def main() -> None:
     if args.print_sha256:
         args.out.mkdir(parents=True, exist_ok=True)
     entries = STAGED.values() if args.only is None else [STAGED[args.only]]
-    for builder, _shipped in entries:
+    for builder, _shipped, _heavy in entries:
         for filename, adata in builder().items():
             line = f"{filename}  {adata.n_obs} x {adata.n_vars}"
             if args.print_sha256:

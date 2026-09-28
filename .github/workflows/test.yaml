@@ -146,7 +146,9 @@ jobs:
 
   # Blocking: the registry sha256 guards the download, this guards that the shipped staged variants still
   # match a rebuild from the current pipeline. A drift now fails the PR, so a pipeline change that no longer
-  # reproduces the uploaded artifacts cannot merge without regenerating and re-uploading them.
+  # reproduces the uploaded artifacts cannot merge without regenerating and re-uploading them. This per-PR
+  # job rebuilds only the light datasets; the heavy ones (large raw inputs) are covered by the scheduled job
+  # below so a pull request is not held on a multi-gigabyte rebuild.
   data-drift-check:
     name: Staged variants match the pipeline
     needs: ensure-data-is-cached
@@ -157,3 +159,17 @@ jobs:
       - *restore-data
       - name: Rebuild the variants and compare against the shipped artifacts
         run: uvx hatch run data:drift-check
+
+  # Scheduled only: the heavy datasets rebuild from raw inputs too large to run on every pull request, so
+  # their drift is checked on the cron schedule instead. Runs the same script with --include-heavy.
+  data-drift-check-heavy:
+    name: Staged variants match the pipeline (including heavy datasets)
+    if: github.event_name == 'schedule'
+    needs: ensure-data-is-cached
+    runs-on: ubuntu-latest
+    steps:
+      - *clone
+      - *setup-uv
+      - *restore-data
+      - name: Rebuild every variant, heavy datasets included, and compare against the shipped artifacts
+        run: uvx hatch run data:drift-check --include-heavy

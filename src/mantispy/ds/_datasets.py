@@ -108,156 +108,75 @@ def _profiles(
     return adata
 
 
-def bbbc021(cache_dir: str | Path | None = None) -> AnnData:
+#: The (aggregated, feature_selected) combination each rehosted bbbc021 variant answers to.
+_BBBC021_VARIANTS = {
+    (False, False): "bbbc021.h5ad",  # 632 x 467, well level, all features
+    (False, True): "bbbc021_selected.h5ad",  # well level, feature selected
+    (True, False): "bbbc021_agg.h5ad",  # perturbation level (modz), all features
+    (True, True): "bbbc021_agg_selected.h5ad",  # perturbation level (modz), feature selected
+}
+
+
+def bbbc021(
+    cache_dir: str | Path | None = None, *, aggregated: bool = False, feature_selected: bool = False
+) -> AnnData:
     """BBBC021, MCF-7 cells treated with small molecules, the standard mechanism-of-action benchmark.
 
     Well-level CellProfiler profiles (``cpg0010-caie-drugresponse``), joined to the compound, concentration and mechanism of action the Broad Bioimage Benchmark Collection publishes with the image set.
     The image set covers 113 compounds.
     This returns the annotated subset the benchmark uses: 38 compounds plus DMSO, 103 treatments (a compound at a concentration) across 12 mechanisms.
-    Downloads about 22 MB, half of it the ``Image.csv`` of each well, which is where the cell counts are.
+
+    The base and its variants are pre-built by ``scripts/build_staged_datasets.py`` and rehosted on ``scverse-exampledata``, so the loader fetches a single h5ad rather than reassembling the base from the raw per-well tables. The two flags select the variant:
+
+    - both ``False``: the base, well-level profiles with every feature, the object the recipe tutorials start from.
+    - ``feature_selected=True``: the well-level block after pycytominer-default feature selection.
+    - ``aggregated=True``: one ``modz`` consensus (Spearman, ``min_replicates=2``) per ``Metadata_Perturbation`` over every well, DMSO-at-a-concentration included, so each compound-at-concentration is one profile.
+    - ``aggregated=True, feature_selected=True``: that same consensus on the feature-selected block.
 
     Every well carries a mechanism, DMSO included; select treatments with ``adata[~adata.obs["Metadata_Control"]]``.
 
     Args:
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
+        aggregated: Return the perturbation-level ``modz`` consensus instead of the wells.
+        feature_selected: Return the feature-selected block instead of all features.
 
     Returns:
-        Wells by features at well resolution, with ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Compound``, ``Metadata_Concentration``, ``Metadata_MOA``, ``Metadata_Perturbation`` (compound at concentration), ``Metadata_Perturbation_Type`` (``"compound"``), ``Metadata_Control``, and ``Metadata_CellCount`` over the ``Metadata_SiteCount`` fields, of four imaged, that contributed cells.
+        Wells by features at well resolution when both flags are ``False``, else the staged variant selected by the two flags, read with :func:`mantispy.io.read`.
+        Every variant carries ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Compound``, ``Metadata_Concentration``, ``Metadata_MOA``, ``Metadata_Perturbation`` (compound at concentration), ``Metadata_Perturbation_Type`` (``"compound"``), ``Metadata_Control``, and ``Metadata_CellCount`` over the ``Metadata_SiteCount`` fields, of four imaged, that contributed cells.
+
+    Raises:
+        ValueError: ``aggregated`` or ``feature_selected`` is not a bool.
 
     References:
         :cite:t:`Caie_2010`, the image set.
         :cite:t:`Ljosa_2013`, these profiles and the benchmark.
         Images courtesy of Peter Caie and David Westwood, available from the Broad Bioimage Benchmark Collection :cite:p:`Ljosa_2012`.
     """
-    profiles_path, images_path, moa_path, *fields = _files("bbbc021", cache_dir)
-    wells = (
-        pd.read_csv(images_path)[
-            [
-                "Image_Metadata_Plate_DAPI",
-                "Image_Metadata_Well_DAPI",
-                "Image_Metadata_Compound",
-                "Image_Metadata_Concentration",
-            ]
-        ]
-        .drop_duplicates()
-        .rename(
-            columns={
-                "Image_Metadata_Plate_DAPI": "Metadata_Plate",
-                "Image_Metadata_Well_DAPI": "Metadata_Well",
-                "Image_Metadata_Compound": "Metadata_Compound",
-                "Image_Metadata_Concentration": "Metadata_Concentration",
-            }
-        )
-    )
-    moa = pd.read_csv(moa_path).rename(
-        columns={"compound": "Metadata_Compound", "concentration": "Metadata_Concentration", "moa": "Metadata_MOA"}
-    )
-    annotations = wells.merge(moa, on=["Metadata_Compound", "Metadata_Concentration"], how="left")
-
-    profiles = pd.read_csv(profiles_path).rename(
-        columns={"Image_Metadata_Plate": "Metadata_Plate", "Image_Metadata_Well": "Metadata_Well"}
-    )
-    merged = profiles.merge(annotations, on=["Metadata_Plate", "Metadata_Well"], how="left").merge(
-        _bbbc021_counts(fields), on=["Metadata_Plate", "Metadata_Well"], how="left"
-    )
-    if unmatched := int(merged["Metadata_Compound"].isna().sum()):
-        get_logger().warning("%d wells have no compound annotation and are dropped", unmatched)
-        merged = merged[merged["Metadata_Compound"].notna()]
-
-    adata = from_dataframe(merged, resolution="well")
-    obs = as_frame(adata.obs)
-    obs["Metadata_Control"] = (obs["Metadata_Compound"] == "DMSO").to_numpy()
-    obs["Metadata_Perturbation"] = pd.Categorical(
-        obs["Metadata_Compound"].astype(str) + "@" + obs["Metadata_Concentration"].astype(str)
-    )
-    obs["Metadata_Perturbation_Type"] = pd.Series("compound", index=obs.index, dtype="category")
-    adata.uns["mantispy"]["dataset"] = "BBBC021"
-    get_logger().info("BBBC021: %d wells x %d features", adata.n_obs, adata.n_vars)
-    return adata
-
-
-def _bbbc021_counts(paths: Sequence[Path]) -> pd.DataFrame:
-    """Cells, and the fields that contributed them, per well, from the per-field ``Image.csv`` of the run the ljosa_2013 profiles aggregate."""
-    rows = []
-    for path in paths:
-        cells = pd.read_csv(path, usecols=["Count_Cells"])["Count_Cells"]
-        rows.append((*path.parent.name.rsplit("-", 1), cells.sum(), (cells > 0).sum()))
-    return pd.DataFrame(rows, columns=["Metadata_Plate", "Metadata_Well", "Metadata_CellCount", "Metadata_SiteCount"])
+    for flag_name, flag in (("aggregated", aggregated), ("feature_selected", feature_selected)):
+        if not isinstance(flag, bool):
+            raise ValueError(f"{flag_name} must be a bool, got {type(flag).__name__}")
+    target = _BBBC021_VARIANTS[aggregated, feature_selected]
+    (path,) = _files("bbbc021", cache_dir, select=lambda name: name == target)
+    return read(path)
 
 
 #: The (aggregated, feature_selected) combination each rehosted rohban variant answers to.
 _ROHBAN_VARIANTS = {
+    (False, False): "rohban.h5ad",  # 1918 x 3616, well level, all features
     (False, True): "rohban_selected.h5ad",  # 1918 x 751, well level
     (True, False): "rohban_gene.h5ad",  # 190 x 3616, gene level, full features
     (True, True): "rohban_gene_selected.h5ad",  # 190 x 751, gene level, feature selected
 }
 
 
-def rohban(
-    plates: Sequence[str] | None = None,
-    cache_dir: str | Path | None = None,
-    *,
-    aggregated: bool = False,
-    feature_selected: bool = False,
-) -> AnnData:
-    """An ORF overexpression screen, with the genes and cell counts that BBBC021 lacks.
+def _rohban_raw(cache_dir: str | Path | None = None) -> AnnData:
+    """Assemble the rohban base object (all five plates) from the raw ``*_augmented`` per-plate tables.
 
-    ``cpg0017-rohban-pathways``: U2OS cells, one ORF construct overexpressed per well, roughly ten replicate wells per construct over five plates.
-    Downloads about 27 MB for all five.
-
-    With ``aggregated`` or ``feature_selected`` set, this returns a pre-computed staged variant rehosted on ``scverse-exampledata`` (each under 7 MB) instead of downloading and reprocessing the five raw plate tables. The variants are built once by ``scripts/build_staged_datasets.py`` from per-plate ``mad_robustize`` normalization against the untreated wells:
-
-    - ``feature_selected=True``: the well-level block after pycytominer-default feature selection, 1,918 wells by 751 features.
-    - ``aggregated=True``: one ``modz`` consensus (Spearman, ``min_replicates=2``) per ``Metadata_Gene`` over the screened wells (untreated and transfection controls dropped), 190 genes by 3,616 features.
-    - ``aggregated=True, feature_selected=True``: that same gene consensus on the feature-selected block, 190 genes by 751 features.
-
-    Args:
-        plates: Plate barcodes to load, all five when omitted.
-            Only applies to the raw well-level path.
-        cache_dir: Where to keep the download.
-            Defaults to :attr:`mantispy.settings.cache_dir`.
-        aggregated: Return the gene-level ``modz`` consensus instead of the raw wells.
-        feature_selected: Return the feature-selected block instead of all features.
-
-    Returns:
-        The raw wells by features at well resolution when both flags are ``False``, else the staged variant selected by the two flags, read with :func:`mantispy.io.read`.
-
-        The raw object carries:
-
-        ``Metadata_Perturbation``: the ORF construct (``Metadata_broad_sample``, ~323 of them), the unit the screen varied and what replicate wells share. Several constructs can overexpress the same gene, so this is finer than the gene; the paper's active set is construct-level. The control ORFs read as their ``Metadata_pert_name`` (``Luciferase_CTRL``, ``LacZ_CTRL``, ``eGFP_CTRL``) and the untreated EMPTY wells as ``"untreated"``.
-
-        ``Metadata_Perturbation_Type``: ``"orf"`` for the overexpression constructs and controls, ``"untreated"`` for the EMPTY wells.
-
-        ``Metadata_Gene`` (the overexpressed gene, 194 of them, so ``tl.pathway_coherence`` and ``tl.enrich_hits`` group by it), ``Metadata_Construct`` (the ``broad_sample``, missing on the controls and EMPTY wells) and ``Metadata_Allele`` (the human-readable ``pert_name``, which separates allele variants).
-
-        ``Metadata_Control``, ``Metadata_CellCount``, ``Metadata_SiteCount`` and the screen's own ``Metadata_gene_name``, ``Metadata_GeneID`` and ``Metadata_ASSAY_WELL_ROLE``.
-
-    Raises:
-        KeyError: A plate is not one of the five.
-        ValueError: ``aggregated`` or ``feature_selected`` is not a bool, or ``plates`` is given for a variant.
-
-    Notes:
-        ``Metadata_Control`` marks the wells transfected with a control ORF (Luciferase, LacZ and eGFP), the reference for normalization.
-        The untreated wells (``Metadata_gene_name == "EMPTY"``) were never transfected and are not flagged; they carry ``Metadata_Perturbation == "untreated"``, so drop them if a gene-level analysis should not see them.
-        Regroup replicates to the gene with ``groupby="Metadata_Gene"`` or ``tl.consensus(by="Metadata_Gene")``; the gene is never smeared into the perturbation id.
-
-    References:
-        :cite:t:`Rohban_2017`.
+    This is the raw pipeline the both-flags-False :func:`rohban` used to run before the base was staged; it
+    lives here so :func:`mantispy.ds._build.build_rohban_base` can rebuild the hosted base from the raw inputs.
     """
-    for flag_name, flag in (("aggregated", aggregated), ("feature_selected", feature_selected)):
-        if not isinstance(flag, bool):
-            raise ValueError(f"{flag_name} must be a bool, got {type(flag).__name__}")
-    if (aggregated or feature_selected) and plates is not None:
-        raise ValueError(
-            "plates only applies to the raw wells; a pre-aggregated or feature-selected variant cannot be plate-subset"
-        )
-    if aggregated or feature_selected:
-        target = _ROHBAN_VARIANTS[aggregated, feature_selected]
-        (path,) = _files("rohban", cache_dir, select=lambda name: name == target)
-        return read(path)
-
-    adata = _augmented("rohban", plates, cache_dir)
+    adata = _augmented("rohban", None, cache_dir)
     obs = as_frame(adata.obs)
     role = obs["Metadata_ASSAY_WELL_ROLE"].astype(str)
     obs["Metadata_Control"] = (role == "CTRL").to_numpy()
@@ -288,6 +207,80 @@ def rohban(
         int(construct.nunique()),
         int(gene.nunique()),
     )
+    return adata
+
+
+def _subset_plates(adata: AnnData, name: str, plates: Sequence[str]) -> AnnData:
+    """The wells of ``plates`` from an in-memory object, raising ``KeyError`` for a plate that is not present."""
+    known = set(adata.obs["Metadata_Plate"].astype(str))
+    if unknown := sorted(set(plates) - known):
+        raise KeyError(f"{name} has no plate(s) {unknown}; available: {sorted(known)}")
+    return adata[adata.obs["Metadata_Plate"].astype(str).isin(set(plates)).to_numpy()].copy()
+
+
+def rohban(
+    plates: Sequence[str] | None = None,
+    cache_dir: str | Path | None = None,
+    *,
+    aggregated: bool = False,
+    feature_selected: bool = False,
+) -> AnnData:
+    """An ORF overexpression screen, with the genes and cell counts that BBBC021 lacks.
+
+    ``cpg0017-rohban-pathways``: U2OS cells, one ORF construct overexpressed per well, roughly ten replicate wells per construct over five plates.
+
+    The base and its variants are pre-built by ``scripts/build_staged_datasets.py`` from the five raw plate tables and rehosted on ``scverse-exampledata`` (each under 7 MB), so the loader fetches a single h5ad rather than reassembling the base on every call. The two flags select the variant, which the variants build from per-plate ``mad_robustize`` normalization against the untreated wells:
+
+    - both ``False``: the raw wells with every feature, 1,918 wells by 3,616 features.
+    - ``feature_selected=True``: the well-level block after pycytominer-default feature selection, 1,918 wells by 751 features.
+    - ``aggregated=True``: one ``modz`` consensus (Spearman, ``min_replicates=2``) per ``Metadata_Gene`` over the screened wells (untreated and transfection controls dropped), 190 genes by 3,616 features.
+    - ``aggregated=True, feature_selected=True``: that same gene consensus on the feature-selected block, 190 genes by 751 features.
+
+    Args:
+        plates: Plate barcodes to load, all five when omitted.
+            Only applies to the base; the hosted base is fetched once and subset to these plates in memory.
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
+        aggregated: Return the gene-level ``modz`` consensus instead of the raw wells.
+        feature_selected: Return the feature-selected block instead of all features.
+
+    Returns:
+        The raw wells by features at well resolution when both flags are ``False``, else the staged variant selected by the two flags, read with :func:`mantispy.io.read`.
+
+        The base object carries:
+
+        ``Metadata_Perturbation``: the ORF construct (``Metadata_broad_sample``, ~323 of them), the unit the screen varied and what replicate wells share. Several constructs can overexpress the same gene, so this is finer than the gene; the paper's active set is construct-level. The control ORFs read as their ``Metadata_pert_name`` (``Luciferase_CTRL``, ``LacZ_CTRL``, ``eGFP_CTRL``) and the untreated EMPTY wells as ``"untreated"``.
+
+        ``Metadata_Perturbation_Type``: ``"orf"`` for the overexpression constructs and controls, ``"untreated"`` for the EMPTY wells.
+
+        ``Metadata_Gene`` (the overexpressed gene, 194 of them, so ``tl.pathway_coherence`` and ``tl.enrich_hits`` group by it), ``Metadata_Construct`` (the ``broad_sample``, missing on the controls and EMPTY wells) and ``Metadata_Allele`` (the human-readable ``pert_name``, which separates allele variants).
+
+        ``Metadata_Control``, ``Metadata_CellCount``, ``Metadata_SiteCount`` and the screen's own ``Metadata_gene_name``, ``Metadata_GeneID`` and ``Metadata_ASSAY_WELL_ROLE``.
+
+    Raises:
+        KeyError: A plate is not one of the five.
+        ValueError: ``aggregated`` or ``feature_selected`` is not a bool, or ``plates`` is given for a variant.
+
+    Notes:
+        ``Metadata_Control`` marks the wells transfected with a control ORF (Luciferase, LacZ and eGFP), the reference for normalization.
+        The untreated wells (``Metadata_gene_name == "EMPTY"``) were never transfected and are not flagged; they carry ``Metadata_Perturbation == "untreated"``, so drop them if a gene-level analysis should not see them.
+        Regroup replicates to the gene with ``groupby="Metadata_Gene"`` or ``tl.consensus(by="Metadata_Gene")``; the gene is never smeared into the perturbation id.
+
+    References:
+        :cite:t:`Rohban_2017`.
+    """
+    for flag_name, flag in (("aggregated", aggregated), ("feature_selected", feature_selected)):
+        if not isinstance(flag, bool):
+            raise ValueError(f"{flag_name} must be a bool, got {type(flag).__name__}")
+    if (aggregated or feature_selected) and plates is not None:
+        raise ValueError(
+            "plates only applies to the raw wells; a pre-aggregated or feature-selected variant cannot be plate-subset"
+        )
+    target = _ROHBAN_VARIANTS[aggregated, feature_selected]
+    (path,) = _files("rohban", cache_dir, select=lambda name: name == target)
+    adata = read(path)
+    if plates is not None:
+        adata = _subset_plates(adata, "rohban", plates)
     return adata
 
 

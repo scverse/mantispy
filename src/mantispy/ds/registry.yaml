@@ -1912,6 +1912,21 @@ datasets:
     - name: cpg0010-caie-drugresponse/broad-az/workspace/analysis/Week9/Week9_39301/analysis/Week9_39301-G11/Image.csv
       s3_key: cpg0010-caie-drugresponse/broad-az/workspace/analysis/Week9/Week9_39301/analysis/Week9_39301-G11/Image.csv
       sha256: 4d1fc2e585b78b7b7fa875f20e4255148420037da22fca38312c95ec04b2be28
+    # Staged variants rehosted on scverse-exampledata (explicit url overrides base_url, so the raw profile,
+    # image, MOA and per-well count tables above stay on cellpainting-gallery). Regenerate with
+    # scripts/build_staged_datasets.py.
+    - name: bbbc021.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/bbbc021/bbbc021.h5ad
+      sha256: 7dbad7bfebb21eb78caa53b5f0c25accd74e6b6db09abc9963230e4c383ef1aa
+    - name: bbbc021_selected.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/bbbc021/bbbc021_selected.h5ad
+      sha256: ef25b1198909370cdbe99f594da18ec0ce581649d80d51e8f7727725d8f3bc45
+    - name: bbbc021_agg.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/bbbc021/bbbc021_agg.h5ad
+      sha256: fe09c65c8aee0ea8e671e466ebab1e1ef4aa50e4ae306331bfa7811560a114a0
+    - name: bbbc021_agg_selected.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/bbbc021/bbbc021_agg_selected.h5ad
+      sha256: 7b42b33f91da91e4e2d92ef30662e2006d1128d531185bfa8bac17db4357e5c0
 
   pooled_rare:
     type: mantispy
@@ -1948,6 +1963,9 @@ datasets:
       sha256: 34136ecae8cf23849656325fab6c90e61cd57733d1b644dbe31372bf10c6ed8c
     # Staged variants rehosted on scverse-exampledata (explicit url overrides base_url, so the raw plate
     # tables above stay on cellpainting-gallery). Regenerate with scripts/build_staged_datasets.py.
+    - name: rohban.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/rohban/rohban.h5ad
+      sha256: bfeba445ce80597f677239aafc607c7366a0f0b6181aa91e97fdfebc2ce73cbb
     - name: rohban_selected.h5ad
       url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/rohban/rohban_selected.h5ad
       sha256: a34f3e01e1ecd953c65bc1a0a5c4c74ed836e16ae38b6b94e5ebdbc8c3317214
