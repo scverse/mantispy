@@ -7,8 +7,6 @@
 
 Plotting functions return Matplotlib axes and do not modify the object.
 
-There is no dedicated function for a plate map of a per-well flag, which is `mt.pl.plate(adata, color="qc_well_pass")`, or for embeddings side by side, which is a loop over `sc.pl.embedding`.
-
 ## Plates and quality control
 
 ```{eval-rst}

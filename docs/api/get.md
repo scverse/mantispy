@@ -3,7 +3,11 @@
 ```{eval-rst}
 .. module:: mantispy.get
 .. currentmodule:: mantispy
+```
 
+Accessors read results out of the object and do not modify it.
+
+```{eval-rst}
 .. autosummary::
     :toctree: generated
 
@@ -13,6 +17,3 @@
     get.obs_df
     get.var_df
 ```
-
-Accessors do not modify the object.
-`get.to_dataframe` returns the flat table that pycytominer and similar tools expect.

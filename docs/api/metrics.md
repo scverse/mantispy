@@ -3,7 +3,12 @@
 ```{eval-rst}
 .. module:: mantispy.metrics
 .. currentmodule:: mantispy
+```
 
+Metrics do not modify the object.
+Each returns a tidy frame with `metric`, `representation`, `key` and `value`, so results from several calls stack.
+
+```{eval-rst}
 .. autosummary::
     :toctree: generated
 
@@ -16,7 +21,3 @@
     metrics.evaluate_correction
     metrics.diagnose_testing
 ```
-
-Metrics do not modify the object.
-Each returns a tidy frame with `metric`, `representation`, `key` and `value`, so results from several calls stack.
-`evaluate_correction` adds a `better` column giving the direction of improvement for each metric, because batch mixing and biological separation trade off against each other and neither is meaningful alone.
