@@ -1,0 +1,47 @@
+Rohban per-cluster ORA: FDR-correction comparison (broad GO-BP + CORUM + Reactome net)
+
+broad-net ORA table: 25088 (cluster, set) rows, 896 distinct sets
+collections (distinct sets): {'GO': 764, 'REACTOME': 132}
+graded universe: 16 multi-gene clusters (paper reports 19/22 enriched)
+permuted-null universe: 17 multi-gene clusters after one label shuffle (seed=0)
+all corrections applied WITHIN each cluster at cutoff 0.05; a cluster is enriched if >=1 set clears it
+
+method                           enriched (of 16)  total set discoveries  permuted-null enriched
+-------------------------------  ----------------  ---------------------  ----------------------
+(a) BH per cluster               0/16              0                      0/17                  
+(b) Storey q per cluster         0/16              0                      0/17                  
+(c) two-stage BH (fdr_tsbh)      0/16              0                      0/17                  
+(d) BH per cluster x collection  0/16              0                      0/17                  
+(e) nominal p<0.05 (reference)   15/16             404                    14/17                 
+
+Per-cluster best hit (why every correction collapses to 0):
+cluster  n_tests  min raw p  min BH q  min Storey q  min tsbh q
+-------  -------  ---------  --------  ------------  ----------
+25       896      4.40e-04   0.394     0.394         0.394     
+27       896      7.25e-04   0.098     0.082         0.098     
+16       896      1.34e-03   0.839     0.839         0.839     
+2        896      1.64e-03   0.735     0.735         0.735     
+13       896      3.12e-03   1.000     1.000         1.000     
+1        896      3.42e-03   0.779     0.779         0.779     
+15       896      3.42e-03   1.000     1.000         1.000     
+24       896      3.42e-03   0.766     0.766         0.766     
+18       896      4.28e-03   1.000     1.000         1.000     
+19       896      6.90e-03   1.000     1.000         1.000     
+6        896      7.18e-03   1.000     1.000         1.000     
+14       896      8.29e-03   1.000     1.000         1.000     
+4        896      9.98e-03   1.000     1.000         1.000     
+26       896      1.41e-02   1.000     1.000         1.000     
+21       896      1.56e-02   1.000     1.000         1.000     
+3        896      5.23e-02   1.000     1.000         1.000     
+
+Notes:
+  - total set discoveries and permuted-null counts are over the same multi-gene cluster universe.
+  - nominal p<0.05 is the uncorrected upper reference, not a valid FDR control.
+  - every cluster is tested against all ~896 sets (ora tests the full universe per group), so BH divides the
+    best hit by that count; the strongest single hit anywhere is p=4.4e-04, giving min BH q=0.39.
+  - Storey and two-stage BH do not help: a 2-8 gene cluster leaves almost all sets genuinely null (pi0~1),
+    so the adaptive pi0 factor is near 1 and the adjusted values track plain BH.
+  - CONCLUSION: on the broad net no within-cluster p-value correction recovers the enrichment, and nominal
+    p<0.05 is not real signal (it also lights up the permuted null). The lever is the test universe, not the
+    correction: restricting each cluster's tests to the sets its genes actually hit (conventional overlap-
+    based ORA) or a curated collection is what recovers the paper's per-cluster count.
