@@ -27,7 +27,9 @@ if TYPE_CHECKING:
 
 def _zero_nonfinite(adata: AnnData) -> AnnData:
     """Replace NaN and +-inf in ``X`` with zero, in place, and return the object."""
-    adata.X = np.nan_to_num(np.asarray(adata.X, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+    from mantispy._core._reduce import get_matrix
+
+    adata.X = np.nan_to_num(np.asarray(get_matrix(adata), dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
     return adata
 
 
