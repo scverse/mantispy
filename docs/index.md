@@ -74,6 +74,7 @@ references
 :maxdepth: 3
 
 tutorials/index
+case_studies/index
 ```
 
 ```{toctree}

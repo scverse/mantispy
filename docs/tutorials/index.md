@@ -38,7 +38,6 @@ compounds/dose_response
 :maxdepth: 1
 :caption: Tutorials — genetic screens
 
-genetics/crispr
 genetics/interpreting_a_screen
 ```
 
@@ -47,14 +46,6 @@ genetics/interpreting_a_screen
 :caption: Tutorials — single cells
 
 single_cells/heterogeneity
-```
-
-```{toctree}
-:maxdepth: 1
-:caption: Tutorials — across laboratories
-
-multisite/cross_laboratory
-multisite/learned_embeddings
 ```
 
 ```{toctree}
