@@ -7,7 +7,13 @@ import spatialdata as sd
 
 import mantispy as mt
 from mantispy._core.frames import as_frame
-from mantispy.ds._datasets import _DATASETS, TARGET2_DEFAULT, _plate
+from mantispy.ds._datasets import (
+    _DATASETS,
+    TARGET2_DEFAULT,
+    _assemble_cp_posh,
+    _assemble_scallops_arv471,
+    _plate,
+)
 
 
 @pytest.mark.parametrize(("n_wells", "n_sites"), [(1, 1), (4, 2)])
@@ -339,7 +345,7 @@ def test_scallops_arv471_loads_clean_cell_resolution(tmp_path, monkeypatch):
     clean = _write_scallops_fixture(path)
     _patch_files(monkeypatch, path)
 
-    adata = mt.ds.scallops_arv471()
+    adata = _assemble_scallops_arv471()
 
     assert adata.shape == (clean, 9)
     assert adata.uns["mantispy"]["resolution"] == "cell"
@@ -356,7 +362,7 @@ def test_scallops_arv471_maps_controls_and_guides(tmp_path, monkeypatch):
     _write_scallops_fixture(path)
     _patch_files(monkeypatch, path)
 
-    adata = mt.ds.scallops_arv471()
+    adata = _assemble_scallops_arv471()
     obs = as_frame(adata.obs)
 
     assert "NTC" not in set(obs["Metadata_Gene"].astype(str))
@@ -381,7 +387,7 @@ def test_scallops_arv471_runs_hit_calling(tmp_path, monkeypatch):
     _write_scallops_fixture(path)
     _patch_files(monkeypatch, path)
 
-    adata = mt.ds.scallops_arv471()
+    adata = _assemble_scallops_arv471()
 
     kwargs = {"groupby": "Metadata_Gene", "reference": "negcon", "n_permutations": 50, "seed": 0, "copy": True}
     # block= is the well-block permutation null (#68); pass it once it reaches this build's signature.
@@ -445,7 +451,7 @@ def test_cp_posh_loads_clean_cell_resolution(tmp_path, monkeypatch):
     cells, _ = _write_cp_posh_fixture(path)
     _patch_files(monkeypatch, path)
 
-    adata = mt.ds.cp_posh()
+    adata = _assemble_cp_posh()
 
     assert adata.shape == (cells, len(_CP_POSH_FIXTURE_FEATURES))
     assert adata.uns["mantispy"]["resolution"] == "cell"
@@ -464,7 +470,7 @@ def test_cp_posh_maps_controls_and_guides(tmp_path, monkeypatch):
     _, controls = _write_cp_posh_fixture(path)
     _patch_files(monkeypatch, path)
 
-    adata = mt.ds.cp_posh()
+    adata = _assemble_cp_posh()
     obs = as_frame(adata.obs)
 
     assert obs["Metadata_Gene"].nunique() == 5  # nontargeting, intergenic, KIF18A, PSMB1, ARPC4
@@ -488,7 +494,7 @@ def test_cp_posh_runs_hit_calling(tmp_path, monkeypatch):
     _write_cp_posh_fixture(path)
     _patch_files(monkeypatch, path)
 
-    adata = mt.ds.cp_posh()
+    adata = _assemble_cp_posh()
 
     result = mt.tl.hit_calling(adata, groupby="Metadata_Gene", reference="negcon", n_permutations=50, seed=0, copy=True)
 
