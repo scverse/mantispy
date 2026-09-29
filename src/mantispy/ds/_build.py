@@ -398,6 +398,75 @@ def _shipped_oasis_pilot() -> dict[str, AnnData]:
     return {"oasis_pilot.h5ad": oasis_pilot(), "oasis_pilot_agg.h5ad": oasis_pilot(aggregated=True)}
 
 
+def _assemble_pki(cache_dir: str | Path | None = None) -> AnnData:
+    """Assemble the PKI base (all eight plates): the dose-series wells with their compound, dose, MOA and control.
+
+    The raw pipeline the both-flags-False :func:`mt.ds.pki` used before the base was staged; it lives here so
+    the drift check can rebuild the hosted base from the raw ``*_augmented`` plate tables.
+    """
+    import numpy as np
+    import pandas as pd
+
+    from mantispy._core.frames import as_frame
+    from mantispy._core.logging import get_logger
+    from mantispy.ds._datasets import _augmented
+
+    adata = _augmented("pki", None, cache_dir)
+    obs = as_frame(adata.obs)
+    control = (obs["Metadata_control_type"].astype(str) == "negcon").to_numpy()
+    obs["Metadata_Control"] = control
+    # Control wells have no compound or dose, so without this each would become its own "nan@nan" perturbation.
+    compound = np.where(control, "DMSO", obs["Metadata_broad_sample"].astype(str).to_numpy())
+    dose = obs["Metadata_mmoles_per_liter"].to_numpy(dtype=float)
+    obs["Metadata_Compound"] = pd.Categorical(compound)
+    obs["Metadata_Concentration"] = dose
+    obs["Metadata_MOA"] = obs.pop("Metadata_moa")
+    label = np.where(control, "DMSO", np.char.add(np.char.add(compound.astype(str), "@"), dose.astype(str)))
+    obs["Metadata_Perturbation"] = pd.Categorical(label)
+    obs["Metadata_Perturbation_Type"] = pd.Series("compound", index=obs.index, dtype="category")
+    adata.uns["mantispy"]["dataset"] = "cpg0008-pki"
+    get_logger().info(
+        "pki: %d wells x %d features, %d compounds x %d doses",
+        adata.n_obs,
+        adata.n_vars,
+        int(obs.loc[~control, "Metadata_Compound"].nunique()),
+        int(obs.loc[~control, "Metadata_Concentration"].nunique()),
+    )
+    return adata
+
+
+def build_pki_variants(cache_dir: str | Path | None = None) -> dict[str, AnnData]:
+    """Returns {'pki.h5ad': ad, 'pki_selected.h5ad': ad, 'pki_agg.h5ad': ad, 'pki_agg_selected.h5ad': ad}."""
+    from mantispy.pp._select import feature_select, subset_features
+
+    base = _stable(_assemble_pki(cache_dir))
+
+    # Well-level feature-selected block, pycytominer's default operations, on the augmented base.
+    selected = base.copy()
+    feature_select(selected)
+    selected = _stable(subset_features(selected))
+
+    # One modz consensus per compound-at-dose, on the full and on the feature-selected block; DMSO kept.
+    return {
+        "pki.h5ad": base,
+        "pki_selected.h5ad": selected,
+        "pki_agg.h5ad": _stable(_perturbation_consensus(base)),
+        "pki_agg_selected.h5ad": _stable(_perturbation_consensus(selected)),
+    }
+
+
+def _shipped_pki() -> dict[str, AnnData]:
+    """The four pki variants as fetched through the public ``mt.ds.pki`` API."""
+    from mantispy.ds._datasets import pki
+
+    return {
+        "pki.h5ad": pki(),
+        "pki_selected.h5ad": pki(feature_selected=True),
+        "pki_agg.h5ad": pki(aggregated=True),
+        "pki_agg_selected.h5ad": pki(aggregated=True, feature_selected=True),
+    }
+
+
 # One entry per staged dataset: (builder rebuilding the variants from the raw pipeline, loader returning the
 # shipped variants through the public ``mt.ds`` API keyed by the same filenames, ``heavy`` marking a rebuild
 # too large to run on every pull request). Later PRs stage a dataset by adding one entry here; the build and
@@ -411,4 +480,5 @@ STAGED: dict[str, tuple[Callable[..., dict[str, AnnData]], Callable[[], dict[str
     "chroma": (build_chroma, _shipped_chroma, False),
     "pooled_rare": (build_pooled_rare, _shipped_pooled_rare, False),
     "oasis_pilot": (build_oasis_pilot, _shipped_oasis_pilot, False),
+    "pki": (build_pki_variants, _shipped_pki, True),
 }

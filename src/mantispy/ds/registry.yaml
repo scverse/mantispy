@@ -2178,6 +2178,20 @@ datasets:
     - name: 2021_04_07_Batch1__BR00122978__BR00122978_augmented.csv.gz
       s3_key: cpg0008-pki/broad/workspace/profiles/2021_04_07_Batch1/BR00122978/BR00122978_augmented.csv.gz
       sha256: dc59da85d6b83c7388e633c3daf2e3ff407ceccea691b0143b986a3574fd0b79
+    # Staged variants rehosted on scverse-exampledata (explicit url overrides base_url, so the raw plate tables
+    # above stay on cellpainting-gallery). Regenerate with scripts/build_staged_datasets.py.
+    - name: pki.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/pki/pki.h5ad
+      sha256: db6da1569ad7eab9f868d4d48d18f79e0c1ac75bcd84c40a05a09ae5f8fd6973
+    - name: pki_selected.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/pki/pki_selected.h5ad
+      sha256: e7d3fcc90fc10d29293f98eaf772c3cbb353202f0a09889643fb969e17518db6
+    - name: pki_agg.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/pki/pki_agg.h5ad
+      sha256: adce802c942ea46457733a0f96ac2807d13619ba7005fdb98b24991a44f1e2cb
+    - name: pki_agg_selected.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/pki/pki_agg_selected.h5ad
+      sha256: acee0765ffc1f9487d57d30c1aec0fb9dcba6b45217b589fe9380223daf5a1eb
 
   jump_crispr:
     type: mantispy

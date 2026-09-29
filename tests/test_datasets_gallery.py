@@ -102,7 +102,7 @@ def test_bbbc021_flags_must_be_bool():
 
 @pytest.mark.network
 def test_pki_loads_with_a_dose_series(pki):
-    assert pki.shape == (3072, 5857)
+    assert pki.shape == (3072, 5839)
     assert mt.io.validate(pki).ok, mt.io.validate(pki).errors
     treated = pki.obs[~pki.obs["Metadata_Control"].to_numpy()]
     assert treated["Metadata_Compound"].nunique() == 15

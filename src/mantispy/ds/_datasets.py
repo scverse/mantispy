@@ -284,48 +284,64 @@ def rohban(
     return adata
 
 
-def pki(plates: Sequence[str] | None = None, cache_dir: str | Path | None = None) -> AnnData:
+#: The (aggregated, feature_selected) combination each rehosted pki variant answers to.
+_PKI_VARIANTS = {
+    (False, False): "pki.h5ad",  # 3072 x 5857, well level, all features
+    (False, True): "pki_selected.h5ad",  # well level, feature selected
+    (True, False): "pki_agg.h5ad",  # perturbation level (modz), all features
+    (True, True): "pki_agg_selected.h5ad",  # perturbation level (modz), feature selected
+}
+
+
+def pki(
+    plates: Sequence[str] | None = None,
+    cache_dir: str | Path | None = None,
+    *,
+    aggregated: bool = False,
+    feature_selected: bool = False,
+) -> AnnData:
     """Kinase inhibitors over a dose series, from the JUMP pilot.
 
     ``cpg0008-pki``: fifteen compounds over a seven-point dose range (eleven at three doses, four at one) in U2OS cells, over eight plates with 32 to 64 replicate wells per treatment.
-    Downloads about 71 MB for all eight.
+
+    The base and its variants are pre-built by ``scripts/build_staged_datasets.py`` from the eight raw plate tables and rehosted on ``scverse-exampledata``, so the loader fetches a single h5ad rather than reassembling the base on every call. The two flags select the variant:
+
+    - both ``False``: the raw wells with every feature, the object the recipe tutorials start from.
+    - ``feature_selected=True``: the well-level block after pycytominer-default feature selection.
+    - ``aggregated=True``: one ``modz`` consensus (Spearman, ``min_replicates=2``) per ``Metadata_Perturbation`` over every well, DMSO included, so each compound-at-dose is one profile.
+    - ``aggregated=True, feature_selected=True``: that same consensus on the feature-selected block.
 
     Args:
         plates: Plate barcodes to load, all eight when omitted.
+            Only applies to the base; the hosted base is fetched once and subset to these plates in memory.
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
+        aggregated: Return the perturbation-level ``modz`` consensus instead of the wells.
+        feature_selected: Return the feature-selected block instead of all features.
 
     Returns:
-        Wells by features at well resolution, with ``Metadata_Perturbation`` (compound at concentration), ``Metadata_Perturbation_Type`` (``"compound"``), ``Metadata_Compound``, ``Metadata_Concentration`` (the platemap's ``mmoles_per_liter``), ``Metadata_MOA``, ``Metadata_Control``, ``Metadata_CellCount`` and ``Metadata_SiteCount``.
+        Wells by features at well resolution when both flags are ``False``, else the staged variant selected by the two flags, read with :func:`mantispy.io.read`, with ``Metadata_Perturbation`` (compound at concentration), ``Metadata_Perturbation_Type`` (``"compound"``), ``Metadata_Compound``, ``Metadata_Concentration`` (the platemap's ``mmoles_per_liter``), ``Metadata_MOA``, ``Metadata_Control``, ``Metadata_CellCount`` and ``Metadata_SiteCount``.
 
     Raises:
         KeyError: A plate is not one of the eight.
+        ValueError: ``aggregated`` or ``feature_selected`` is not a bool, or ``plates`` is given for a variant.
 
     Notes:
         ``Metadata_Control`` marks the DMSO wells only.
         The positive controls (``Metadata_control_type == "poscon"``) are not flagged, because they are perturbations and should not be normalized against.
     """
-    adata = _augmented("pki", plates, cache_dir)
-    obs = as_frame(adata.obs)
-    control = (obs["Metadata_control_type"].astype(str) == "negcon").to_numpy()
-    obs["Metadata_Control"] = control
-    # Control wells have no compound or dose, so without this each would become its own "nan@nan" perturbation.
-    compound = np.where(control, "DMSO", obs["Metadata_broad_sample"].astype(str).to_numpy())
-    dose = obs["Metadata_mmoles_per_liter"].to_numpy(dtype=float)
-    obs["Metadata_Compound"] = pd.Categorical(compound)
-    obs["Metadata_Concentration"] = dose
-    obs["Metadata_MOA"] = obs.pop("Metadata_moa")
-    label = np.where(control, "DMSO", np.char.add(np.char.add(compound.astype(str), "@"), dose.astype(str)))
-    obs["Metadata_Perturbation"] = pd.Categorical(label)
-    obs["Metadata_Perturbation_Type"] = pd.Series("compound", index=obs.index, dtype="category")
-    adata.uns["mantispy"]["dataset"] = "cpg0008-pki"
-    get_logger().info(
-        "pki: %d wells x %d features, %d compounds x %d doses",
-        adata.n_obs,
-        adata.n_vars,
-        int(obs.loc[~control, "Metadata_Compound"].nunique()),
-        int(obs.loc[~control, "Metadata_Concentration"].nunique()),
-    )
+    for flag_name, flag in (("aggregated", aggregated), ("feature_selected", feature_selected)):
+        if not isinstance(flag, bool):
+            raise ValueError(f"{flag_name} must be a bool, got {type(flag).__name__}")
+    if (aggregated or feature_selected) and plates is not None:
+        raise ValueError(
+            "plates only applies to the raw wells; a pre-aggregated or feature-selected variant cannot be plate-subset"
+        )
+    target = _PKI_VARIANTS[aggregated, feature_selected]
+    (path,) = _files("pki", cache_dir, select=lambda name: name == target)
+    adata = read(path)
+    if plates is not None:
+        adata = _subset_plates(adata, "pki", plates)
     return adata
 
 
