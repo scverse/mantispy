@@ -10,7 +10,7 @@ from mantispy.pp._normalize import normalize
 from mantispy.pp._outliers import outliers
 from mantispy.pp._qc import calculate_qc_metrics, filter_cells, filter_features
 from mantispy.pp._sample import downsample
-from mantispy.pp._select import feature_select, subset_features
+from mantispy.pp._select import decorr_threshold_sweep, feature_select, subset_features
 from mantispy.pp._sphere import sphere, tvn
 from mantispy.pp._transform import rank_int
 from mantispy.pp._well_qc import well_qc
@@ -20,6 +20,7 @@ __all__ = [
     "annotate_jump",
     "calculate_qc_metrics",
     "correct_plate_position",
+    "decorr_threshold_sweep",
     "downsample",
     "feature_batch_sensitivity",
     "feature_reproducibility",

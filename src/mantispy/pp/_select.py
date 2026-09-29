@@ -6,9 +6,10 @@ Every operation returns a boolean keep mask over ``var``.
 from __future__ import annotations
 
 import warnings
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 import numpy as np
+import pandas as pd
 from anndata import AnnData
 
 from mantispy._core._corr import _blockwise, correlated_pairs, rank_revealing_subset
@@ -379,3 +380,49 @@ def subset_features(adata: AnnData, key: str = "selected") -> AnnData:
     if key not in adata.var:
         raise KeyError(f"var has no column {key!r}; run mt.pp.feature_select first")
     return adata[:, as_frame(adata.var)[key].to_numpy(dtype=bool)].copy()
+
+
+def decorr_threshold_sweep(
+    adata: AnnData,
+    thresholds: Sequence[float],
+    scorers: Mapping[str, Callable[[AnnData], float]] | Sequence[Callable[[AnnData], float]],
+    *,
+    key: str = "selected",
+    **feature_select_kwargs: object,
+) -> pd.DataFrame:
+    """Score ``decorrelate`` at a range of thresholds so the smallest set that holds a metric can be chosen.
+
+    ``decorr_threshold`` trades size for signal, and the right setting depends on the screen and on the metric
+    that matters, so there is no universal best. This runs :func:`feature_select` with ``decorrelate=True`` at each
+    threshold on a copy, scores the selected object with each callable, and returns one row per threshold.
+
+    Args:
+        adata: Object to select features on. Never modified.
+        thresholds: ``decorr_threshold`` values to try.
+        scorers: Scoring callables, each taking the selected :class:`~anndata.AnnData` and returning a scalar (for
+            example replicate or activity mAP). A mapping names the columns; a sequence names them by
+            ``callable.__name__``.
+        key: Boolean ``var`` column :func:`feature_select` writes and :func:`subset_features` reads.
+        feature_select_kwargs: Passed through to :func:`feature_select` (``operations``, ``corr_threshold``, and so
+            on); ``decorrelate``, ``decorr_threshold``, ``key_added`` and ``copy`` are set here.
+
+    Returns:
+        A frame with a ``threshold`` column, an ``n_kept`` column, and one column per scorer.
+    """
+    named = list(scorers.items() if isinstance(scorers, Mapping) else ((s.__name__, s) for s in scorers))
+    records = []
+    for threshold in thresholds:
+        selected = feature_select(
+            adata,
+            decorrelate=True,
+            decorr_threshold=float(threshold),
+            key_added=key,
+            copy=True,
+            **feature_select_kwargs,
+        )
+        kept = subset_features(selected, key)
+        row: dict[str, float] = {"threshold": float(threshold), "n_kept": int(kept.n_vars)}
+        for name, scorer in named:
+            row[name] = float(scorer(kept))
+        records.append(row)
+    return pd.DataFrame(records)

@@ -53,6 +53,7 @@ Annotate, quality-control, normalize, select and batch-correct profiles.
 
     pp.feature_select
     pp.subset_features
+    pp.decorr_threshold_sweep
     pp.feature_select_chatterjee
     pp.feature_reproducibility
     pp.feature_batch_sensitivity
