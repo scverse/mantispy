@@ -282,7 +282,8 @@ def diagnose_testing(
         The empirical-null rows are absent when every null p-value came back non-finite, and the two hit-caller rows need at least eight reference wells.
 
     Raises:
-        ValueError: No treatment has two wells, or there are fewer than four reference wells, leaving nothing to measure a null against.
+        ValueError: At well resolution, no treatment has two wells, or there are fewer than four reference wells, leaving nothing to measure a null against.
+            At cell resolution, the object is not stamped a known resolution (stamp it with :func:`mantispy.io.stamp`, or aggregate to wells with :func:`~mantispy.tl.aggregate`); or it has no complete, replicated well column, or a ``block`` naming no ``obs`` column, to draw the well-block null from; or fewer than six reference wells, too few to leave four for the null after a two-well pseudo-treatment.
 
     Notes:
         At cell resolution the checks change, because cells within a well are not independent replicates and the well-level checks describe well-level testing. Control cells are relabeled as pseudo-treatments of whole control wells and put through the two cell-resolution hit callers under two nulls. Each row's ``note`` names the block the null draws whole, and the ``hit_calling`` rows name ``method`` too, so there is no silent substitution of the test you meant:
