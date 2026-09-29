@@ -10,6 +10,7 @@ import pandas as pd
 from mantispy._core.frames import as_frame
 from mantispy.pl._common import axes as _axes
 from mantispy.pl._common import maybe_interactive as _maybe_interactive
+from mantispy.pl._common import returned as _returned
 from mantispy.pl._common import table as _table
 
 if TYPE_CHECKING:
@@ -41,7 +42,7 @@ def _heatmap(
     return ax
 
 
-def moa_confusion(adata: AnnData, key: str = "moa", normalize: bool = True, ax: Axes | None = None) -> Axes:
+def moa_confusion(adata: AnnData, key: str = "moa", normalize: bool = True, ax: Axes | None = None) -> Axes | None:
     """The confusion matrix of :func:`~mantispy.tl.nn_moa_classify`, as a heatmap.
 
     With row normalization the diagonal is per-mechanism recall, and an off-diagonal block marks a pair of mechanisms the morphology does not separate.
@@ -54,7 +55,8 @@ def moa_confusion(adata: AnnData, key: str = "moa", normalize: bool = True, ax: 
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
-        The axes drawn on, holding true against predicted mechanisms with the values printed when there are at most 400 cells, and the run's scheme and accuracy in the title.
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
+        When returned they hold true against predicted mechanisms with the values printed when there are at most 400 cells, and the run's scheme and accuracy in the title.
 
     Raises:
         KeyError: ``uns["mantispy"]`` holds no ``key + "_confusion"`` table.
@@ -85,12 +87,12 @@ def moa_confusion(adata: AnnData, key: str = "moa", normalize: bool = True, ax: 
         value_label="fraction" if normalize else "count",
         title=title,
     )
-    return ax
+    return _returned(ax)
 
 
 def moa_enrichment(
     adata: AnnData, group: str, key: str = "moa_enrichment", top: int = 10, ax: Axes | None = None
-) -> Axes:
+) -> Axes | None:
     """Which mechanisms one profile's neighborhood is enriched for.
 
     Args:
@@ -101,7 +103,8 @@ def moa_enrichment(
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
-        The axes drawn on, with one bar of ``-log10`` q per mechanism, labeled by how many of the neighbors carried it, and a reference line at ``q = 0.05``.
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
+        When returned they hold one bar of ``-log10`` q per mechanism, labeled by how many of the neighbors carried it, and a reference line at ``q = 0.05``.
 
     Raises:
         KeyError: There is no such table, or it holds no such group.
@@ -124,12 +127,12 @@ def moa_enrichment(
 
     tidy = pd.DataFrame({"mechanism": labels, "-log10 q": neg_log_q})
     _maybe_interactive("barh", ax=ax, data=tidy, x="-log10 q", y="mechanism", title=str(group))
-    return ax
+    return _returned(ax)
 
 
 def distance_heatmap(
     adata: AnnData, key: str = "edistance", groupby: str | None = "Metadata_MOA", ax: Axes | None = None
-) -> Axes:
+) -> Axes | None:
     """The group-by-group distance matrix, ordered so related groups sit together.
 
     Args:
@@ -140,7 +143,8 @@ def distance_heatmap(
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
-        The axes drawn on, holding the distance matrix with a white line at each ``groupby`` boundary.
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
+        When returned they hold the distance matrix with a white line at each ``groupby`` boundary.
 
     Raises:
         KeyError: ``uns["mantispy"]`` holds no ``key + "_pairwise"`` matrix.
@@ -177,12 +181,12 @@ def distance_heatmap(
         value_label="energy distance",
         title="distance heatmap",
     )
-    return ax
+    return _returned(ax)
 
 
 def sets_heatmap(
     adata: AnnData, groupby: str, score_key: str = "score_ulm", top: int = 30, ax: Axes | None = None
-) -> Axes:
+) -> Axes | None:
     """Mean enrichment score per group per feature set.
 
     Args:
@@ -193,7 +197,8 @@ def sets_heatmap(
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
-        The axes drawn on, holding groups against feature sets, the sets it kept sorted by name, on a diverging scale.
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
+        When returned they hold groups against feature sets, the sets it kept sorted by name, on a diverging scale.
 
     Raises:
         KeyError: ``obsm`` holds nothing under ``score_key``.
@@ -224,10 +229,12 @@ def sets_heatmap(
         value_label="mean score",
         title="feature-set scores",
     )
-    return ax
+    return _returned(ax)
 
 
-def pathway_coherence(adata: AnnData, key: str = "pathway_coherence", top: int = 15, ax: Axes | None = None) -> Axes:
+def pathway_coherence(
+    adata: AnnData, key: str = "pathway_coherence", top: int = 15, ax: Axes | None = None
+) -> Axes | None:
     """Coherence per gene set, the significant ones marked.
 
     Sets are ordered by coherence, as in the table.
@@ -240,7 +247,8 @@ def pathway_coherence(adata: AnnData, key: str = "pathway_coherence", top: int =
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
-        The axes drawn on, with one bar per set labeled by how many of its genes were in the screen, colored by whether its q-value is below 0.05.
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
+        When returned they hold one bar per set labeled by how many of its genes were in the screen, colored by whether its q-value is below 0.05.
 
     Raises:
         KeyError: ``uns["mantispy"]`` holds no table under ``key``.
@@ -274,4 +282,4 @@ def pathway_coherence(adata: AnnData, key: str = "pathway_coherence", top: int =
         }
     )
     _maybe_interactive("barh", ax=ax, data=tidy, x="coherence", y="set", color="significant", title="pathway coherence")
-    return ax
+    return _returned(ax)

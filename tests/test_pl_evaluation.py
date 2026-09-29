@@ -44,31 +44,34 @@ def close_figures():
 @pytest.mark.parametrize(
     "draw",
     [
-        lambda a: mt.pl.map(a),
-        lambda a: mt.pl.replicate_correlation(a),
-        lambda a: mt.pl.batch_variance(a, keys=["Metadata_Batch", "Metadata_Plate"]),
-        lambda a: mt.pl.similarity(a),
-        lambda a: mt.pl.metrics(mt.metrics.evaluate_correction(a, reps=("X_pca",))),
+        lambda a, ax: mt.pl.map(a, ax=ax),
+        lambda a, ax: mt.pl.replicate_correlation(a, ax=ax),
+        lambda a, ax: mt.pl.batch_variance(a, keys=["Metadata_Batch", "Metadata_Plate"], ax=ax),
+        lambda a, ax: mt.pl.similarity(a, ax=ax),
+        lambda a, ax: mt.pl.metrics(mt.metrics.evaluate_correction(a, reps=("X_pca",)), ax=ax),
     ],
     ids=["map", "replicate_correlation", "batch_variance", "similarity", "metrics"],
 )
 def test_every_plot_draws_and_does_not_mutate(evaluated, draw):
     before = (list(evaluated.obs.columns), evaluated.X.copy())
-    result = np.asarray(draw(evaluated))
-    assert all(isinstance(axis, matplotlib.axes.Axes) for axis in result.ravel())
+    # Passing ax makes the plot hand it back, so this still asserts on the drawn Axes.
+    _, ax = plt.subplots()
+    assert isinstance(draw(evaluated, ax), matplotlib.axes.Axes)
     assert list(evaluated.obs.columns) == before[0]
     np.testing.assert_array_equal(evaluated.X, before[1])
 
 
 def test_map_plot_draws_the_threshold_actually_used(evaluated):
-    ax = mt.pl.map(evaluated)
+    _, ax = plt.subplots()
+    mt.pl.map(evaluated, ax=ax)
     lines = [line.get_ydata()[0] for line in ax.get_lines()]
     assert any(abs(y - -np.log10(0.05)) < 1e-9 for y in lines)
 
 
 def test_metrics_plot_marks_which_direction_is_better(evaluated):
     table = mt.metrics.evaluate_correction(evaluated, reps=("X_pca",))
-    ax = mt.pl.metrics(table)
+    _, ax = plt.subplots()
+    mt.pl.metrics(table, ax=ax)
     assert any("better" in label.get_text() for label in ax.get_xticklabels())
 
 
@@ -78,13 +81,16 @@ def test_metrics_plot_claims_no_direction_for_a_covariate(evaluated):
     evaluated.obs["Metadata_CellCount"] = np.arange(evaluated.n_obs, dtype=float)
     table = mt.metrics.evaluate_correction(evaluated, reps=("X_pca",), covariates=("Metadata_CellCount",))
 
-    labels = {label.get_text() for label in mt.pl.metrics(table).get_xticklabels()}
+    _, ax = plt.subplots()
+    mt.pl.metrics(table, ax=ax)
+    labels = {label.get_text() for label in ax.get_xticklabels()}
     assert "pc_regression:Metadata_CellCount" in labels
     assert not any("nan" in label for label in labels)
 
 
 def test_similarity_subsamples_a_large_object(evaluated):
-    ax = mt.pl.similarity(evaluated, max_obs=50)
+    _, ax = plt.subplots()
+    mt.pl.similarity(evaluated, max_obs=50, ax=ax)
     assert ax.images[0].get_array().shape == (50, 50)
 
 
@@ -106,7 +112,9 @@ def test_similarity_draws_one_block_per_group_when_it_subsamples():
     # A same-group indicator makes the drawn image exactly block diagonal whenever the rows reach it grouped.
     profiles.obsp["similarity"] = (labels[:, None] == labels[None, :]).astype(np.float32)
 
-    drawn = np.asarray(mt.pl.similarity(profiles, max_obs=50).images[0].get_array())
+    _, ax = plt.subplots()
+    mt.pl.similarity(profiles, max_obs=50, ax=ax)
+    drawn = np.asarray(ax.images[0].get_array())
     assert drawn.shape == (50, 50)
 
     # Each drop to zero on the first off-diagonal starts a new block of consecutive rows.

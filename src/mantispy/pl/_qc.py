@@ -13,6 +13,7 @@ from mantispy._core.frames import as_frame
 from mantispy._core.schema import get_resolution
 from mantispy.pl._common import axes as _axes
 from mantispy.pl._common import maybe_interactive as _maybe_interactive
+from mantispy.pl._common import returned as _returned
 from mantispy.pl._common import table as _table
 
 if TYPE_CHECKING:
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
 
 def cell_counts(
     adata: AnnData, groupby: str = "Metadata_Plate", ax: Axes | None = None, count_key: str = "Metadata_CellCount"
-) -> Axes:
+) -> Axes | None:
     """Distribution of cells per well, split by ``groupby``.
 
     Args:
@@ -32,7 +33,7 @@ def cell_counts(
         count_key: ``obs`` column holding the cell count of profiles.
 
     Returns:
-        The axes drawn on.
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
 
     Raises:
         KeyError: Profiles carry no ``count_key``.
@@ -62,7 +63,7 @@ def cell_counts(
     label_of = np.array([str(name) for name in names])
     tidy = pd.DataFrame({groupby: label_of[groups[known]], ylabel: counts[known]})
     _maybe_interactive("box", ax=ax, data=tidy, x=groupby, y=ylabel, title="cell counts")
-    return ax
+    return _returned(ax)
 
 
 def feature_distributions(
@@ -71,7 +72,7 @@ def feature_distributions(
     groupby: str = "Metadata_Plate",
     layer_before: str | None = "raw",
     kind: str = "ecdf",
-) -> np.ndarray:
+) -> np.ndarray | None:
     """Per-feature distributions, before and after normalization when ``layer_before`` exists.
 
     Args:
@@ -83,7 +84,7 @@ def feature_distributions(
         kind: ``"ecdf"``, ``"hist"``, or ``"ridge"`` for one offset filled density per group, which is easier to read with many groups.
 
     Returns:
-        A 2-D array of axes with one row per layer shown and one column per feature.
+        ``None``; this plot always creates its own figure, a 2-D grid with one row per layer shown and one column per feature.
 
     Raises:
         ValueError: ``kind`` is not one of the three accepted values.
@@ -116,7 +117,7 @@ def feature_distributions(
             axis.set_title(f"{feature}\n{'raw' if layer else 'current'}", fontsize=8)
     axes[0, 0].legend(fontsize=6)
     figure.tight_layout()
-    return axes
+    return _returned(axes, owned=True)
 
 
 def _ridge(axis: Axes, values: np.ndarray, offset: int, label: str) -> None:
@@ -131,7 +132,7 @@ def _ridge(axis: Axes, values: np.ndarray, offset: int, label: str) -> None:
     axis.fill_between(grid, offset, offset + density, alpha=0.7, lw=0.6, edgecolor="black", label=label)
 
 
-def nan_matrix(adata: AnnData, max_features: int = 200, ax: Axes | None = None) -> Axes:
+def nan_matrix(adata: AnnData, max_features: int = 200, ax: Axes | None = None) -> Axes | None:
     """Fraction of missing values per feature, per plate.
 
     Args:
@@ -140,7 +141,7 @@ def nan_matrix(adata: AnnData, max_features: int = 200, ax: Axes | None = None) 
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
-        The axes drawn on.
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
     """
     ax = _axes(ax, (8, 4))
     missing = np.isnan(get_matrix(adata))
@@ -163,10 +164,10 @@ def nan_matrix(adata: AnnData, max_features: int = 200, ax: Axes | None = None) 
         value_label="NaN fraction",
         title="missing values",
     )
-    return ax
+    return _returned(ax)
 
 
-def qc(adata: AnnData, figsize: tuple[float, float] = (12, 8)) -> np.ndarray:
+def qc(adata: AnnData, figsize: tuple[float, float] = (12, 8)) -> np.ndarray | None:
     """Two-by-two summary of the QC metrics :func:`~mantispy.pp.calculate_qc_metrics` writes.
 
     Each panel is drawn only if the object holds what it needs, so a partial run still gives a figure.
@@ -176,7 +177,7 @@ def qc(adata: AnnData, figsize: tuple[float, float] = (12, 8)) -> np.ndarray:
         figsize: Size of the whole figure, in inches.
 
     Returns:
-        The two-by-two array of axes.
+        ``None``; this plot always creates its own figure, a two-by-two grid of the QC panels.
     """
     import matplotlib.pyplot as plt
 
@@ -203,10 +204,10 @@ def qc(adata: AnnData, figsize: tuple[float, float] = (12, 8)) -> np.ndarray:
         axes[1, 1].set_xlabel("log10 feature variance")
 
     figure.tight_layout()
-    return axes
+    return _returned(axes, owned=True)
 
 
-def replicate_saturation(adata: AnnData, key: str = "replicate_saturation", ax: Axes | None = None) -> Axes:
+def replicate_saturation(adata: AnnData, key: str = "replicate_saturation", ax: Axes | None = None) -> Axes | None:
     """The saturation curve with its spread across draws.
 
     A curve still rising at the right edge means the screen is under-replicated, which informs the design of the next experiment.
@@ -217,7 +218,7 @@ def replicate_saturation(adata: AnnData, key: str = "replicate_saturation", ax: 
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
-        The axes drawn on.
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
 
     Raises:
         KeyError: ``uns["mantispy"]`` holds no table under ``key``.
@@ -245,10 +246,10 @@ def replicate_saturation(adata: AnnData, key: str = "replicate_saturation", ax: 
         hover=["std"],
         title="replicate saturation",
     )
-    return ax
+    return _returned(ax)
 
 
-def cytotoxicity(adata: AnnData, key: str = "cytotoxicity", label_top: int = 8, ax: Axes | None = None) -> Axes:
+def cytotoxicity(adata: AnnData, key: str = "cytotoxicity", label_top: int = 8, ax: Axes | None = None) -> Axes | None:
     """Distance from the controls against viability, with the suspect groups marked.
 
     Groups in the upper left are far from the controls and have lost most of their cells.
@@ -261,7 +262,7 @@ def cytotoxicity(adata: AnnData, key: str = "cytotoxicity", label_top: int = 8, 
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
-        The axes drawn on.
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
 
     Raises:
         KeyError: ``uns["mantispy"]`` holds no table under ``key``.
@@ -299,4 +300,4 @@ def cytotoxicity(adata: AnnData, key: str = "cytotoxicity", label_top: int = 8, 
         hover=["group"],
         title="cytotoxicity",
     )
-    return ax
+    return _returned(ax)

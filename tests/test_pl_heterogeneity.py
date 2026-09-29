@@ -31,8 +31,10 @@ def close_figures():
 
 def test_composition_and_subpopulation_plots_draw(clustered):
     composition = mt.tl.cluster_composition(clustered)
-    assert isinstance(mt.pl.cluster_composition(composition), matplotlib.axes.Axes)
-    assert isinstance(mt.pl.subpopulation_hits(clustered), matplotlib.axes.Axes)
+    _, composition_ax = plt.subplots()
+    assert isinstance(mt.pl.cluster_composition(composition, ax=composition_ax), matplotlib.axes.Axes)
+    _, hits_ax = plt.subplots()
+    assert isinstance(mt.pl.subpopulation_hits(clustered, ax=hits_ax), matplotlib.axes.Axes)
 
 
 def test_cell_cycle_plot_draws_one_panel_per_plate(clustered):
@@ -43,14 +45,17 @@ def test_cell_cycle_plot_draws_one_panel_per_plate(clustered):
     clustered.layers["raw"] = raw
 
     mt.tl.cell_cycle_phase(clustered, dna_feature=clustered.var_names[0], layer="raw")
-    axes = np.asarray(mt.pl.cell_cycle(clustered, dna_feature=clustered.var_names[0], layer="raw"))
-    assert axes.size == clustered.obs["Metadata_Plate"].nunique()
+    # cell_cycle has no ax parameter and always owns its figure, so it draws and returns None.
+    assert mt.pl.cell_cycle(clustered, dna_feature=clustered.var_names[0], layer="raw") is None
+    assert len(plt.gcf().axes) == clustered.obs["Metadata_Plate"].nunique()
 
 
 def test_feature_distributions_gains_a_ridge_kind(clustered):
-    axes = mt.pl.feature_distributions(clustered, features=list(clustered.var_names[:2]), kind="ridge")
-    assert axes[0, 0].collections  # filled density curves; a histogram would draw patches instead
-    assert np.asarray(axes).size >= 2
+    # feature_distributions has no ax parameter and always owns its figure, so inspect the drawn panels.
+    assert mt.pl.feature_distributions(clustered, features=list(clustered.var_names[:2]), kind="ridge") is None
+    panels = plt.gcf().axes
+    assert panels[0].collections  # filled density curves; a histogram would draw patches instead
+    assert len(panels) >= 2
     with pytest.raises(ValueError, match="'ecdf', 'hist' or 'ridge'"):
         mt.pl.feature_distributions(clustered, features=[clustered.var_names[0]], kind="violin")
 
@@ -73,4 +78,5 @@ def test_density_plot_draws_and_says_what_to_run_first(clustered):
         mt.pl.density(clustered, feature=clustered.var_names[0])
 
     mt.tl.neighbors_local_density(clustered, k=5)
-    assert isinstance(mt.pl.density(clustered, feature=clustered.var_names[0]), matplotlib.axes.Axes)
+    _, ax = plt.subplots()
+    assert isinstance(mt.pl.density(clustered, feature=clustered.var_names[0], ax=ax), matplotlib.axes.Axes)

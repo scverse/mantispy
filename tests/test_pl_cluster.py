@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 
 import mantispy as mt
@@ -29,11 +30,13 @@ def clustered():
 
 
 def test_dendrogram_returns_axes_with_every_leaf(clustered):
-    ax = mt.pl.dendrogram(clustered)
-    assert isinstance(ax, Axes)
+    _, ax = plt.subplots()
+    # A caller-supplied ax is handed back; an owned figure would return None instead.
+    assert isinstance(mt.pl.dendrogram(clustered, ax=ax), Axes)
     ticks = [text.get_text() for text in ax.get_xticklabels()]
     assert len(ticks) == clustered.n_obs
     assert set(ticks) == set(clustered.obs_names)
+    plt.close(ax.figure)
 
 
 def test_dendrogram_needs_a_linkage_tree():

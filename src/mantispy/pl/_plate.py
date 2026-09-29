@@ -11,6 +11,7 @@ import pandas as pd
 from mantispy._core._reduce import get_matrix, group_codes, group_offsets
 from mantispy._core.frames import as_frame
 from mantispy._core.plate import plate_grid, row_label, well_col, well_row
+from mantispy.pl._common import returned as _returned
 
 if TYPE_CHECKING:
     from anndata import AnnData
@@ -45,7 +46,7 @@ def plate(
     ax: Axes | None = None,
     cmap: str = "viridis",
     **kwargs: Any,
-) -> Axes | np.ndarray:
+) -> Axes | np.ndarray | None:
     """Well-grid heatmap of ``color``, one panel per plate.
 
     Args:
@@ -65,7 +66,8 @@ def plate(
             ``vmin``, ``vmax`` or ``norm`` set the scale.
 
     Returns:
-        A single :class:`~matplotlib.axes.Axes`, or an array of them for several plates in panel order, each panel labeled with the plate's own well grid.
+        The single :class:`~matplotlib.axes.Axes` when the caller passed ``ax`` (valid only for one plate), else ``None`` because the plot then owns the figure it created.
+        When several plates are drawn each panel is labeled with the plate's own well grid.
 
     Raises:
         ValueError: ``agg`` is not one of ``AGGREGATIONS``, ``ax`` was passed for more than one plate, ``groupby`` varies within a drawn plate, or it or ``Metadata_Plate`` has missing values.
@@ -102,6 +104,7 @@ def plate(
         kwargs.setdefault("vmin", np.nanmin(everything))
         kwargs.setdefault("vmax", np.nanmax(everything))
 
+    owned = ax is None
     if ax is None:
         width = min(ncols, len(grids))
         height = -(-len(grids) // width)
@@ -122,4 +125,4 @@ def plate(
     if share_colorbar:
         axes[0].figure.colorbar(image, ax=axes if len(axes) > 1 else axes[0], fraction=0.04, label=color)
 
-    return axes[0] if len(axes) == 1 else axes
+    return _returned(axes[0] if len(axes) == 1 else axes, owned=owned)

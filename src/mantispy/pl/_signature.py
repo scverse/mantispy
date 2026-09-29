@@ -9,6 +9,7 @@ from mantispy._core._reduce import get_matrix
 from mantispy._core.frames import as_frame
 from mantispy.pl._common import axes as _axes
 from mantispy.pl._common import maybe_interactive as _maybe_interactive
+from mantispy.pl._common import returned as _returned
 
 if TYPE_CHECKING:
     from anndata import AnnData
@@ -23,7 +24,7 @@ def feature_signature(
     cmap: str = "RdBu_r",
     figsize: tuple[float, float] | None = None,
     ax: Axes | None = None,
-) -> Axes:
+) -> Axes | None:
     """Heatmap of perturbations by feature families.
 
     Args:
@@ -41,7 +42,8 @@ def feature_signature(
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
-        The axes drawn on, holding perturbations against feature families on a scale centered on zero, with a colorbar beside them.
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
+        When returned they hold perturbations against feature families on a scale centered on zero, with a colorbar beside them.
 
     Raises:
         KeyError: ``groupby`` was given and ``obs`` has no such column.
@@ -106,4 +108,4 @@ def feature_signature(
         value_label="mean t",
         title="feature signature",
     )
-    return ax
+    return _returned(ax)

@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from mantispy.pl._common import axes as _axes
+from mantispy.pl._common import returned as _returned
 
 if TYPE_CHECKING:
     from anndata import AnnData
@@ -13,7 +14,7 @@ if TYPE_CHECKING:
 
 def dendrogram(
     adata: AnnData, key: str = "cluster", color_threshold: float | None = None, ax: Axes | None = None
-) -> Axes:
+) -> Axes | None:
     """Draw the hierarchical clustering tree stored by :func:`~mantispy.tl.cluster`.
 
     Args:
@@ -24,7 +25,8 @@ def dendrogram(
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
-        The axes drawn on, holding the tree with the profiles as leaves and merge height on the y axis.
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
+        When returned they hold the tree, with the profiles as leaves and merge height on the y axis.
 
     Raises:
         KeyError: ``uns["mantispy"]`` holds no ``key + "_linkage"`` (the run used ``method="leiden"``, or none ran).
@@ -50,4 +52,4 @@ def dendrogram(
         linkage_matrix, labels=labels, color_threshold=color_threshold, ax=ax, leaf_rotation=90, leaf_font_size=6
     )
     ax.set_ylabel("distance")
-    return ax
+    return _returned(ax)

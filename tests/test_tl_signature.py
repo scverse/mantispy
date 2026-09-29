@@ -8,6 +8,7 @@ import pytest
 
 matplotlib.use("Agg")
 
+import matplotlib.pyplot as plt
 
 import mantispy as mt
 
@@ -76,9 +77,11 @@ def test_the_heatmap_draws_one_row_per_group(annotated):
     adata.obs["Metadata_MOA"] = np.where(adata.obs["Metadata_Perturbation"].to_numpy() == "compound", "mechanism", None)
     mt.tl.differential_features(adata, block=None, key_added="d")
     signature = mt.tl.feature_signature(adata, key="d")
-    axes = mt.pl.feature_signature(signature, groupby="Metadata_MOA")
-    assert len(axes.get_yticklabels()) == 1
-    assert len(axes.get_xticklabels()) == signature.n_vars
+    _, ax = plt.subplots()
+    mt.pl.feature_signature(signature, groupby="Metadata_MOA", ax=ax)
+    assert len(ax.get_yticklabels()) == 1
+    assert len(ax.get_xticklabels()) == signature.n_vars
+    plt.close(ax.figure)
 
 
 def test_the_heatmap_reads_an_infinity_as_missing():
@@ -87,9 +90,12 @@ def test_the_heatmap_reads_an_infinity_as_missing():
     drawn = []
     for value in (np.inf, np.nan):
         values[0, 0] = value
-        drawn.append(mt.pl.feature_signature(ad.AnnData(values.copy())).images[0])
+        _, ax = plt.subplots()
+        mt.pl.feature_signature(ad.AnnData(values.copy()), ax=ax)
+        drawn.append(ax.images[0])
     assert drawn[0].get_clim() == drawn[1].get_clim()
     np.testing.assert_array_equal(drawn[0].get_array(), drawn[1].get_array())
+    plt.close("all")
 
 
 def test_two_components_that_name_the_same_family_are_refused(annotated):

@@ -38,6 +38,27 @@ def axes(ax: Axes | None, figsize: tuple[float, float]) -> Axes:
     return ax
 
 
+def returned(result: Axes | np.ndarray | None, *, owned: bool | None = None) -> Axes | np.ndarray | None:
+    """The value a plot hands back under the scanpy-style owned-figure contract.
+
+    Returns the drawn axes only when the caller supplied their own ``ax`` (they
+    own the figure and asked for the handle); returns ``None`` when the plot
+    created the figure itself, so a bare call as a notebook cell's last line
+    prints nothing beside the figure it already drew.
+
+    Args:
+        result: The single axes, or array of axes, that were drawn on.
+        owned: Whether the plot created the figure, meaning the caller passed no axes of their own.
+            Omitted for a single axes, where it is read from the axes' own figure, which :func:`axes` marks when it creates one.
+
+    Returns:
+        ``result`` when the caller owns the figure, else ``None``.
+    """
+    if owned is None:
+        owned = getattr(cast("Axes", result).figure, _OWNED, False)
+    return None if owned else result
+
+
 def table(adata: AnnData, key: str, produced_by: str, when_empty: str | None = None) -> pd.DataFrame:
     """A result table from ``uns["mantispy"]``, or an error naming what writes it.
 
@@ -129,7 +150,6 @@ def maybe_interactive(
     if not interactive_available():
         return False
     import plotly.express as px
-    from IPython.display import display
 
     hover_list = list(hover) if hover is not None else None
     if kind == "scatter":
@@ -155,7 +175,7 @@ def maybe_interactive(
         )
     else:
         raise ValueError(f"unknown interactive kind {kind!r}")
-    display(figure)
+    figure.show(renderer="notebook_connected")
     if ax is not None and getattr(ax.figure, _OWNED, False):
         import matplotlib.pyplot as plt
 

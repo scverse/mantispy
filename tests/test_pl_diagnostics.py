@@ -6,6 +6,8 @@ import pytest
 
 matplotlib.use("Agg")
 
+import matplotlib.pyplot as plt
+
 import mantispy as mt
 from mantispy.ds import synthetic_plate
 
@@ -33,21 +35,23 @@ def diagnosed():
 @pytest.mark.parametrize(
     "draw",
     [
-        lambda a: mt.pl.plate_effects(a),
-        lambda a: mt.pl.image_qc(a),
-        lambda a: mt.pl.control_drift(a),
-        lambda a: mt.pl.outliers(a),
-        lambda a: mt.pl.feature_correlation(a),
-        lambda a: mt.pl.feature_groups(a),
+        lambda a: mt.pl.plate_effects(a, axes=plt.subplots(a.obs["Metadata_Plate"].nunique(), 2, squeeze=False)[1]),
+        lambda a: mt.pl.image_qc(a, ax=plt.subplots()[1]),
+        lambda a: mt.pl.control_drift(a, ax=plt.subplots()[1]),
+        lambda a: mt.pl.outliers(a, axes=plt.subplots(1, 2)[1]),
+        lambda a: mt.pl.feature_correlation(a, ax=plt.subplots()[1]),
+        lambda a: mt.pl.feature_groups(a, ax=plt.subplots()[1]),
     ],
     ids=["plate_effects", "image_qc", "control_drift", "outliers", "feature_correlation", "feature_groups"],
 )
 def test_every_plot_draws_and_does_not_mutate(diagnosed, draw):
     before = (list(diagnosed.obs.columns), list(diagnosed.var.columns), diagnosed.X.copy())
+    # Passing axes makes each plot hand them back, so this still asserts on the drawn Axes.
     result = np.asarray(draw(diagnosed))
     assert all(isinstance(axis, matplotlib.axes.Axes) for axis in result.ravel())
     assert (list(diagnosed.obs.columns), list(diagnosed.var.columns)) == before[:2]
     np.testing.assert_array_equal(diagnosed.X, before[2])
+    plt.close("all")
 
 
 def test_plots_say_what_to_run_first(diagnosed):
@@ -61,7 +65,11 @@ def test_plots_say_what_to_run_first(diagnosed):
 def test_well_level_pass_maps_reuse_pl_plate(diagnosed):
     """No dedicated pl.well_qc: the plate heatmap already draws any obs column."""
     mt.pp.well_qc(diagnosed, min_cells=5)
-    assert np.asarray(mt.pl.plate(diagnosed, color="qc_well_pass")).size == 2
+    # plate owns the figure over several plates, so it draws and returns None; check the panels it drew.
+    assert mt.pl.plate(diagnosed, color="qc_well_pass") is None
+    panels = [axis for axis in plt.gcf().axes if axis.images]
+    assert len(panels) == diagnosed.obs["Metadata_Plate"].nunique()
+    plt.close("all")
 
 
 def test_control_drift_reads_an_infinity_as_missing(diagnosed):
@@ -71,8 +79,10 @@ def test_control_drift_reads_an_infinity_as_missing(diagnosed):
     for value in (np.inf, np.nan):
         adata = diagnosed.copy()
         adata.X[control, 0] = value
-        axes = mt.pl.control_drift(adata)
-        drawn.append(np.vstack([points.get_offsets() for points in axes.collections]))
+        _, ax = plt.subplots()
+        mt.pl.control_drift(adata, ax=ax)
+        drawn.append(np.vstack([points.get_offsets() for points in ax.collections]))
+        plt.close(ax.figure)
     np.testing.assert_array_equal(*drawn)
 
 

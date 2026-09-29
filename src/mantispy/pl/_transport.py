@@ -10,6 +10,7 @@ import pandas as pd
 from mantispy._core.frames import as_frame
 from mantispy.pl._common import axes as _axes
 from mantispy.pl._common import maybe_interactive as _maybe_interactive
+from mantispy.pl._common import returned as _returned
 from mantispy.pl._common import table as _table
 from mantispy.pl._moa import _heatmap
 
@@ -20,7 +21,7 @@ if TYPE_CHECKING:
 
 def transport(
     adata: AnnData, key: str = "transport", level: str | None = None, top: int = 25, ax: Axes | None = None
-) -> Axes:
+) -> Axes | None:
     """Agreement per perturbation, ranked, with the ones that reproduce colored.
 
     With more than ``top`` perturbations, the highest and lowest ranked are shown.
@@ -34,7 +35,8 @@ def transport(
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
-        The axes drawn on, with one bar per perturbation, the ones that reproduce in crimson, and how many of them do in the title.
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
+        When returned they hold one bar per perturbation, the ones that reproduce in crimson, and how many of them do in the title.
 
     Raises:
         KeyError: There is no such table, or it holds no such level.
@@ -68,12 +70,12 @@ def transport(
         }
     )
     _maybe_interactive("barh", ax=ax, data=tidy, x=xlabel, y="group", color="reproduces", title=title)
-    return ax
+    return _returned(ax)
 
 
 def setting_agreement(
     adata: AnnData, key: str = "transport", by: str | None = None, cluster: bool = True, ax: Axes | None = None
-) -> Axes:
+) -> Axes | None:
     """Settings against settings: which plates, batches or laboratories agree with each other.
 
     Uses the same effect vectors as :func:`transport`, compared between settings instead of between perturbations.
@@ -89,7 +91,8 @@ def setting_agreement(
         ax: Axes to draw into.
 
     Returns:
-        The axes drawn on, holding the settings-by-settings agreement matrix with a white line at each ``by`` boundary.
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
+        When returned they hold the settings-by-settings agreement matrix with a white line at each ``by`` boundary.
 
     Raises:
         KeyError: ``uns["mantispy"]`` holds no ``key + "_units"`` matrix, or ``by`` was given and no ``obs`` column names the settings it holds.
@@ -145,4 +148,4 @@ def setting_agreement(
         value_label="effect agreement",
         title="setting agreement",
     )
-    return ax
+    return _returned(ax)

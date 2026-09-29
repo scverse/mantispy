@@ -22,7 +22,7 @@ def _fake_shell(name):
 
 
 class _Capture:
-    """Stands in for ``IPython.display.display`` and keeps what it was handed."""
+    """Stands in for a plotly figure's ``show`` and keeps the figures it was handed."""
 
     def __init__(self):
         self.figures = []
@@ -102,15 +102,13 @@ _KINDS = {
 
 @pytest.fixture
 def displayed(monkeypatch):
-    """Force the gate True and capture what would be displayed, without a real frontend."""
+    """Force the gate True and capture the figures a twin would show, without a real frontend."""
     pytest.importorskip("plotly")
-    pytest.importorskip("IPython")
-    import IPython.display
     import plotly.graph_objects as go
 
     capture = _Capture()
     monkeypatch.setattr(_common, "interactive_available", lambda: True)
-    monkeypatch.setattr(IPython.display, "display", capture)
+    monkeypatch.setattr(go.Figure, "show", lambda self, *args, **kwargs: capture(self))
     return capture, go.Figure
 
 
@@ -152,18 +150,20 @@ _REPRESENTATIVES = {
 
 
 @pytest.mark.parametrize("kind", list(_REPRESENTATIVES))
-def test_a_fired_twin_returns_the_axes_and_closes_the_static_figure(displayed, scored, kind):
+def test_a_fired_twin_closes_the_owned_static_figure(displayed, scored, kind):
     capture, figure_type = displayed
-    ax = _REPRESENTATIVES[kind](scored)
-    assert isinstance(ax, matplotlib.axes.Axes)
+    open_before = set(plt.get_fignums())
+    # These calls own their figure, so nothing is returned and the fired twin closes the static one.
+    assert _REPRESENTATIVES[kind](scored) is None
     assert len(capture.figures) == 1
     assert isinstance(capture.figures[0], figure_type)
-    assert not plt.fignum_exists(ax.figure.number), "the static figure must be closed so it is not shown twice"
+    assert set(plt.get_fignums()) == open_before, "the owned static figure must be closed so it is not shown twice"
 
 
 @pytest.mark.parametrize("kind", list(_REPRESENTATIVES))
 def test_the_static_plot_is_untouched_without_a_frontend(monkeypatch, scored, kind):
     monkeypatch.setattr(_common, "interactive_available", lambda: False)
-    ax = _REPRESENTATIVES[kind](scored)
-    assert isinstance(ax, matplotlib.axes.Axes)
-    assert plt.fignum_exists(ax.figure.number), "the static figure stays open when no twin fires"
+    open_before = set(plt.get_fignums())
+    # The plot owns its figure and returns None; without a twin the static figure stays open.
+    assert _REPRESENTATIVES[kind](scored) is None
+    assert len(set(plt.get_fignums()) - open_before) == 1, "the owned static figure stays open when no twin fires"
