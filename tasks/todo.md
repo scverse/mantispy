@@ -13,17 +13,27 @@ I build finals + write code; coordinator uploads + pushes + opens PR.
 - build: `python scripts/build_staged_datasets.py --only <name> --print-sha256 --out $HOME/build_all/`.
 
 ## Order (smallest raw first, commit in groups)
-- [ ] neuropainting  (base only)            -- validates the whole pipeline
-- [ ] chroma         (base only)
-- [ ] pooled_rare    (base, selected)
-- [ ] oasis_pilot    (base, agg; keep annotate= raw path)
-- [ ] pki            (base, selected, agg, agg_selected)
-- [ ] scallops_arv471(base, agg; cells->guide via tl.aggregate)
-- [ ] jump_crispr    (base, agg; guides->gene consensus; keep annotate= raw path)
-- [ ] jump_cells     (base, selected, agg; HEAVY; keep annotate=/selected=)
-- [ ] cp_posh        (base, selected, agg, agg_selected; HEAVY)
-- [ ] jump_target2   (default base; keep plates= subset; parameterized) -- attempt/flag
-- [ ] jump_lite      (per-model keyed finals) -- evaluate; SKIP if thin per-model read
+- [x] neuropainting  (base only)            -- validated the whole pipeline
+- [x] chroma         (base only)
+- [x] pooled_rare    (base, selected)
+- [x] oasis_pilot    (base, agg; annotate=False keeps raw path)
+- [x] pki            (base, selected, agg, agg_selected); fixed stale gallery test 5857->5839
+- [x] scallops_arv471(base, agg; cells->guide via tl.aggregate)
+- [x] jump_crispr    (base, agg; guides->gene consensus; annotate=False keeps raw path)
+- [x] jump_cells     (base, selected, agg; agg is cells->WELL per the audit; keep annotate=/selected=)
+- [x] cp_posh        (base, selected, agg, agg_selected)
+- [x] jump_target2   (default 11-plate base hosted; non-default plates= keeps the raw path)
+- [x] jump_lite      (6 per-model keyed finals; annotate=False keeps raw path)
+
+## Review
+- All 11 datasets migrated, none deferred. 28 finals in $HOME/build_all/ (all sha256 in registry).
+- jump_cells `aggregated`: the audit says aggregate by (Metadata_Plate, Metadata_Well) i.e. cells->well,
+  which is also `tl.aggregate`'s default and lines up with the well-level jump_target2; the task text said
+  "Metadata_Perturbation unit", the audit wins (noted per the follow-the-audit rule).
+- pki base is (3072, 5839) from the live `_augmented`; the gallery test asserted (3072, 5857), which was
+  stale against the pinned data (verified `_augmented("pki", None).n_vars == 5839`). Updated the assertion.
+- Deterministic spot-checks (build twice, identical sha256): neuropainting, pki, scallops_arv471, jump_cells.
+- api-guards + offline gallery tests pass; ruff clean; every built h5ad round-trips and `io.validate` is ok.
 
 ## Verify (mine)
 - [ ] `import mantispy; import mantispy.ds._build` (no cycle)
