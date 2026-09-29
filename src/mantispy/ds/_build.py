@@ -288,6 +288,116 @@ def _shipped_chroma() -> dict[str, AnnData]:
     return {"chroma.h5ad": chroma()}
 
 
+def _assemble_pooled_rare(cache_dir: str | Path | None = None) -> AnnData:
+    """Assemble the pooled-rare base: the per-barcode profiles with their variant, gene and allele.
+
+    The raw pipeline the loader used before the base was staged; it lives here so the drift check can rebuild
+    the hosted base from the raw gene-normalized table.
+    """
+    import pandas as pd
+
+    from mantispy._core.frames import as_frame
+    from mantispy._core.logging import get_logger
+    from mantispy.ds._datasets import _profiles
+
+    adata = _profiles("pooled_rare", cache_dir, select=lambda name: not name.endswith(".h5ad"))
+    obs = as_frame(adata.obs)
+    code = obs["Metadata_Foci_Barcode_MatchedTo_GeneCode"].astype(str)
+    obs["Metadata_Perturbation"] = code.astype("category")
+    obs["Metadata_Perturbation_Type"] = pd.Series("orf", index=obs.index, dtype="category")
+    # The gene is the token before the first space; the variant "ACTB E364K" belongs to gene "ACTB".
+    obs["Metadata_Gene"] = code.str.split(" ").str[0].astype("category")
+    obs["Metadata_Allele"] = code.astype("category")
+    get_logger().info(
+        "pooled_rare: %d variants over %d genes x %d features",
+        adata.n_obs,
+        int(obs["Metadata_Gene"].nunique()),
+        adata.n_vars,
+    )
+    return adata
+
+
+def build_pooled_rare(cache_dir: str | Path | None = None) -> dict[str, AnnData]:
+    """Returns {'pooled_rare.h5ad': ad, 'pooled_rare_selected.h5ad': ad}."""
+    from mantispy.pp._select import feature_select, subset_features
+
+    base = _stable(_assemble_pooled_rare(cache_dir))
+    # Feature-selected block, pycytominer's default operations, on the gene-normalized base.
+    selected = base.copy()
+    feature_select(selected)
+    selected = _stable(subset_features(selected))
+    return {"pooled_rare.h5ad": base, "pooled_rare_selected.h5ad": selected}
+
+
+def _shipped_pooled_rare() -> dict[str, AnnData]:
+    """The two pooled-rare variants as fetched through the public ``mt.ds.pooled_rare`` API."""
+    from mantispy.ds._datasets import pooled_rare
+
+    return {
+        "pooled_rare.h5ad": pooled_rare(),
+        "pooled_rare_selected.h5ad": pooled_rare(feature_selected=True),
+    }
+
+
+def _assemble_oasis_pilot(cache_dir: str | Path | None = None) -> AnnData:
+    """Assemble the annotated OASIS-pilot base: the profiles joined to the plate maps and their doses.
+
+    The raw pipeline the ``annotate=True`` :func:`mt.ds.oasis_pilot` used before the base was staged; it lives
+    here so the drift check can rebuild the hosted base from the raw profile and plate-map tables. The
+    ``annotate=False`` path stays in the loader, reading the raw profiles directly.
+    """
+    import numpy as np
+    import pandas as pd
+
+    from mantispy._core.frames import as_frame
+    from mantispy._core.logging import get_logger
+    from mantispy.ds._datasets import _oasis_platemaps, _profiles
+
+    adata = _profiles("oasis_pilot", cache_dir, select=lambda name: name.endswith(".csv.gz"))
+    obs = as_frame(adata.obs)
+    merged = obs.merge(_oasis_platemaps(cache_dir), on=["Metadata_plate_map_name", "Metadata_Well"], how="left")
+    merged.index = obs.index
+    if unmatched := int(merged["Metadata_Compound"].isna().sum()):
+        get_logger().warning("oasis_pilot: %d of %d wells have no plate-map row", unmatched, len(merged))
+    adata.obs["Metadata_Compound"] = merged["Metadata_Compound"].to_numpy()
+    adata.obs["Metadata_Concentration"] = merged["Metadata_Concentration"].to_numpy(dtype=float)
+    adata.obs["Metadata_ConcentrationRecorded"] = merged["Metadata_ConcentrationRecorded"].to_numpy(dtype=float)
+    adata.obs["Metadata_CellLine"] = merged["Metadata_CellLine"].to_numpy()
+    adata.obs["Metadata_Control"] = merged["Metadata_Compound"].astype(str).str.upper().eq("DMSO").to_numpy()
+    is_control = np.asarray(adata.obs["Metadata_Control"], dtype=bool)
+    adata.obs["Metadata_Perturbation"] = pd.Categorical(
+        np.where(
+            is_control,
+            "DMSO",
+            merged["Metadata_Compound"].astype(str) + "@" + merged["Metadata_Concentration"].astype(str),
+        )
+    )
+    adata.obs["Metadata_Perturbation_Type"] = pd.Series("compound", index=adata.obs_names, dtype="category")
+    get_logger().info(
+        "OASIS pilot: %d wells x %d features, %d compounds over %d concentrations, %d control wells",
+        adata.n_obs,
+        adata.n_vars,
+        int(merged.loc[~is_control, "Metadata_Compound"].nunique()),
+        int(merged["Metadata_Concentration"].nunique()),
+        int(is_control.sum()),
+    )
+    return adata
+
+
+def build_oasis_pilot(cache_dir: str | Path | None = None) -> dict[str, AnnData]:
+    """Returns {'oasis_pilot.h5ad': ad, 'oasis_pilot_agg.h5ad': ad}."""
+    base = _stable(_assemble_oasis_pilot(cache_dir))
+    # One modz consensus per compound-at-concentration, DMSO wells kept as the "DMSO" perturbation.
+    return {"oasis_pilot.h5ad": base, "oasis_pilot_agg.h5ad": _stable(_perturbation_consensus(base))}
+
+
+def _shipped_oasis_pilot() -> dict[str, AnnData]:
+    """The two OASIS-pilot variants as fetched through the public ``mt.ds.oasis_pilot`` API."""
+    from mantispy.ds._datasets import oasis_pilot
+
+    return {"oasis_pilot.h5ad": oasis_pilot(), "oasis_pilot_agg.h5ad": oasis_pilot(aggregated=True)}
+
+
 # One entry per staged dataset: (builder rebuilding the variants from the raw pipeline, loader returning the
 # shipped variants through the public ``mt.ds`` API keyed by the same filenames, ``heavy`` marking a rebuild
 # too large to run on every pull request). Later PRs stage a dataset by adding one entry here; the build and
@@ -299,4 +409,6 @@ STAGED: dict[str, tuple[Callable[..., dict[str, AnnData]], Callable[[], dict[str
     "bbbc021": (build_bbbc021_variants, _shipped_bbbc021, True),
     "neuropainting": (build_neuropainting, _shipped_neuropainting, False),
     "chroma": (build_chroma, _shipped_chroma, False),
+    "pooled_rare": (build_pooled_rare, _shipped_pooled_rare, False),
+    "oasis_pilot": (build_oasis_pilot, _shipped_oasis_pilot, False),
 }

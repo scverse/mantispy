@@ -370,40 +370,42 @@ def jump_target2(
     return adata
 
 
-def pooled_rare(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
+#: The rehosted pooled_rare variant each ``feature_selected`` flag answers to.
+_POOLED_RARE_VARIANTS = {
+    False: "pooled_rare.h5ad",  # 290 x 4417, per barcode, all features
+    True: "pooled_rare_selected.h5ad",  # per barcode, feature selected
+}
+
+
+def pooled_rare(cache_dir: str | Path | None = None, *, feature_selected: bool = False) -> AnnData:
     """Pooled rare variants, 290 barcodes in a pooled screen.
 
     ``cpg0032-pooled-rare``, aggregated to one row per barcode rather than per well, so there is no plate or well in ``obs``.
 
+    The base and its feature-selected block are pre-built by ``scripts/build_staged_datasets.py`` from the raw gene-normalized table and rehosted on ``scverse-exampledata``, so the loader fetches a single h5ad rather than reassembling it on every call.
+
     Args:
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
-        kwargs: Passed to :func:`mantispy.io.read_profiles`.
+        feature_selected: Return the block after pycytominer-default feature selection instead of all features.
 
     Returns:
-        Barcodes by features, at perturbation resolution, with:
+        Barcodes by features, at perturbation resolution, read with :func:`mantispy.io.read`, with:
 
         ``Metadata_Perturbation``: the variant the barcode expresses (``Metadata_Foci_Barcode_MatchedTo_GeneCode``, 290 of them), the unit the library varied. It is a gene (``"ACTB"``) or a specific coding variant of it (``"ACTB E364K"``).
 
         ``Metadata_Perturbation_Type``: ``"orf"``, the variants being expressed from constructs.
 
         ``Metadata_Gene`` (the gene the variant belongs to, the token before the first space) and ``Metadata_Allele`` (the full variant label).
+
+    Raises:
+        ValueError: ``feature_selected`` is not a bool.
     """
-    adata = _profiles("pooled_rare", cache_dir, **kwargs)
-    obs = as_frame(adata.obs)
-    code = obs["Metadata_Foci_Barcode_MatchedTo_GeneCode"].astype(str)
-    obs["Metadata_Perturbation"] = code.astype("category")
-    obs["Metadata_Perturbation_Type"] = pd.Series("orf", index=obs.index, dtype="category")
-    # The gene is the token before the first space; the variant "ACTB E364K" belongs to gene "ACTB".
-    obs["Metadata_Gene"] = code.str.split(" ").str[0].astype("category")
-    obs["Metadata_Allele"] = code.astype("category")
-    get_logger().info(
-        "pooled_rare: %d variants over %d genes x %d features",
-        adata.n_obs,
-        int(obs["Metadata_Gene"].nunique()),
-        adata.n_vars,
-    )
-    return adata
+    if not isinstance(feature_selected, bool):
+        raise ValueError(f"feature_selected must be a bool, got {type(feature_selected).__name__}")
+    target = _POOLED_RARE_VARIANTS[feature_selected]
+    (path,) = _files("pooled_rare", cache_dir, select=lambda name: name == target)
+    return read(path)
 
 
 def neuropainting(cache_dir: str | Path | None = None) -> AnnData:
@@ -528,20 +530,33 @@ def _oasis_platemaps(cache_dir: str | Path | None) -> pd.DataFrame:
     return platemap
 
 
-def oasis_pilot(annotate: bool = True, cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
+#: The rehosted OASIS-pilot variant each ``aggregated`` flag answers to (both need ``annotate=True``).
+_OASIS_PILOT_VARIANTS = {
+    False: "oasis_pilot.h5ad",  # 4604 x 99, well level, annotated
+    True: "oasis_pilot_agg.h5ad",  # perturbation level (modz)
+}
+
+
+def oasis_pilot(annotate: bool = True, cache_dir: str | Path | None = None, *, aggregated: bool = False) -> AnnData:
     """OASIS pilot, 4,604 wells in U2OS and HepaRG, most compounds over a ten-point dose range.
 
     ``cpg0033-oasis-pilot``, twelve plates read down to the features they share, over four batches: two of assay development and two that dose 36 compounds in each cell line.
     It is the dose-response dataset of the package: 28 of those compounds carry six or more concentrations in both U2OS and HepaRG.
 
+    The annotated base and its perturbation-level consensus are pre-built by ``scripts/build_staged_datasets.py`` from the raw profile and plate-map tables and rehosted on ``scverse-exampledata``, so the loader fetches a single h5ad rather than joining the plate maps on every call. Passing ``annotate=False`` still reads the raw profiles directly, without the annotation join.
+
     Args:
-        annotate: Join the plate maps, which supply ``Metadata_Compound``, ``Metadata_Concentration``, ``Metadata_CellLine``, ``Metadata_Control`` (the DMSO wells), ``Metadata_Perturbation`` and ``Metadata_Perturbation_Type`` (``"compound"``).
+        annotate: Fetch the annotated base, which carries ``Metadata_Compound``, ``Metadata_Concentration``, ``Metadata_CellLine``, ``Metadata_Control`` (the DMSO wells), ``Metadata_Perturbation`` and ``Metadata_Perturbation_Type`` (``"compound"``).
+            ``False`` reads the raw profiles without the plate-map join and cannot be aggregated.
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
-        kwargs: Passed to :func:`mantispy.io.read_profiles`.
+        aggregated: Return one ``modz`` consensus (Spearman, ``min_replicates=2``) per ``Metadata_Perturbation`` instead of the wells, DMSO kept as the ``"DMSO"`` perturbation. Needs ``annotate=True``.
 
     Returns:
-        Wells by features, indexed by plate and well, with ``Metadata_CellCount`` and ``Metadata_SiteCount``, and the annotation columns above when ``annotate``.
+        Wells by features at well resolution when ``aggregated`` is ``False``, else the perturbation-level consensus, indexed by plate and well, with ``Metadata_CellCount`` and ``Metadata_SiteCount``, read with :func:`mantispy.io.read`. The annotation columns above are present when ``annotate``.
+
+    Raises:
+        ValueError: ``aggregated`` is not a bool, or ``aggregated`` is asked for with ``annotate=False``.
 
     Notes:
         The four batches name their plate-map columns differently, so the join reads whichever of ``treatment``/``Compound Name``/``compound`` and ``concentration_uM``/``assay_conc_uM``/``compound_concentration`` each one carries.
@@ -554,38 +569,15 @@ def oasis_pilot(annotate: bool = True, cache_dir: str | Path | None = None, **kw
         ``Metadata_Concentration`` is the dose the well was meant to get, reading a coarser spelling as the finer level it rounds to within each compound, and it names the replicate groups.
         ``Metadata_ConcentrationRecorded`` keeps what the plate map wrote: read against that column, every dosed compound here carries eighteen levels where ten were plated, and a treatment's wells split across two spellings.
     """
-    adata = _profiles("oasis_pilot", cache_dir, select=lambda name: name.endswith(".csv.gz"), **kwargs)
+    if not isinstance(aggregated, bool):
+        raise ValueError(f"aggregated must be a bool, got {type(aggregated).__name__}")
+    if aggregated and not annotate:
+        raise ValueError("aggregated needs annotate=True: the consensus groups by the plate-map perturbation")
     if not annotate:
-        return adata
-
-    obs = as_frame(adata.obs)
-    merged = obs.merge(_oasis_platemaps(cache_dir), on=["Metadata_plate_map_name", "Metadata_Well"], how="left")
-    merged.index = obs.index
-    if unmatched := int(merged["Metadata_Compound"].isna().sum()):
-        get_logger().warning("oasis_pilot: %d of %d wells have no plate-map row", unmatched, len(merged))
-    adata.obs["Metadata_Compound"] = merged["Metadata_Compound"].to_numpy()
-    adata.obs["Metadata_Concentration"] = merged["Metadata_Concentration"].to_numpy(dtype=float)
-    adata.obs["Metadata_ConcentrationRecorded"] = merged["Metadata_ConcentrationRecorded"].to_numpy(dtype=float)
-    adata.obs["Metadata_CellLine"] = merged["Metadata_CellLine"].to_numpy()
-    adata.obs["Metadata_Control"] = merged["Metadata_Compound"].astype(str).str.upper().eq("DMSO").to_numpy()
-    is_control = np.asarray(adata.obs["Metadata_Control"], dtype=bool)
-    adata.obs["Metadata_Perturbation"] = pd.Categorical(
-        np.where(
-            is_control,
-            "DMSO",
-            merged["Metadata_Compound"].astype(str) + "@" + merged["Metadata_Concentration"].astype(str),
-        )
-    )
-    adata.obs["Metadata_Perturbation_Type"] = pd.Series("compound", index=adata.obs_names, dtype="category")
-    get_logger().info(
-        "OASIS pilot: %d wells x %d features, %d compounds over %d concentrations, %d control wells",
-        adata.n_obs,
-        adata.n_vars,
-        int(merged.loc[~is_control, "Metadata_Compound"].nunique()),
-        int(merged["Metadata_Concentration"].nunique()),
-        int(is_control.sum()),
-    )
-    return adata
+        return _profiles("oasis_pilot", cache_dir, select=lambda name: name.endswith(".csv.gz"))
+    target = _OASIS_PILOT_VARIANTS[aggregated]
+    (path,) = _files("oasis_pilot", cache_dir, select=lambda name: name == target)
+    return read(path)
 
 
 #: The feature sets JUMP-Lite publishes for one set of wells: five learned embeddings and the CellProfiler-equivalent ``cp_measure``.

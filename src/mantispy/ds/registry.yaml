@@ -1939,6 +1939,14 @@ datasets:
     - name: 2023_06_05_24W_RD3_poscon__2023_06_05_24W_RD3_poscon_gene_normalized_ALLBATCHES___ALLPLATES___ALLWELLS.csv.gz
       s3_key: cpg0032-pooled-rare/broad/workspace/profiles/2023_06_05_24W_RD3_poscon/2023_06_05_24W_RD3_poscon_gene_normalized_ALLBATCHES___ALLPLATES___ALLWELLS.csv.gz
       sha256: 93d1f3dec58676b266fece87d950945cdc31da91e22b8c8101218091198d6eab
+    # Staged variants rehosted on scverse-exampledata (explicit url overrides base_url, so the raw table above
+    # stays on cellpainting-gallery). Regenerate with scripts/build_staged_datasets.py.
+    - name: pooled_rare.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/pooled_rare/pooled_rare.h5ad
+      sha256: abacc60b3e9d011bc079c02857bc5a4c8c3d2c6bed0e54e04224a325483f9d02
+    - name: pooled_rare_selected.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/pooled_rare/pooled_rare_selected.h5ad
+      sha256: b197f748c123ff3b9d1c0ae589f809519b1e72db41ca912a87a1b9180f6b3eb9
 
   rohban:
     type: mantispy
@@ -2131,6 +2139,14 @@ datasets:
     - name: 2025_07_29_OASIS_HepaRG_Ptx_AD2__BR00147879__platemap.txt
       s3_key: cpg0033-oasis-pilot/broad/workspace/metadata/2025_07_29_OASIS_HepaRG_Ptx_AD2/platemap/BR00147879.txt
       sha256: eda00ee6e9d50e91a935ae5d505c9dc751ac0a81cb46968ccd22147b138acbac
+    # Staged variants rehosted on scverse-exampledata (explicit url overrides base_url, so the raw profile and
+    # plate-map tables above stay on cellpainting-gallery). Regenerate with scripts/build_staged_datasets.py.
+    - name: oasis_pilot.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/oasis_pilot/oasis_pilot.h5ad
+      sha256: dd77fc202ea43a3223fdcb572bebdbae209946b62d30f34d44de90c9088b8363
+    - name: oasis_pilot_agg.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/oasis_pilot/oasis_pilot_agg.h5ad
+      sha256: 228f89aa4098b071a40b7c14c2d90f99c7b930f98a2bd6b3f469b50dce318e58
 
   pki:
     type: mantispy
