@@ -4690,3 +4690,16 @@ datasets:
     - name: cp_posh_124gene_poc_well_normalized.pq
       url: https://insitro-research-2023-cellpaint-posh.s3.amazonaws.com/Supp%20Data%202%20-%20124-Gene%20PoC%20Dataset%20(well-normalized).pq
       sha256: 4730d28ac5fc5d4245855523a644c79c7299e30df046c0e342197391a036e760
+    # Staged variants rehosted on scverse-exampledata. Regenerate with scripts/build_staged_datasets.py.
+    - name: cp_posh.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/cp_posh/cp_posh.h5ad
+      sha256: 7b9c41861ef80c97476cf9c099ec899bf8d5a71e85f8b2bdecb88ed180513712
+    - name: cp_posh_selected.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/cp_posh/cp_posh_selected.h5ad
+      sha256: e74a4fbc9945f353d331462452f2e4f1e33fde9a5f92c9856b6fd24fd072a76d
+    - name: cp_posh_agg.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/cp_posh/cp_posh_agg.h5ad
+      sha256: 49ad57eb11a1a7f3d204dcfceae5c3f6bf8f2e99d837894e8512d4e42e31cc17
+    - name: cp_posh_agg_selected.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/cp_posh/cp_posh_agg_selected.h5ad
+      sha256: 5913832c31b19d934aebf3e21744f09ce04a05b0ccec7273e6e675c3ac470b3a

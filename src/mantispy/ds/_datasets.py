@@ -897,21 +897,73 @@ _CP_POSH_METADATA = ("barcode", "gene_id", "treatment", "plate_well", "plate", "
 _CP_POSH_CONTROLS = ("nontargeting", "intergenic")
 
 
-def cp_posh(cache_dir: str | Path | None = None) -> AnnData:
+def _assemble_cp_posh(cache_dir: str | Path | None = None) -> AnnData:
+    """Assemble the cp-POSH base: the cells with their gene, guide, plate, well and control.
+
+    The raw pipeline the both-flags-False :func:`mt.ds.cp_posh` used before the base was staged; it lives here
+    so the drift check can rebuild the hosted base from the raw parquet.
+    """
+    import anndata as ad
+
+    (path,) = _files("cp_posh", cache_dir, select=lambda name: not name.endswith(".h5ad"))
+    df = pd.read_parquet(path).reset_index()
+    features = [column for column in df.columns if column not in _CP_POSH_METADATA]
+
+    gene = df["gene_id"].astype(str).to_numpy()
+    guide = df["barcode"].astype(str).to_numpy()
+    # plate_well is "<plate>_<well>", e.g. "EL37_B04"; the well is the segment after the last "_" (wells carry none).
+    well = df["plate_well"].astype(str).str.rsplit("_", n=1).str[-1].to_numpy()
+    obs = pd.DataFrame(
+        {
+            "Metadata_Gene": gene,
+            "Metadata_sgRNA": guide,
+            "Metadata_Perturbation": guide,
+            "Metadata_Plate": df["plate"].astype(str).to_numpy(),
+            "Metadata_Well": well,
+            "Metadata_Control": np.isin(gene, _CP_POSH_CONTROLS),
+        },
+        index=pd.Index(df["ID"].astype(str).to_numpy()),
+    )
+    obs = categorize_metadata(obs)
+    adata = ad.AnnData(X=df[features].to_numpy(dtype=np.float32), obs=obs, var=empty_annotation(features))
+    stamp(adata, resolution="cell")
+    return _finish_guide_screen(adata, "cp_posh")
+
+
+#: The (aggregated, feature_selected) combination each rehosted cp_posh variant answers to.
+_CP_POSH_VARIANTS = {
+    (False, False): "cp_posh.h5ad",  # 163090 x 1278, cell level, all features
+    (False, True): "cp_posh_selected.h5ad",  # cell level, feature selected
+    (True, False): "cp_posh_agg.h5ad",  # guide level (median), all features
+    (True, True): "cp_posh_agg_selected.h5ad",  # guide level (median), feature selected
+}
+
+
+def cp_posh(
+    cache_dir: str | Path | None = None, *, aggregated: bool = False, feature_selected: bool = False
+) -> AnnData:
     """Single cells of insitro cp-POSH, a broad-morphology pooled CRISPR Cell Painting screen.
 
     The 124-gene proof-of-concept dataset from ``insitro/cp-posh``: A549 cells carrying a pooled CRISPR-knockout library, stained with a six-channel Cell Painting panel (WGA, a mitochondrial probe, phalloidin, concanavalin A, DAPI and a marker round) and read by in-situ sequencing of the guide barcodes.
     Each cell gets a broad, untargeted morphology profile of about 1,278 CellStats features rather than the handful of hand-picked readouts a targeted screen keeps, so it is the broad-morphology complement to :func:`scallops_arv471`.
 
     The features are already well-normalized by the authors, so :func:`~mantispy.pp.normalize` is not needed before analysis; a per-plate control normalization would re-do work already done.
-    Downloads about 1.6 GB once, checked against a pinned sha256.
+
+    The base and its variants are pre-built by ``scripts/build_staged_datasets.py`` from the raw parquet and rehosted on ``scverse-exampledata``, so the loader fetches a single h5ad rather than reassembling the base on every call. The two flags select the variant:
+
+    - both ``False``: the cells with every feature.
+    - ``feature_selected=True``: the cells after pycytominer-default feature selection.
+    - ``aggregated=True``: one median profile per ``(Metadata_Gene, Metadata_sgRNA)`` guide, with ``Metadata_CellCount``.
+    - ``aggregated=True, feature_selected=True``: that same guide aggregate on the feature-selected block.
 
     Args:
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
+        aggregated: Return the guide-level median aggregate instead of the cells.
+        feature_selected: Return the feature-selected block instead of all features.
 
     Returns:
-        Cells by about 1,278 CellStats morphology features at cell resolution, indexed by the upstream cell ``ID``, with:
+        Cells by about 1,278 CellStats morphology features at cell resolution (one median per guide when ``aggregated``), read with :func:`mantispy.io.read`, indexed by the upstream cell ``ID`` on the base, with:
 
         ``Metadata_Gene``: the gene the cell's guide targets, taken from the upstream ``gene_id``.
         The two control classes keep their upstream spellings, ``"nontargeting"`` (the non-targeting guides) and ``"intergenic"`` (guides against intergenic regions); ``"nontargeting"`` is the spelling the analysis functions read.
@@ -937,33 +989,17 @@ def cp_posh(cache_dir: str | Path | None = None) -> AnnData:
         Anything that reads ``var["feature_group"]`` or ``var["channel"]`` has nothing to work with here.
 
         A cell carries no count.
-        Aggregate to a guide-level profile with ``mt.tl.aggregate(adata, by=("Metadata_Gene", "Metadata_sgRNA"))``, which writes ``Metadata_CellCount``.
+        The ``aggregated`` variant is one median profile per ``(Metadata_Gene, Metadata_sgRNA)`` guide, which writes ``Metadata_CellCount``.
+
+    Raises:
+        ValueError: ``aggregated`` or ``feature_selected`` is not a bool.
     """
-    import anndata as ad
-
-    (path,) = _files("cp_posh", cache_dir)
-    df = pd.read_parquet(path).reset_index()
-    features = [column for column in df.columns if column not in _CP_POSH_METADATA]
-
-    gene = df["gene_id"].astype(str).to_numpy()
-    guide = df["barcode"].astype(str).to_numpy()
-    # plate_well is "<plate>_<well>", e.g. "EL37_B04"; the well is the segment after the last "_" (wells carry none).
-    well = df["plate_well"].astype(str).str.rsplit("_", n=1).str[-1].to_numpy()
-    obs = pd.DataFrame(
-        {
-            "Metadata_Gene": gene,
-            "Metadata_sgRNA": guide,
-            "Metadata_Perturbation": guide,
-            "Metadata_Plate": df["plate"].astype(str).to_numpy(),
-            "Metadata_Well": well,
-            "Metadata_Control": np.isin(gene, _CP_POSH_CONTROLS),
-        },
-        index=pd.Index(df["ID"].astype(str).to_numpy()),
-    )
-    obs = categorize_metadata(obs)
-    adata = ad.AnnData(X=df[features].to_numpy(dtype=np.float32), obs=obs, var=empty_annotation(features))
-    stamp(adata, resolution="cell")
-    return _finish_guide_screen(adata, "cp_posh")
+    for flag_name, flag in (("aggregated", aggregated), ("feature_selected", feature_selected)):
+        if not isinstance(flag, bool):
+            raise ValueError(f"{flag_name} must be a bool, got {type(flag).__name__}")
+    target = _CP_POSH_VARIANTS[aggregated, feature_selected]
+    (path,) = _files("cp_posh", cache_dir, select=lambda name: name == target)
+    return read(path)
 
 
 def corum(cache_dir: str | Path | None = None) -> pd.DataFrame:

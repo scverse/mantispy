@@ -531,6 +531,39 @@ def _shipped_jump_crispr() -> dict[str, AnnData]:
     return {"jump_crispr.h5ad": jump_crispr(), "jump_crispr_agg.h5ad": jump_crispr(aggregated=True)}
 
 
+def build_cp_posh_variants(cache_dir: str | Path | None = None) -> dict[str, AnnData]:
+    """Returns {'cp_posh.h5ad': ad, 'cp_posh_selected.h5ad': ad, 'cp_posh_agg.h5ad': ad, 'cp_posh_agg_selected.h5ad': ad}."""
+    from mantispy.ds._datasets import _assemble_cp_posh
+    from mantispy.pp._select import feature_select, subset_features
+
+    base = _stable(_assemble_cp_posh(cache_dir))
+
+    # Cell-level feature-selected block, pycytominer's default operations, on the author-normalized base.
+    selected = base.copy()
+    feature_select(selected)
+    selected = _stable(subset_features(selected))
+
+    # One median profile per guide, on the full and on the feature-selected block.
+    return {
+        "cp_posh.h5ad": base,
+        "cp_posh_selected.h5ad": selected,
+        "cp_posh_agg.h5ad": _stable(_guide_aggregate(base)),
+        "cp_posh_agg_selected.h5ad": _stable(_guide_aggregate(selected)),
+    }
+
+
+def _shipped_cp_posh() -> dict[str, AnnData]:
+    """The four cp_posh variants as fetched through the public ``mt.ds.cp_posh`` API."""
+    from mantispy.ds._datasets import cp_posh
+
+    return {
+        "cp_posh.h5ad": cp_posh(),
+        "cp_posh_selected.h5ad": cp_posh(feature_selected=True),
+        "cp_posh_agg.h5ad": cp_posh(aggregated=True),
+        "cp_posh_agg_selected.h5ad": cp_posh(aggregated=True, feature_selected=True),
+    }
+
+
 # One entry per staged dataset: (builder rebuilding the variants from the raw pipeline, loader returning the
 # shipped variants through the public ``mt.ds`` API keyed by the same filenames, ``heavy`` marking a rebuild
 # too large to run on every pull request). Later PRs stage a dataset by adding one entry here; the build and
@@ -547,4 +580,5 @@ STAGED: dict[str, tuple[Callable[..., dict[str, AnnData]], Callable[[], dict[str
     "pki": (build_pki_variants, _shipped_pki, True),
     "scallops_arv471": (build_scallops_arv471, _shipped_scallops_arv471, True),
     "jump_crispr": (build_jump_crispr, _shipped_jump_crispr, True),
+    "cp_posh": (build_cp_posh_variants, _shipped_cp_posh, True),
 }
