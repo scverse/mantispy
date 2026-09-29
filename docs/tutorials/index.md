@@ -1,32 +1,31 @@
 # Tutorials
 
-The documentation comes in three tiers. **Tutorials** teach a full biological workflow end to end, from a raw
-object to an interpreted result. **Examples** are short, focused how-to recipes for one task, such as reading a
-particular input format. **Pitfalls** show what goes wrong in image-based profiling and how to detect it before it
-reaches a conclusion.
+Each tutorial runs a workflow end to end, from a raw object to an interpreted result. Start with the overview, which covers the whole pipeline on one page, then follow the section that matches your screen. For heavier, full-scale analyses see the [case studies](../case_studies/index.md).
 
-Start with the overview, which runs the whole workflow on one page and links to the page that covers each step.
+## General
+
+Universal steps that apply to any screen: loading data, quality control, normalization, feature selection, and the pitfalls to watch for.
 
 ```{toctree}
 :maxdepth: 1
-:caption: Tutorials — start here
 
 overview
-```
-
-```{toctree}
-:maxdepth: 1
-:caption: Tutorials — preparing profiles
-
 profiles/quality_control
 profiles/normalize_and_select
 profiles/artifacts
 profiles/screen_quality
+data/cellprofiler
+data/profiles
+data/embeddings
+data/images
+phenotypes/which_features_moved
+pitfalls/index
 ```
+
+## Compound screens
 
 ```{toctree}
 :maxdepth: 1
-:caption: Tutorials — compound screens
 
 compounds/hits
 compounds/mechanism_of_action
@@ -34,34 +33,18 @@ compounds/enrichment
 compounds/dose_response
 ```
 
+## Genetic screens
+
 ```{toctree}
 :maxdepth: 1
-:caption: Tutorials — genetic screens
 
 genetics/interpreting_a_screen
 ```
 
+## Single cells
+
 ```{toctree}
 :maxdepth: 1
-:caption: Tutorials — single cells
 
 single_cells/heterogeneity
-```
-
-```{toctree}
-:maxdepth: 1
-:caption: Examples — bringing data in
-
-data/cellprofiler
-data/profiles
-data/embeddings
-data/images
-```
-
-```{toctree}
-:maxdepth: 1
-:caption: Pitfalls
-
-pitfalls/index
-phenotypes/which_features_moved
 ```

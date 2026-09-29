@@ -69,7 +69,7 @@ references
 ```
 
 ```{toctree}
-:caption: Gallery
+:caption: Tutorials
 :hidden: true
 :maxdepth: 3
 
