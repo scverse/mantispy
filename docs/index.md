@@ -21,7 +21,7 @@ The whole workflow on one page, from a public screen to called hits.
 :::
 
 :::{grid-item-card} {octicon}`play;1.5em;sd-mr-1` Tutorials
-:link: tutorials/index
+:link: tutorials/general
 :link-type: doc
 
 The tutorials walk you through real-world applications of mantispy.
@@ -71,9 +71,19 @@ references
 ```{toctree}
 :caption: Tutorials
 :hidden: true
-:maxdepth: 3
+:maxdepth: 2
 
-tutorials/index
+tutorials/general
+tutorials/compound_screens
+tutorials/genetic_screens
+tutorials/single_cells
+```
+
+```{toctree}
+:caption: Case studies
+:hidden: true
+:maxdepth: 1
+
 case_studies/index
 ```
 
