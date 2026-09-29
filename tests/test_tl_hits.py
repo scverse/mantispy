@@ -622,3 +622,80 @@ def test_hit_calling_does_not_crash_on_missing_wells_at_cell_resolution():
         mt.tl.hit_calling(adata, n_permutations=100, seed=0)
     table = adata.uns["mantispy"]["hits"].set_index("group")
     assert np.isfinite(table.loc["DMSO", "pvalue"]), "every group is still scored on the cell path"
+
+
+def test_ks_hit_calling_block_null_fixes_cell_resolution_pseudoreplication():
+    """Regression for #68 on method='ks': ks_2samp on pooled cell distances treats cells as independent draws.
+
+    A well-block permutation resamples whole wells and brings the pure-null false positive rate back to nominal, where the pooled-cell KS calls almost everything.
+    """
+    block_hits = block_total = cell_hits = cell_total = 0
+    for seed in range(10):
+        adata = _well_effect_cells(seed=seed)
+        mt.tl.hit_calling(adata, method="ks", block="Metadata_Well", n_permutations=300, seed=seed, key_added="block")
+
+        buggy = adata.copy()
+        del buggy.obs["Metadata_Well"]  # no well column, so the pooled-cell ks_2samp (the bug) runs
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            mt.tl.hit_calling(buggy, method="ks", n_permutations=300, seed=seed, key_added="cell")
+
+        block = adata.uns["mantispy"]["block"]
+        cell = buggy.uns["mantispy"]["cell"]
+        block_hits += int((block[block["group"] != "DMSO"]["qvalue"] < 0.05).sum())
+        block_total += int((block["group"] != "DMSO").sum())
+        cell_hits += int((cell[cell["group"] != "DMSO"]["qvalue"] < 0.05).sum())
+        cell_total += int((cell["group"] != "DMSO").sum())
+
+    block_rate = block_hits / block_total
+    cell_rate = cell_hits / cell_total
+    assert block_rate <= 0.08, f"the ks well-block null called {block_rate:.1%} of pure-null pseudo-treatments"
+    assert cell_rate >= 0.2, f"the pooled-cell ks called {cell_rate:.1%}, so the bug is not reproduced"
+
+
+def _small_well_effect_cells(seed):
+    """The #68 well-random-effect fixture, shrunk so the quadratic energy distance stays cheap in a permutation loop."""
+    return _well_effect_cells(n_groups=8, cells_per_well=15, seed=seed)
+
+
+def test_edistance_block_null_fixes_cell_resolution_pseudoreplication():
+    """Regression for #68 on edistance: permuting cell labels gives the energy distance far too little spread.
+
+    Drawing whole wells matches the null's unit to the design and brings the pure-null false positive rate back to nominal.
+    """
+    block_hits = block_total = cell_hits = cell_total = 0
+    for seed in range(10):
+        adata = _small_well_effect_cells(seed=seed)
+        mt.tl.edistance(adata, block="Metadata_Well", n_permutations=100, seed=seed, key_added="block")
+
+        buggy = adata.copy()
+        del buggy.obs["Metadata_Well"]  # no well column, so the cell-shuffle null (the bug) runs
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            mt.tl.edistance(buggy, n_permutations=100, seed=seed, key_added="cell")
+
+        block = adata.uns["mantispy"]["block"]
+        cell = buggy.uns["mantispy"]["cell"]
+        block_hits += int((block[block["group"] != "DMSO"]["qvalue"] < 0.05).sum())
+        block_total += int((block["group"] != "DMSO").sum())
+        cell_hits += int((cell[cell["group"] != "DMSO"]["qvalue"] < 0.05).sum())
+        cell_total += int((cell["group"] != "DMSO").sum())
+
+    block_rate = block_hits / block_total
+    cell_rate = cell_hits / cell_total
+    assert block_rate <= 0.08, f"the edistance well-block null called {block_rate:.1%} of pure-null pseudo-treatments"
+    assert cell_rate >= 0.2, f"the cell-shuffle null called {cell_rate:.1%}, so the bug is not reproduced"
+
+
+def test_edistance_block_null_reference_group_is_not_falsely_called_under_subsampling():
+    """Regression for #68 follow-up: the reference group subsampled below max_reference spans every control well.
+
+    Its group rows and the null's control rows are then two draws from the same wells, so a naive whole-well draw would take every well and leave an empty complement, an all-NaN null, and a spurious tiny p-value for the control.
+    """
+    adata = _well_effect_cells(n_groups=4, cells_per_well=20, n_control_wells=8, seed=0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        mt.tl.edistance(adata, n_permutations=200, max_reference=60, seed=0)
+    row = adata.uns["mantispy"]["edistance"].set_index("group").loc["DMSO"]
+    assert np.isfinite(row["pvalue"]), "the reference group's null degenerated to all-NaN"
+    assert not bool(row["is_hit"]), "the reference group was falsely called a hit"
