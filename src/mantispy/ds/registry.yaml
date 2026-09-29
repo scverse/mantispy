@@ -4550,6 +4550,17 @@ datasets:
     - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O11-4/Nuclei.csv
       s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O11-4/Nuclei.csv
       sha256: 6d1bc0acb3b4d21cde0649e18eaf4eaf9357bd9e98de230b51de4e0335b6e22f
+    # Staged variants rehosted on scverse-exampledata (explicit url overrides base_url, so the raw CellProfiler
+    # tables above stay on cellpainting-gallery). Regenerate with scripts/build_staged_datasets.py.
+    - name: jump_cells.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/jump_cells/jump_cells.h5ad
+      sha256: c0d97cac8be979c0752e2ec8399ad30522e6d91fc2b0857276736c9d5e186520
+    - name: jump_cells_selected.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/jump_cells/jump_cells_selected.h5ad
+      sha256: 6603051f11da05d0517a620f76b2e9ac99dd777da5e1d44082e65c187ef2e9b5
+    - name: jump_cells_agg.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/jump_cells/jump_cells_agg.h5ad
+      sha256: 8f5143e1c72b753d836c46d6beaaed9bc9f749150886d9740fdac0990f64b836
 
   jump_plate:
     type: mantispy

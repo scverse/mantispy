@@ -22,7 +22,6 @@ from mantispy._core.schema import SCHEMA_VERSION, stamp
 from mantispy._settings import settings
 from mantispy.io._jump import join_jump_annotation, read_jump
 from mantispy.io._profiles import _UPSTREAM_COUNTS, _adopt_counts, from_dataframe, read, read_profiles, write
-from mantispy.pp._select import subset_features
 
 if TYPE_CHECKING:
     from anndata import AnnData
@@ -1054,7 +1053,7 @@ def _assemble_cells(entry: DatasetEntry, cache_dir: str | Path | None, *, annota
 
     source = str(entry.metadata["source"])
     channels = [str(channel) for channel in entry.metadata["channels"]]
-    paths = _files("jump_cells", cache_dir)
+    paths = _files("jump_cells", cache_dir, select=lambda name: not name.endswith(".h5ad"))
     parts = [_read_site(directory, source, channels) for directory in sorted({path.parent for path in paths})]
     # Every field of view numbers its own images from one, so each part's numbers are shifted past the ones before it.
     images, offset = [], 0
@@ -1083,13 +1082,6 @@ def _assemble_cells(entry: DatasetEntry, cache_dir: str | Path | None, *, annota
         adata.obs["Metadata_Well"].nunique(),
     )
     return adata
-
-
-def _select(adata: AnnData, path: Path) -> AnnData:
-    """The selected features of `adata`, kept at `path` so the next call reads only those."""
-    chosen = subset_features(adata)
-    write(chosen, path)
-    return chosen
 
 
 def _mark_selected(adata: AnnData) -> None:
@@ -1134,7 +1126,33 @@ def jump_export(cache_dir: str | Path | None = None) -> Path:
     return paths[0].parent
 
 
-def jump_cells(annotate: bool = True, selected: bool = False, cache_dir: str | Path | None = None) -> AnnData:
+def _assemble_jump_cells(cache_dir: str | Path | None = None) -> AnnData:
+    """Assemble the annotated jump_cells base from the 480 raw CellProfiler tables.
+
+    The raw pipeline the ``annotate=True`` :func:`jump_cells` used before the base was staged; it lives here so
+    :func:`mantispy.ds._build.build_jump_cells` can rebuild the hosted variants from the raw inputs.
+    """
+    return _assemble_cells(_DATASETS["jump_cells"], cache_dir, annotate=True)
+
+
+def _jump_cells_raw(cache_dir: str | Path | None) -> AnnData:
+    """The un-annotated assembled cells, cached on disk (the ``annotate=False`` path, which is not staged)."""
+    entry = _DATASETS["jump_cells"]
+    root = Path(cache_dir or settings.cache_dir)
+    # The name fingerprints the schema, the pinned files and the assembly version, so a stale file is never read.
+    material = f"{_ASSEMBLY_VERSION}:" + "".join(str(file.sha256) for file in entry.files)
+    fingerprint = hashlib.sha256(material.encode()).hexdigest()[:12]
+    derived = root / f"jump_cells-{SCHEMA_VERSION}-{fingerprint}-raw.h5ad"
+    if derived.exists():
+        return read(derived)
+    adata = _assemble_cells(entry, cache_dir, annotate=False)
+    write(adata, derived)
+    return adata
+
+
+def jump_cells(
+    annotate: bool = True, selected: bool = False, cache_dir: str | Path | None = None, *, aggregated: bool = False
+) -> AnnData:
     """Single cells from one JUMP plate, as CellProfiler measured them.
 
     Twenty-four wells of ``BR00121438`` at four fields of view each: eight DMSO wells, four compounds with both of their replicate wells, and eight more compounds at one well.
@@ -1142,48 +1160,45 @@ def jump_cells(annotate: bool = True, selected: bool = False, cache_dir: str | P
 
     The same plate's well-level profiles are :func:`jump_target2`, so a profile aggregated from these cells can be compared with the one the consortium published.
 
-    The first call downloads about 1.5 GB of CellProfiler output, reads 480 tables and writes the assembled object next to them, which takes a few minutes.
-    Later calls read that one file.
+    The annotated cells, their feature-selected block and their well-level aggregate are pre-built by ``scripts/build_staged_datasets.py`` from the 480 raw CellProfiler tables and rehosted on ``scverse-exampledata``, so the loader fetches a single h5ad rather than reassembling the object on every call. Passing ``annotate=False`` still assembles the raw, un-annotated cells locally, downloading about 1.5 GB of CellProfiler output and caching the assembled object.
 
     Args:
-        annotate: Join the JUMP annotation, which supplies ``Metadata_Perturbation`` and ``Metadata_Control``.
-            Downloads another 14 MB.
-            Needed for `selected`, which is computed against the controls.
-        selected: Return only the features ``var["selected"]`` marks, as :func:`mantispy.pp.subset_features` would.
-            The subset is kept beside the whole object, so a notebook that only wants the reduced one reads 87 MB instead of 308 MB.
+        annotate: Fetch the annotated cells, which carry ``Metadata_Perturbation`` and ``Metadata_Control``.
+            ``False`` assembles the raw cells locally, without the annotation join.
+            Needed for `selected` and `aggregated`.
+        selected: Return only the features ``var["selected"]`` marks, as :func:`mantispy.pp.subset_features` would (87 MB instead of 308 MB).
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
+        aggregated: Return one median profile per well (``Metadata_Plate``, ``Metadata_Well``) instead of the cells, with ``Metadata_CellCount`` and ``Metadata_SiteCount``, so it lines up with the well-level :func:`jump_target2`.
 
     Raises:
-        KeyError: `selected` was asked for without `annotate`, so there are no controls to select against.
+        KeyError: `selected` or `aggregated` was asked for without `annotate`, so there is no annotation to select or group against.
+        ValueError: `selected` and `aggregated` were both asked for; there is no aggregated feature-selected variant.
 
     Returns:
-        Cells by features at cell resolution, carrying ``Metadata_Source``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Site`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_Perturbation_Type`` (``"compound"``), ``Metadata_InChIKey`` and ``Metadata_Control``.
+        Cells by features at cell resolution (one median per well when ``aggregated``), read with :func:`mantispy.io.read`, carrying ``Metadata_Source``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Site`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_Perturbation_Type`` (``"compound"``), ``Metadata_InChIKey`` and ``Metadata_Control``.
         When annotated, ``var["selected"]`` marks the features feature selection keeps, so the object can be reduced with ``adata[:, adata.var["selected"]]`` the way scanpy's ``highly_variable`` is used.
-        A cell carries no count.
-        :func:`mantispy.tl.aggregate` writes ``Metadata_CellCount`` over the four fields read and a ``Metadata_SiteCount`` of four, so a well counts about four ninths of the cells :func:`jump_target2` gives it over all nine.
+        The ``aggregated`` well profiles carry ``Metadata_CellCount`` over the four fields read and a ``Metadata_SiteCount`` of four, so a well counts about four ninths of the cells :func:`jump_target2` gives it over all nine.
 
     References:
         :cite:t:`Chandrasekaran_2023`.
     """
     if selected and not annotate:
         raise KeyError("selected=True needs annotate=True: the mask is computed against the negative controls")
-
-    entry = _DATASETS["jump_cells"]
-    root = Path(cache_dir or settings.cache_dir)
-    # The name fingerprints the schema, the pinned files and the assembly version, so a stale file is never read.
-    material = f"{_ASSEMBLY_VERSION}:" + "".join(str(file.sha256) for file in entry.files)
-    fingerprint = hashlib.sha256(material.encode()).hexdigest()[:12]
-    stem = f"jump_cells-{SCHEMA_VERSION}-{fingerprint}-{'annotated' if annotate else 'raw'}"
-    derived, subset = root / f"{stem}.h5ad", root / f"{stem}-selected.h5ad"
-    if selected and subset.exists():
-        return read(subset)
-    if derived.exists():
-        return _select(read(derived), subset) if selected else read(derived)
-
-    adata = _assemble_cells(entry, cache_dir, annotate=annotate)
-    write(adata, derived)
-    return _select(adata, subset) if selected else adata
+    if aggregated and not annotate:
+        raise KeyError("aggregated=True needs annotate=True: the well profiles carry the annotation")
+    if selected and aggregated:
+        raise ValueError("jump_cells has no aggregated feature-selected variant; pass one of selected or aggregated")
+    if not annotate:
+        return _jump_cells_raw(cache_dir)
+    if aggregated:
+        target = "jump_cells_agg.h5ad"
+    elif selected:
+        target = "jump_cells_selected.h5ad"
+    else:
+        target = "jump_cells.h5ad"
+    (path,) = _files("jump_cells", cache_dir, select=lambda name: name == target)
+    return read(path)
 
 
 def jump_plate(cache_dir: str | Path | None = None, **kwargs: Any) -> SpatialData:

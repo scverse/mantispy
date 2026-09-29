@@ -564,6 +564,30 @@ def _shipped_cp_posh() -> dict[str, AnnData]:
     }
 
 
+def build_jump_cells(cache_dir: str | Path | None = None) -> dict[str, AnnData]:
+    """Returns {'jump_cells.h5ad': the annotated cells, 'jump_cells_selected.h5ad': the mask subset, 'jump_cells_agg.h5ad': one median per well}."""
+    from mantispy.ds._datasets import _assemble_jump_cells
+    from mantispy.pp._select import subset_features
+    from mantispy.tl._aggregate import aggregate
+
+    base = _stable(_assemble_jump_cells(cache_dir))
+    # The feature-selection mask is already on var["selected"]; subset to it, and aggregate the cells to wells.
+    selected = _stable(subset_features(base))
+    agg = _stable(aggregate(base))
+    return {"jump_cells.h5ad": base, "jump_cells_selected.h5ad": selected, "jump_cells_agg.h5ad": agg}
+
+
+def _shipped_jump_cells() -> dict[str, AnnData]:
+    """The three jump_cells variants as fetched through the public ``mt.ds.jump_cells`` API."""
+    from mantispy.ds._datasets import jump_cells
+
+    return {
+        "jump_cells.h5ad": jump_cells(),
+        "jump_cells_selected.h5ad": jump_cells(selected=True),
+        "jump_cells_agg.h5ad": jump_cells(aggregated=True),
+    }
+
+
 # One entry per staged dataset: (builder rebuilding the variants from the raw pipeline, loader returning the
 # shipped variants through the public ``mt.ds`` API keyed by the same filenames, ``heavy`` marking a rebuild
 # too large to run on every pull request). Later PRs stage a dataset by adding one entry here; the build and
@@ -581,4 +605,5 @@ STAGED: dict[str, tuple[Callable[..., dict[str, AnnData]], Callable[[], dict[str
     "scallops_arv471": (build_scallops_arv471, _shipped_scallops_arv471, True),
     "jump_crispr": (build_jump_crispr, _shipped_jump_crispr, True),
     "cp_posh": (build_cp_posh_variants, _shipped_cp_posh, True),
+    "jump_cells": (build_jump_cells, _shipped_jump_cells, True),
 }
