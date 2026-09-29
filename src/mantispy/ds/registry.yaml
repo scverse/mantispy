@@ -2246,6 +2246,27 @@ datasets:
     - name: refchem_annotations.parquet
       s3_key: cpg0016-jump/source_all/workspace/publication_data/2026_jump_lite/metadata/v1.0/jump_lite_refchem_annotations.parquet
       sha256: 5a766a222907e1b3805f84cc2eccad0e5cd2f3eaac1add4983689853601db960
+    # Staged per-model objects (the annotated wells of each feature set) rehosted on scverse-exampledata
+    # (explicit url overrides base_url, so the raw feature parquets above stay on cellpainting-gallery). The
+    # annotate=False path still reads those raw parquets. Regenerate with scripts/build_staged_datasets.py.
+    - name: jump_lite_openphenom.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/jump_lite/jump_lite_openphenom.h5ad
+      sha256: 1652bcba78f74ef309f4359cd1b48492d5a63414a10f7891eb27e2d8a614bcfb
+    - name: jump_lite_dinov2.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/jump_lite/jump_lite_dinov2.h5ad
+      sha256: 9aaff8af2b69e4ad517c346255a460a358ef5c04a4bab5aa50220cdb9b8da508
+    - name: jump_lite_dinov2_random.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/jump_lite/jump_lite_dinov2_random.h5ad
+      sha256: 47bb156833c165fd8413dde1bf6bd3f6af04d3003d7b3c1c468e0c23b2425d91
+    - name: jump_lite_subcell.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/jump_lite/jump_lite_subcell.h5ad
+      sha256: 6cc6485a5033824c96b87bd72b308941e1cf897b4106821aa5ce7fa0ec6bba9c
+    - name: jump_lite_morphem.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/jump_lite/jump_lite_morphem.h5ad
+      sha256: fccc073e32936ecd9620785a3fdedb194be1f96115481048ed7883e974989de1
+    - name: jump_lite_cp_measure.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/jump_lite/jump_lite_cp_measure.h5ad
+      sha256: 63380e08eed3820850d9c6c423095eecfe2869f5c6e0a2961bcd499412eef843
 
   jump_target2:
     type: mantispy

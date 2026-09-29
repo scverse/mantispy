@@ -602,6 +602,22 @@ def _shipped_jump_target2() -> dict[str, AnnData]:
     return {"jump_target2.h5ad": jump_target2()}
 
 
+def build_jump_lite(cache_dir: str | Path | None = None) -> dict[str, AnnData]:
+    """Returns {'jump_lite_<model>.h5ad': the annotated wells of that feature set} for each JUMP-Lite model."""
+    from mantispy.ds._datasets import JUMP_LITE_MODELS, _assemble_jump_lite
+
+    return {
+        f"jump_lite_{model}.h5ad": _stable(_assemble_jump_lite(model, True, cache_dir)) for model in JUMP_LITE_MODELS
+    }
+
+
+def _shipped_jump_lite() -> dict[str, AnnData]:
+    """The per-model jump_lite objects as fetched through the public ``mt.ds.jump_lite`` API."""
+    from mantispy.ds._datasets import JUMP_LITE_MODELS, jump_lite
+
+    return {f"jump_lite_{model}.h5ad": jump_lite(model=model) for model in JUMP_LITE_MODELS}
+
+
 # One entry per staged dataset: (builder rebuilding the variants from the raw pipeline, loader returning the
 # shipped variants through the public ``mt.ds`` API keyed by the same filenames, ``heavy`` marking a rebuild
 # too large to run on every pull request). Later PRs stage a dataset by adding one entry here; the build and
@@ -621,4 +637,5 @@ STAGED: dict[str, tuple[Callable[..., dict[str, AnnData]], Callable[[], dict[str
     "cp_posh": (build_cp_posh_variants, _shipped_cp_posh, True),
     "jump_cells": (build_jump_cells, _shipped_jump_cells, True),
     "jump_target2": (build_jump_target2, _shipped_jump_target2, True),
+    "jump_lite": (build_jump_lite, _shipped_jump_lite, False),
 }

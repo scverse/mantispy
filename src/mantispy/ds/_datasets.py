@@ -615,54 +615,14 @@ def oasis_pilot(annotate: bool = True, cache_dir: str | Path | None = None, *, a
 JUMP_LITE_MODELS = ("openphenom", "dinov2", "dinov2_random", "subcell", "morphem", "cp_measure")
 
 
-def jump_lite(
-    model: str = "openphenom", annotate: bool = True, cache_dir: str | Path | None = None, **kwargs: Any
-) -> AnnData:
-    """JUMP-Lite Target-2: 1,536 wells, four imaging sites, one feature set at a time.
+def _assemble_jump_lite(model: str, annotate: bool, cache_dir: str | Path | None) -> AnnData:
+    """Assemble one JUMP-Lite feature set: the model's wells joined to their cell count, row-sorted and annotated.
 
-    ``cpg0016-jump``, the compact benchmark of :cite:t:`Munoz_2026`.
-    Four plates of the JUMP Target-2 plate map, one from each of ``source_3``, ``source_4``, ``source_5`` and ``source_6``, so the four batches are four different laboratories running the same 302 compounds with 64 DMSO wells each.
-
-    Every ``model`` covers the same 1,536 wells, which is what makes this a comparison rather than six datasets: the rows, their order and the metadata are identical and only the feature block changes.
-    The files list the wells in a different order for every model, so the rows are sorted by source, plate and well.
-    Five are learned embeddings and one, ``"cp_measure"``, is the CellProfiler-equivalent measurement of the same images.
-
-    Args:
-        model: Which feature set to read, one of ``ds.JUMP_LITE_MODELS``.
-            ``"dinov2_random"`` is the same architecture with untrained weights, which is the null model the benchmark scores the others against.
-        annotate: Join the JUMP well and compound tables, which name the compound of each well.
-            Downloads about 14 MB once and caches it.
-        cache_dir: Where to keep the download.
-            Defaults to :attr:`mantispy.settings.cache_dir`.
-        kwargs: Passed to :func:`mantispy.io.read_profiles`.
-
-    Returns:
-        Wells by features at well resolution, indexed by plate and well, with ``Metadata_Source``, ``Metadata_Batch``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_CellCount`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_Perturbation_Type`` (``"compound"``), ``Metadata_InChIKey`` and ``Metadata_Control``.
-
-    Raises:
-        ValueError: ``model`` is not one of ``ds.JUMP_LITE_MODELS``.
-
-    Notes:
-        A dimension of a learned embedding is a coordinate in the model's own basis, not a measurement with a name to parse, so for every model but ``"cp_measure"`` the annotation columns of ``var`` are supplied empty.
-        Anything that reads ``var["feature_group"]`` or ``var["channel"]``, such as the feature families :func:`~mantispy.pl.effect_sizes` colours by, has nothing to work with on those.
-
-        ``"cp_measure"`` is CellProfiler-style measurements and keeps its parsed compartment, feature group and channel.
-        Its channel is the index cp_measure numbered its inputs by rather than the name of a stain, because the name lives in the acquisition metadata and not in the feature name.
-
-        The embeddings are not normalized.
-        They are the model's output on each well's images, so a per-plate control normalization is still the first step.
-
-        The trained embeddings here carry the cell count in their leading components, where it can account for more of the variance than either the laboratory or the imaging site.
-        The untrained ``"dinov2_random"`` does not, and neither does ``"cp_measure"``, whose per-cell measurements are averaged over the well.
-        Measure it with :func:`~mantispy.metrics.evaluate_correction` before correcting for anything else, and read :doc:`/tutorials/multisite/learned_embeddings` on why removing it is not obviously right.
-
-    References:
-        :cite:t:`Munoz_2026`, :cite:t:`Chandrasekaran_2023`, :cite:t:`Weisbart_2024`.
+    The raw pipeline the ``annotate=True`` :func:`jump_lite` used before the per-model objects were staged; it
+    lives here so the drift check can rebuild each hosted object, and so the loader can still serve the
+    un-annotated ``annotate=False`` path.
     """
-    if model not in JUMP_LITE_MODELS:
-        raise ValueError(f"model must be one of {JUMP_LITE_MODELS}, got {model!r}")
-
-    adata = _profiles("jump_lite", cache_dir, select=lambda name: name == f"{model}.parquet", **kwargs)
+    adata = _profiles("jump_lite", cache_dir, select=lambda name: name == f"{model}.parquet")
     if model != "cp_measure":
         empty = empty_annotation(adata.var_names)
         adata.var[empty.columns] = empty
@@ -692,6 +652,57 @@ def jump_lite(
         int(as_frame(adata.obs)["Metadata_Source"].nunique()),
     )
     return adata
+
+
+def jump_lite(model: str = "openphenom", annotate: bool = True, cache_dir: str | Path | None = None) -> AnnData:
+    """JUMP-Lite Target-2: 1,536 wells, four imaging sites, one feature set at a time.
+
+    ``cpg0016-jump``, the compact benchmark of :cite:t:`Munoz_2026`.
+    Four plates of the JUMP Target-2 plate map, one from each of ``source_3``, ``source_4``, ``source_5`` and ``source_6``, so the four batches are four different laboratories running the same 302 compounds with 64 DMSO wells each.
+
+    Every ``model`` covers the same 1,536 wells, which is what makes this a comparison rather than six datasets: the rows, their order and the metadata are identical and only the feature block changes.
+    The files list the wells in a different order for every model, so the rows are sorted by plate and well and every model is aligned.
+    Five are learned embeddings and one, ``"cp_measure"``, is the CellProfiler-equivalent measurement of the same images.
+
+    The annotated object for each model is pre-built by ``scripts/build_staged_datasets.py`` and rehosted on ``scverse-exampledata``, so the annotated call fetches a single h5ad rather than joining the count and annotation tables on every call. Passing ``annotate=False`` still assembles the un-annotated wells directly.
+
+    Args:
+        model: Which feature set to read, one of ``ds.JUMP_LITE_MODELS``.
+            ``"dinov2_random"`` is the same architecture with untrained weights, which is the null model the benchmark scores the others against.
+        annotate: Fetch the annotated object, which joins the JUMP well and compound tables that name the compound of each well.
+            ``False`` assembles the un-annotated wells without that join.
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
+
+    Returns:
+        Wells by features at well resolution, indexed by plate and well, read with :func:`mantispy.io.read` when annotated, with ``Metadata_Source``, ``Metadata_Batch``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_CellCount`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_Perturbation_Type`` (``"compound"``), ``Metadata_InChIKey`` and ``Metadata_Control``.
+
+    Raises:
+        ValueError: ``model`` is not one of ``ds.JUMP_LITE_MODELS``.
+
+    Notes:
+        A dimension of a learned embedding is a coordinate in the model's own basis, not a measurement with a name to parse, so for every model but ``"cp_measure"`` the annotation columns of ``var`` are supplied empty.
+        Anything that reads ``var["feature_group"]`` or ``var["channel"]``, such as the feature families :func:`~mantispy.pl.effect_sizes` colours by, has nothing to work with on those.
+
+        ``"cp_measure"`` is CellProfiler-style measurements and keeps its parsed compartment, feature group and channel.
+        Its channel is the index cp_measure numbered its inputs by rather than the name of a stain, because the name lives in the acquisition metadata and not in the feature name.
+
+        The embeddings are not normalized.
+        They are the model's output on each well's images, so a per-plate control normalization is still the first step.
+
+        The trained embeddings here carry the cell count in their leading components, where it can account for more of the variance than either the laboratory or the imaging site.
+        The untrained ``"dinov2_random"`` does not, and neither does ``"cp_measure"``, whose per-cell measurements are averaged over the well.
+        Measure it with :func:`~mantispy.metrics.evaluate_correction` before correcting for anything else, and read :doc:`/tutorials/multisite/learned_embeddings` on why removing it is not obviously right.
+
+    References:
+        :cite:t:`Munoz_2026`, :cite:t:`Chandrasekaran_2023`, :cite:t:`Weisbart_2024`.
+    """
+    if model not in JUMP_LITE_MODELS:
+        raise ValueError(f"model must be one of {JUMP_LITE_MODELS}, got {model!r}")
+    if not annotate:
+        return _assemble_jump_lite(model, annotate=False, cache_dir=cache_dir)
+    (path,) = _files("jump_lite", cache_dir, select=lambda name: name == f"jump_lite_{model}.h5ad")
+    return read(path)
 
 
 def jump_lite_targets(cache_dir: str | Path | None = None) -> pd.DataFrame:
