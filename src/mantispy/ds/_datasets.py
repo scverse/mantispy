@@ -107,6 +107,19 @@ def _profiles(
     return adata
 
 
+def _require_bools(**flags: object) -> None:
+    """Raise ``ValueError`` naming the first flag that is not a bool."""
+    for flag_name, flag in flags.items():
+        if not isinstance(flag, bool):
+            raise ValueError(f"{flag_name} must be a bool, got {type(flag).__name__}")
+
+
+def _fetch_variant(name: str, filename: str, cache_dir: str | Path | None) -> AnnData:
+    """Read the single rehosted ``filename`` variant of dataset ``name``."""
+    (path,) = _files(name, cache_dir, select=lambda file_name: file_name == filename)
+    return read(path)
+
+
 #: The (aggregated, feature_selected) combination each rehosted bbbc021 variant answers to.
 _BBBC021_VARIANTS = {
     (False, False): "bbbc021.h5ad",  # 632 x 467, well level, all features
@@ -152,12 +165,8 @@ def bbbc021(
         :cite:t:`Ljosa_2013`, these profiles and the benchmark.
         Images courtesy of Peter Caie and David Westwood, available from the Broad Bioimage Benchmark Collection :cite:p:`Ljosa_2012`.
     """
-    for flag_name, flag in (("aggregated", aggregated), ("feature_selected", feature_selected)):
-        if not isinstance(flag, bool):
-            raise ValueError(f"{flag_name} must be a bool, got {type(flag).__name__}")
-    target = _BBBC021_VARIANTS[aggregated, feature_selected]
-    (path,) = _files("bbbc021", cache_dir, select=lambda name: name == target)
-    return read(path)
+    _require_bools(aggregated=aggregated, feature_selected=feature_selected)
+    return _fetch_variant("bbbc021", _BBBC021_VARIANTS[aggregated, feature_selected], cache_dir)
 
 
 #: The (aggregated, feature_selected) combination each rehosted rohban variant answers to.
@@ -268,16 +277,12 @@ def rohban(
     References:
         :cite:t:`Rohban_2017`.
     """
-    for flag_name, flag in (("aggregated", aggregated), ("feature_selected", feature_selected)):
-        if not isinstance(flag, bool):
-            raise ValueError(f"{flag_name} must be a bool, got {type(flag).__name__}")
+    _require_bools(aggregated=aggregated, feature_selected=feature_selected)
     if (aggregated or feature_selected) and plates is not None:
         raise ValueError(
             "plates only applies to the raw wells; a pre-aggregated or feature-selected variant cannot be plate-subset"
         )
-    target = _ROHBAN_VARIANTS[aggregated, feature_selected]
-    (path,) = _files("rohban", cache_dir, select=lambda name: name == target)
-    adata = read(path)
+    adata = _fetch_variant("rohban", _ROHBAN_VARIANTS[aggregated, feature_selected], cache_dir)
     if plates is not None:
         adata = _subset_plates(adata, "rohban", plates)
     return adata
@@ -329,16 +334,12 @@ def pki(
         ``Metadata_Control`` marks the DMSO wells only.
         The positive controls (``Metadata_control_type == "poscon"``) are not flagged, because they are perturbations and should not be normalized against.
     """
-    for flag_name, flag in (("aggregated", aggregated), ("feature_selected", feature_selected)):
-        if not isinstance(flag, bool):
-            raise ValueError(f"{flag_name} must be a bool, got {type(flag).__name__}")
+    _require_bools(aggregated=aggregated, feature_selected=feature_selected)
     if (aggregated or feature_selected) and plates is not None:
         raise ValueError(
             "plates only applies to the raw wells; a pre-aggregated or feature-selected variant cannot be plate-subset"
         )
-    target = _PKI_VARIANTS[aggregated, feature_selected]
-    (path,) = _files("pki", cache_dir, select=lambda name: name == target)
-    adata = read(path)
+    adata = _fetch_variant("pki", _PKI_VARIANTS[aggregated, feature_selected], cache_dir)
     if plates is not None:
         adata = _subset_plates(adata, "pki", plates)
     return adata
@@ -396,8 +397,7 @@ def jump_target2(
         KeyError: A plate is not one of the 141.
     """
     if annotate and plates is not None and set(plates) == set(TARGET2_DEFAULT):
-        (path,) = _files("jump_target2", cache_dir, select=lambda name: name == "jump_target2.h5ad")
-        return read(path)
+        return _fetch_variant("jump_target2", "jump_target2.h5ad", cache_dir)
     return _assemble_jump_target2(plates, annotate, cache_dir)
 
 
@@ -432,11 +432,8 @@ def pooled_rare(cache_dir: str | Path | None = None, *, feature_selected: bool =
     Raises:
         ValueError: ``feature_selected`` is not a bool.
     """
-    if not isinstance(feature_selected, bool):
-        raise ValueError(f"feature_selected must be a bool, got {type(feature_selected).__name__}")
-    target = _POOLED_RARE_VARIANTS[feature_selected]
-    (path,) = _files("pooled_rare", cache_dir, select=lambda name: name == target)
-    return read(path)
+    _require_bools(feature_selected=feature_selected)
+    return _fetch_variant("pooled_rare", _POOLED_RARE_VARIANTS[feature_selected], cache_dir)
 
 
 def neuropainting(cache_dir: str | Path | None = None) -> AnnData:
@@ -457,8 +454,7 @@ def neuropainting(cache_dir: str | Path | None = None) -> AnnData:
     Notes:
         No ``Metadata_Perturbation`` is set. This is a genotype-and-donor comparison (a control-versus-deletion contrast over patient and isogenic lines) rather than a reagent perturbation screen, and its genotype and line columns differ between plates, so the per-plate column intersect keeps none of them. Group with an explicit ``groupby=`` on the column the analysis needs.
     """
-    (path,) = _files("neuropainting", cache_dir, select=lambda name: name == "neuropainting.h5ad")
-    return read(path)
+    return _fetch_variant("neuropainting", "neuropainting.h5ad", cache_dir)
 
 
 def chroma(cache_dir: str | Path | None = None) -> AnnData:
@@ -483,8 +479,7 @@ def chroma(cache_dir: str | Path | None = None) -> AnnData:
 
         ``Metadata_Compound`` (the compound's common name), ``Metadata_Concentration`` (the platemap's ``mmoles_per_liter``), ``Metadata_MOA`` (the mechanism) and ``Metadata_Control`` (the ``negcon`` wells).
     """
-    (path,) = _files("chroma", cache_dir, select=lambda name: name == "chroma.h5ad")
-    return read(path)
+    return _fetch_variant("chroma", "chroma.h5ad", cache_dir)
 
 
 #: The spellings the four OASIS batches use for each column mantispy reads, since no two of them agree.
@@ -600,15 +595,12 @@ def oasis_pilot(annotate: bool = True, cache_dir: str | Path | None = None, *, a
         ``Metadata_Concentration`` is the dose the well was meant to get, reading a coarser spelling as the finer level it rounds to within each compound, and it names the replicate groups.
         ``Metadata_ConcentrationRecorded`` keeps what the plate map wrote: read against that column, every dosed compound here carries eighteen levels where ten were plated, and a treatment's wells split across two spellings.
     """
-    if not isinstance(aggregated, bool):
-        raise ValueError(f"aggregated must be a bool, got {type(aggregated).__name__}")
+    _require_bools(aggregated=aggregated)
     if aggregated and not annotate:
         raise ValueError("aggregated needs annotate=True: the consensus groups by the plate-map perturbation")
     if not annotate:
         return _profiles("oasis_pilot", cache_dir, select=lambda name: name.endswith(".csv.gz"))
-    target = _OASIS_PILOT_VARIANTS[aggregated]
-    (path,) = _files("oasis_pilot", cache_dir, select=lambda name: name == target)
-    return read(path)
+    return _fetch_variant("oasis_pilot", _OASIS_PILOT_VARIANTS[aggregated], cache_dir)
 
 
 #: The feature sets JUMP-Lite publishes for one set of wells: five learned embeddings and the CellProfiler-equivalent ``cp_measure``.
@@ -701,8 +693,7 @@ def jump_lite(model: str = "openphenom", annotate: bool = True, cache_dir: str |
         raise ValueError(f"model must be one of {JUMP_LITE_MODELS}, got {model!r}")
     if not annotate:
         return _assemble_jump_lite(model, annotate=False, cache_dir=cache_dir)
-    (path,) = _files("jump_lite", cache_dir, select=lambda name: name == f"jump_lite_{model}.h5ad")
-    return read(path)
+    return _fetch_variant("jump_lite", f"jump_lite_{model}.h5ad", cache_dir)
 
 
 def jump_lite_targets(cache_dir: str | Path | None = None) -> pd.DataFrame:
@@ -763,8 +754,7 @@ def jump_crispr(annotate: bool = True, cache_dir: str | Path | None = None, *, a
     References:
         :cite:t:`Chandrasekaran_2023`.
     """
-    if not isinstance(aggregated, bool):
-        raise ValueError(f"aggregated must be a bool, got {type(aggregated).__name__}")
+    _require_bools(aggregated=aggregated)
     if aggregated and not annotate:
         raise ValueError("aggregated needs annotate=True: the consensus groups by the annotated gene")
     if not annotate:
@@ -772,9 +762,7 @@ def jump_crispr(annotate: bool = True, cache_dir: str | Path | None = None, *, a
         return _profiles(
             "jump_crispr", cache_dir, select=lambda name: not name.endswith(".h5ad"), platemap=_read_counts(counts)
         )
-    target = _JUMP_CRISPR_VARIANTS[aggregated]
-    (path,) = _files("jump_crispr", cache_dir, select=lambda name: name == target)
-    return read(path)
+    return _fetch_variant("jump_crispr", _JUMP_CRISPR_VARIANTS[aggregated], cache_dir)
 
 
 def _finish_guide_screen(adata: AnnData, name: str) -> AnnData:
@@ -909,11 +897,8 @@ def scallops_arv471(cache_dir: str | Path | None = None, *, aggregated: bool = F
     Raises:
         ValueError: ``aggregated`` is not a bool.
     """
-    if not isinstance(aggregated, bool):
-        raise ValueError(f"aggregated must be a bool, got {type(aggregated).__name__}")
-    target = _SCALLOPS_VARIANTS[aggregated]
-    (path,) = _files("scallops_arv471", cache_dir, select=lambda name: name == target)
-    return read(path)
+    _require_bools(aggregated=aggregated)
+    return _fetch_variant("scallops_arv471", _SCALLOPS_VARIANTS[aggregated], cache_dir)
 
 
 #: The upstream parquet stores these as its MultiIndex; every other column is a CellStats morphology feature.
@@ -1020,12 +1005,8 @@ def cp_posh(
     Raises:
         ValueError: ``aggregated`` or ``feature_selected`` is not a bool.
     """
-    for flag_name, flag in (("aggregated", aggregated), ("feature_selected", feature_selected)):
-        if not isinstance(flag, bool):
-            raise ValueError(f"{flag_name} must be a bool, got {type(flag).__name__}")
-    target = _CP_POSH_VARIANTS[aggregated, feature_selected]
-    (path,) = _files("cp_posh", cache_dir, select=lambda name: name == target)
-    return read(path)
+    _require_bools(aggregated=aggregated, feature_selected=feature_selected)
+    return _fetch_variant("cp_posh", _CP_POSH_VARIANTS[aggregated, feature_selected], cache_dir)
 
 
 def corum(cache_dir: str | Path | None = None) -> pd.DataFrame:
@@ -1224,8 +1205,7 @@ def jump_cells(
         target = "jump_cells_selected.h5ad"
     else:
         target = "jump_cells.h5ad"
-    (path,) = _files("jump_cells", cache_dir, select=lambda name: name == target)
-    return read(path)
+    return _fetch_variant("jump_cells", target, cache_dir)
 
 
 def jump_plate(cache_dir: str | Path | None = None, **kwargs: Any) -> SpatialData:

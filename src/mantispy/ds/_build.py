@@ -42,31 +42,21 @@ def _stable(adata: AnnData) -> AnnData:
     return adata[rows][:, cols].copy()
 
 
-def _gene_consensus(block: AnnData, screened: np.ndarray) -> AnnData:
-    """One modz consensus per gene over the screened wells of ``block``, NaN-zeroed."""
-    from mantispy.tl._consensus import consensus
-
-    gene = consensus(block[screened], by="Metadata_Gene", method="modz", correlation="spearman", min_replicates=2)
-    return _zero_nonfinite(gene)
-
-
-def _perturbation_consensus(block: AnnData) -> AnnData:
-    """One modz consensus per ``Metadata_Perturbation`` over every well of ``block``, NaN-zeroed.
-
-    Controls are kept: BBBC021's DMSO-at-a-concentration wells are legitimate perturbation units.
-    """
-    from mantispy.tl._consensus import consensus
-
-    agg = consensus(block, by="Metadata_Perturbation", method="modz", correlation="spearman", min_replicates=2)
-    return _zero_nonfinite(agg)
-
-
 def _modz(block: AnnData, by: str) -> AnnData:
     """One modz consensus per ``by`` group over every row of ``block``, NaN-zeroed."""
     from mantispy.tl._consensus import consensus
 
     agg = consensus(block, by=by, method="modz", correlation="spearman", min_replicates=2)
     return _zero_nonfinite(agg)
+
+
+def _feature_selected_block(base: AnnData) -> AnnData:
+    """A stable copy of ``base`` reduced to pycytominer's default feature selection."""
+    from mantispy.pp._select import feature_select, subset_features
+
+    block = base.copy()
+    feature_select(block)
+    return _stable(subset_features(block))
 
 
 def build_rohban_base(cache_dir: str | Path | None = None) -> dict[str, AnnData]:
@@ -95,8 +85,8 @@ def build_rohban_variants(cache_dir: str | Path | None = None) -> dict[str, AnnD
     screened = (~adata.obs["is_untreated"].to_numpy()) & (~adata.obs["Metadata_Control"].to_numpy())
     return {
         "rohban_selected.h5ad": _stable(selected),
-        "rohban_gene.h5ad": _stable(_gene_consensus(adata, screened)),
-        "rohban_gene_selected.h5ad": _stable(_gene_consensus(selected, screened)),
+        "rohban_gene.h5ad": _stable(_modz(adata[screened], "Metadata_Gene")),
+        "rohban_gene_selected.h5ad": _stable(_modz(selected[screened], "Metadata_Gene")),
     }
 
 
@@ -176,22 +166,16 @@ def _assemble_bbbc021(cache_dir: str | Path | None = None) -> AnnData:
 
 def build_bbbc021_variants(cache_dir: str | Path | None = None) -> dict[str, AnnData]:
     """Returns {'bbbc021.h5ad': ad, 'bbbc021_selected.h5ad': ad, 'bbbc021_agg.h5ad': ad, 'bbbc021_agg_selected.h5ad': ad}."""
-    from mantispy.pp._select import feature_select, subset_features
-
     base = _stable(_assemble_bbbc021(cache_dir))
-
-    # Well-level feature-selected block, pycytominer's default operations, on the raw (author-normalized) base.
-    selected = base.copy()
-    feature_select(selected)
-    selected = _stable(subset_features(selected))
+    selected = _feature_selected_block(base)
 
     # One modz consensus per compound-at-concentration, on the full and on the feature-selected block. DMSO
     # wells are kept: their concentration series are legitimate perturbation units, not a normalization control.
     return {
         "bbbc021.h5ad": base,
         "bbbc021_selected.h5ad": selected,
-        "bbbc021_agg.h5ad": _stable(_perturbation_consensus(base)),
-        "bbbc021_agg_selected.h5ad": _stable(_perturbation_consensus(selected)),
+        "bbbc021_agg.h5ad": _stable(_modz(base, "Metadata_Perturbation")),
+        "bbbc021_agg_selected.h5ad": _stable(_modz(selected, "Metadata_Perturbation")),
     }
 
 
@@ -327,14 +311,8 @@ def _assemble_pooled_rare(cache_dir: str | Path | None = None) -> AnnData:
 
 def build_pooled_rare(cache_dir: str | Path | None = None) -> dict[str, AnnData]:
     """Returns {'pooled_rare.h5ad': ad, 'pooled_rare_selected.h5ad': ad}."""
-    from mantispy.pp._select import feature_select, subset_features
-
     base = _stable(_assemble_pooled_rare(cache_dir))
-    # Feature-selected block, pycytominer's default operations, on the gene-normalized base.
-    selected = base.copy()
-    feature_select(selected)
-    selected = _stable(subset_features(selected))
-    return {"pooled_rare.h5ad": base, "pooled_rare_selected.h5ad": selected}
+    return {"pooled_rare.h5ad": base, "pooled_rare_selected.h5ad": _feature_selected_block(base)}
 
 
 def _shipped_pooled_rare() -> dict[str, AnnData]:
@@ -396,7 +374,7 @@ def build_oasis_pilot(cache_dir: str | Path | None = None) -> dict[str, AnnData]
     """Returns {'oasis_pilot.h5ad': ad, 'oasis_pilot_agg.h5ad': ad}."""
     base = _stable(_assemble_oasis_pilot(cache_dir))
     # One modz consensus per compound-at-concentration, DMSO wells kept as the "DMSO" perturbation.
-    return {"oasis_pilot.h5ad": base, "oasis_pilot_agg.h5ad": _stable(_perturbation_consensus(base))}
+    return {"oasis_pilot.h5ad": base, "oasis_pilot_agg.h5ad": _stable(_modz(base, "Metadata_Perturbation"))}
 
 
 def _shipped_oasis_pilot() -> dict[str, AnnData]:
@@ -445,21 +423,15 @@ def _assemble_pki(cache_dir: str | Path | None = None) -> AnnData:
 
 def build_pki_variants(cache_dir: str | Path | None = None) -> dict[str, AnnData]:
     """Returns {'pki.h5ad': ad, 'pki_selected.h5ad': ad, 'pki_agg.h5ad': ad, 'pki_agg_selected.h5ad': ad}."""
-    from mantispy.pp._select import feature_select, subset_features
-
     base = _stable(_assemble_pki(cache_dir))
-
-    # Well-level feature-selected block, pycytominer's default operations, on the augmented base.
-    selected = base.copy()
-    feature_select(selected)
-    selected = _stable(subset_features(selected))
+    selected = _feature_selected_block(base)
 
     # One modz consensus per compound-at-dose, on the full and on the feature-selected block; DMSO kept.
     return {
         "pki.h5ad": base,
         "pki_selected.h5ad": selected,
-        "pki_agg.h5ad": _stable(_perturbation_consensus(base)),
-        "pki_agg_selected.h5ad": _stable(_perturbation_consensus(selected)),
+        "pki_agg.h5ad": _stable(_modz(base, "Metadata_Perturbation")),
+        "pki_agg_selected.h5ad": _stable(_modz(selected, "Metadata_Perturbation")),
     }
 
 
@@ -534,14 +506,9 @@ def _shipped_jump_crispr() -> dict[str, AnnData]:
 def build_cp_posh_variants(cache_dir: str | Path | None = None) -> dict[str, AnnData]:
     """Returns {'cp_posh.h5ad': ad, 'cp_posh_selected.h5ad': ad, 'cp_posh_agg.h5ad': ad, 'cp_posh_agg_selected.h5ad': ad}."""
     from mantispy.ds._datasets import _assemble_cp_posh
-    from mantispy.pp._select import feature_select, subset_features
 
     base = _stable(_assemble_cp_posh(cache_dir))
-
-    # Cell-level feature-selected block, pycytominer's default operations, on the author-normalized base.
-    selected = base.copy()
-    feature_select(selected)
-    selected = _stable(subset_features(selected))
+    selected = _feature_selected_block(base)
 
     # One median profile per guide, on the full and on the feature-selected block.
     return {
