@@ -705,32 +705,50 @@ def jump_lite_targets(cache_dir: str | Path | None = None) -> pd.DataFrame:
     return frame.drop_duplicates().reset_index(drop=True)
 
 
-def jump_crispr(annotate: bool = True, cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
+#: The rehosted jump_crispr variant each ``aggregated`` flag answers to (both need ``annotate=True``).
+_JUMP_CRISPR_VARIANTS = {
+    False: "jump_crispr.h5ad",  # 51185 x 595, well level, annotated
+    True: "jump_crispr_agg.h5ad",  # gene level (modz)
+}
+
+
+def jump_crispr(annotate: bool = True, cache_dir: str | Path | None = None, *, aggregated: bool = False) -> AnnData:
     """The assembled JUMP CRISPR arm, 51,185 wells of knockouts in U2OS cells.
 
-    ``cpg0016-jump-assembled``, the ``v1.0a`` well-position-corrected and feature-selected parquet, and the largest dataset here at 180 MB.
+    ``cpg0016-jump-assembled``, the ``v1.0a`` well-position-corrected and feature-selected parquet.
     jump-profiling-recipe has corrected it for well position and cell count, normalized it and selected its features, and has not yet sphered it.
     The cell counts are the ones the recipe regresses out of these profiles; their ``Cells_Count_Count`` feature was normalized with the rest and is no longer a count.
 
+    The annotated base and its gene-level consensus are pre-built by ``scripts/build_staged_datasets.py`` from the raw parquet and rehosted on ``scverse-exampledata``, so the loader fetches a single h5ad rather than reassembling the base on every call. Passing ``annotate=False`` still reads the raw profiles directly, without the annotation join.
+
     Args:
-        annotate: Join JUMP's CRISPR annotation, which names the gene each well's guides target and which wells are controls.
+        annotate: Fetch the annotated base, which names the gene each well's guides target and which wells are controls.
+            ``False`` reads the raw profiles without the annotation join and cannot be aggregated.
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
-        kwargs: Passed to :func:`mantispy.io.read_profiles`.
+        aggregated: Return one ``modz`` consensus (Spearman, ``min_replicates=2``) per ``Metadata_Gene`` over the guides instead of the wells. Needs ``annotate=True``.
 
     Returns:
-        Wells by features, indexed by plate and well, with ``Metadata_JCP2022`` and ``Metadata_CellCount`` and, when annotated, ``Metadata_Gene`` and ``Metadata_Perturbation`` (the gene symbol; its guides are the replicates), ``Metadata_Perturbation_Type`` (``"crispr"``), ``Metadata_Control_Type`` (``"negcon"``, ``"poscon"`` or ``"trt"``), ``Metadata_Control`` (the no-guide and non-targeting wells) and ``Metadata_ChromosomeArm``.
+        Wells by features at well resolution when ``aggregated`` is ``False``, else the gene-level consensus, indexed by plate and well, read with :func:`mantispy.io.read`, with ``Metadata_JCP2022`` and ``Metadata_CellCount`` and, when annotated, ``Metadata_Gene`` and ``Metadata_Perturbation`` (the gene symbol; its guides are the replicates), ``Metadata_Perturbation_Type`` (``"crispr"``), ``Metadata_Control_Type`` (``"negcon"``, ``"poscon"`` or ``"trt"``), ``Metadata_Control`` (the no-guide and non-targeting wells) and ``Metadata_ChromosomeArm``.
+
+    Raises:
+        ValueError: ``aggregated`` is not a bool, or ``aggregated`` is asked for with ``annotate=False``.
 
     References:
         :cite:t:`Chandrasekaran_2023`.
     """
-    (counts,) = _files("_jump_cell_counts", cache_dir)
-    adata = _profiles("jump_crispr", cache_dir, platemap=_read_counts(counts), **kwargs)
-    if annotate:
-        from mantispy.pp._annotate import annotate_jump
-
-        annotate_jump(adata, kind="crispr")
-    return adata
+    if not isinstance(aggregated, bool):
+        raise ValueError(f"aggregated must be a bool, got {type(aggregated).__name__}")
+    if aggregated and not annotate:
+        raise ValueError("aggregated needs annotate=True: the consensus groups by the annotated gene")
+    if not annotate:
+        (counts,) = _files("_jump_cell_counts", cache_dir)
+        return _profiles(
+            "jump_crispr", cache_dir, select=lambda name: not name.endswith(".h5ad"), platemap=_read_counts(counts)
+        )
+    target = _JUMP_CRISPR_VARIANTS[aggregated]
+    (path,) = _files("jump_crispr", cache_dir, select=lambda name: name == target)
+    return read(path)
 
 
 def _finish_guide_screen(adata: AnnData, name: str) -> AnnData:

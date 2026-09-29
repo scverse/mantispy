@@ -61,6 +61,14 @@ def _perturbation_consensus(block: AnnData) -> AnnData:
     return _zero_nonfinite(agg)
 
 
+def _modz(block: AnnData, by: str) -> AnnData:
+    """One modz consensus per ``by`` group over every row of ``block``, NaN-zeroed."""
+    from mantispy.tl._consensus import consensus
+
+    agg = consensus(block, by=by, method="modz", correlation="spearman", min_replicates=2)
+    return _zero_nonfinite(agg)
+
+
 def build_rohban_base(cache_dir: str | Path | None = None) -> dict[str, AnnData]:
     """Returns {'rohban.h5ad': the raw wells the both-flags-False ``mt.ds.rohban`` used to assemble}."""
     from mantispy.ds._datasets import _rohban_raw
@@ -492,6 +500,37 @@ def _shipped_scallops_arv471() -> dict[str, AnnData]:
     }
 
 
+def _assemble_jump_crispr(cache_dir: str | Path | None = None) -> AnnData:
+    """Assemble the annotated JUMP CRISPR base: the upstream selected profiles with their gene and controls.
+
+    The raw pipeline the ``annotate=True`` :func:`mt.ds.jump_crispr` used before the base was staged; it lives
+    here so the drift check can rebuild the hosted base from the raw parquet. The ``annotate=False`` path stays
+    in the loader, reading the raw profiles without the annotation join.
+    """
+    from mantispy.ds._datasets import _files, _profiles, _read_counts
+    from mantispy.pp._annotate import annotate_jump
+
+    (counts,) = _files("_jump_cell_counts", cache_dir)
+    adata = _profiles(
+        "jump_crispr", cache_dir, select=lambda name: not name.endswith(".h5ad"), platemap=_read_counts(counts)
+    )
+    annotate_jump(adata, kind="crispr")
+    return adata
+
+
+def build_jump_crispr(cache_dir: str | Path | None = None) -> dict[str, AnnData]:
+    """Returns {'jump_crispr.h5ad': the annotated wells, 'jump_crispr_agg.h5ad': one modz per gene}."""
+    base = _stable(_assemble_jump_crispr(cache_dir))
+    return {"jump_crispr.h5ad": base, "jump_crispr_agg.h5ad": _stable(_modz(base, "Metadata_Gene"))}
+
+
+def _shipped_jump_crispr() -> dict[str, AnnData]:
+    """The two jump_crispr variants as fetched through the public ``mt.ds.jump_crispr`` API."""
+    from mantispy.ds._datasets import jump_crispr
+
+    return {"jump_crispr.h5ad": jump_crispr(), "jump_crispr_agg.h5ad": jump_crispr(aggregated=True)}
+
+
 # One entry per staged dataset: (builder rebuilding the variants from the raw pipeline, loader returning the
 # shipped variants through the public ``mt.ds`` API keyed by the same filenames, ``heavy`` marking a rebuild
 # too large to run on every pull request). Later PRs stage a dataset by adding one entry here; the build and
@@ -507,4 +546,5 @@ STAGED: dict[str, tuple[Callable[..., dict[str, AnnData]], Callable[[], dict[str
     "oasis_pilot": (build_oasis_pilot, _shipped_oasis_pilot, False),
     "pki": (build_pki_variants, _shipped_pki, True),
     "scallops_arv471": (build_scallops_arv471, _shipped_scallops_arv471, True),
+    "jump_crispr": (build_jump_crispr, _shipped_jump_crispr, True),
 }
