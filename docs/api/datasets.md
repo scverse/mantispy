@@ -67,8 +67,18 @@
 
 ../datasets/overview
 ../datasets/bbbc021
+../datasets/rohban
+../datasets/pki
 ../datasets/jump_target2
-../datasets/jump_cells
+../datasets/jump_crispr
 ../datasets/jump_lite
+../datasets/chroma
+../datasets/neuropainting
 ../datasets/oasis_pilot
+../datasets/pooled_rare
+../datasets/jump_cells
+../datasets/jump_export
+../datasets/jump_plate
+../datasets/scallops_arv471
+../datasets/cp_posh
 ```
