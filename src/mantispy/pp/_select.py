@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Callable, Mapping, Sequence
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -388,7 +389,7 @@ def decorr_threshold_sweep(
     scorers: Mapping[str, Callable[[AnnData], float]] | Sequence[Callable[[AnnData], float]],
     *,
     key: str = "selected",
-    **feature_select_kwargs: object,
+    **feature_select_kwargs: Any,
 ) -> pd.DataFrame:
     """Score ``decorrelate`` at a range of thresholds so the smallest set that holds a metric can be chosen.
 
@@ -420,6 +421,7 @@ def decorr_threshold_sweep(
             copy=True,
             **feature_select_kwargs,
         )
+        assert selected is not None  # feature_select(copy=True) returns the modified copy
         kept = subset_features(selected, key)
         row: dict[str, float] = {"threshold": float(threshold), "n_kept": int(kept.n_vars)}
         for name, scorer in named:

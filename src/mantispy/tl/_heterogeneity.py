@@ -407,7 +407,7 @@ def subpopulation_hits(
     half_generator = generator.spawn(1)[0]
     needed = max(2 * min_cells, 4)
 
-    records = []
+    records: list[dict[str, object]] = []
     for cluster in pd.unique(clusters):
         in_cluster = np.flatnonzero(clusters == cluster)
         controls = in_cluster[is_control[in_cluster]]
