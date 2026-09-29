@@ -159,7 +159,9 @@ def _diagnose_cell(
 
     # Wells per treatment, the analogue of the well-level sizes, so the pseudo-treatment matches yours.
     treatment_wells = [
-        int(np.unique(well_codes[codes == index]).size) for index in range(len(keys)) if not is_control[codes == index].all()
+        int(np.unique(well_codes[codes == index]).size)
+        for index in range(len(keys))
+        if not is_control[codes == index].all()
     ]
     scored = [count for count in treatment_wells if count >= 2]
     controls = adata[is_control].copy()
