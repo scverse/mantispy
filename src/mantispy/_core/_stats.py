@@ -2,12 +2,56 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import numpy as np
+from anndata import AnnData
 
 from mantispy._core._corr import _blockwise
+from mantispy._core._reduce import group_codes
+from mantispy._core.frames import as_frame
+from mantispy._core.schema import REQUIRED_OBS
 
 #: Scale factor that makes the median absolute deviation estimate the standard deviation of a normal distribution.
 MAD_TO_SIGMA = 1.4826
+
+
+def _is_cell_resolution(adata: AnnData) -> bool:
+    """Whether the object is explicitly stamped cell resolution (an unstamped object is not)."""
+    return adata.uns.get("mantispy", {}).get("resolution") == "cell"
+
+
+def _default_well_block(adata: AnnData, *, block: str | Sequence[str] | None = None) -> np.ndarray | None:
+    """Per-row codes of the design's exchangeable unit, the well, or ``None`` when there is none to draw.
+
+    A permutation null at cell resolution must resample whole wells rather than cells, since cells within a well
+    share the well and are not independent replicates. This centralizes the choice of that unit:
+
+    - ``block`` given: its groups, whatever they are.
+    - otherwise, on an object stamped cell resolution that carries a complete ``(Metadata_Plate, Metadata_Well)``
+      with more than one cell in some well, the physical well.
+    - otherwise ``None``, so the caller can warn and fall back to a cell-level null.
+    """
+    if block is not None:
+        return group_codes(adata, block)[0]
+    if not _is_cell_resolution(adata):
+        return None
+    well = list(REQUIRED_OBS["cell"])
+    obs = as_frame(adata.obs)
+    if not set(well) <= set(adata.obs) or bool(obs[well].isna().to_numpy().any()):
+        # group_codes rejects gaps, so a well column with any missing value is unusable.
+        return None
+    codes = group_codes(adata, well)[0]
+    return codes if np.bincount(codes).max() > 1 else None
+
+
+def _split_wells(codes: np.ndarray, generator: np.random.Generator) -> np.ndarray:
+    """Boolean mask over ``codes`` selecting the rows of a random half of the wells they name.
+
+    The block-aware sibling of :func:`split_reference`: it halves by whole wells, so a reference group's own row draws a strict subset of the wells like any other group rather than folding cells across the split.
+    """
+    wells = np.unique(codes)
+    return np.isin(codes, generator.permutation(wells)[: wells.size // 2])
 
 
 def benjamini_hochberg(pvalues: np.ndarray) -> np.ndarray:
@@ -42,8 +86,9 @@ def permutation_pvalue(observed: np.ndarray, null: np.ndarray) -> np.ndarray:
     null = np.atleast_2d(np.asarray(null, dtype=np.float64))
     at_least = (null >= observed[:, None]).sum(axis=1)
     pvalues = (at_least + 1.0) / (null.shape[1] + 1.0)
-    # `nan >= x` is False, so an unmeasured observation would otherwise get the smallest p-value the permutations can express.
-    return np.where(np.isnan(observed), np.nan, pvalues)
+    # `nan >= x` is False, so an unmeasured observation, or one with no computable null, would otherwise get the smallest p-value the permutations can express.
+    unmeasured = np.isnan(observed) | ~np.isfinite(null).any(axis=1)
+    return np.where(unmeasured, np.nan, pvalues)
 
 
 def robust_zscore(values: np.ndarray, axis: int = 0) -> np.ndarray:
