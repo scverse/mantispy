@@ -106,6 +106,28 @@ def interactive_available() -> bool:
     return type(get_ipython()).__name__ == "ZMQInteractiveShell"
 
 
+# The renderers plotly assigns by itself in a Jupyter kernel; an empty string is its unset state.
+_AUTO_RENDERERS = frozenset({"", "plotly_mimetype", "plotly_mimetype+notebook"})
+
+
+def _ensure_notebook_renderer() -> None:
+    """Default plotly to CDN-backed HTML, once, when imported in a notebook kernel.
+
+    myst-nb (docs) and nbviewer render the ``notebook_connected`` HTML but not plotly's own
+    mime bundle, so setting the global default here lets every figure serialize as connected
+    HTML: our twins and a user's own ``px.*`` figures alike, with no per-notebook renderer setup.
+    Runs only under the :func:`interactive_available` gate (Jupyter kernel with plotly, honouring
+    the static escape hatch); it never overrides a renderer the user chose, and is a silent no-op
+    in scripts, the terminal REPL, and pytest.
+    """
+    if not interactive_available():
+        return
+    import plotly.io as pio
+
+    if pio.renderers.default in _AUTO_RENDERERS:
+        pio.renderers.default = "notebook_connected"
+
+
 def maybe_interactive(
     kind: str,
     *,

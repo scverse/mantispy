@@ -7,6 +7,7 @@ A plate map of a per-well flag is ``mt.pl.plate(adata, color="qc_well_pass")``, 
 """
 
 from mantispy.pl._cluster import dendrogram
+from mantispy.pl._common import _ensure_notebook_renderer
 from mantispy.pl._diagnostics import control_drift, image_qc, outliers, plate_effects
 from mantispy.pl._evaluation import batch_variance, map, metrics, replicate_correlation, similarity
 from mantispy.pl._features import feature_correlation, feature_groups
@@ -56,3 +57,6 @@ __all__ = [
     "transport",
     "subpopulation_hits",
 ]
+
+# Set the connected-HTML plotly renderer on import so no notebook or figure needs a renderer arg.
+_ensure_notebook_renderer()
