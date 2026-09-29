@@ -11,7 +11,7 @@ from mantispy._core._reduce import get_matrix, group_codes, group_offsets
 from mantispy._core._stats import _default_well_block, benjamini_hochberg
 from mantispy._core.frames import as_frame
 from mantispy._core.masks import reference_mask
-from mantispy._core.schema import get_resolution, stamp
+from mantispy._core.schema import RESOLUTIONS, stamp
 
 #: How far the observed null rate may exceed the nominal one before it is a failure.
 TOLERANCE = 2.0
@@ -282,8 +282,17 @@ def diagnose_testing(
     """
     from scipy import stats
 
-    if get_resolution(adata) == "cell":
+    resolution = adata.uns.get("mantispy", {}).get("resolution")
+    if resolution == "cell":
         return _diagnose_cell(adata, groupby, reference, n_draws, alpha, seed, n_permutations)
+    if resolution not in RESOLUTIONS:
+        # get_resolution would default an unstamped object to "cell" and route it to the cell path, which then
+        # cannot tell whether its wells are single cells; name the two fixes instead of a missing-column error.
+        raise ValueError(
+            "diagnose_testing cannot tell this object's resolution because it is not stamped, and the checks "
+            "differ by resolution. Stamp it with mt.io.stamp(resolution=...), or aggregate single cells to "
+            "wells with mt.tl.aggregate first."
+        )
 
     obs = as_frame(adata.obs)
     is_control = reference_mask(adata, reference)
