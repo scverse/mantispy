@@ -467,6 +467,31 @@ def _shipped_pki() -> dict[str, AnnData]:
     }
 
 
+def _guide_aggregate(base: AnnData) -> AnnData:
+    """One median profile per ``(Metadata_Gene, Metadata_sgRNA)`` guide, the way the loaders document."""
+    from mantispy.tl._aggregate import aggregate
+
+    return aggregate(base, by=("Metadata_Gene", "Metadata_sgRNA"))
+
+
+def build_scallops_arv471(cache_dir: str | Path | None = None) -> dict[str, AnnData]:
+    """Returns {'scallops_arv471.h5ad': the cells, 'scallops_arv471_agg.h5ad': one median per guide}."""
+    from mantispy.ds._datasets import _assemble_scallops_arv471
+
+    base = _stable(_assemble_scallops_arv471(cache_dir))
+    return {"scallops_arv471.h5ad": base, "scallops_arv471_agg.h5ad": _stable(_guide_aggregate(base))}
+
+
+def _shipped_scallops_arv471() -> dict[str, AnnData]:
+    """The two scallops_arv471 variants as fetched through the public ``mt.ds.scallops_arv471`` API."""
+    from mantispy.ds._datasets import scallops_arv471
+
+    return {
+        "scallops_arv471.h5ad": scallops_arv471(),
+        "scallops_arv471_agg.h5ad": scallops_arv471(aggregated=True),
+    }
+
+
 # One entry per staged dataset: (builder rebuilding the variants from the raw pipeline, loader returning the
 # shipped variants through the public ``mt.ds`` API keyed by the same filenames, ``heavy`` marking a rebuild
 # too large to run on every pull request). Later PRs stage a dataset by adding one entry here; the build and
@@ -481,4 +506,5 @@ STAGED: dict[str, tuple[Callable[..., dict[str, AnnData]], Callable[[], dict[str
     "pooled_rare": (build_pooled_rare, _shipped_pooled_rare, False),
     "oasis_pilot": (build_oasis_pilot, _shipped_oasis_pilot, False),
     "pki": (build_pki_variants, _shipped_pki, True),
+    "scallops_arv471": (build_scallops_arv471, _shipped_scallops_arv471, True),
 }

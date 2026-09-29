@@ -4665,6 +4665,13 @@ datasets:
     - name: dataframe_fig3_clean.pq
       url: https://github.com/Genentech/scallops-manuscript/raw/main/Figure3/Data/dataframe_fig3_clean.pq
       sha256: e3988e2d8e1be1899b6e7136896e61d8a20ffedf2f2283d7fc15355c4a7068e7
+    # Staged variants rehosted on scverse-exampledata. Regenerate with scripts/build_staged_datasets.py.
+    - name: scallops_arv471.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/scallops_arv471/scallops_arv471.h5ad
+      sha256: d1f3e50e97b29787b31b3a18e2071e39acec12935968cd39c843a97c5e52965c
+    - name: scallops_arv471_agg.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/scallops_arv471/scallops_arv471_agg.h5ad
+      sha256: c99d2cd3a37921ca472bb329da63d95540d620fb90b434b4f04d51159d2205c3
 
   cp_posh:
     type: mantispy

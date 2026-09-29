@@ -773,7 +773,45 @@ _SCALLOPS_SOURCE = (
 )
 
 
-def scallops_arv471(cache_dir: str | Path | None = None) -> AnnData:
+def _assemble_scallops_arv471(cache_dir: str | Path | None = None) -> AnnData:
+    """Assemble the SCALLOPS ARV-471 base: the ARV-471 cells with their gene, guide and control.
+
+    The raw pipeline the both-flags-False :func:`mt.ds.scallops_arv471` used before the base was staged; it
+    lives here so the drift check can rebuild the hosted base from the raw parquet.
+    """
+    (path,) = _files("scallops_arv471", cache_dir, select=lambda name: not name.endswith(".h5ad"))
+    df = pd.read_parquet(path, columns=[*_SCALLOPS_FEATURES, *_SCALLOPS_SOURCE])
+    df = df[df["Condition"].astype(str) == "ARV-471"]
+    df = df[~df["Cells_Location_IntersectsBoundary_IF"].astype(bool)]
+    before = len(df)
+    df = df.dropna(subset=list(_SCALLOPS_FEATURES))
+    report_drop("cell(s) with a missing phenotype feature", before - len(df), before)
+
+    gene = df["gene_symbol"].astype(str).to_numpy()
+    guide = df["sgRNA_id"].astype(str).to_numpy()
+    is_ntc = gene == "NTC"
+    frame = df[list(_SCALLOPS_FEATURES)].reset_index(drop=True)
+    frame["Metadata_Gene"] = np.where(is_ntc, "nontargeting", gene)
+    frame["Metadata_sgRNA"] = guide
+    frame["Metadata_Control_Type"] = df["type"].astype(str).to_numpy()
+    frame["Metadata_Control"] = is_ntc
+    frame["Metadata_Perturbation"] = guide
+    frame["Metadata_Plate"] = df["plate"].astype(str).to_numpy()
+    # The raw well is a rowless integer; prefix a synthetic row letter so from_dataframe's normalize_well can pad it.
+    frame["Metadata_Well"] = ("W" + df["well"].astype(int).astype(str)).to_numpy()
+
+    adata = from_dataframe(frame, resolution="cell")
+    return _finish_guide_screen(adata, "scallops_arv471")
+
+
+#: The rehosted scallops_arv471 variant each ``aggregated`` flag answers to.
+_SCALLOPS_VARIANTS = {
+    False: "scallops_arv471.h5ad",  # 2021814 x 9, cell level
+    True: "scallops_arv471_agg.h5ad",  # guide level (median)
+}
+
+
+def scallops_arv471(cache_dir: str | Path | None = None, *, aggregated: bool = False) -> AnnData:
     """SCALLOPS ARV-471, single cells of an optical pooled screen under an estrogen-receptor degrader.
 
     The drug arm of a genome-scale optical pooled CRISPR screen from ``Genentech/scallops-manuscript``, its Figure 3 table.
@@ -783,14 +821,16 @@ def scallops_arv471(cache_dir: str | Path | None = None) -> AnnData:
 
     This loads only the ARV-471 condition, at single-cell resolution, so a hit is a guide whose cells sit away from the non-targeting cells in the phenotype space.
     The matched DMSO condition and the barcode-calling columns are left in the upstream file.
-    Downloads about 205 MB once, checked against a pinned sha256, and subsets it on read.
+
+    The base and its guide-level aggregate are pre-built by ``scripts/build_staged_datasets.py`` from the raw parquet and rehosted on ``scverse-exampledata``, so the loader fetches a single h5ad rather than filtering and reassembling the cells on every call.
 
     Args:
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
+        aggregated: Return one median profile per ``(Metadata_Gene, Metadata_sgRNA)`` guide instead of the cells, with ``Metadata_CellCount``.
 
     Returns:
-        Cells by nine phenotype features at cell resolution, with:
+        Cells by nine phenotype features at cell resolution (one median per guide when ``aggregated``), read with :func:`mantispy.io.read`, with:
 
         ``Metadata_Gene``: the gene the cell's guide targets, with the non-targeting guides written as ``"nontargeting"`` (the upstream ``NTC``), the spelling the analysis functions read.
 
@@ -820,31 +860,16 @@ def scallops_arv471(cache_dir: str | Path | None = None) -> AnnData:
         Cells missing any phenotype feature are dropped too, so every returned cell has a full feature vector.
 
         A cell carries no count.
-        Aggregate to a guide-level profile with ``mt.tl.aggregate(adata, by=("Metadata_Gene", "Metadata_sgRNA"))``, which writes ``Metadata_CellCount``.
+        The ``aggregated`` variant is one median profile per ``(Metadata_Gene, Metadata_sgRNA)`` guide, which writes ``Metadata_CellCount``.
+
+    Raises:
+        ValueError: ``aggregated`` is not a bool.
     """
-    (path,) = _files("scallops_arv471", cache_dir)
-    df = pd.read_parquet(path, columns=[*_SCALLOPS_FEATURES, *_SCALLOPS_SOURCE])
-    df = df[df["Condition"].astype(str) == "ARV-471"]
-    df = df[~df["Cells_Location_IntersectsBoundary_IF"].astype(bool)]
-    before = len(df)
-    df = df.dropna(subset=list(_SCALLOPS_FEATURES))
-    report_drop("cell(s) with a missing phenotype feature", before - len(df), before)
-
-    gene = df["gene_symbol"].astype(str).to_numpy()
-    guide = df["sgRNA_id"].astype(str).to_numpy()
-    is_ntc = gene == "NTC"
-    frame = df[list(_SCALLOPS_FEATURES)].reset_index(drop=True)
-    frame["Metadata_Gene"] = np.where(is_ntc, "nontargeting", gene)
-    frame["Metadata_sgRNA"] = guide
-    frame["Metadata_Control_Type"] = df["type"].astype(str).to_numpy()
-    frame["Metadata_Control"] = is_ntc
-    frame["Metadata_Perturbation"] = guide
-    frame["Metadata_Plate"] = df["plate"].astype(str).to_numpy()
-    # The raw well is a rowless integer; prefix a synthetic row letter so from_dataframe's normalize_well can pad it.
-    frame["Metadata_Well"] = ("W" + df["well"].astype(int).astype(str)).to_numpy()
-
-    adata = from_dataframe(frame, resolution="cell")
-    return _finish_guide_screen(adata, "scallops_arv471")
+    if not isinstance(aggregated, bool):
+        raise ValueError(f"aggregated must be a bool, got {type(aggregated).__name__}")
+    target = _SCALLOPS_VARIANTS[aggregated]
+    (path,) = _files("scallops_arv471", cache_dir, select=lambda name: name == target)
+    return read(path)
 
 
 #: The upstream parquet stores these as its MultiIndex; every other column is a CellStats morphology feature.
