@@ -8,9 +8,69 @@ import numpy as np
 import pandas as pd
 import pytest
 import scanpy as sc
+from test_tl_hits import _well_effect_cells
 
 import mantispy as mt
 from mantispy._core.schema import stamp
+
+
+def _one_cluster(seed):
+    """A well-random-effect cell screen (issue #68 fixture) collapsed into a single shared cluster.
+
+    Every group is then compared against the controls within one cell state, the pseudoreplication setting of #137.
+    """
+    adata = _well_effect_cells(seed=seed)
+    adata.obs["cluster"] = "c0"
+    return adata
+
+
+def _subpopulation_fpr(seeds, *, drop_well):
+    """Fraction of non-reference (cluster, group) pairs called at raw p < 0.05 across ``seeds``.
+
+    Dropping the well column forces the analytic KS fallback; keeping it runs the default well-block permutation.
+    """
+    called = total = 0
+    for seed in seeds:
+        adata = _one_cluster(seed)
+        if drop_well:
+            del adata.obs["Metadata_Well"]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            mt.tl.subpopulation_hits(adata, cluster_key="cluster", seed=seed, n_permutations=300)
+        table = adata.uns["mantispy"]["subpopulation_hits"]
+        treated = table[table["group"] != "DMSO"]
+        called += int((treated["pvalue"] < 0.05).sum())
+        total += int(len(treated))
+    return called / total
+
+
+def test_subpopulation_hits_well_block_fixes_cell_resolution_pseudoreplication():
+    """Regression for #137: the analytic KS p-value is built from cell counts, so cells within a well inflate it.
+
+    A well-block permutation matches the null's unit to the design and brings the pure-null false positive rate back to nominal.
+    """
+    block_rate = _subpopulation_fpr(range(8), drop_well=False)
+    analytic_rate = _subpopulation_fpr(range(8), drop_well=True)
+    assert block_rate <= 0.08, f"the well-block null called {block_rate:.1%} of pure-null pseudo-treatments"
+    assert analytic_rate >= 0.2, f"the analytic path called {analytic_rate:.1%}, so the bug is not reproduced"
+
+
+def test_subpopulation_hits_defaults_to_the_well_block_at_cell_resolution():
+    adata = _one_cluster(seed=0)
+    default = mt.tl.subpopulation_hits(adata, cluster_key="cluster", n_permutations=200, seed=0, copy=True)
+    explicit = mt.tl.subpopulation_hits(
+        adata, cluster_key="cluster", block="Metadata_Well", n_permutations=200, seed=0, copy=True
+    )
+    pd.testing.assert_frame_equal(
+        default.uns["mantispy"]["subpopulation_hits"], explicit.uns["mantispy"]["subpopulation_hits"]
+    )
+
+
+def test_subpopulation_hits_warns_without_a_well_column_at_cell_resolution():
+    adata = _one_cluster(seed=0)
+    del adata.obs["Metadata_Well"]
+    with pytest.warns(UserWarning, match="not independent replicates"):
+        mt.tl.subpopulation_hits(adata, cluster_key="cluster", n_permutations=100, seed=0)
 
 
 @pytest.fixture(scope="module")

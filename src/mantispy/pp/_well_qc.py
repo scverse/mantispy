@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
 from anndata import AnnData
@@ -72,6 +74,16 @@ def well_qc(
     table = pd.DataFrame(records)
     table.insert(0, "Metadata_Well", keys.get_level_values(1))
     table.insert(0, "Metadata_Plate", keys.get_level_values(0))
+
+    if len(table) and (table["n_cells"] == 1).all():
+        # min_cells counts the rows of each well, so one row per well means the object is already aggregated.
+        warnings.warn(
+            "well_qc counts the cells per well, but every well here holds exactly one row, so the object is "
+            "already aggregated and min_cells fails every well. Run well_qc before aggregation, or at well "
+            "resolution threshold obs['Metadata_CellCount'] instead.",
+            UserWarning,
+            stacklevel=3,
+        )
 
     passed = (table["n_cells"] >= min_cells) & (table["nan_fraction"] <= max_nan_fraction)
     if max_control_cv is not None:

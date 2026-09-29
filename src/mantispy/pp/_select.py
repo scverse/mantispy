@@ -6,9 +6,11 @@ Every operation returns a boolean keep mask over ``var``.
 from __future__ import annotations
 
 import warnings
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any
 
 import numpy as np
+import pandas as pd
 from anndata import AnnData
 
 from mantispy._core._corr import _blockwise, correlated_pairs, rank_revealing_subset
@@ -156,11 +158,20 @@ def _op_blocklist(adata: AnnData, blocklist: str | Sequence[str] = "default") ->
     return ~blocklist_hits(names, blocklist)
 
 
-def _op_noise_removal(X: np.ndarray, codes: np.ndarray, stdev_cutoff: float = 0.8) -> np.ndarray:
+def _op_noise_removal(
+    X: np.ndarray, codes: np.ndarray, stdev_cutoff: float = 0.8, *, mode: str = "absolute"
+) -> np.ndarray:
     """Drop features that vary too much within a perturbation group.
 
-    The statistic is the mean, over groups, of each group's population standard deviation (``ddof=0``).
+    The within-group spread of a feature is the mean, over groups, of each group's population standard deviation (``ddof=0``).
+    ``mode`` sets what ``stdev_cutoff`` is compared against:
+
+    - ``"absolute"``: the spread itself, pycytominer's behaviour, meaningful only on the scale the normalization left.
+    - ``"ratio"``: the spread divided by the feature's total standard deviation, so the cutoff means the same whichever normalization preceded it.
+    - ``"quantile"``: ``stdev_cutoff`` is read as a quantile of the observed within-group spreads, keeping the features below it.
     """
+    if mode not in ("absolute", "ratio", "quantile"):
+        raise ValueError(f"noise_removal_cutoff_mode must be 'absolute', 'ratio' or 'quantile', got {mode!r}")
     n_groups = int(codes.max()) + 1
     order, offsets = group_offsets(codes, n_groups)
     with warnings.catch_warnings():
@@ -168,7 +179,13 @@ def _op_noise_removal(X: np.ndarray, codes: np.ndarray, stdev_cutoff: float = 0.
         deviations = np.stack(
             [np.nanstd(X[order[offsets[group] : offsets[group + 1]]], axis=0, ddof=0) for group in range(n_groups)]
         )
-    return ~(np.nan_to_num(deviations.mean(axis=0), nan=0.0) > stdev_cutoff)
+        within = np.nan_to_num(deviations.mean(axis=0), nan=0.0)
+    cutoff = float(np.nanquantile(within, stdev_cutoff)) if mode == "quantile" else stdev_cutoff
+    if mode == "ratio":
+        total = np.nan_to_num(np.nanstd(X, axis=0, ddof=0), nan=0.0)
+        # A feature with no total spread has no noise to remove, so its ratio is zero and it is kept.
+        within = np.divide(within, total, out=np.zeros_like(within), where=total > 0)
+    return ~(within > cutoff)
 
 
 @inplace_or_copy()
@@ -194,6 +211,8 @@ def feature_select(
     decorr_method: str = "pearson",
     key_added: str = "selected",
     copy: bool = False,
+    *,
+    noise_removal_cutoff_mode: str = "absolute",
 ) -> AnnData | None:
     """Flag the features worth keeping.
 
@@ -232,6 +251,9 @@ def feature_select(
             An absolute threshold on the scale :func:`~mantispy.pp.normalize` left the values on, so it is only meaningful next to the normalization that produced them; pycytominer's default assumes whole-plate standardization.
         key_added: Name of the boolean ``var`` column to write.
         copy: Return a modified copy instead of mutating in place.
+        noise_removal_cutoff_mode: ``noise_removal``: what ``noise_removal_stdev_cutoff`` is compared against.
+            ``"absolute"`` (the default) keeps pycytominer's behaviour, comparing the raw within-group spread and so tied to the normalization scale.
+            ``"ratio"`` compares the within-group spread to the feature's total spread, and ``"quantile"`` reads the cutoff as a quantile of the observed within-group spreads; both keep a useful subset under the control-based or MAD normalization the package recommends, where the absolute cutoff keeps everything or nothing.
 
     Returns:
         ``None``, or the modified copy.
@@ -299,7 +321,7 @@ def feature_select(
             if noise_removal_perturb_groups not in adata.obs:
                 raise KeyError(f"obs has no column {noise_removal_perturb_groups!r} to group replicates by")
             codes, _ = group_codes(adata, noise_removal_perturb_groups)
-            mask = _op_noise_removal(X, codes, noise_removal_stdev_cutoff)
+            mask = _op_noise_removal(X, codes, noise_removal_stdev_cutoff, mode=noise_removal_cutoff_mode)
         removed[operation] = int((~mask).sum())
         keep[judged] &= mask
 
@@ -309,12 +331,24 @@ def feature_select(
         removed["decorrelate"] = int((~mask).sum())
         keep[survivors[~mask]] = False
 
+    noise_stripped = removed.get("noise_removal", 0)
+    # Only the absolute cutoff is tied to the normalization scale, so only it earns the scale-relative advice.
+    near_total_noise = noise_removal_cutoff_mode == "absolute" and noise_stripped > 0.95 * judged.size
     if not keep.any() and adata.n_vars:
         warnings.warn(
             f"feature_select flagged none of the {adata.n_vars} features as selected; "
             f"uns['mantispy']['feature_select'] says what each operation removed. Every cutoff here is an "
             f"absolute threshold on the scale pp.normalize left the values on, so check it against that "
             f"scale; noise_removal's stdev_cutoff is the usual cause.",
+            UserWarning,
+            stacklevel=3,
+        )
+    elif near_total_noise:
+        warnings.warn(
+            f"noise_removal alone flagged {noise_stripped} of the {judged.size} features it judged for removal "
+            "(more than 95%). Its stdev_cutoff is an absolute threshold on the scale pp.normalize left the values "
+            "on, so it strips nearly everything under the control-based or MAD normalization the package "
+            "recommends. Set noise_removal_cutoff_mode='ratio' or 'quantile' for a scale-relative cutoff.",
             UserWarning,
             stacklevel=3,
         )
@@ -347,3 +381,50 @@ def subset_features(adata: AnnData, key: str = "selected") -> AnnData:
     if key not in adata.var:
         raise KeyError(f"var has no column {key!r}; run mt.pp.feature_select first")
     return adata[:, as_frame(adata.var)[key].to_numpy(dtype=bool)].copy()
+
+
+def decorr_threshold_sweep(
+    adata: AnnData,
+    thresholds: Sequence[float],
+    scorers: Mapping[str, Callable[[AnnData], float]] | Sequence[Callable[[AnnData], float]],
+    *,
+    key: str = "selected",
+    **feature_select_kwargs: Any,
+) -> pd.DataFrame:
+    """Score ``decorrelate`` at a range of thresholds so the smallest set that holds a metric can be chosen.
+
+    ``decorr_threshold`` trades size for signal, and the right setting depends on the screen and on the metric
+    that matters, so there is no universal best. This runs :func:`feature_select` with ``decorrelate=True`` at each
+    threshold on a copy, scores the selected object with each callable, and returns one row per threshold.
+
+    Args:
+        adata: Object to select features on. Never modified.
+        thresholds: ``decorr_threshold`` values to try.
+        scorers: Scoring callables, each taking the selected :class:`~anndata.AnnData` and returning a scalar (for
+            example replicate or activity mAP). A mapping names the columns; a sequence names them by
+            ``callable.__name__``.
+        key: Boolean ``var`` column :func:`feature_select` writes and :func:`subset_features` reads.
+        feature_select_kwargs: Passed through to :func:`feature_select` (``operations``, ``corr_threshold``, and so
+            on); ``decorrelate``, ``decorr_threshold``, ``key_added`` and ``copy`` are set here.
+
+    Returns:
+        A frame with a ``threshold`` column, an ``n_kept`` column, and one column per scorer.
+    """
+    named = list(scorers.items() if isinstance(scorers, Mapping) else ((s.__name__, s) for s in scorers))
+    records = []
+    for threshold in thresholds:
+        selected = feature_select(
+            adata,
+            decorrelate=True,
+            decorr_threshold=float(threshold),
+            key_added=key,
+            copy=True,
+            **feature_select_kwargs,
+        )
+        assert selected is not None  # feature_select(copy=True) returns the modified copy
+        kept = subset_features(selected, key)
+        row: dict[str, float] = {"threshold": float(threshold), "n_kept": int(kept.n_vars)}
+        for name, scorer in named:
+            row[name] = float(scorer(kept))
+        records.append(row)
+    return pd.DataFrame(records)

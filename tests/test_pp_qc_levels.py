@@ -1,5 +1,8 @@
 """Image-, well- and cell-level QC, and feature name standardization."""
 
+import anndata as ad
+import numpy as np
+import pandas as pd
 import pytest
 
 import mantispy as mt
@@ -72,6 +75,26 @@ def test_well_qc_criteria(cells):
     table = cells.uns["mantispy"]["well_qc"]
     assert not table.loc[table["control_cv"].notna(), "qc_well_pass"].any()
     assert table["control_cv"].isna().any()
+
+
+def test_well_qc_warns_on_already_aggregated_input():
+    """Regression for #111: an unstamped one-row-per-well object gives no resolution advisory, so well_qc's own shape check must warn."""
+    obs = pd.DataFrame({"Metadata_Plate": ["P1"] * 8, "Metadata_Well": [f"A{i:02d}" for i in range(1, 9)]})
+    obs.index = obs["Metadata_Plate"] + ":" + obs["Metadata_Well"]
+    wells = ad.AnnData(np.random.default_rng(0).normal(size=(8, 5)).astype(np.float32), obs=obs)
+    wells.var_names = [f"Cells_AreaShape_F{i}" for i in range(5)]
+
+    with pytest.warns(UserWarning, match="already aggregated"):
+        mt.pp.well_qc(wells)
+
+
+def test_well_qc_does_not_warn_on_genuine_single_cell_input(cells):
+    """A real multi-cell-per-well object must not trip the already-aggregated warning."""
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        mt.pp.well_qc(cells, min_cells=1)
 
 
 def test_standardize_keeps_originals_and_is_idempotent(cells):

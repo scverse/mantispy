@@ -160,6 +160,101 @@ def test_decorrelate_rejects_a_threshold_outside_the_unit_interval():
         mt.pp.feature_select(adata, operations=(), decorrelate=True, decorr_threshold=1.0)
 
 
+def _scale_mixed(n_groups=8, per_group=12, n_features=40, seed=0):
+    """Replicate groups whose within-group spread is large on every feature, mimicking control-based or MAD normalization.
+
+    One feature is quiet within a group; the rest are noisy, so the absolute cutoff strips nearly all of them.
+    The first half also carry a strong between-group signal, so their within-to-total ratio is small and a ratio cutoff keeps them.
+    """
+    rng = np.random.default_rng(seed)
+    group_ids = np.repeat(np.arange(n_groups), per_group)
+    within_sd = np.full(n_features, 3.0)
+    within_sd[0] = 0.3  # the one feature quiet enough to survive the absolute cutoff
+    between_sd = np.zeros(n_features)
+    between_sd[: n_features // 2] = 20.0  # a total spread far above the within-group spread, so a small ratio
+    group_means = rng.standard_normal((n_groups, n_features)) * between_sd
+    values = group_means[group_ids] + rng.standard_normal((group_ids.size, n_features)) * within_sd
+
+    obs = pd.DataFrame(
+        {"Metadata_Perturbation": [f"g{group}" for group in group_ids]},
+        index=[str(index) for index in range(group_ids.size)],
+    )
+    return ad.AnnData(values.astype(np.float32), obs=obs, var=pd.DataFrame(index=[f"f{i}" for i in range(n_features)]))
+
+
+def test_near_total_absolute_noise_removal_warns():
+    """Regression for #109: the absolute cutoff strips nearly every feature under control-based or MAD normalization, which was silent unless exactly zero survived."""
+    adata = _scale_mixed()
+    with pytest.warns(UserWarning, match="more than 95%"):
+        mt.pp.feature_select(adata, operations=("noise_removal",), noise_removal_stdev_cutoff=0.8)
+    kept = int(adata.var["selected"].sum())
+    assert 0 < kept < adata.n_vars, "one quiet feature survives, so this is near-total and not the empty case"
+
+
+@pytest.mark.parametrize("mode", ["ratio", "quantile"])
+def test_scale_relative_noise_removal_keeps_a_useful_subset(mode):
+    """The scale-relative modes keep a nonzero, non-total subset where the absolute cutoff keeps almost none."""
+    adata = _scale_mixed()
+    absolute = adata.copy()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        mt.pp.feature_select(absolute, operations=("noise_removal",), noise_removal_stdev_cutoff=0.8)
+    assert int(absolute.var["selected"].sum()) <= 1, "the absolute cutoff keeps almost nothing on this scale"
+
+    scaled = adata.copy()
+    mt.pp.feature_select(
+        scaled, operations=("noise_removal",), noise_removal_stdev_cutoff=0.8, noise_removal_cutoff_mode=mode
+    )
+    kept = int(scaled.var["selected"].sum())
+    assert 1 < kept < scaled.n_vars, f"{mode} kept {kept} of {scaled.n_vars}, expected a useful subset"
+
+
+def test_noise_removal_rejects_an_unknown_cutoff_mode():
+    adata = _scale_mixed()
+    with pytest.raises(ValueError, match="noise_removal_cutoff_mode"):
+        mt.pp.feature_select(adata, operations=("noise_removal",), noise_removal_cutoff_mode="nonsense")
+
+
+def _low_rank_profiles(n_obs=400, n_latent=4, n_features=20, seed=0):
+    """Features spanning a low-rank signal with a gradient of independent noise, so their redundancy varies feature to feature."""
+    rng = np.random.default_rng(seed)
+    signal = rng.standard_normal((n_obs, n_latent)) @ rng.standard_normal((n_latent, n_features))
+    signal += rng.standard_normal((n_obs, n_features)) * np.linspace(0.05, 1.5, n_features)
+    return ad.AnnData(
+        signal.astype(np.float64), var=pd.DataFrame(index=[f"Cells_Intensity_f{i}" for i in range(n_features)])
+    )
+
+
+def test_decorr_threshold_sweep_tabulates_scores_per_threshold():
+    """Regression for #133: one row per threshold, the scorer's column present, and fewer features kept at a lower threshold."""
+    adata = _low_rank_profiles()
+    thresholds = [0.7, 0.9, 0.99]
+    table = mt.pp.decorr_threshold_sweep(
+        adata, thresholds, {"variance": lambda a: float(np.nanvar(np.asarray(a.X)))}, operations=()
+    )
+
+    assert list(table["threshold"]) == thresholds
+    assert set(table.columns) >= {"threshold", "n_kept", "variance"}
+    assert table["n_kept"].is_monotonic_increasing, "a lower threshold must keep fewer features"
+    assert table["n_kept"].iloc[0] < table["n_kept"].iloc[-1], "the thresholds must span a range that changes the set"
+
+    again = mt.pp.decorr_threshold_sweep(
+        adata, thresholds, {"variance": lambda a: float(np.nanvar(np.asarray(a.X)))}, operations=()
+    )
+    pd.testing.assert_frame_equal(table, again)
+    assert "selected" not in adata.var, "the sweep is a pure diagnostic and mutates nothing"
+
+
+def test_decorr_threshold_sweep_names_columns_from_callables():
+    adata = _low_rank_profiles()
+
+    def kept_fraction(selected):
+        return selected.n_vars / 20.0
+
+    table = mt.pp.decorr_threshold_sweep(adata, [0.9], [kept_fraction], operations=())
+    assert "kept_fraction" in table.columns
+
+
 def test_features_normalize_could_not_scale_are_dropped_before_the_rest_are_judged():
     """drop_degenerate drops what normalize flagged, and the other operations never see it: judged alongside the rest, the flagged feature here would push a healthy one out through the correlation ranking."""
     rng = np.random.default_rng(2)
