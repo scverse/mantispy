@@ -39,23 +39,25 @@ def scored():
 @pytest.mark.parametrize(
     "draw",
     [
-        lambda a: mt.pl.hits(a),
-        lambda a: mt.pl.effect_sizes(a, group="pert00"),
-        lambda a: mt.pl.feature_volcano(a, group="pert00"),
-        lambda a: mt.pl.dose_response(a, compound="pert00"),
-        lambda a: mt.pl.moa_confusion(a),
-        lambda a: mt.pl.moa_enrichment(a, group="pert00"),
-        lambda a: mt.pl.distance_heatmap(a),
-        lambda a: mt.pl.sets_heatmap(a, groupby="Metadata_Perturbation"),
+        lambda a, ax: mt.pl.hits(a, ax=ax),
+        lambda a, ax: mt.pl.effect_sizes(a, group="pert00", ax=ax),
+        lambda a, ax: mt.pl.feature_volcano(a, group="pert00", ax=ax),
+        lambda a, ax: mt.pl.dose_response(a, compound="pert00", ax=ax),
+        lambda a, ax: mt.pl.moa_confusion(a, ax=ax),
+        lambda a, ax: mt.pl.moa_enrichment(a, group="pert00", ax=ax),
+        lambda a, ax: mt.pl.distance_heatmap(a, ax=ax),
+        lambda a, ax: mt.pl.sets_heatmap(a, groupby="Metadata_Perturbation", ax=ax),
     ],
     ids=["hits", "effects", "volcano", "dose", "confusion", "enrichment", "distances", "sets"],
 )
 def test_every_plot_draws_and_changes_nothing(scored, draw):
     columns, values = list(scored.obs.columns), scored.X.copy()
-    axes = np.asarray(draw(scored))
-    assert all(isinstance(axis, matplotlib.axes.Axes) for axis in axes.ravel())
+    # Passing ax makes the plot hand it back, so this still asserts on the drawn Axes.
+    _, ax = plt.subplots()
+    assert draw(scored, ax) is ax
     assert list(scored.obs.columns) == columns
     np.testing.assert_array_equal(scored.X, values)
+    plt.close(ax.figure)
 
 
 def test_the_hits_plot_draws_the_threshold_that_colored_the_points():
@@ -67,7 +69,8 @@ def test_the_hits_plot_draws_the_threshold_that_colored_the_points():
     wells = mt.tl.aggregate(cells, min_cells=0)
     mt.tl.hit_calling(wells, n_permutations=15, threshold=0.25)  # the plot marks the threshold; not a p-value assertion
 
-    ax = mt.pl.hits(wells)
+    _, ax = plt.subplots()
+    mt.pl.hits(wells, ax=ax)
     line = next(drawn for drawn in ax.get_lines() if str(drawn.get_label()).startswith("q ="))
     assert line.get_label() == "q = 0.25"
 
@@ -93,8 +96,10 @@ def test_design_plots_draw_and_say_what_to_run_first(scored):
         scored.obs["Metadata_Perturbation"].astype(str) == "pert00", 10.0, 100.0
     )
     mt.tl.cytotoxicity(scored)
-    assert isinstance(mt.pl.replicate_saturation(scored), matplotlib.axes.Axes)
-    assert isinstance(mt.pl.cytotoxicity(scored), matplotlib.axes.Axes)
+    _, saturation_ax = plt.subplots()
+    assert isinstance(mt.pl.replicate_saturation(scored, ax=saturation_ax), matplotlib.axes.Axes)
+    _, cytotoxicity_ax = plt.subplots()
+    assert isinstance(mt.pl.cytotoxicity(scored, ax=cytotoxicity_ax), matplotlib.axes.Axes)
 
     fresh = mt.tl.aggregate(mt.ds.synthetic_plate(n_wells=8, n_cells=4, n_features=8, seed=0), min_cells=0)
     with pytest.raises(KeyError, match="mt.tl.replicate_saturation"):
@@ -127,7 +132,8 @@ def inhibitor_adata():
 
 def test_the_direction_plot_bands_the_ladder_by_phase(phenotypes):
     mt.tl.dose_direction(phenotypes)
-    ax = mt.pl.dose_direction(phenotypes, compound="grows")
+    _, ax = plt.subplots()
+    mt.pl.dose_direction(phenotypes, compound="grows", ax=ax)
     table = phenotypes.uns["mantispy"]["dose_direction"]
     drawn_compound = table[table["compound"] == "grows"]
 
@@ -147,8 +153,12 @@ def test_the_direction_plot_says_which_compounds_it_has(phenotypes):
 
 def test_one_stray_well_does_not_flatten_the_rest_onto_the_baseline(inhibitor_adata):
     """A distance from the controls has a long right tail, so a linear axis hides the response."""
-    assert mt.pl.dose_response(inhibitor_adata, compound="cpd").get_yscale() == "log"
+    _, ax = plt.subplots()
+    mt.pl.dose_response(inhibitor_adata, compound="cpd", ax=ax)
+    assert ax.get_yscale() == "log"
 
     # A response that reaches zero has no log scale to be drawn on.
     inhibitor_adata.obs.loc[inhibitor_adata.obs.index[0], "hits_row_distance"] = 0.0
-    assert mt.pl.dose_response(inhibitor_adata, compound="cpd").get_yscale() == "linear"
+    _, linear_ax = plt.subplots()
+    mt.pl.dose_response(inhibitor_adata, compound="cpd", ax=linear_ax)
+    assert linear_ax.get_yscale() == "linear"

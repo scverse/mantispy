@@ -11,6 +11,7 @@ from mantispy._core._reduce import get_matrix, group_codes
 from mantispy._core.frames import as_frame
 from mantispy.pl._common import axes as _axes
 from mantispy.pl._common import maybe_interactive as _maybe_interactive
+from mantispy.pl._common import returned as _returned
 from mantispy.pl._common import table as _table
 
 if TYPE_CHECKING:
@@ -20,7 +21,9 @@ if TYPE_CHECKING:
 PHASE_COLOURS = {"G1": "tab:blue", "S": "tab:grey", "G2M": "tab:red"}
 
 
-def cluster_composition(composition: AnnData, groupby: str = "Metadata_Perturbation", ax: Axes | None = None) -> Axes:
+def cluster_composition(
+    composition: AnnData, groupby: str = "Metadata_Perturbation", ax: Axes | None = None
+) -> Axes | None:
     """Stacked bars of cell-state fractions, averaged within each group.
 
     Args:
@@ -29,7 +32,8 @@ def cluster_composition(composition: AnnData, groupby: str = "Metadata_Perturbat
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
-        The axes drawn on, with one bar per group of ``groupby`` in the order the groups first appear and one stacked segment per cluster.
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
+        When returned they hold one bar per group of ``groupby`` in the order the groups first appear and one stacked segment per cluster.
 
     Raises:
         KeyError: ``obs`` has no ``groupby`` column.
@@ -61,7 +65,7 @@ def cluster_composition(composition: AnnData, groupby: str = "Metadata_Perturbat
     _maybe_interactive(
         "barh", ax=ax, data=tidy, x="fraction of cells", y="group", color="cluster", title="cluster composition"
     )
-    return ax
+    return _returned(ax)
 
 
 def cell_cycle(
@@ -70,7 +74,7 @@ def cell_cycle(
     by: str | None = "Metadata_Plate",
     key: str = "Metadata_CellCyclePhase",
     layer: str | None = None,
-) -> np.ndarray:
+) -> np.ndarray | None:
     """Log DNA intensity per group, colored by assigned phase.
 
     Two separated peaks with the phases split between them indicate a working assignment; a single broad distribution indicates a failed one.
@@ -84,7 +88,7 @@ def cell_cycle(
             Only positive values are drawn, since the plot takes their logarithm.
 
     Returns:
-        A ``(1, n_groups)`` array of axes sharing an x axis, one panel per group of ``by``, each holding one filled histogram per phase.
+        ``None``; this plot always creates its own figure, a ``(1, n_groups)`` row of panels sharing an x axis, one per group of ``by``, each holding one filled histogram per phase.
 
     Raises:
         KeyError: ``obs`` has no ``key`` column, or ``dna_feature`` is not one of ``var_names``.
@@ -112,10 +116,12 @@ def cell_cycle(
         axis.set_xlabel("log DNA intensity")
     axes[0, 0].legend(fontsize=6)
     figure.tight_layout()
-    return axes
+    return _returned(axes, owned=True)
 
 
-def subpopulation_hits(adata: AnnData, key: str = "subpopulation_hits", top: int = 30, ax: Axes | None = None) -> Axes:
+def subpopulation_hits(
+    adata: AnnData, key: str = "subpopulation_hits", top: int = 30, ax: Axes | None = None
+) -> Axes | None:
     """Cluster by group heatmap of significance, so an effect in one cell state stands out.
 
     Args:
@@ -125,7 +131,8 @@ def subpopulation_hits(adata: AnnData, key: str = "subpopulation_hits", top: int
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
-        The axes drawn on, holding ``-log10`` q per cluster and group, the drawn groups sorted by name, with a colorbar beside them.
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
+        When returned they hold ``-log10`` q per cluster and group, the drawn groups sorted by name, with a colorbar beside them.
 
     Raises:
         KeyError: ``uns["mantispy"]`` holds no table under ``key``.
@@ -155,7 +162,7 @@ def subpopulation_hits(adata: AnnData, key: str = "subpopulation_hits", top: int
         value_label="-log10 q",
         title="subpopulation hits",
     )
-    return ax
+    return _returned(ax)
 
 
 def density(
@@ -165,7 +172,7 @@ def density(
     key: str = "Metadata_LocalDensity",
     max_groups: int = 6,
     ax: Axes | None = None,
-) -> Axes:
+) -> Axes | None:
     """Local cell density against a feature, per group.
 
     Crowding alone changes morphology.
@@ -181,7 +188,8 @@ def density(
         ax: Axes to draw on.
 
     Returns:
-        The axes drawn on, with a scatter and a fitted line per group and each group's Pearson correlation between density and the feature in the legend.
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
+        When returned they hold a scatter and a fitted line per group and each group's Pearson correlation between density and the feature in the legend.
         A group with fewer than three usable points is left out.
 
     Raises:
@@ -222,4 +230,4 @@ def density(
             color=groupby,
             title=f"{feature} against density",
         )
-    return ax
+    return _returned(ax)

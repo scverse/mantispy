@@ -12,6 +12,7 @@ from mantispy._core.frames import as_frame
 from mantispy.metrics._common import embedding, r_squared
 from mantispy.pl._common import axes as _axes
 from mantispy.pl._common import maybe_interactive as _maybe_interactive
+from mantispy.pl._common import returned as _returned
 from mantispy.pl._common import table as _table
 
 if TYPE_CHECKING:
@@ -19,7 +20,7 @@ if TYPE_CHECKING:
     from matplotlib.axes import Axes
 
 
-def map(adata: AnnData, key: str = "map", label_top: int = 10, ax: Axes | None = None) -> Axes:
+def map(adata: AnnData, key: str = "map", label_top: int = 10, ax: Axes | None = None) -> Axes | None:
     """Mean average precision against significance, with the strongest groups labeled.
 
     The dashed line is the significance threshold the run used, so a point above it and to the right is a perturbation that is both strong and reproducible.
@@ -31,7 +32,8 @@ def map(adata: AnnData, key: str = "map", label_top: int = 10, ax: Axes | None =
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
-        The axes drawn on, with one point per group and the threshold drawn as a labeled reference line.
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
+        When returned they hold one point per group and the threshold drawn as a labeled reference line.
 
     Raises:
         KeyError: ``uns["mantispy"]`` holds no table under ``key``.
@@ -73,10 +75,10 @@ def map(adata: AnnData, key: str = "map", label_top: int = 10, ax: Axes | None =
         hover=[group_column],
         title="mean average precision",
     )
-    return ax
+    return _returned(ax)
 
 
-def replicate_correlation(adata: AnnData, key: str = "percent_replicating", ax: Axes | None = None) -> Axes:
+def replicate_correlation(adata: AnnData, key: str = "percent_replicating", ax: Axes | None = None) -> Axes | None:
     """Observed replicate correlation against each group's permutation threshold.
 
     Points above the diagonal replicate; the distance from it is the margin.
@@ -87,7 +89,8 @@ def replicate_correlation(adata: AnnData, key: str = "percent_replicating", ax: 
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
-        The axes drawn on, with the groups that replicate colored apart from those that do not and the diagonal drawn as a reference line.
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
+        When returned they hold the groups that replicate colored apart from those that do not and the diagonal drawn as a reference line.
 
     Raises:
         KeyError: ``uns["mantispy"]`` holds no table under ``key``.
@@ -134,7 +137,7 @@ def replicate_correlation(adata: AnnData, key: str = "percent_replicating", ax: 
         hover=[group_column],
         title="replicate correlation",
     )
-    return ax
+    return _returned(ax)
 
 
 def batch_variance(
@@ -143,7 +146,7 @@ def batch_variance(
     use_rep: str = "X_pca",
     n_comps: int | None = None,
     ax: Axes | None = None,
-) -> Axes:
+) -> Axes | None:
     """R^2 of each principal component on each covariate.
 
     A covariate with high R^2 in the leading components accounts for much of the embedding's structure.
@@ -156,7 +159,8 @@ def batch_variance(
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
-        The axes drawn on, with one line per entry of ``keys`` and the y axis fixed to ``[0, 1]``.
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
+        When returned they hold one line per entry of ``keys`` and the y axis fixed to ``[0, 1]``.
 
     Raises:
         KeyError: ``obsm`` holds nothing under ``use_rep``, or ``obs`` has no column for one of ``keys``.
@@ -190,10 +194,10 @@ def batch_variance(
             color="covariate",
             title="variance explained per component",
         )
-    return ax
+    return _returned(ax)
 
 
-def metrics(table: pd.DataFrame, ax: Axes | None = None) -> Axes:
+def metrics(table: pd.DataFrame, ax: Axes | None = None) -> Axes | None:
     """Grouped bars of an :func:`~mantispy.metrics.evaluate_correction` table.
 
     Takes the table instead of an AnnData because the table already holds every representation side by side.
@@ -204,7 +208,8 @@ def metrics(table: pd.DataFrame, ax: Axes | None = None) -> Axes:
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
-        The axes drawn on, with one group of bars per metric and one bar per representation.
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
+        When returned they hold one group of bars per metric and one bar per representation.
 
     Raises:
         ValueError: The table holds more than one value for some metric and representation, which cannot be pivoted into a grid.
@@ -236,7 +241,7 @@ def metrics(table: pd.DataFrame, ax: Axes | None = None) -> Axes:
         barmode="group",
         title="correction metrics",
     )
-    return ax
+    return _returned(ax)
 
 
 def similarity(
@@ -245,7 +250,7 @@ def similarity(
     groupby: str | None = "Metadata_Perturbation",
     max_obs: int = 500,
     ax: Axes | None = None,
-) -> Axes:
+) -> Axes | None:
     """Profile-by-profile similarity, ordered by ``groupby`` so blocks are visible.
 
     Subsamples to ``max_obs`` rows with a fixed seed when the object is larger, because the matrix is quadratic.
@@ -258,7 +263,8 @@ def similarity(
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
-        The axes drawn on, holding the ordered matrix on a diverging scale fixed to ``[-1, 1]`` with a colorbar beside it.
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
+        When returned they hold the ordered matrix on a diverging scale fixed to ``[-1, 1]`` with a colorbar beside it.
 
     Raises:
         KeyError: ``obsp`` holds nothing under ``key``.
@@ -293,4 +299,4 @@ def similarity(
         value_label="similarity",
         title=f"{key} ({order.size} profiles)",
     )
-    return ax
+    return _returned(ax)

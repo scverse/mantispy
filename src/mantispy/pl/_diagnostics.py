@@ -11,6 +11,7 @@ from mantispy._core.masks import reference_mask
 from mantispy._core.plate import well_col, well_row
 from mantispy.pl._common import axes as _axes
 from mantispy.pl._common import maybe_interactive as _maybe_interactive
+from mantispy.pl._common import returned as _returned
 from mantispy.pl._common import table as _table
 
 if TYPE_CHECKING:
@@ -27,7 +28,7 @@ def _feature_values(adata: AnnData, feature: str | None) -> np.ndarray:
         return np.nanmean(matrix, axis=1)
 
 
-def plate_effects(adata: AnnData, feature: str | None = None, axes: np.ndarray | None = None) -> np.ndarray:
+def plate_effects(adata: AnnData, feature: str | None = None, axes: np.ndarray | None = None) -> np.ndarray | None:
     """Row and column medians per plate, for spotting plate position artifacts.
 
     Args:
@@ -36,7 +37,8 @@ def plate_effects(adata: AnnData, feature: str | None = None, axes: np.ndarray |
         axes: A ``(n_plates, 2)`` array of axes to draw into, or ``None`` for a new figure.
 
     Returns:
-        The axes array, one row per plate, with the row marginal on the left and the column marginal on the right, each with the plate median drawn as a reference line.
+        The axes array when the caller passed ``axes``, else ``None`` because the plot then owns the figure it created.
+        When returned it has one row per plate, with the row marginal on the left and the column marginal on the right, each with the plate median drawn as a reference line.
 
     Raises:
         KeyError: ``feature`` is not one of ``var_names``, or ``obs`` has no ``Metadata_Plate`` or ``Metadata_Well`` column.
@@ -53,6 +55,7 @@ def plate_effects(adata: AnnData, feature: str | None = None, axes: np.ndarray |
         }
     )
     plates = sorted(frame["plate"].unique())
+    owned = axes is None
     if axes is None:
         _, axes = plt.subplots(len(plates), 2, figsize=(9, 3 * len(plates)), squeeze=False)
 
@@ -67,10 +70,10 @@ def plate_effects(adata: AnnData, feature: str | None = None, axes: np.ndarray |
             axis.set_xlabel(f"plate {axis_name}")
             axis.set_title(f"{plate} by {axis_name}", fontsize=9)
     axes[0, 0].set_ylabel(feature or "mean feature value")
-    return axes
+    return _returned(axes, owned=owned)
 
 
-def image_qc(adata: AnnData, ax: Axes | None = None) -> Axes:
+def image_qc(adata: AnnData, ax: Axes | None = None) -> Axes | None:
     """Image quality score per image, with the flagged images marked.
 
     Args:
@@ -78,7 +81,8 @@ def image_qc(adata: AnnData, ax: Axes | None = None) -> Axes:
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
-        The axes drawn on, with one point per image in the order of the table and the flagged images drawn larger and in crimson.
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
+        When returned they hold one point per image in the order of the table, the flagged images drawn larger and in crimson.
 
     Raises:
         KeyError: ``uns["mantispy"]`` holds no ``image_qc`` table.
@@ -106,7 +110,7 @@ def image_qc(adata: AnnData, ax: Axes | None = None) -> Axes:
         hover=hover or None,
         title="image quality",
     )
-    return ax
+    return _returned(ax)
 
 
 def control_drift(
@@ -114,7 +118,7 @@ def control_drift(
     groupby: str = "Metadata_Plate",
     n_components: int = 2,
     ax: Axes | None = None,
-) -> Axes:
+) -> Axes | None:
     """Control wells projected onto principal components fitted on the controls alone.
 
     Fitting on the controls alone shows how the reference moves between plates or batches, which is the drift normalization should remove.
@@ -127,7 +131,8 @@ def control_drift(
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
-        The axes drawn on, with one scatter per group of ``groupby`` in the space of the first two control components.
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
+        When returned they hold one scatter per group of ``groupby`` in the space of the first two control components.
 
     Raises:
         KeyError: ``obs`` has no ``Metadata_Control`` column to select the controls with, or no ``groupby`` column.
@@ -158,12 +163,12 @@ def control_drift(
     _maybe_interactive(
         "scatter", ax=ax, data=tidy, x="control PC1", y="control PC2", color=groupby, title="control drift"
     )
-    return ax
+    return _returned(ax)
 
 
 def outliers(
     adata: AnnData, key: str = "qc_outlier", groupby: str = "Metadata_Plate", axes: np.ndarray | None = None
-) -> np.ndarray:
+) -> np.ndarray | None:
     """Outlier score distribution, and the flagged fraction per ``groupby`` group.
 
     Args:
@@ -173,7 +178,8 @@ def outliers(
         axes: A pair of axes to draw into, or ``None`` for a new figure.
 
     Returns:
-        The two axes: the score histogram split into kept and flagged, and the flagged fraction per group.
+        The two axes when the caller passed ``axes``, else ``None`` because the plot then owns the figure it created.
+        When returned they are the score histogram split into kept and flagged, and the flagged fraction per group.
 
     Raises:
         KeyError: ``obs`` has no ``key`` column.
@@ -182,6 +188,7 @@ def outliers(
 
     if key not in adata.obs:
         raise KeyError(f"obs has no {key!r}; run mt.pp.outliers first")
+    owned = axes is None
     if axes is None:
         _, axes = plt.subplots(1, 2, figsize=(9, 3.5), layout="constrained")
 
@@ -198,4 +205,4 @@ def outliers(
     axes[1].set_xticklabels([str(name) for name in per_group.index], rotation=45, fontsize=7)
     axes[1].set_xlabel(groupby)
     axes[1].set_ylabel("fraction flagged")
-    return axes
+    return _returned(axes, owned=owned)

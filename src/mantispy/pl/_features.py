@@ -13,6 +13,7 @@ from mantispy._core.frames import as_frame
 from mantispy._core.masks import feature_mask
 from mantispy.pl._common import axes as _axes
 from mantispy.pl._common import maybe_interactive as _maybe_interactive
+from mantispy.pl._common import returned as _returned
 
 if TYPE_CHECKING:
     from anndata import AnnData
@@ -25,7 +26,7 @@ def feature_correlation(
     groupby: str = "feature_group",
     max_features: int = 300,
     ax: Axes | None = None,
-) -> Axes:
+) -> Axes | None:
     """Correlation heatmap with features ordered by their annotation.
 
     Features are sorted by ``groupby`` and then by channel, with a line at each group boundary.
@@ -41,7 +42,8 @@ def feature_correlation(
         ax: Axes to draw into.
 
     Returns:
-        The axes drawn on, holding the correlation matrix on a diverging scale fixed to ``[-1, 1]``, with a line at each group boundary and one tick per group.
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
+        When returned they hold the correlation matrix on a diverging scale fixed to ``[-1, 1]``, with a line at each group boundary and one tick per group.
 
     Raises:
         KeyError: ``var`` has no ``groupby`` column, or no ``channel`` column.
@@ -82,10 +84,10 @@ def feature_correlation(
         value_label="correlation",
         title=f"feature correlation ({len(order)} features)",
     )
-    return ax
+    return _returned(ax)
 
 
-def feature_groups(adata: AnnData, key: str | None = None, ax: Axes | None = None) -> Axes:
+def feature_groups(adata: AnnData, key: str | None = None, ax: Axes | None = None) -> Axes | None:
     """How many features each group contributes, split by channel.
 
     Pass ``key="selected"`` after feature selection to see which families survived.
@@ -97,7 +99,8 @@ def feature_groups(adata: AnnData, key: str | None = None, ax: Axes | None = Non
         ax: Axes to draw into.
 
     Returns:
-        The axes drawn on, with one stacked bar per feature group and one segment per channel.
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
+        When returned they hold one stacked bar per feature group and one segment per channel.
 
     Raises:
         KeyError: ``var`` has no ``feature_group`` column, or no ``channel`` column.
@@ -126,4 +129,4 @@ def feature_groups(adata: AnnData, key: str | None = None, ax: Axes | None = Non
     _maybe_interactive(
         "barh", ax=ax, data=tidy, x="features", y="feature_group", color="channel", title="feature groups"
     )
-    return ax
+    return _returned(ax)

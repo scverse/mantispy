@@ -10,6 +10,7 @@ import pandas as pd
 from mantispy._core.frames import as_frame
 from mantispy.pl._common import axes as _axes
 from mantispy.pl._common import maybe_interactive as _maybe_interactive
+from mantispy.pl._common import returned as _returned
 from mantispy.pl._common import table as _table
 from mantispy.tl._dose import DOSE_PHASES
 
@@ -58,7 +59,7 @@ def _recorded_response(adata: AnnData, function: str, default: str) -> str:
     return str(recorded.get("response", default))
 
 
-def hits(adata: AnnData, key: str = "hits", label_top: int = 10, ax: Axes | None = None) -> Axes:
+def hits(adata: AnnData, key: str = "hits", label_top: int = 10, ax: Axes | None = None) -> Axes | None:
     """Distance from the controls against significance, with the most distant groups labeled.
 
     A point in the upper right moved far from the controls and is significant under the permutation null.
@@ -71,7 +72,7 @@ def hits(adata: AnnData, key: str = "hits", label_top: int = 10, ax: Axes | None
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
-        The axes drawn on.
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
 
     Raises:
         KeyError: ``uns["mantispy"]`` holds no table under ``key``.
@@ -113,7 +114,7 @@ def hits(adata: AnnData, key: str = "hits", label_top: int = 10, ax: Axes | None
         hover=["group"],
         title="hits",
     )
-    return ax
+    return _returned(ax)
 
 
 def _rows_for(table: pd.DataFrame, column: str, value: str, key: str) -> pd.DataFrame:
@@ -143,7 +144,7 @@ def _family_colours(families: pd.Series | None, names: pd.Series) -> tuple[list[
     return [palette[label] for label in labels], palette
 
 
-def effect_sizes(adata: AnnData, group: str, key: str = "effect", top: int = 30, ax: Axes | None = None) -> Axes:
+def effect_sizes(adata: AnnData, group: str, key: str = "effect", top: int = 30, ax: Axes | None = None) -> Axes | None:
     """The largest effects for one group, colored by feature family.
 
     Args:
@@ -154,7 +155,7 @@ def effect_sizes(adata: AnnData, group: str, key: str = "effect", top: int = 30,
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
-        The axes drawn on.
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
 
     Raises:
         KeyError: There is no such table, or it holds no such group.
@@ -197,12 +198,12 @@ def effect_sizes(adata: AnnData, group: str, key: str = "effect", top: int = 30,
         color="family" if family_of is not None else None,
         title=str(group),
     )
-    return ax
+    return _returned(ax)
 
 
 def feature_volcano(
     adata: AnnData, group: str, key: str = "effect", label_top: int = 8, ax: Axes | None = None
-) -> Axes:
+) -> Axes | None:
     """Effect against significance, per feature, for one group.
 
     The dashed line is q = 0.05, and the counts beside it say how many features sit on either side.
@@ -215,7 +216,7 @@ def feature_volcano(
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
-        The axes drawn on.
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
 
     Raises:
         KeyError: There is no such table, or it holds no such group.
@@ -267,7 +268,7 @@ def feature_volcano(
         hover=["feature"],
         title=str(group),
     )
-    return ax
+    return _returned(ax)
 
 
 def dose_response(
@@ -278,7 +279,7 @@ def dose_response(
     dose_key: str = "Metadata_Concentration",
     response: str | None = None,
     ax: Axes | None = None,
-) -> Axes:
+) -> Axes | None:
     """One compound's response against dose, with the fitted curve when there is one.
 
     Args:
@@ -292,7 +293,8 @@ def dose_response(
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
-        The axes drawn on, with a log ``y`` scale where every drawn response is positive, since a distance from the controls has a long right tail and one stray well would otherwise flatten the rest onto the baseline.
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
+        When returned they carry a log ``y`` scale where every drawn response is positive, since a distance from the controls has a long right tail and one stray well would otherwise flatten the rest onto the baseline.
         The scale is decided per axes, so panels drawn side by side can differ; set it on the returned axes to compare them.
 
     Raises:
@@ -339,7 +341,7 @@ def dose_response(
     tidy = pd.DataFrame({dose_label: doses[usable], response: values[usable]})
     if usable.any():
         _maybe_interactive("scatter", ax=ax, data=tidy, x=dose_label, y=response, title=str(compound))
-    return ax
+    return _returned(ax)
 
 
 #: Grey where nothing happens, warm where it does, green where it has arrived, red where the cells are gone.
@@ -351,7 +353,7 @@ def dose_direction(
     compound: str,
     key: str = "dose_direction",
     ax: Axes | None = None,
-) -> Axes:
+) -> Axes | None:
     """One compound's ladder, with the background banded by what each concentration is doing.
 
     The solid line is how far the profile sits from the controls, and the dashed line is how far it moved from the concentration below it.
@@ -365,7 +367,7 @@ def dose_direction(
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
-        The axes drawn on.
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
 
     Raises:
         KeyError: There is no such table, or it holds no such compound.
@@ -430,4 +432,4 @@ def dose_direction(
     _maybe_interactive(
         "line", ax=ax, data=tidy, x="concentration", y="MADs per feature", color="series", title=str(compound)
     )
-    return ax
+    return _returned(ax)

@@ -62,10 +62,13 @@ def test_gene_sets_rejects_an_unknown_source():
 
 def test_the_coherence_plot_draws_and_refuses_an_empty_table(screen, net):
     import matplotlib
+    import matplotlib.pyplot as plt
 
     matplotlib.use("Agg")
     mt.tl.pathway_coherence(screen, net, min_genes=3, n_permutations=50)
-    assert isinstance(mt.pl.pathway_coherence(screen), matplotlib.axes.Axes)
+    _, ax = plt.subplots()
+    assert isinstance(mt.pl.pathway_coherence(screen, ax=ax), matplotlib.axes.Axes)
+    plt.close(ax.figure)
 
     screen.uns["mantispy"]["pathway_coherence"] = screen.uns["mantispy"]["pathway_coherence"].iloc[:0]
     with pytest.raises(ValueError, match="is empty"):
