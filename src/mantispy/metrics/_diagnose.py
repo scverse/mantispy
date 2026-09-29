@@ -223,17 +223,24 @@ def _diagnose_cell(
                 ),
             }
         )
+        # Pseudoreplication is present when the cell-shuffle count exceeds both the well-block rate and the
+        # chance cutoff; a clean screen where cells are roughly exchangeable keeps the two rates in line.
+        inflated = cell_shuffle > well_block and cell_shuffle > critical
         rows.append(
             {
                 "check": f"{name} cell-shuffle null rate",
                 "value": f"{cell_shuffle} of {n_draws}",
-                "expected": f"> {critical} (inflated)",
-                "verdict": _verdict(False, warn=True),
+                "expected": f"<= {well_block} (well-block)",
+                "verdict": _verdict(not inflated, warn=inflated and cell_shuffle <= critical + 1),
                 "note": (
-                    f"the naive null that permutes single cells instead of whole wells, called in {cell_shuffle} of "
-                    f"{n_draws} draws. Cells within a well share the well and are not independent replicates, so "
-                    "this rate is expected to be inflated above the well-block rate; it is shown to make the "
-                    "pseudoreplication visible, not to pass or fail."
+                    f"the same {name} null permuting single cells instead of whole wells, called in {cell_shuffle} "
+                    f"of {n_draws} draws. Cells within a well are not independent replicates, so a rate above both "
+                    f"the well-block rate of {well_block} and the chance cutoff of {critical} is pseudoreplication"
+                    + (
+                        "; it is inflated here, so cells are not exchangeable on this screen."
+                        if inflated
+                        else "; it is in line with the well-block rate here, so cells are roughly exchangeable."
+                    )
                 ),
             }
         )
@@ -286,8 +293,8 @@ def diagnose_testing(
             This is the rate to trust.
         ``hit_calling cell-shuffle null rate`` / ``edistance cell-shuffle null rate``
             The same caller with the null permuting single cells instead of whole wells.
-            Cells within a well share the well, so this shrinks the null spread by the cell count rather than the well count and is expected to be inflated above the well-block rate.
-            It is diagnostic, shown to make the pseudoreplication visible rather than to pass or fail.
+            Cells within a well share the well, so this shrinks the null spread by the cell count rather than the well count and runs above the well-block rate when cells are not exchangeable.
+            The verdict compares the two: it fails when the cell-shuffle count exceeds both the well-block rate and the chance cutoff, the signature of pseudoreplication, and passes when the two rates agree.
 
         At well resolution the checks and what each one detects:
 
