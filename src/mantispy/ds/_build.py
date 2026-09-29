@@ -217,6 +217,77 @@ def _shipped_bbbc021() -> dict[str, AnnData]:
     }
 
 
+def _assemble_neuropainting(cache_dir: str | Path | None = None) -> AnnData:
+    """Astrocyte and neuron wells read down to the features the six plates share.
+
+    The raw pipeline the both-flags-absent :func:`mt.ds.neuropainting` used before the base was staged; it lives
+    here so the drift check can rebuild the hosted base from the raw per-plate tables.
+    """
+    from mantispy.ds._datasets import _profiles
+
+    return _profiles("neuropainting", cache_dir, select=lambda name: not name.endswith(".h5ad"))
+
+
+def build_neuropainting(cache_dir: str | Path | None = None) -> dict[str, AnnData]:
+    """Returns {'neuropainting.h5ad': the wells the loader used to assemble}."""
+    return {"neuropainting.h5ad": _stable(_assemble_neuropainting(cache_dir))}
+
+
+def _shipped_neuropainting() -> dict[str, AnnData]:
+    """The neuropainting base as fetched through the public ``mt.ds.neuropainting`` API."""
+    from mantispy.ds._datasets import neuropainting
+
+    return {"neuropainting.h5ad": neuropainting()}
+
+
+def _assemble_chroma(cache_dir: str | Path | None = None) -> AnnData:
+    """Assemble the chroma base: the extra-channel wells with their compound, concentration, MOA and control.
+
+    The raw pipeline the loader used before the base was staged; it lives here so the drift check can rebuild
+    the hosted base from the raw per-plate tables.
+    """
+    import numpy as np
+    import pandas as pd
+
+    from mantispy._core.frames import as_frame
+    from mantispy._core.logging import get_logger
+    from mantispy.ds._datasets import _profiles
+
+    adata = _profiles("chroma", cache_dir, select=lambda name: not name.endswith(".h5ad"))
+    obs = as_frame(adata.obs)
+    control = (obs["Metadata_control_type"].astype(str) == "negcon").to_numpy()
+    obs["Metadata_Control"] = control
+    name = obs["Metadata_Common Name"].astype(str).to_numpy()
+    dose = pd.to_numeric(obs["Metadata_mmoles_per_liter"], errors="coerce").to_numpy(dtype=float)
+    compound = np.where(control, "DMSO", name)
+    obs["Metadata_Compound"] = pd.Categorical(compound)
+    obs["Metadata_Concentration"] = dose
+    obs["Metadata_MOA"] = obs["Metadata_MoA"].astype("category")
+    label = np.where(control, "DMSO", np.char.add(np.char.add(compound.astype(str), "@"), dose.astype(str)))
+    obs["Metadata_Perturbation"] = pd.Categorical(label)
+    obs["Metadata_Perturbation_Type"] = pd.Series("compound", index=obs.index, dtype="category")
+    get_logger().info(
+        "chroma: %d wells x %d features, %d compounds, %d control wells",
+        adata.n_obs,
+        adata.n_vars,
+        int(pd.Series(name[~control]).nunique()),
+        int(control.sum()),
+    )
+    return adata
+
+
+def build_chroma(cache_dir: str | Path | None = None) -> dict[str, AnnData]:
+    """Returns {'chroma.h5ad': the wells the loader used to assemble}."""
+    return {"chroma.h5ad": _stable(_assemble_chroma(cache_dir))}
+
+
+def _shipped_chroma() -> dict[str, AnnData]:
+    """The chroma base as fetched through the public ``mt.ds.chroma`` API."""
+    from mantispy.ds._datasets import chroma
+
+    return {"chroma.h5ad": chroma()}
+
+
 # One entry per staged dataset: (builder rebuilding the variants from the raw pipeline, loader returning the
 # shipped variants through the public ``mt.ds`` API keyed by the same filenames, ``heavy`` marking a rebuild
 # too large to run on every pull request). Later PRs stage a dataset by adding one entry here; the build and
@@ -226,4 +297,6 @@ STAGED: dict[str, tuple[Callable[..., dict[str, AnnData]], Callable[[], dict[str
     "rohban": (build_rohban_variants, _shipped_rohban, False),
     "rohban_base": (build_rohban_base, _shipped_rohban_base, False),
     "bbbc021": (build_bbbc021_variants, _shipped_bbbc021, True),
+    "neuropainting": (build_neuropainting, _shipped_neuropainting, False),
+    "chroma": (build_chroma, _shipped_chroma, False),
 }

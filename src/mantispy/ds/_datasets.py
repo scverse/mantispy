@@ -406,40 +406,43 @@ def pooled_rare(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
     return adata
 
 
-def neuropainting(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
+def neuropainting(cache_dir: str | Path | None = None) -> AnnData:
     """Astrocytes and neurons, 1,691 wells imaged at 20x and 63x.
 
     ``cpg0038-tegtmeyer-neuropainting``.
     One plate barcode appears in more than one batch, so the observations are not indexed by plate and well.
 
+    The base is pre-built by ``scripts/build_staged_datasets.py`` from the six raw plate tables and rehosted on ``scverse-exampledata``, so the loader fetches a single h5ad rather than reassembling it on every call.
+
     Args:
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
-        kwargs: Passed to :func:`mantispy.io.read_profiles`.
 
     Returns:
-        Wells by features, with ``Metadata_CellCount`` and ``Metadata_SiteCount``.
+        Wells by features at well resolution, with ``Metadata_CellCount`` and ``Metadata_SiteCount``, read with :func:`mantispy.io.read`.
 
     Notes:
         No ``Metadata_Perturbation`` is set. This is a genotype-and-donor comparison (a control-versus-deletion contrast over patient and isogenic lines) rather than a reagent perturbation screen, and its genotype and line columns differ between plates, so the per-plate column intersect keeps none of them. Group with an explicit ``groupby=`` on the column the analysis needs.
     """
-    return _profiles("neuropainting", cache_dir, **kwargs)
+    (path,) = _files("neuropainting", cache_dir, select=lambda name: name == "neuropainting.h5ad")
+    return read(path)
 
 
-def chroma(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
+def chroma(cache_dir: str | Path | None = None) -> AnnData:
     """Alternative dyes, 3,455 wells across eight channels.
 
     ``cpg0029-chroma-pilot``, which images more channels than the five of the standard protocol.
     One plate barcode appears at several timepoints, so the observations are not indexed by plate and well.
     The plates hold a set of 91 compounds with known mechanisms; the point of the dataset is the extra dye channels rather than the compounds.
 
+    The base is pre-built by ``scripts/build_staged_datasets.py`` from the raw per-plate tables and rehosted on ``scverse-exampledata``, so the loader fetches a single h5ad rather than reassembling it on every call.
+
     Args:
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
-        kwargs: Passed to :func:`mantispy.io.read_profiles`.
 
     Returns:
-        Wells by features, with ``Metadata_CellCount`` and ``Metadata_SiteCount`` and:
+        Wells by features at well resolution, with ``Metadata_CellCount`` and ``Metadata_SiteCount`` and, read with :func:`mantispy.io.read`:
 
         ``Metadata_Perturbation``: the compound at its concentration (``"<name>@<mmoles_per_liter>"``), with the ``negcon`` wells grouped as ``"DMSO"``.
 
@@ -447,27 +450,8 @@ def chroma(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
 
         ``Metadata_Compound`` (the compound's common name), ``Metadata_Concentration`` (the platemap's ``mmoles_per_liter``), ``Metadata_MOA`` (the mechanism) and ``Metadata_Control`` (the ``negcon`` wells).
     """
-    adata = _profiles("chroma", cache_dir, **kwargs)
-    obs = as_frame(adata.obs)
-    control = (obs["Metadata_control_type"].astype(str) == "negcon").to_numpy()
-    obs["Metadata_Control"] = control
-    name = obs["Metadata_Common Name"].astype(str).to_numpy()
-    dose = pd.to_numeric(obs["Metadata_mmoles_per_liter"], errors="coerce").to_numpy(dtype=float)
-    compound = np.where(control, "DMSO", name)
-    obs["Metadata_Compound"] = pd.Categorical(compound)
-    obs["Metadata_Concentration"] = dose
-    obs["Metadata_MOA"] = obs["Metadata_MoA"].astype("category")
-    label = np.where(control, "DMSO", np.char.add(np.char.add(compound.astype(str), "@"), dose.astype(str)))
-    obs["Metadata_Perturbation"] = pd.Categorical(label)
-    obs["Metadata_Perturbation_Type"] = pd.Series("compound", index=obs.index, dtype="category")
-    get_logger().info(
-        "chroma: %d wells x %d features, %d compounds, %d control wells",
-        adata.n_obs,
-        adata.n_vars,
-        int(pd.Series(name[~control]).nunique()),
-        int(control.sum()),
-    )
-    return adata
+    (path,) = _files("chroma", cache_dir, select=lambda name: name == "chroma.h5ad")
+    return read(path)
 
 
 #: The spellings the four OASIS batches use for each column mantispy reads, since no two of them agree.

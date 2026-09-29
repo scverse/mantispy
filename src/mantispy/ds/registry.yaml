@@ -2002,6 +2002,11 @@ datasets:
     - name: NCP_NEURONS_2_63x__BR00132673__BR00132673_normalized_feature_select_batch.csv.gz
       s3_key: cpg0038-tegtmeyer-neuropainting/broad/workspace/profiles/NCP_NEURONS_2_63x/BR00132673/BR00132673_normalized_feature_select_batch.csv.gz
       sha256: 41cee30b1c7386b27d157f5c23dc9ee22afcc6e24cbf5395c2f04289dfb858ef
+    # Staged base rehosted on scverse-exampledata (explicit url overrides base_url, so the raw plate tables
+    # above stay on cellpainting-gallery). Regenerate with scripts/build_staged_datasets.py.
+    - name: neuropainting.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/neuropainting/neuropainting.h5ad
+      sha256: 897f8b6f6c237dd132da9bdf5be57bdd30f7679cd0cafae5b23067b887bba893
 
   chroma:
     type: mantispy
@@ -2038,6 +2043,11 @@ datasets:
     - name: 2024_02_02_Batch8__BR00122249_4h__BR00122249_4h_normalized_feature_select_negcon_batch.csv.gz
       s3_key: cpg0029-chroma-pilot/broad/workspace/profiles/2024_02_02_Batch8/BR00122249_4h/BR00122249_4h_normalized_feature_select_negcon_batch.csv.gz
       sha256: f6c4b24b702070b1fb434b4a4482eb1be6041c50060de3b16a3582d2713ab474
+    # Staged base rehosted on scverse-exampledata (explicit url overrides base_url, so the raw plate tables
+    # above stay on cellpainting-gallery). Regenerate with scripts/build_staged_datasets.py.
+    - name: chroma.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/chroma/chroma.h5ad
+      sha256: e747864a9f099ec2594a147e29844cd9e3103606b2d0181a3b2b04b18f1437b3
 
   oasis_pilot:
     type: mantispy
