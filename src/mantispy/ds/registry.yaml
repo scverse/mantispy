@@ -1939,6 +1939,14 @@ datasets:
     - name: 2023_06_05_24W_RD3_poscon__2023_06_05_24W_RD3_poscon_gene_normalized_ALLBATCHES___ALLPLATES___ALLWELLS.csv.gz
       s3_key: cpg0032-pooled-rare/broad/workspace/profiles/2023_06_05_24W_RD3_poscon/2023_06_05_24W_RD3_poscon_gene_normalized_ALLBATCHES___ALLPLATES___ALLWELLS.csv.gz
       sha256: 93d1f3dec58676b266fece87d950945cdc31da91e22b8c8101218091198d6eab
+    # Staged variants rehosted on scverse-exampledata (explicit url overrides base_url, so the raw table above
+    # stays on cellpainting-gallery). Regenerate with scripts/build_staged_datasets.py.
+    - name: pooled_rare.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/pooled_rare/pooled_rare.h5ad
+      sha256: abacc60b3e9d011bc079c02857bc5a4c8c3d2c6bed0e54e04224a325483f9d02
+    - name: pooled_rare_selected.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/pooled_rare/pooled_rare_selected.h5ad
+      sha256: b197f748c123ff3b9d1c0ae589f809519b1e72db41ca912a87a1b9180f6b3eb9
 
   rohban:
     type: mantispy
@@ -2002,6 +2010,11 @@ datasets:
     - name: NCP_NEURONS_2_63x__BR00132673__BR00132673_normalized_feature_select_batch.csv.gz
       s3_key: cpg0038-tegtmeyer-neuropainting/broad/workspace/profiles/NCP_NEURONS_2_63x/BR00132673/BR00132673_normalized_feature_select_batch.csv.gz
       sha256: 41cee30b1c7386b27d157f5c23dc9ee22afcc6e24cbf5395c2f04289dfb858ef
+    # Staged base rehosted on scverse-exampledata (explicit url overrides base_url, so the raw plate tables
+    # above stay on cellpainting-gallery). Regenerate with scripts/build_staged_datasets.py.
+    - name: neuropainting.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/neuropainting/neuropainting.h5ad
+      sha256: 897f8b6f6c237dd132da9bdf5be57bdd30f7679cd0cafae5b23067b887bba893
 
   chroma:
     type: mantispy
@@ -2038,6 +2051,11 @@ datasets:
     - name: 2024_02_02_Batch8__BR00122249_4h__BR00122249_4h_normalized_feature_select_negcon_batch.csv.gz
       s3_key: cpg0029-chroma-pilot/broad/workspace/profiles/2024_02_02_Batch8/BR00122249_4h/BR00122249_4h_normalized_feature_select_negcon_batch.csv.gz
       sha256: f6c4b24b702070b1fb434b4a4482eb1be6041c50060de3b16a3582d2713ab474
+    # Staged base rehosted on scverse-exampledata (explicit url overrides base_url, so the raw plate tables
+    # above stay on cellpainting-gallery). Regenerate with scripts/build_staged_datasets.py.
+    - name: chroma.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/chroma/chroma.h5ad
+      sha256: e747864a9f099ec2594a147e29844cd9e3103606b2d0181a3b2b04b18f1437b3
 
   oasis_pilot:
     type: mantispy
@@ -2121,6 +2139,14 @@ datasets:
     - name: 2025_07_29_OASIS_HepaRG_Ptx_AD2__BR00147879__platemap.txt
       s3_key: cpg0033-oasis-pilot/broad/workspace/metadata/2025_07_29_OASIS_HepaRG_Ptx_AD2/platemap/BR00147879.txt
       sha256: eda00ee6e9d50e91a935ae5d505c9dc751ac0a81cb46968ccd22147b138acbac
+    # Staged variants rehosted on scverse-exampledata (explicit url overrides base_url, so the raw profile and
+    # plate-map tables above stay on cellpainting-gallery). Regenerate with scripts/build_staged_datasets.py.
+    - name: oasis_pilot.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/oasis_pilot/oasis_pilot.h5ad
+      sha256: dd77fc202ea43a3223fdcb572bebdbae209946b62d30f34d44de90c9088b8363
+    - name: oasis_pilot_agg.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/oasis_pilot/oasis_pilot_agg.h5ad
+      sha256: 228f89aa4098b071a40b7c14c2d90f99c7b930f98a2bd6b3f469b50dce318e58
 
   pki:
     type: mantispy
@@ -2152,6 +2178,20 @@ datasets:
     - name: 2021_04_07_Batch1__BR00122978__BR00122978_augmented.csv.gz
       s3_key: cpg0008-pki/broad/workspace/profiles/2021_04_07_Batch1/BR00122978/BR00122978_augmented.csv.gz
       sha256: dc59da85d6b83c7388e633c3daf2e3ff407ceccea691b0143b986a3574fd0b79
+    # Staged variants rehosted on scverse-exampledata (explicit url overrides base_url, so the raw plate tables
+    # above stay on cellpainting-gallery). Regenerate with scripts/build_staged_datasets.py.
+    - name: pki.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/pki/pki.h5ad
+      sha256: db6da1569ad7eab9f868d4d48d18f79e0c1ac75bcd84c40a05a09ae5f8fd6973
+    - name: pki_selected.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/pki/pki_selected.h5ad
+      sha256: e7d3fcc90fc10d29293f98eaf772c3cbb353202f0a09889643fb969e17518db6
+    - name: pki_agg.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/pki/pki_agg.h5ad
+      sha256: adce802c942ea46457733a0f96ac2807d13619ba7005fdb98b24991a44f1e2cb
+    - name: pki_agg_selected.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/pki/pki_agg_selected.h5ad
+      sha256: acee0765ffc1f9487d57d30c1aec0fb9dcba6b45217b589fe9380223daf5a1eb
 
   jump_crispr:
     type: mantispy
@@ -2164,6 +2204,14 @@ datasets:
     - name: profiles_wellpos_cc_var_mad_outlier_featselect.parquet
       s3_key: cpg0016-jump-assembled/source_all/workspace/profiles_assembled/CRISPR/v1.0a/profiles_wellpos_cc_var_mad_outlier_featselect.parquet
       sha256: 2f52c600db35d9cc23645d6d94685ceb0df986c23d48c81499bf5f76df7b43b2
+    # Staged variants rehosted on scverse-exampledata (explicit url overrides base_url, so the raw profile
+    # parquet above stays on cellpainting-gallery). Regenerate with scripts/build_staged_datasets.py.
+    - name: jump_crispr.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/jump_crispr/jump_crispr.h5ad
+      sha256: e5b3101740d9bf6f5ed29e52c5689e4fa6352edacc6df76c7d099c72ef8a169b
+    - name: jump_crispr_agg.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/jump_crispr/jump_crispr_agg.h5ad
+      sha256: 5b2ec01a0151c256f7b05298a91cd2fc538685e299d374a94c8a15f076eea52e
 
   jump_lite:
     type: mantispy
@@ -2198,6 +2246,27 @@ datasets:
     - name: refchem_annotations.parquet
       s3_key: cpg0016-jump/source_all/workspace/publication_data/2026_jump_lite/metadata/v1.0/jump_lite_refchem_annotations.parquet
       sha256: 5a766a222907e1b3805f84cc2eccad0e5cd2f3eaac1add4983689853601db960
+    # Staged per-model objects (the annotated wells of each feature set) rehosted on scverse-exampledata
+    # (explicit url overrides base_url, so the raw feature parquets above stay on cellpainting-gallery). The
+    # annotate=False path still reads those raw parquets. Regenerate with scripts/build_staged_datasets.py.
+    - name: jump_lite_openphenom.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/jump_lite/jump_lite_openphenom.h5ad
+      sha256: 1652bcba78f74ef309f4359cd1b48492d5a63414a10f7891eb27e2d8a614bcfb
+    - name: jump_lite_dinov2.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/jump_lite/jump_lite_dinov2.h5ad
+      sha256: 9aaff8af2b69e4ad517c346255a460a358ef5c04a4bab5aa50220cdb9b8da508
+    - name: jump_lite_dinov2_random.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/jump_lite/jump_lite_dinov2_random.h5ad
+      sha256: 47bb156833c165fd8413dde1bf6bd3f6af04d3003d7b3c1c468e0c23b2425d91
+    - name: jump_lite_subcell.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/jump_lite/jump_lite_subcell.h5ad
+      sha256: 6cc6485a5033824c96b87bd72b308941e1cf897b4106821aa5ce7fa0ec6bba9c
+    - name: jump_lite_morphem.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/jump_lite/jump_lite_morphem.h5ad
+      sha256: fccc073e32936ecd9620785a3fdedb194be1f96115481048ed7883e974989de1
+    - name: jump_lite_cp_measure.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/jump_lite/jump_lite_cp_measure.h5ad
+      sha256: 63380e08eed3820850d9c6c423095eecfe2869f5c6e0a2961bcd499412eef843
 
   jump_target2:
     type: mantispy
@@ -3051,6 +3120,12 @@ datasets:
     - name: 20221120_Run6__CP-CC9-R7-29__CP-CC9-R7-29.csv
       s3_key: cpg0016-jump/source_13/workspace/backend/20221120_Run6/CP-CC9-R7-29/CP-CC9-R7-29.csv
       sha256: 89ff2d98a188afa49bfbc681975e38330e7f3e1f95e5e5b97e1f923374497f85
+    # Staged default object (the eleven-plate default selection, annotated) rehosted on scverse-exampledata
+    # (explicit url overrides base_url, so the raw per-plate tables above stay on cellpainting-gallery). A
+    # non-default plate selection still reads those raw tables. Regenerate with scripts/build_staged_datasets.py.
+    - name: jump_target2.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/jump_target2/jump_target2.h5ad
+      sha256: 3d9ddd26541f50685b2c5b515f63efbc479f4e4081e8f984998334605f035d8c
 
   jump_cells:
     type: mantispy
@@ -4502,6 +4577,17 @@ datasets:
     - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O11-4/Nuclei.csv
       s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O11-4/Nuclei.csv
       sha256: 6d1bc0acb3b4d21cde0649e18eaf4eaf9357bd9e98de230b51de4e0335b6e22f
+    # Staged variants rehosted on scverse-exampledata (explicit url overrides base_url, so the raw CellProfiler
+    # tables above stay on cellpainting-gallery). Regenerate with scripts/build_staged_datasets.py.
+    - name: jump_cells.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/jump_cells/jump_cells.h5ad
+      sha256: c0d97cac8be979c0752e2ec8399ad30522e6d91fc2b0857276736c9d5e186520
+    - name: jump_cells_selected.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/jump_cells/jump_cells_selected.h5ad
+      sha256: 6603051f11da05d0517a620f76b2e9ac99dd777da5e1d44082e65c187ef2e9b5
+    - name: jump_cells_agg.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/jump_cells/jump_cells_agg.h5ad
+      sha256: 8f5143e1c72b753d836c46d6beaaed9bc9f749150886d9740fdac0990f64b836
 
   jump_plate:
     type: mantispy
@@ -4625,6 +4711,13 @@ datasets:
     - name: dataframe_fig3_clean.pq
       url: https://github.com/Genentech/scallops-manuscript/raw/main/Figure3/Data/dataframe_fig3_clean.pq
       sha256: e3988e2d8e1be1899b6e7136896e61d8a20ffedf2f2283d7fc15355c4a7068e7
+    # Staged variants rehosted on scverse-exampledata. Regenerate with scripts/build_staged_datasets.py.
+    - name: scallops_arv471.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/scallops_arv471/scallops_arv471.h5ad
+      sha256: d1f3e50e97b29787b31b3a18e2071e39acec12935968cd39c843a97c5e52965c
+    - name: scallops_arv471_agg.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/scallops_arv471/scallops_arv471_agg.h5ad
+      sha256: c99d2cd3a37921ca472bb329da63d95540d620fb90b434b4f04d51159d2205c3
 
   cp_posh:
     type: mantispy
@@ -4635,3 +4728,16 @@ datasets:
     - name: cp_posh_124gene_poc_well_normalized.pq
       url: https://insitro-research-2023-cellpaint-posh.s3.amazonaws.com/Supp%20Data%202%20-%20124-Gene%20PoC%20Dataset%20(well-normalized).pq
       sha256: 4730d28ac5fc5d4245855523a644c79c7299e30df046c0e342197391a036e760
+    # Staged variants rehosted on scverse-exampledata. Regenerate with scripts/build_staged_datasets.py.
+    - name: cp_posh.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/cp_posh/cp_posh.h5ad
+      sha256: 7b9c41861ef80c97476cf9c099ec899bf8d5a71e85f8b2bdecb88ed180513712
+    - name: cp_posh_selected.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/cp_posh/cp_posh_selected.h5ad
+      sha256: e74a4fbc9945f353d331462452f2e4f1e33fde9a5f92c9856b6fd24fd072a76d
+    - name: cp_posh_agg.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/cp_posh/cp_posh_agg.h5ad
+      sha256: 49ad57eb11a1a7f3d204dcfceae5c3f6bf8f2e99d837894e8512d4e42e31cc17
+    - name: cp_posh_agg_selected.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/cp_posh/cp_posh_agg_selected.h5ad
+      sha256: 5913832c31b19d934aebf3e21744f09ce04a05b0ccec7273e6e675c3ac470b3a

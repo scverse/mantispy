@@ -22,7 +22,6 @@ from mantispy._core.schema import SCHEMA_VERSION, stamp
 from mantispy._settings import settings
 from mantispy.io._jump import join_jump_annotation, read_jump
 from mantispy.io._profiles import _UPSTREAM_COUNTS, _adopt_counts, from_dataframe, read, read_profiles, write
-from mantispy.pp._select import subset_features
 
 if TYPE_CHECKING:
     from anndata import AnnData
@@ -108,6 +107,19 @@ def _profiles(
     return adata
 
 
+def _require_bools(**flags: object) -> None:
+    """Raise ``ValueError`` naming the first flag that is not a bool."""
+    for flag_name, flag in flags.items():
+        if not isinstance(flag, bool):
+            raise ValueError(f"{flag_name} must be a bool, got {type(flag).__name__}")
+
+
+def _fetch_variant(name: str, filename: str, cache_dir: str | Path | None) -> AnnData:
+    """Read the single rehosted ``filename`` variant of dataset ``name``."""
+    (path,) = _files(name, cache_dir, select=lambda file_name: file_name == filename)
+    return read(path)
+
+
 #: The (aggregated, feature_selected) combination each rehosted bbbc021 variant answers to.
 _BBBC021_VARIANTS = {
     (False, False): "bbbc021.h5ad",  # 632 x 467, well level, all features
@@ -153,12 +165,8 @@ def bbbc021(
         :cite:t:`Ljosa_2013`, these profiles and the benchmark.
         Images courtesy of Peter Caie and David Westwood, available from the Broad Bioimage Benchmark Collection :cite:p:`Ljosa_2012`.
     """
-    for flag_name, flag in (("aggregated", aggregated), ("feature_selected", feature_selected)):
-        if not isinstance(flag, bool):
-            raise ValueError(f"{flag_name} must be a bool, got {type(flag).__name__}")
-    target = _BBBC021_VARIANTS[aggregated, feature_selected]
-    (path,) = _files("bbbc021", cache_dir, select=lambda name: name == target)
-    return read(path)
+    _require_bools(aggregated=aggregated, feature_selected=feature_selected)
+    return _fetch_variant("bbbc021", _BBBC021_VARIANTS[aggregated, feature_selected], cache_dir)
 
 
 #: The (aggregated, feature_selected) combination each rehosted rohban variant answers to.
@@ -269,89 +277,80 @@ def rohban(
     References:
         :cite:t:`Rohban_2017`.
     """
-    for flag_name, flag in (("aggregated", aggregated), ("feature_selected", feature_selected)):
-        if not isinstance(flag, bool):
-            raise ValueError(f"{flag_name} must be a bool, got {type(flag).__name__}")
+    _require_bools(aggregated=aggregated, feature_selected=feature_selected)
     if (aggregated or feature_selected) and plates is not None:
         raise ValueError(
             "plates only applies to the raw wells; a pre-aggregated or feature-selected variant cannot be plate-subset"
         )
-    target = _ROHBAN_VARIANTS[aggregated, feature_selected]
-    (path,) = _files("rohban", cache_dir, select=lambda name: name == target)
-    adata = read(path)
+    adata = _fetch_variant("rohban", _ROHBAN_VARIANTS[aggregated, feature_selected], cache_dir)
     if plates is not None:
         adata = _subset_plates(adata, "rohban", plates)
     return adata
 
 
-def pki(plates: Sequence[str] | None = None, cache_dir: str | Path | None = None) -> AnnData:
+#: The (aggregated, feature_selected) combination each rehosted pki variant answers to.
+_PKI_VARIANTS = {
+    (False, False): "pki.h5ad",  # 3072 x 5857, well level, all features
+    (False, True): "pki_selected.h5ad",  # well level, feature selected
+    (True, False): "pki_agg.h5ad",  # perturbation level (modz), all features
+    (True, True): "pki_agg_selected.h5ad",  # perturbation level (modz), feature selected
+}
+
+
+def pki(
+    plates: Sequence[str] | None = None,
+    cache_dir: str | Path | None = None,
+    *,
+    aggregated: bool = False,
+    feature_selected: bool = False,
+) -> AnnData:
     """Kinase inhibitors over a dose series, from the JUMP pilot.
 
     ``cpg0008-pki``: fifteen compounds over a seven-point dose range (eleven at three doses, four at one) in U2OS cells, over eight plates with 32 to 64 replicate wells per treatment.
-    Downloads about 71 MB for all eight.
+
+    The base and its variants are pre-built by ``scripts/build_staged_datasets.py`` from the eight raw plate tables and rehosted on ``scverse-exampledata``, so the loader fetches a single h5ad rather than reassembling the base on every call. The two flags select the variant:
+
+    - both ``False``: the raw wells with every feature, the object the recipe tutorials start from.
+    - ``feature_selected=True``: the well-level block after pycytominer-default feature selection.
+    - ``aggregated=True``: one ``modz`` consensus (Spearman, ``min_replicates=2``) per ``Metadata_Perturbation`` over every well, DMSO included, so each compound-at-dose is one profile.
+    - ``aggregated=True, feature_selected=True``: that same consensus on the feature-selected block.
 
     Args:
         plates: Plate barcodes to load, all eight when omitted.
+            Only applies to the base; the hosted base is fetched once and subset to these plates in memory.
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
+        aggregated: Return the perturbation-level ``modz`` consensus instead of the wells.
+        feature_selected: Return the feature-selected block instead of all features.
 
     Returns:
-        Wells by features at well resolution, with ``Metadata_Perturbation`` (compound at concentration), ``Metadata_Perturbation_Type`` (``"compound"``), ``Metadata_Compound``, ``Metadata_Concentration`` (the platemap's ``mmoles_per_liter``), ``Metadata_MOA``, ``Metadata_Control``, ``Metadata_CellCount`` and ``Metadata_SiteCount``.
+        Wells by features at well resolution when both flags are ``False``, else the staged variant selected by the two flags, read with :func:`mantispy.io.read`, with ``Metadata_Perturbation`` (compound at concentration), ``Metadata_Perturbation_Type`` (``"compound"``), ``Metadata_Compound``, ``Metadata_Concentration`` (the platemap's ``mmoles_per_liter``), ``Metadata_MOA``, ``Metadata_Control``, ``Metadata_CellCount`` and ``Metadata_SiteCount``.
 
     Raises:
         KeyError: A plate is not one of the eight.
+        ValueError: ``aggregated`` or ``feature_selected`` is not a bool, or ``plates`` is given for a variant.
 
     Notes:
         ``Metadata_Control`` marks the DMSO wells only.
         The positive controls (``Metadata_control_type == "poscon"``) are not flagged, because they are perturbations and should not be normalized against.
     """
-    adata = _augmented("pki", plates, cache_dir)
-    obs = as_frame(adata.obs)
-    control = (obs["Metadata_control_type"].astype(str) == "negcon").to_numpy()
-    obs["Metadata_Control"] = control
-    # Control wells have no compound or dose, so without this each would become its own "nan@nan" perturbation.
-    compound = np.where(control, "DMSO", obs["Metadata_broad_sample"].astype(str).to_numpy())
-    dose = obs["Metadata_mmoles_per_liter"].to_numpy(dtype=float)
-    obs["Metadata_Compound"] = pd.Categorical(compound)
-    obs["Metadata_Concentration"] = dose
-    obs["Metadata_MOA"] = obs.pop("Metadata_moa")
-    label = np.where(control, "DMSO", np.char.add(np.char.add(compound.astype(str), "@"), dose.astype(str)))
-    obs["Metadata_Perturbation"] = pd.Categorical(label)
-    obs["Metadata_Perturbation_Type"] = pd.Series("compound", index=obs.index, dtype="category")
-    adata.uns["mantispy"]["dataset"] = "cpg0008-pki"
-    get_logger().info(
-        "pki: %d wells x %d features, %d compounds x %d doses",
-        adata.n_obs,
-        adata.n_vars,
-        int(obs.loc[~control, "Metadata_Compound"].nunique()),
-        int(obs.loc[~control, "Metadata_Concentration"].nunique()),
-    )
+    _require_bools(aggregated=aggregated, feature_selected=feature_selected)
+    if (aggregated or feature_selected) and plates is not None:
+        raise ValueError(
+            "plates only applies to the raw wells; a pre-aggregated or feature-selected variant cannot be plate-subset"
+        )
+    adata = _fetch_variant("pki", _PKI_VARIANTS[aggregated, feature_selected], cache_dir)
+    if plates is not None:
+        adata = _subset_plates(adata, "pki", plates)
     return adata
 
 
-def jump_target2(
-    plates: Sequence[str] | None = TARGET2_DEFAULT, annotate: bool = True, cache_dir: str | Path | None = None
-) -> AnnData:
-    """JUMP-Target-2, one plate map run at many sites.
+def _assemble_jump_target2(plates: Sequence[str] | None, annotate: bool, cache_dir: str | Path | None) -> AnnData:
+    """Assemble a jump_target2 object from the raw per-plate profiles and backend count tables.
 
-    The JUMP consortium :cite:p:`Chandrasekaran_2023` ran the same plate map in every participating laboratory, so differences between plates from different sources are technical.
-    This makes it suited to studying batch and source effects.
-    All 141 of its plates in ``cpg0016-jump`` are pinned here, from eleven sources and 107 batches, which lets :func:`~mantispy.tl.transport` separate a laboratory effect from a batch and a plate effect.
-    source_9 ran it on 1536-well plates, the others on 384-well plates.
-
-    Args:
-        plates: Plate barcodes to load.
-            The default takes one plate from each source, about 0.7 GB, most of it the per-well table each plate's cell counts are published in; ``None`` loads all 141, 9.4 GB.
-        annotate: Join the JUMP annotation, which supplies ``Metadata_Perturbation`` and ``Metadata_Control``.
-            Downloads another 14 MB.
-        cache_dir: Where to keep the download.
-            Defaults to :attr:`mantispy.settings.cache_dir`.
-
-    Returns:
-        One row per well at well resolution, carrying ``Metadata_Source``, ``Metadata_Batch``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_CellCount``, ``Metadata_SiteCount`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_Perturbation_Type`` (``"compound"``), ``Metadata_InChIKey`` and ``Metadata_Control`` (the DMSO wells).
-
-    Raises:
-        KeyError: A plate is not one of the 141.
+    The raw pipeline the loader used before the default object was staged; it lives here so the loader can still
+    read any plate selection (the non-default ``plates`` and ``annotate=False`` paths) and so the drift check can
+    rebuild the hosted default from the raw inputs.
     """
     paths = _plate_files("jump_target2", plates, cache_dir)
     # The profiles carry no count; each plate's backend table does, among 7,600 other columns.
@@ -370,76 +369,109 @@ def jump_target2(
     return adata
 
 
-def pooled_rare(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
+def jump_target2(
+    plates: Sequence[str] | None = TARGET2_DEFAULT, annotate: bool = True, cache_dir: str | Path | None = None
+) -> AnnData:
+    """JUMP-Target-2, one plate map run at many sites.
+
+    The JUMP consortium :cite:p:`Chandrasekaran_2023` ran the same plate map in every participating laboratory, so differences between plates from different sources are technical.
+    This makes it suited to studying batch and source effects.
+    All 141 of its plates in ``cpg0016-jump`` are pinned here, from eleven sources and 107 batches, which lets :func:`~mantispy.tl.transport` separate a laboratory effect from a batch and a plate effect.
+    source_9 ran it on 1536-well plates, the others on 384-well plates.
+
+    The default object (one plate from each of the eleven sources, annotated) is pre-built by ``scripts/build_staged_datasets.py`` and rehosted on ``scverse-exampledata``, so the default call fetches a single h5ad. Any other plate selection, or ``annotate=False``, still reads the raw per-plate profiles and backend count tables directly, so the batch-effect study can load any subset or all 141 plates.
+
+    Args:
+        plates: Plate barcodes to load.
+            The default takes one plate from each source; ``None`` loads all 141, 9.4 GB.
+        annotate: Join the JUMP annotation, which supplies ``Metadata_Perturbation`` and ``Metadata_Control``.
+            Downloads another 14 MB.
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
+
+    Returns:
+        One row per well at well resolution, carrying ``Metadata_Source``, ``Metadata_Batch``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_CellCount``, ``Metadata_SiteCount`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_Perturbation_Type`` (``"compound"``), ``Metadata_InChIKey`` and ``Metadata_Control`` (the DMSO wells).
+        The default call is read with :func:`mantispy.io.read`; any other selection is assembled from the raw tables.
+
+    Raises:
+        KeyError: A plate is not one of the 141.
+    """
+    if annotate and plates is not None and set(plates) == set(TARGET2_DEFAULT):
+        return _fetch_variant("jump_target2", "jump_target2.h5ad", cache_dir)
+    return _assemble_jump_target2(plates, annotate, cache_dir)
+
+
+#: The rehosted pooled_rare variant each ``feature_selected`` flag answers to.
+_POOLED_RARE_VARIANTS = {
+    False: "pooled_rare.h5ad",  # 290 x 4417, per barcode, all features
+    True: "pooled_rare_selected.h5ad",  # per barcode, feature selected
+}
+
+
+def pooled_rare(cache_dir: str | Path | None = None, *, feature_selected: bool = False) -> AnnData:
     """Pooled rare variants, 290 barcodes in a pooled screen.
 
     ``cpg0032-pooled-rare``, aggregated to one row per barcode rather than per well, so there is no plate or well in ``obs``.
 
+    The base and its feature-selected block are pre-built by ``scripts/build_staged_datasets.py`` from the raw gene-normalized table and rehosted on ``scverse-exampledata``, so the loader fetches a single h5ad rather than reassembling it on every call.
+
     Args:
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
-        kwargs: Passed to :func:`mantispy.io.read_profiles`.
+        feature_selected: Return the block after pycytominer-default feature selection instead of all features.
 
     Returns:
-        Barcodes by features, at perturbation resolution, with:
+        Barcodes by features, at perturbation resolution, read with :func:`mantispy.io.read`, with:
 
         ``Metadata_Perturbation``: the variant the barcode expresses (``Metadata_Foci_Barcode_MatchedTo_GeneCode``, 290 of them), the unit the library varied. It is a gene (``"ACTB"``) or a specific coding variant of it (``"ACTB E364K"``).
 
         ``Metadata_Perturbation_Type``: ``"orf"``, the variants being expressed from constructs.
 
         ``Metadata_Gene`` (the gene the variant belongs to, the token before the first space) and ``Metadata_Allele`` (the full variant label).
+
+    Raises:
+        ValueError: ``feature_selected`` is not a bool.
     """
-    adata = _profiles("pooled_rare", cache_dir, **kwargs)
-    obs = as_frame(adata.obs)
-    code = obs["Metadata_Foci_Barcode_MatchedTo_GeneCode"].astype(str)
-    obs["Metadata_Perturbation"] = code.astype("category")
-    obs["Metadata_Perturbation_Type"] = pd.Series("orf", index=obs.index, dtype="category")
-    # The gene is the token before the first space; the variant "ACTB E364K" belongs to gene "ACTB".
-    obs["Metadata_Gene"] = code.str.split(" ").str[0].astype("category")
-    obs["Metadata_Allele"] = code.astype("category")
-    get_logger().info(
-        "pooled_rare: %d variants over %d genes x %d features",
-        adata.n_obs,
-        int(obs["Metadata_Gene"].nunique()),
-        adata.n_vars,
-    )
-    return adata
+    _require_bools(feature_selected=feature_selected)
+    return _fetch_variant("pooled_rare", _POOLED_RARE_VARIANTS[feature_selected], cache_dir)
 
 
-def neuropainting(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
+def neuropainting(cache_dir: str | Path | None = None) -> AnnData:
     """Astrocytes and neurons, 1,691 wells imaged at 20x and 63x.
 
     ``cpg0038-tegtmeyer-neuropainting``.
     One plate barcode appears in more than one batch, so the observations are not indexed by plate and well.
 
+    The base is pre-built by ``scripts/build_staged_datasets.py`` from the six raw plate tables and rehosted on ``scverse-exampledata``, so the loader fetches a single h5ad rather than reassembling it on every call.
+
     Args:
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
-        kwargs: Passed to :func:`mantispy.io.read_profiles`.
 
     Returns:
-        Wells by features, with ``Metadata_CellCount`` and ``Metadata_SiteCount``.
+        Wells by features at well resolution, with ``Metadata_CellCount`` and ``Metadata_SiteCount``, read with :func:`mantispy.io.read`.
 
     Notes:
         No ``Metadata_Perturbation`` is set. This is a genotype-and-donor comparison (a control-versus-deletion contrast over patient and isogenic lines) rather than a reagent perturbation screen, and its genotype and line columns differ between plates, so the per-plate column intersect keeps none of them. Group with an explicit ``groupby=`` on the column the analysis needs.
     """
-    return _profiles("neuropainting", cache_dir, **kwargs)
+    return _fetch_variant("neuropainting", "neuropainting.h5ad", cache_dir)
 
 
-def chroma(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
+def chroma(cache_dir: str | Path | None = None) -> AnnData:
     """Alternative dyes, 3,455 wells across eight channels.
 
     ``cpg0029-chroma-pilot``, which images more channels than the five of the standard protocol.
     One plate barcode appears at several timepoints, so the observations are not indexed by plate and well.
     The plates hold a set of 91 compounds with known mechanisms; the point of the dataset is the extra dye channels rather than the compounds.
 
+    The base is pre-built by ``scripts/build_staged_datasets.py`` from the raw per-plate tables and rehosted on ``scverse-exampledata``, so the loader fetches a single h5ad rather than reassembling it on every call.
+
     Args:
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
-        kwargs: Passed to :func:`mantispy.io.read_profiles`.
 
     Returns:
-        Wells by features, with ``Metadata_CellCount`` and ``Metadata_SiteCount`` and:
+        Wells by features at well resolution, with ``Metadata_CellCount`` and ``Metadata_SiteCount`` and, read with :func:`mantispy.io.read`:
 
         ``Metadata_Perturbation``: the compound at its concentration (``"<name>@<mmoles_per_liter>"``), with the ``negcon`` wells grouped as ``"DMSO"``.
 
@@ -447,27 +479,7 @@ def chroma(cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
 
         ``Metadata_Compound`` (the compound's common name), ``Metadata_Concentration`` (the platemap's ``mmoles_per_liter``), ``Metadata_MOA`` (the mechanism) and ``Metadata_Control`` (the ``negcon`` wells).
     """
-    adata = _profiles("chroma", cache_dir, **kwargs)
-    obs = as_frame(adata.obs)
-    control = (obs["Metadata_control_type"].astype(str) == "negcon").to_numpy()
-    obs["Metadata_Control"] = control
-    name = obs["Metadata_Common Name"].astype(str).to_numpy()
-    dose = pd.to_numeric(obs["Metadata_mmoles_per_liter"], errors="coerce").to_numpy(dtype=float)
-    compound = np.where(control, "DMSO", name)
-    obs["Metadata_Compound"] = pd.Categorical(compound)
-    obs["Metadata_Concentration"] = dose
-    obs["Metadata_MOA"] = obs["Metadata_MoA"].astype("category")
-    label = np.where(control, "DMSO", np.char.add(np.char.add(compound.astype(str), "@"), dose.astype(str)))
-    obs["Metadata_Perturbation"] = pd.Categorical(label)
-    obs["Metadata_Perturbation_Type"] = pd.Series("compound", index=obs.index, dtype="category")
-    get_logger().info(
-        "chroma: %d wells x %d features, %d compounds, %d control wells",
-        adata.n_obs,
-        adata.n_vars,
-        int(pd.Series(name[~control]).nunique()),
-        int(control.sum()),
-    )
-    return adata
+    return _fetch_variant("chroma", "chroma.h5ad", cache_dir)
 
 
 #: The spellings the four OASIS batches use for each column mantispy reads, since no two of them agree.
@@ -544,20 +556,33 @@ def _oasis_platemaps(cache_dir: str | Path | None) -> pd.DataFrame:
     return platemap
 
 
-def oasis_pilot(annotate: bool = True, cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
+#: The rehosted OASIS-pilot variant each ``aggregated`` flag answers to (both need ``annotate=True``).
+_OASIS_PILOT_VARIANTS = {
+    False: "oasis_pilot.h5ad",  # 4604 x 99, well level, annotated
+    True: "oasis_pilot_agg.h5ad",  # perturbation level (modz)
+}
+
+
+def oasis_pilot(annotate: bool = True, cache_dir: str | Path | None = None, *, aggregated: bool = False) -> AnnData:
     """OASIS pilot, 4,604 wells in U2OS and HepaRG, most compounds over a ten-point dose range.
 
     ``cpg0033-oasis-pilot``, twelve plates read down to the features they share, over four batches: two of assay development and two that dose 36 compounds in each cell line.
     It is the dose-response dataset of the package: 28 of those compounds carry six or more concentrations in both U2OS and HepaRG.
 
+    The annotated base and its perturbation-level consensus are pre-built by ``scripts/build_staged_datasets.py`` from the raw profile and plate-map tables and rehosted on ``scverse-exampledata``, so the loader fetches a single h5ad rather than joining the plate maps on every call. Passing ``annotate=False`` still reads the raw profiles directly, without the annotation join.
+
     Args:
-        annotate: Join the plate maps, which supply ``Metadata_Compound``, ``Metadata_Concentration``, ``Metadata_CellLine``, ``Metadata_Control`` (the DMSO wells), ``Metadata_Perturbation`` and ``Metadata_Perturbation_Type`` (``"compound"``).
+        annotate: Fetch the annotated base, which carries ``Metadata_Compound``, ``Metadata_Concentration``, ``Metadata_CellLine``, ``Metadata_Control`` (the DMSO wells), ``Metadata_Perturbation`` and ``Metadata_Perturbation_Type`` (``"compound"``).
+            ``False`` reads the raw profiles without the plate-map join and cannot be aggregated.
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
-        kwargs: Passed to :func:`mantispy.io.read_profiles`.
+        aggregated: Return one ``modz`` consensus (Spearman, ``min_replicates=2``) per ``Metadata_Perturbation`` instead of the wells, DMSO kept as the ``"DMSO"`` perturbation. Needs ``annotate=True``.
 
     Returns:
-        Wells by features, indexed by plate and well, with ``Metadata_CellCount`` and ``Metadata_SiteCount``, and the annotation columns above when ``annotate``.
+        Wells by features at well resolution when ``aggregated`` is ``False``, else the perturbation-level consensus, indexed by plate and well, with ``Metadata_CellCount`` and ``Metadata_SiteCount``, read with :func:`mantispy.io.read`. The annotation columns above are present when ``annotate``.
+
+    Raises:
+        ValueError: ``aggregated`` is not a bool, or ``aggregated`` is asked for with ``annotate=False``.
 
     Notes:
         The four batches name their plate-map columns differently, so the join reads whichever of ``treatment``/``Compound Name``/``compound`` and ``concentration_uM``/``assay_conc_uM``/``compound_concentration`` each one carries.
@@ -570,92 +595,26 @@ def oasis_pilot(annotate: bool = True, cache_dir: str | Path | None = None, **kw
         ``Metadata_Concentration`` is the dose the well was meant to get, reading a coarser spelling as the finer level it rounds to within each compound, and it names the replicate groups.
         ``Metadata_ConcentrationRecorded`` keeps what the plate map wrote: read against that column, every dosed compound here carries eighteen levels where ten were plated, and a treatment's wells split across two spellings.
     """
-    adata = _profiles("oasis_pilot", cache_dir, select=lambda name: name.endswith(".csv.gz"), **kwargs)
+    _require_bools(aggregated=aggregated)
+    if aggregated and not annotate:
+        raise ValueError("aggregated needs annotate=True: the consensus groups by the plate-map perturbation")
     if not annotate:
-        return adata
-
-    obs = as_frame(adata.obs)
-    merged = obs.merge(_oasis_platemaps(cache_dir), on=["Metadata_plate_map_name", "Metadata_Well"], how="left")
-    merged.index = obs.index
-    if unmatched := int(merged["Metadata_Compound"].isna().sum()):
-        get_logger().warning("oasis_pilot: %d of %d wells have no plate-map row", unmatched, len(merged))
-    adata.obs["Metadata_Compound"] = merged["Metadata_Compound"].to_numpy()
-    adata.obs["Metadata_Concentration"] = merged["Metadata_Concentration"].to_numpy(dtype=float)
-    adata.obs["Metadata_ConcentrationRecorded"] = merged["Metadata_ConcentrationRecorded"].to_numpy(dtype=float)
-    adata.obs["Metadata_CellLine"] = merged["Metadata_CellLine"].to_numpy()
-    adata.obs["Metadata_Control"] = merged["Metadata_Compound"].astype(str).str.upper().eq("DMSO").to_numpy()
-    is_control = np.asarray(adata.obs["Metadata_Control"], dtype=bool)
-    adata.obs["Metadata_Perturbation"] = pd.Categorical(
-        np.where(
-            is_control,
-            "DMSO",
-            merged["Metadata_Compound"].astype(str) + "@" + merged["Metadata_Concentration"].astype(str),
-        )
-    )
-    adata.obs["Metadata_Perturbation_Type"] = pd.Series("compound", index=adata.obs_names, dtype="category")
-    get_logger().info(
-        "OASIS pilot: %d wells x %d features, %d compounds over %d concentrations, %d control wells",
-        adata.n_obs,
-        adata.n_vars,
-        int(merged.loc[~is_control, "Metadata_Compound"].nunique()),
-        int(merged["Metadata_Concentration"].nunique()),
-        int(is_control.sum()),
-    )
-    return adata
+        return _profiles("oasis_pilot", cache_dir, select=lambda name: name.endswith(".csv.gz"))
+    return _fetch_variant("oasis_pilot", _OASIS_PILOT_VARIANTS[aggregated], cache_dir)
 
 
 #: The feature sets JUMP-Lite publishes for one set of wells: five learned embeddings and the CellProfiler-equivalent ``cp_measure``.
 JUMP_LITE_MODELS = ("openphenom", "dinov2", "dinov2_random", "subcell", "morphem", "cp_measure")
 
 
-def jump_lite(
-    model: str = "openphenom", annotate: bool = True, cache_dir: str | Path | None = None, **kwargs: Any
-) -> AnnData:
-    """JUMP-Lite Target-2: 1,536 wells, four imaging sites, one feature set at a time.
+def _assemble_jump_lite(model: str, annotate: bool, cache_dir: str | Path | None) -> AnnData:
+    """Assemble one JUMP-Lite feature set: the model's wells joined to their cell count, row-sorted and annotated.
 
-    ``cpg0016-jump``, the compact benchmark of :cite:t:`Munoz_2026`.
-    Four plates of the JUMP Target-2 plate map, one from each of ``source_3``, ``source_4``, ``source_5`` and ``source_6``, so the four batches are four different laboratories running the same 302 compounds with 64 DMSO wells each.
-
-    Every ``model`` covers the same 1,536 wells, which is what makes this a comparison rather than six datasets: the rows, their order and the metadata are identical and only the feature block changes.
-    The files list the wells in a different order for every model, so the rows are sorted by source, plate and well.
-    Five are learned embeddings and one, ``"cp_measure"``, is the CellProfiler-equivalent measurement of the same images.
-
-    Args:
-        model: Which feature set to read, one of ``ds.JUMP_LITE_MODELS``.
-            ``"dinov2_random"`` is the same architecture with untrained weights, which is the null model the benchmark scores the others against.
-        annotate: Join the JUMP well and compound tables, which name the compound of each well.
-            Downloads about 14 MB once and caches it.
-        cache_dir: Where to keep the download.
-            Defaults to :attr:`mantispy.settings.cache_dir`.
-        kwargs: Passed to :func:`mantispy.io.read_profiles`.
-
-    Returns:
-        Wells by features at well resolution, indexed by plate and well, with ``Metadata_Source``, ``Metadata_Batch``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_CellCount`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_Perturbation_Type`` (``"compound"``), ``Metadata_InChIKey`` and ``Metadata_Control``.
-
-    Raises:
-        ValueError: ``model`` is not one of ``ds.JUMP_LITE_MODELS``.
-
-    Notes:
-        A dimension of a learned embedding is a coordinate in the model's own basis, not a measurement with a name to parse, so for every model but ``"cp_measure"`` the annotation columns of ``var`` are supplied empty.
-        Anything that reads ``var["feature_group"]`` or ``var["channel"]``, such as the feature families :func:`~mantispy.pl.effect_sizes` colours by, has nothing to work with on those.
-
-        ``"cp_measure"`` is CellProfiler-style measurements and keeps its parsed compartment, feature group and channel.
-        Its channel is the index cp_measure numbered its inputs by rather than the name of a stain, because the name lives in the acquisition metadata and not in the feature name.
-
-        The embeddings are not normalized.
-        They are the model's output on each well's images, so a per-plate control normalization is still the first step.
-
-        The trained embeddings here carry the cell count in their leading components, where it can account for more of the variance than either the laboratory or the imaging site.
-        The untrained ``"dinov2_random"`` does not, and neither does ``"cp_measure"``, whose per-cell measurements are averaged over the well.
-        Measure it with :func:`~mantispy.metrics.evaluate_correction` before correcting for anything else, and read :doc:`/tutorials/multisite/learned_embeddings` on why removing it is not obviously right.
-
-    References:
-        :cite:t:`Munoz_2026`, :cite:t:`Chandrasekaran_2023`, :cite:t:`Weisbart_2024`.
+    The raw pipeline the ``annotate=True`` :func:`jump_lite` used before the per-model objects were staged; it
+    lives here so the drift check can rebuild each hosted object, and so the loader can still serve the
+    un-annotated ``annotate=False`` path.
     """
-    if model not in JUMP_LITE_MODELS:
-        raise ValueError(f"model must be one of {JUMP_LITE_MODELS}, got {model!r}")
-
-    adata = _profiles("jump_lite", cache_dir, select=lambda name: name == f"{model}.parquet", **kwargs)
+    adata = _profiles("jump_lite", cache_dir, select=lambda name: name == f"{model}.parquet")
     if model != "cp_measure":
         empty = empty_annotation(adata.var_names)
         adata.var[empty.columns] = empty
@@ -687,6 +646,56 @@ def jump_lite(
     return adata
 
 
+def jump_lite(model: str = "openphenom", annotate: bool = True, cache_dir: str | Path | None = None) -> AnnData:
+    """JUMP-Lite Target-2: 1,536 wells, four imaging sites, one feature set at a time.
+
+    ``cpg0016-jump``, the compact benchmark of :cite:t:`Munoz_2026`.
+    Four plates of the JUMP Target-2 plate map, one from each of ``source_3``, ``source_4``, ``source_5`` and ``source_6``, so the four batches are four different laboratories running the same 302 compounds with 64 DMSO wells each.
+
+    Every ``model`` covers the same 1,536 wells, which is what makes this a comparison rather than six datasets: the rows, their order and the metadata are identical and only the feature block changes.
+    The files list the wells in a different order for every model, so the rows are sorted by plate and well and every model is aligned.
+    Five are learned embeddings and one, ``"cp_measure"``, is the CellProfiler-equivalent measurement of the same images.
+
+    The annotated object for each model is pre-built by ``scripts/build_staged_datasets.py`` and rehosted on ``scverse-exampledata``, so the annotated call fetches a single h5ad rather than joining the count and annotation tables on every call. Passing ``annotate=False`` still assembles the un-annotated wells directly.
+
+    Args:
+        model: Which feature set to read, one of ``ds.JUMP_LITE_MODELS``.
+            ``"dinov2_random"`` is the same architecture with untrained weights, which is the null model the benchmark scores the others against.
+        annotate: Fetch the annotated object, which joins the JUMP well and compound tables that name the compound of each well.
+            ``False`` assembles the un-annotated wells without that join.
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
+
+    Returns:
+        Wells by features at well resolution, indexed by plate and well, read with :func:`mantispy.io.read` when annotated, with ``Metadata_Source``, ``Metadata_Batch``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_CellCount`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_Perturbation_Type`` (``"compound"``), ``Metadata_InChIKey`` and ``Metadata_Control``.
+
+    Raises:
+        ValueError: ``model`` is not one of ``ds.JUMP_LITE_MODELS``.
+
+    Notes:
+        A dimension of a learned embedding is a coordinate in the model's own basis, not a measurement with a name to parse, so for every model but ``"cp_measure"`` the annotation columns of ``var`` are supplied empty.
+        Anything that reads ``var["feature_group"]`` or ``var["channel"]``, such as the feature families :func:`~mantispy.pl.effect_sizes` colours by, has nothing to work with on those.
+
+        ``"cp_measure"`` is CellProfiler-style measurements and keeps its parsed compartment, feature group and channel.
+        Its channel is the index cp_measure numbered its inputs by rather than the name of a stain, because the name lives in the acquisition metadata and not in the feature name.
+
+        The embeddings are not normalized.
+        They are the model's output on each well's images, so a per-plate control normalization is still the first step.
+
+        The trained embeddings here carry the cell count in their leading components, where it can account for more of the variance than either the laboratory or the imaging site.
+        The untrained ``"dinov2_random"`` does not, and neither does ``"cp_measure"``, whose per-cell measurements are averaged over the well.
+        Measure it with :func:`~mantispy.metrics.evaluate_correction` before correcting for anything else, and read :doc:`/tutorials/multisite/learned_embeddings` on why removing it is not obviously right.
+
+    References:
+        :cite:t:`Munoz_2026`, :cite:t:`Chandrasekaran_2023`, :cite:t:`Weisbart_2024`.
+    """
+    if model not in JUMP_LITE_MODELS:
+        raise ValueError(f"model must be one of {JUMP_LITE_MODELS}, got {model!r}")
+    if not annotate:
+        return _assemble_jump_lite(model, annotate=False, cache_dir=cache_dir)
+    return _fetch_variant("jump_lite", f"jump_lite_{model}.h5ad", cache_dir)
+
+
 def jump_lite_targets(cache_dir: str | Path | None = None) -> pd.DataFrame:
     """The gene each JUMP compound is annotated to act on, as a set per target.
 
@@ -713,32 +722,47 @@ def jump_lite_targets(cache_dir: str | Path | None = None) -> pd.DataFrame:
     return frame.drop_duplicates().reset_index(drop=True)
 
 
-def jump_crispr(annotate: bool = True, cache_dir: str | Path | None = None, **kwargs: Any) -> AnnData:
+#: The rehosted jump_crispr variant each ``aggregated`` flag answers to (both need ``annotate=True``).
+_JUMP_CRISPR_VARIANTS = {
+    False: "jump_crispr.h5ad",  # 51185 x 595, well level, annotated
+    True: "jump_crispr_agg.h5ad",  # gene level (modz)
+}
+
+
+def jump_crispr(annotate: bool = True, cache_dir: str | Path | None = None, *, aggregated: bool = False) -> AnnData:
     """The assembled JUMP CRISPR arm, 51,185 wells of knockouts in U2OS cells.
 
-    ``cpg0016-jump-assembled``, the ``v1.0a`` well-position-corrected and feature-selected parquet, and the largest dataset here at 180 MB.
+    ``cpg0016-jump-assembled``, the ``v1.0a`` well-position-corrected and feature-selected parquet.
     jump-profiling-recipe has corrected it for well position and cell count, normalized it and selected its features, and has not yet sphered it.
     The cell counts are the ones the recipe regresses out of these profiles; their ``Cells_Count_Count`` feature was normalized with the rest and is no longer a count.
 
+    The annotated base and its gene-level consensus are pre-built by ``scripts/build_staged_datasets.py`` from the raw parquet and rehosted on ``scverse-exampledata``, so the loader fetches a single h5ad rather than reassembling the base on every call. Passing ``annotate=False`` still reads the raw profiles directly, without the annotation join.
+
     Args:
-        annotate: Join JUMP's CRISPR annotation, which names the gene each well's guides target and which wells are controls.
+        annotate: Fetch the annotated base, which names the gene each well's guides target and which wells are controls.
+            ``False`` reads the raw profiles without the annotation join and cannot be aggregated.
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
-        kwargs: Passed to :func:`mantispy.io.read_profiles`.
+        aggregated: Return one ``modz`` consensus (Spearman, ``min_replicates=2``) per ``Metadata_Gene`` over the guides instead of the wells. Needs ``annotate=True``.
 
     Returns:
-        Wells by features, indexed by plate and well, with ``Metadata_JCP2022`` and ``Metadata_CellCount`` and, when annotated, ``Metadata_Gene`` and ``Metadata_Perturbation`` (the gene symbol; its guides are the replicates), ``Metadata_Perturbation_Type`` (``"crispr"``), ``Metadata_Control_Type`` (``"negcon"``, ``"poscon"`` or ``"trt"``), ``Metadata_Control`` (the no-guide and non-targeting wells) and ``Metadata_ChromosomeArm``.
+        Wells by features at well resolution when ``aggregated`` is ``False``, else the gene-level consensus, indexed by plate and well, read with :func:`mantispy.io.read`, with ``Metadata_JCP2022`` and ``Metadata_CellCount`` and, when annotated, ``Metadata_Gene`` and ``Metadata_Perturbation`` (the gene symbol; its guides are the replicates), ``Metadata_Perturbation_Type`` (``"crispr"``), ``Metadata_Control_Type`` (``"negcon"``, ``"poscon"`` or ``"trt"``), ``Metadata_Control`` (the no-guide and non-targeting wells) and ``Metadata_ChromosomeArm``.
+
+    Raises:
+        ValueError: ``aggregated`` is not a bool, or ``aggregated`` is asked for with ``annotate=False``.
 
     References:
         :cite:t:`Chandrasekaran_2023`.
     """
-    (counts,) = _files("_jump_cell_counts", cache_dir)
-    adata = _profiles("jump_crispr", cache_dir, platemap=_read_counts(counts), **kwargs)
-    if annotate:
-        from mantispy.pp._annotate import annotate_jump
-
-        annotate_jump(adata, kind="crispr")
-    return adata
+    _require_bools(aggregated=aggregated)
+    if aggregated and not annotate:
+        raise ValueError("aggregated needs annotate=True: the consensus groups by the annotated gene")
+    if not annotate:
+        (counts,) = _files("_jump_cell_counts", cache_dir)
+        return _profiles(
+            "jump_crispr", cache_dir, select=lambda name: not name.endswith(".h5ad"), platemap=_read_counts(counts)
+        )
+    return _fetch_variant("jump_crispr", _JUMP_CRISPR_VARIANTS[aggregated], cache_dir)
 
 
 def _finish_guide_screen(adata: AnnData, name: str) -> AnnData:
@@ -781,7 +805,45 @@ _SCALLOPS_SOURCE = (
 )
 
 
-def scallops_arv471(cache_dir: str | Path | None = None) -> AnnData:
+def _assemble_scallops_arv471(cache_dir: str | Path | None = None) -> AnnData:
+    """Assemble the SCALLOPS ARV-471 base: the ARV-471 cells with their gene, guide and control.
+
+    The raw pipeline the both-flags-False :func:`mt.ds.scallops_arv471` used before the base was staged; it
+    lives here so the drift check can rebuild the hosted base from the raw parquet.
+    """
+    (path,) = _files("scallops_arv471", cache_dir, select=lambda name: not name.endswith(".h5ad"))
+    df = pd.read_parquet(path, columns=[*_SCALLOPS_FEATURES, *_SCALLOPS_SOURCE])
+    df = df[df["Condition"].astype(str) == "ARV-471"]
+    df = df[~df["Cells_Location_IntersectsBoundary_IF"].astype(bool)]
+    before = len(df)
+    df = df.dropna(subset=list(_SCALLOPS_FEATURES))
+    report_drop("cell(s) with a missing phenotype feature", before - len(df), before)
+
+    gene = df["gene_symbol"].astype(str).to_numpy()
+    guide = df["sgRNA_id"].astype(str).to_numpy()
+    is_ntc = gene == "NTC"
+    frame = df[list(_SCALLOPS_FEATURES)].reset_index(drop=True)
+    frame["Metadata_Gene"] = np.where(is_ntc, "nontargeting", gene)
+    frame["Metadata_sgRNA"] = guide
+    frame["Metadata_Control_Type"] = df["type"].astype(str).to_numpy()
+    frame["Metadata_Control"] = is_ntc
+    frame["Metadata_Perturbation"] = guide
+    frame["Metadata_Plate"] = df["plate"].astype(str).to_numpy()
+    # The raw well is a rowless integer; prefix a synthetic row letter so from_dataframe's normalize_well can pad it.
+    frame["Metadata_Well"] = ("W" + df["well"].astype(int).astype(str)).to_numpy()
+
+    adata = from_dataframe(frame, resolution="cell")
+    return _finish_guide_screen(adata, "scallops_arv471")
+
+
+#: The rehosted scallops_arv471 variant each ``aggregated`` flag answers to.
+_SCALLOPS_VARIANTS = {
+    False: "scallops_arv471.h5ad",  # 2021814 x 9, cell level
+    True: "scallops_arv471_agg.h5ad",  # guide level (median)
+}
+
+
+def scallops_arv471(cache_dir: str | Path | None = None, *, aggregated: bool = False) -> AnnData:
     """SCALLOPS ARV-471, single cells of an optical pooled screen under an estrogen-receptor degrader.
 
     The drug arm of a genome-scale optical pooled CRISPR screen from ``Genentech/scallops-manuscript``, its Figure 3 table.
@@ -791,14 +853,16 @@ def scallops_arv471(cache_dir: str | Path | None = None) -> AnnData:
 
     This loads only the ARV-471 condition, at single-cell resolution, so a hit is a guide whose cells sit away from the non-targeting cells in the phenotype space.
     The matched DMSO condition and the barcode-calling columns are left in the upstream file.
-    Downloads about 205 MB once, checked against a pinned sha256, and subsets it on read.
+
+    The base and its guide-level aggregate are pre-built by ``scripts/build_staged_datasets.py`` from the raw parquet and rehosted on ``scverse-exampledata``, so the loader fetches a single h5ad rather than filtering and reassembling the cells on every call.
 
     Args:
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
+        aggregated: Return one median profile per ``(Metadata_Gene, Metadata_sgRNA)`` guide instead of the cells, with ``Metadata_CellCount``.
 
     Returns:
-        Cells by nine phenotype features at cell resolution, with:
+        Cells by nine phenotype features at cell resolution (one median per guide when ``aggregated``), read with :func:`mantispy.io.read`, with:
 
         ``Metadata_Gene``: the gene the cell's guide targets, with the non-targeting guides written as ``"nontargeting"`` (the upstream ``NTC``), the spelling the analysis functions read.
 
@@ -828,31 +892,13 @@ def scallops_arv471(cache_dir: str | Path | None = None) -> AnnData:
         Cells missing any phenotype feature are dropped too, so every returned cell has a full feature vector.
 
         A cell carries no count.
-        Aggregate to a guide-level profile with ``mt.tl.aggregate(adata, by=("Metadata_Gene", "Metadata_sgRNA"))``, which writes ``Metadata_CellCount``.
+        The ``aggregated`` variant is one median profile per ``(Metadata_Gene, Metadata_sgRNA)`` guide, which writes ``Metadata_CellCount``.
+
+    Raises:
+        ValueError: ``aggregated`` is not a bool.
     """
-    (path,) = _files("scallops_arv471", cache_dir)
-    df = pd.read_parquet(path, columns=[*_SCALLOPS_FEATURES, *_SCALLOPS_SOURCE])
-    df = df[df["Condition"].astype(str) == "ARV-471"]
-    df = df[~df["Cells_Location_IntersectsBoundary_IF"].astype(bool)]
-    before = len(df)
-    df = df.dropna(subset=list(_SCALLOPS_FEATURES))
-    report_drop("cell(s) with a missing phenotype feature", before - len(df), before)
-
-    gene = df["gene_symbol"].astype(str).to_numpy()
-    guide = df["sgRNA_id"].astype(str).to_numpy()
-    is_ntc = gene == "NTC"
-    frame = df[list(_SCALLOPS_FEATURES)].reset_index(drop=True)
-    frame["Metadata_Gene"] = np.where(is_ntc, "nontargeting", gene)
-    frame["Metadata_sgRNA"] = guide
-    frame["Metadata_Control_Type"] = df["type"].astype(str).to_numpy()
-    frame["Metadata_Control"] = is_ntc
-    frame["Metadata_Perturbation"] = guide
-    frame["Metadata_Plate"] = df["plate"].astype(str).to_numpy()
-    # The raw well is a rowless integer; prefix a synthetic row letter so from_dataframe's normalize_well can pad it.
-    frame["Metadata_Well"] = ("W" + df["well"].astype(int).astype(str)).to_numpy()
-
-    adata = from_dataframe(frame, resolution="cell")
-    return _finish_guide_screen(adata, "scallops_arv471")
+    _require_bools(aggregated=aggregated)
+    return _fetch_variant("scallops_arv471", _SCALLOPS_VARIANTS[aggregated], cache_dir)
 
 
 #: The upstream parquet stores these as its MultiIndex; every other column is a CellStats morphology feature.
@@ -862,21 +908,73 @@ _CP_POSH_METADATA = ("barcode", "gene_id", "treatment", "plate_well", "plate", "
 _CP_POSH_CONTROLS = ("nontargeting", "intergenic")
 
 
-def cp_posh(cache_dir: str | Path | None = None) -> AnnData:
+def _assemble_cp_posh(cache_dir: str | Path | None = None) -> AnnData:
+    """Assemble the cp-POSH base: the cells with their gene, guide, plate, well and control.
+
+    The raw pipeline the both-flags-False :func:`mt.ds.cp_posh` used before the base was staged; it lives here
+    so the drift check can rebuild the hosted base from the raw parquet.
+    """
+    import anndata as ad
+
+    (path,) = _files("cp_posh", cache_dir, select=lambda name: not name.endswith(".h5ad"))
+    df = pd.read_parquet(path).reset_index()
+    features = [column for column in df.columns if column not in _CP_POSH_METADATA]
+
+    gene = df["gene_id"].astype(str).to_numpy()
+    guide = df["barcode"].astype(str).to_numpy()
+    # plate_well is "<plate>_<well>", e.g. "EL37_B04"; the well is the segment after the last "_" (wells carry none).
+    well = df["plate_well"].astype(str).str.rsplit("_", n=1).str[-1].to_numpy()
+    obs = pd.DataFrame(
+        {
+            "Metadata_Gene": gene,
+            "Metadata_sgRNA": guide,
+            "Metadata_Perturbation": guide,
+            "Metadata_Plate": df["plate"].astype(str).to_numpy(),
+            "Metadata_Well": well,
+            "Metadata_Control": np.isin(gene, _CP_POSH_CONTROLS),
+        },
+        index=pd.Index(df["ID"].astype(str).to_numpy()),
+    )
+    obs = categorize_metadata(obs)
+    adata = ad.AnnData(X=df[features].to_numpy(dtype=np.float32), obs=obs, var=empty_annotation(features))
+    stamp(adata, resolution="cell")
+    return _finish_guide_screen(adata, "cp_posh")
+
+
+#: The (aggregated, feature_selected) combination each rehosted cp_posh variant answers to.
+_CP_POSH_VARIANTS = {
+    (False, False): "cp_posh.h5ad",  # 163090 x 1278, cell level, all features
+    (False, True): "cp_posh_selected.h5ad",  # cell level, feature selected
+    (True, False): "cp_posh_agg.h5ad",  # guide level (median), all features
+    (True, True): "cp_posh_agg_selected.h5ad",  # guide level (median), feature selected
+}
+
+
+def cp_posh(
+    cache_dir: str | Path | None = None, *, aggregated: bool = False, feature_selected: bool = False
+) -> AnnData:
     """Single cells of insitro cp-POSH, a broad-morphology pooled CRISPR Cell Painting screen.
 
     The 124-gene proof-of-concept dataset from ``insitro/cp-posh``: A549 cells carrying a pooled CRISPR-knockout library, stained with a six-channel Cell Painting panel (WGA, a mitochondrial probe, phalloidin, concanavalin A, DAPI and a marker round) and read by in-situ sequencing of the guide barcodes.
     Each cell gets a broad, untargeted morphology profile of about 1,278 CellStats features rather than the handful of hand-picked readouts a targeted screen keeps, so it is the broad-morphology complement to :func:`scallops_arv471`.
 
     The features are already well-normalized by the authors, so :func:`~mantispy.pp.normalize` is not needed before analysis; a per-plate control normalization would re-do work already done.
-    Downloads about 1.6 GB once, checked against a pinned sha256.
+
+    The base and its variants are pre-built by ``scripts/build_staged_datasets.py`` from the raw parquet and rehosted on ``scverse-exampledata``, so the loader fetches a single h5ad rather than reassembling the base on every call. The two flags select the variant:
+
+    - both ``False``: the cells with every feature.
+    - ``feature_selected=True``: the cells after pycytominer-default feature selection.
+    - ``aggregated=True``: one median profile per ``(Metadata_Gene, Metadata_sgRNA)`` guide, with ``Metadata_CellCount``.
+    - ``aggregated=True, feature_selected=True``: that same guide aggregate on the feature-selected block.
 
     Args:
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
+        aggregated: Return the guide-level median aggregate instead of the cells.
+        feature_selected: Return the feature-selected block instead of all features.
 
     Returns:
-        Cells by about 1,278 CellStats morphology features at cell resolution, indexed by the upstream cell ``ID``, with:
+        Cells by about 1,278 CellStats morphology features at cell resolution (one median per guide when ``aggregated``), read with :func:`mantispy.io.read`, indexed by the upstream cell ``ID`` on the base, with:
 
         ``Metadata_Gene``: the gene the cell's guide targets, taken from the upstream ``gene_id``.
         The two control classes keep their upstream spellings, ``"nontargeting"`` (the non-targeting guides) and ``"intergenic"`` (guides against intergenic regions); ``"nontargeting"`` is the spelling the analysis functions read.
@@ -902,33 +1000,13 @@ def cp_posh(cache_dir: str | Path | None = None) -> AnnData:
         Anything that reads ``var["feature_group"]`` or ``var["channel"]`` has nothing to work with here.
 
         A cell carries no count.
-        Aggregate to a guide-level profile with ``mt.tl.aggregate(adata, by=("Metadata_Gene", "Metadata_sgRNA"))``, which writes ``Metadata_CellCount``.
+        The ``aggregated`` variant is one median profile per ``(Metadata_Gene, Metadata_sgRNA)`` guide, which writes ``Metadata_CellCount``.
+
+    Raises:
+        ValueError: ``aggregated`` or ``feature_selected`` is not a bool.
     """
-    import anndata as ad
-
-    (path,) = _files("cp_posh", cache_dir)
-    df = pd.read_parquet(path).reset_index()
-    features = [column for column in df.columns if column not in _CP_POSH_METADATA]
-
-    gene = df["gene_id"].astype(str).to_numpy()
-    guide = df["barcode"].astype(str).to_numpy()
-    # plate_well is "<plate>_<well>", e.g. "EL37_B04"; the well is the segment after the last "_" (wells carry none).
-    well = df["plate_well"].astype(str).str.rsplit("_", n=1).str[-1].to_numpy()
-    obs = pd.DataFrame(
-        {
-            "Metadata_Gene": gene,
-            "Metadata_sgRNA": guide,
-            "Metadata_Perturbation": guide,
-            "Metadata_Plate": df["plate"].astype(str).to_numpy(),
-            "Metadata_Well": well,
-            "Metadata_Control": np.isin(gene, _CP_POSH_CONTROLS),
-        },
-        index=pd.Index(df["ID"].astype(str).to_numpy()),
-    )
-    obs = categorize_metadata(obs)
-    adata = ad.AnnData(X=df[features].to_numpy(dtype=np.float32), obs=obs, var=empty_annotation(features))
-    stamp(adata, resolution="cell")
-    return _finish_guide_screen(adata, "cp_posh")
+    _require_bools(aggregated=aggregated, feature_selected=feature_selected)
+    return _fetch_variant("cp_posh", _CP_POSH_VARIANTS[aggregated, feature_selected], cache_dir)
 
 
 def corum(cache_dir: str | Path | None = None) -> pd.DataFrame:
@@ -983,7 +1061,7 @@ def _assemble_cells(entry: DatasetEntry, cache_dir: str | Path | None, *, annota
 
     source = str(entry.metadata["source"])
     channels = [str(channel) for channel in entry.metadata["channels"]]
-    paths = _files("jump_cells", cache_dir)
+    paths = _files("jump_cells", cache_dir, select=lambda name: not name.endswith(".h5ad"))
     parts = [_read_site(directory, source, channels) for directory in sorted({path.parent for path in paths})]
     # Every field of view numbers its own images from one, so each part's numbers are shifted past the ones before it.
     images, offset = [], 0
@@ -1012,13 +1090,6 @@ def _assemble_cells(entry: DatasetEntry, cache_dir: str | Path | None, *, annota
         adata.obs["Metadata_Well"].nunique(),
     )
     return adata
-
-
-def _select(adata: AnnData, path: Path) -> AnnData:
-    """The selected features of `adata`, kept at `path` so the next call reads only those."""
-    chosen = subset_features(adata)
-    write(chosen, path)
-    return chosen
 
 
 def _mark_selected(adata: AnnData) -> None:
@@ -1063,7 +1134,33 @@ def jump_export(cache_dir: str | Path | None = None) -> Path:
     return paths[0].parent
 
 
-def jump_cells(annotate: bool = True, selected: bool = False, cache_dir: str | Path | None = None) -> AnnData:
+def _assemble_jump_cells(cache_dir: str | Path | None = None) -> AnnData:
+    """Assemble the annotated jump_cells base from the 480 raw CellProfiler tables.
+
+    The raw pipeline the ``annotate=True`` :func:`jump_cells` used before the base was staged; it lives here so
+    :func:`mantispy.ds._build.build_jump_cells` can rebuild the hosted variants from the raw inputs.
+    """
+    return _assemble_cells(_DATASETS["jump_cells"], cache_dir, annotate=True)
+
+
+def _jump_cells_raw(cache_dir: str | Path | None) -> AnnData:
+    """The un-annotated assembled cells, cached on disk (the ``annotate=False`` path, which is not staged)."""
+    entry = _DATASETS["jump_cells"]
+    root = Path(cache_dir or settings.cache_dir)
+    # The name fingerprints the schema, the pinned files and the assembly version, so a stale file is never read.
+    material = f"{_ASSEMBLY_VERSION}:" + "".join(str(file.sha256) for file in entry.files)
+    fingerprint = hashlib.sha256(material.encode()).hexdigest()[:12]
+    derived = root / f"jump_cells-{SCHEMA_VERSION}-{fingerprint}-raw.h5ad"
+    if derived.exists():
+        return read(derived)
+    adata = _assemble_cells(entry, cache_dir, annotate=False)
+    write(adata, derived)
+    return adata
+
+
+def jump_cells(
+    annotate: bool = True, selected: bool = False, cache_dir: str | Path | None = None, *, aggregated: bool = False
+) -> AnnData:
     """Single cells from one JUMP plate, as CellProfiler measured them.
 
     Twenty-four wells of ``BR00121438`` at four fields of view each: eight DMSO wells, four compounds with both of their replicate wells, and eight more compounds at one well.
@@ -1071,48 +1168,44 @@ def jump_cells(annotate: bool = True, selected: bool = False, cache_dir: str | P
 
     The same plate's well-level profiles are :func:`jump_target2`, so a profile aggregated from these cells can be compared with the one the consortium published.
 
-    The first call downloads about 1.5 GB of CellProfiler output, reads 480 tables and writes the assembled object next to them, which takes a few minutes.
-    Later calls read that one file.
+    The annotated cells, their feature-selected block and their well-level aggregate are pre-built by ``scripts/build_staged_datasets.py`` from the 480 raw CellProfiler tables and rehosted on ``scverse-exampledata``, so the loader fetches a single h5ad rather than reassembling the object on every call. Passing ``annotate=False`` still assembles the raw, un-annotated cells locally, downloading about 1.5 GB of CellProfiler output and caching the assembled object.
 
     Args:
-        annotate: Join the JUMP annotation, which supplies ``Metadata_Perturbation`` and ``Metadata_Control``.
-            Downloads another 14 MB.
-            Needed for `selected`, which is computed against the controls.
-        selected: Return only the features ``var["selected"]`` marks, as :func:`mantispy.pp.subset_features` would.
-            The subset is kept beside the whole object, so a notebook that only wants the reduced one reads 87 MB instead of 308 MB.
+        annotate: Fetch the annotated cells, which carry ``Metadata_Perturbation`` and ``Metadata_Control``.
+            ``False`` assembles the raw cells locally, without the annotation join.
+            Needed for `selected` and `aggregated`.
+        selected: Return only the features ``var["selected"]`` marks, as :func:`mantispy.pp.subset_features` would (87 MB instead of 308 MB).
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
+        aggregated: Return one median profile per well (``Metadata_Plate``, ``Metadata_Well``) instead of the cells, with ``Metadata_CellCount`` and ``Metadata_SiteCount``, so it lines up with the well-level :func:`jump_target2`.
 
     Raises:
-        KeyError: `selected` was asked for without `annotate`, so there are no controls to select against.
+        KeyError: `selected` or `aggregated` was asked for without `annotate`, so there is no annotation to select or group against.
+        ValueError: `selected` and `aggregated` were both asked for; there is no aggregated feature-selected variant.
 
     Returns:
-        Cells by features at cell resolution, carrying ``Metadata_Source``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Site`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_Perturbation_Type`` (``"compound"``), ``Metadata_InChIKey`` and ``Metadata_Control``.
+        Cells by features at cell resolution (one median per well when ``aggregated``), read with :func:`mantispy.io.read`, carrying ``Metadata_Source``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Site`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_Perturbation_Type`` (``"compound"``), ``Metadata_InChIKey`` and ``Metadata_Control``.
         When annotated, ``var["selected"]`` marks the features feature selection keeps, so the object can be reduced with ``adata[:, adata.var["selected"]]`` the way scanpy's ``highly_variable`` is used.
-        A cell carries no count.
-        :func:`mantispy.tl.aggregate` writes ``Metadata_CellCount`` over the four fields read and a ``Metadata_SiteCount`` of four, so a well counts about four ninths of the cells :func:`jump_target2` gives it over all nine.
+        The ``aggregated`` well profiles carry ``Metadata_CellCount`` over the four fields read and a ``Metadata_SiteCount`` of four, so a well counts about four ninths of the cells :func:`jump_target2` gives it over all nine.
 
     References:
         :cite:t:`Chandrasekaran_2023`.
     """
     if selected and not annotate:
         raise KeyError("selected=True needs annotate=True: the mask is computed against the negative controls")
-
-    entry = _DATASETS["jump_cells"]
-    root = Path(cache_dir or settings.cache_dir)
-    # The name fingerprints the schema, the pinned files and the assembly version, so a stale file is never read.
-    material = f"{_ASSEMBLY_VERSION}:" + "".join(str(file.sha256) for file in entry.files)
-    fingerprint = hashlib.sha256(material.encode()).hexdigest()[:12]
-    stem = f"jump_cells-{SCHEMA_VERSION}-{fingerprint}-{'annotated' if annotate else 'raw'}"
-    derived, subset = root / f"{stem}.h5ad", root / f"{stem}-selected.h5ad"
-    if selected and subset.exists():
-        return read(subset)
-    if derived.exists():
-        return _select(read(derived), subset) if selected else read(derived)
-
-    adata = _assemble_cells(entry, cache_dir, annotate=annotate)
-    write(adata, derived)
-    return _select(adata, subset) if selected else adata
+    if aggregated and not annotate:
+        raise KeyError("aggregated=True needs annotate=True: the well profiles carry the annotation")
+    if selected and aggregated:
+        raise ValueError("jump_cells has no aggregated feature-selected variant; pass one of selected or aggregated")
+    if not annotate:
+        return _jump_cells_raw(cache_dir)
+    if aggregated:
+        target = "jump_cells_agg.h5ad"
+    elif selected:
+        target = "jump_cells_selected.h5ad"
+    else:
+        target = "jump_cells.h5ad"
+    return _fetch_variant("jump_cells", target, cache_dir)
 
 
 def jump_plate(cache_dir: str | Path | None = None, **kwargs: Any) -> SpatialData:
