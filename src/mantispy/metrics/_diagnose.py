@@ -179,13 +179,24 @@ def _diagnose_cell(
     scored = [count for count in treatment_wells if count >= 2]
     controls = adata[is_control].copy()
     control_wells = _default_well_block(controls, block=well_unit)
-    n_control_wells = int(np.unique(control_wells).size) if control_wells is not None else 0
-    if not scored or n_control_wells < 4:
-        raise ValueError("need at least one treatment on two wells and four reference wells to measure a null against")
+    n_control_wells = 0 if control_wells is None else int(np.unique(control_wells).size)
+    if not scored:
+        raise ValueError("need at least one treatment on two wells to measure a null against")
+    # A genuine well-block null needs four reference wells left after the pseudo-treatment is drawn, since
+    # hit_calling keeps the well block only with four or more reference wells and otherwise falls back to a
+    # per-cell KS test, plus a pseudo-treatment of at least two wells: at least six reference wells in all.
+    if control_wells is None or n_control_wells < 6:
+        raise ValueError(
+            "diagnose_testing at cell resolution needs at least six reference wells to draw a genuine "
+            "well-block null (four to form the null, two for the pseudo-treatment); "
+            f"{block_name} gives {n_control_wells}. Aggregate to wells with mt.tl.aggregate to test at well level."
+        )
+    assert control_wells is not None  # narrowed by the guard above; the well-block call below needs it non-None
 
     typical = int(np.median(scored))
-    # Cap the pseudo-treatment at half the control wells so the rest can serve as the reference.
-    pseudo_wells = max(min(typical, n_control_wells // 2), 2)
+    # Cap the pseudo-treatment so at least four reference wells remain for a real well-block null, with the
+    # two-well floor the design needs; the six-well guard above keeps the floor from ever breaking the cap.
+    pseudo_wells = max(min(typical, n_control_wells - 4), 2)
     counts = _empirical_cell_hit_rate(
         controls, control_wells, pseudo_wells, n_draws, seed, n_permutations, alpha, method=method, well_block=well_unit
     )
