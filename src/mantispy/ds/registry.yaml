@@ -3099,6 +3099,12 @@ datasets:
     - name: 20221120_Run6__CP-CC9-R7-29__CP-CC9-R7-29.csv
       s3_key: cpg0016-jump/source_13/workspace/backend/20221120_Run6/CP-CC9-R7-29/CP-CC9-R7-29.csv
       sha256: 89ff2d98a188afa49bfbc681975e38330e7f3e1f95e5e5b97e1f923374497f85
+    # Staged default object (the eleven-plate default selection, annotated) rehosted on scverse-exampledata
+    # (explicit url overrides base_url, so the raw per-plate tables above stay on cellpainting-gallery). A
+    # non-default plate selection still reads those raw tables. Regenerate with scripts/build_staged_datasets.py.
+    - name: jump_target2.h5ad
+      url: https://scverse-exampledata.s3.eu-west-1.amazonaws.com/mantispy/jump_target2/jump_target2.h5ad
+      sha256: 3d9ddd26541f50685b2c5b515f63efbc479f4e4081e8f984998334605f035d8c
 
   jump_cells:
     type: mantispy

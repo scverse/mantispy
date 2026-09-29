@@ -344,29 +344,12 @@ def pki(
     return adata
 
 
-def jump_target2(
-    plates: Sequence[str] | None = TARGET2_DEFAULT, annotate: bool = True, cache_dir: str | Path | None = None
-) -> AnnData:
-    """JUMP-Target-2, one plate map run at many sites.
+def _assemble_jump_target2(plates: Sequence[str] | None, annotate: bool, cache_dir: str | Path | None) -> AnnData:
+    """Assemble a jump_target2 object from the raw per-plate profiles and backend count tables.
 
-    The JUMP consortium :cite:p:`Chandrasekaran_2023` ran the same plate map in every participating laboratory, so differences between plates from different sources are technical.
-    This makes it suited to studying batch and source effects.
-    All 141 of its plates in ``cpg0016-jump`` are pinned here, from eleven sources and 107 batches, which lets :func:`~mantispy.tl.transport` separate a laboratory effect from a batch and a plate effect.
-    source_9 ran it on 1536-well plates, the others on 384-well plates.
-
-    Args:
-        plates: Plate barcodes to load.
-            The default takes one plate from each source, about 0.7 GB, most of it the per-well table each plate's cell counts are published in; ``None`` loads all 141, 9.4 GB.
-        annotate: Join the JUMP annotation, which supplies ``Metadata_Perturbation`` and ``Metadata_Control``.
-            Downloads another 14 MB.
-        cache_dir: Where to keep the download.
-            Defaults to :attr:`mantispy.settings.cache_dir`.
-
-    Returns:
-        One row per well at well resolution, carrying ``Metadata_Source``, ``Metadata_Batch``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_CellCount``, ``Metadata_SiteCount`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_Perturbation_Type`` (``"compound"``), ``Metadata_InChIKey`` and ``Metadata_Control`` (the DMSO wells).
-
-    Raises:
-        KeyError: A plate is not one of the 141.
+    The raw pipeline the loader used before the default object was staged; it lives here so the loader can still
+    read any plate selection (the non-default ``plates`` and ``annotate=False`` paths) and so the drift check can
+    rebuild the hosted default from the raw inputs.
     """
     paths = _plate_files("jump_target2", plates, cache_dir)
     # The profiles carry no count; each plate's backend table does, among 7,600 other columns.
@@ -383,6 +366,39 @@ def jump_target2(
         adata.obs["Metadata_Source"].nunique(),
     )
     return adata
+
+
+def jump_target2(
+    plates: Sequence[str] | None = TARGET2_DEFAULT, annotate: bool = True, cache_dir: str | Path | None = None
+) -> AnnData:
+    """JUMP-Target-2, one plate map run at many sites.
+
+    The JUMP consortium :cite:p:`Chandrasekaran_2023` ran the same plate map in every participating laboratory, so differences between plates from different sources are technical.
+    This makes it suited to studying batch and source effects.
+    All 141 of its plates in ``cpg0016-jump`` are pinned here, from eleven sources and 107 batches, which lets :func:`~mantispy.tl.transport` separate a laboratory effect from a batch and a plate effect.
+    source_9 ran it on 1536-well plates, the others on 384-well plates.
+
+    The default object (one plate from each of the eleven sources, annotated) is pre-built by ``scripts/build_staged_datasets.py`` and rehosted on ``scverse-exampledata``, so the default call fetches a single h5ad. Any other plate selection, or ``annotate=False``, still reads the raw per-plate profiles and backend count tables directly, so the batch-effect study can load any subset or all 141 plates.
+
+    Args:
+        plates: Plate barcodes to load.
+            The default takes one plate from each source; ``None`` loads all 141, 9.4 GB.
+        annotate: Join the JUMP annotation, which supplies ``Metadata_Perturbation`` and ``Metadata_Control``.
+            Downloads another 14 MB.
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
+
+    Returns:
+        One row per well at well resolution, carrying ``Metadata_Source``, ``Metadata_Batch``, ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_CellCount``, ``Metadata_SiteCount`` and, when annotated, ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_Perturbation_Type`` (``"compound"``), ``Metadata_InChIKey`` and ``Metadata_Control`` (the DMSO wells).
+        The default call is read with :func:`mantispy.io.read`; any other selection is assembled from the raw tables.
+
+    Raises:
+        KeyError: A plate is not one of the 141.
+    """
+    if annotate and plates is not None and set(plates) == set(TARGET2_DEFAULT):
+        (path,) = _files("jump_target2", cache_dir, select=lambda name: name == "jump_target2.h5ad")
+        return read(path)
+    return _assemble_jump_target2(plates, annotate, cache_dir)
 
 
 #: The rehosted pooled_rare variant each ``feature_selected`` flag answers to.

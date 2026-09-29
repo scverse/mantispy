@@ -588,6 +588,20 @@ def _shipped_jump_cells() -> dict[str, AnnData]:
     }
 
 
+def build_jump_target2(cache_dir: str | Path | None = None) -> dict[str, AnnData]:
+    """Returns {'jump_target2.h5ad': the annotated default object, one plate from each of the eleven sources}."""
+    from mantispy.ds._datasets import TARGET2_DEFAULT, _assemble_jump_target2
+
+    return {"jump_target2.h5ad": _stable(_assemble_jump_target2(TARGET2_DEFAULT, True, cache_dir))}
+
+
+def _shipped_jump_target2() -> dict[str, AnnData]:
+    """The jump_target2 default object as fetched through the public ``mt.ds.jump_target2`` API."""
+    from mantispy.ds._datasets import jump_target2
+
+    return {"jump_target2.h5ad": jump_target2()}
+
+
 # One entry per staged dataset: (builder rebuilding the variants from the raw pipeline, loader returning the
 # shipped variants through the public ``mt.ds`` API keyed by the same filenames, ``heavy`` marking a rebuild
 # too large to run on every pull request). Later PRs stage a dataset by adding one entry here; the build and
@@ -606,4 +620,5 @@ STAGED: dict[str, tuple[Callable[..., dict[str, AnnData]], Callable[[], dict[str
     "jump_crispr": (build_jump_crispr, _shipped_jump_crispr, True),
     "cp_posh": (build_cp_posh_variants, _shipped_cp_posh, True),
     "jump_cells": (build_jump_cells, _shipped_jump_cells, True),
+    "jump_target2": (build_jump_target2, _shipped_jump_target2, True),
 }
