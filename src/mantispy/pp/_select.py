@@ -156,11 +156,20 @@ def _op_blocklist(adata: AnnData, blocklist: str | Sequence[str] = "default") ->
     return ~blocklist_hits(names, blocklist)
 
 
-def _op_noise_removal(X: np.ndarray, codes: np.ndarray, stdev_cutoff: float = 0.8) -> np.ndarray:
+def _op_noise_removal(
+    X: np.ndarray, codes: np.ndarray, stdev_cutoff: float = 0.8, *, mode: str = "absolute"
+) -> np.ndarray:
     """Drop features that vary too much within a perturbation group.
 
-    The statistic is the mean, over groups, of each group's population standard deviation (``ddof=0``).
+    The within-group spread of a feature is the mean, over groups, of each group's population standard deviation (``ddof=0``).
+    ``mode`` sets what ``stdev_cutoff`` is compared against:
+
+    - ``"absolute"``: the spread itself, pycytominer's behaviour, meaningful only on the scale the normalization left.
+    - ``"ratio"``: the spread divided by the feature's total standard deviation, so the cutoff means the same whichever normalization preceded it.
+    - ``"quantile"``: ``stdev_cutoff`` is read as a quantile of the observed within-group spreads, keeping the features below it.
     """
+    if mode not in ("absolute", "ratio", "quantile"):
+        raise ValueError(f"noise_removal_cutoff_mode must be 'absolute', 'ratio' or 'quantile', got {mode!r}")
     n_groups = int(codes.max()) + 1
     order, offsets = group_offsets(codes, n_groups)
     with warnings.catch_warnings():
@@ -168,7 +177,13 @@ def _op_noise_removal(X: np.ndarray, codes: np.ndarray, stdev_cutoff: float = 0.
         deviations = np.stack(
             [np.nanstd(X[order[offsets[group] : offsets[group + 1]]], axis=0, ddof=0) for group in range(n_groups)]
         )
-    return ~(np.nan_to_num(deviations.mean(axis=0), nan=0.0) > stdev_cutoff)
+        within = np.nan_to_num(deviations.mean(axis=0), nan=0.0)
+    cutoff = float(np.nanquantile(within, stdev_cutoff)) if mode == "quantile" else stdev_cutoff
+    if mode == "ratio":
+        total = np.nan_to_num(np.nanstd(X, axis=0, ddof=0), nan=0.0)
+        # A feature with no total spread has no noise to remove, so its ratio is zero and it is kept.
+        within = np.divide(within, total, out=np.zeros_like(within), where=total > 0)
+    return ~(within > cutoff)
 
 
 @inplace_or_copy()
@@ -194,6 +209,8 @@ def feature_select(
     decorr_method: str = "pearson",
     key_added: str = "selected",
     copy: bool = False,
+    *,
+    noise_removal_cutoff_mode: str = "absolute",
 ) -> AnnData | None:
     """Flag the features worth keeping.
 
@@ -232,6 +249,9 @@ def feature_select(
             An absolute threshold on the scale :func:`~mantispy.pp.normalize` left the values on, so it is only meaningful next to the normalization that produced them; pycytominer's default assumes whole-plate standardization.
         key_added: Name of the boolean ``var`` column to write.
         copy: Return a modified copy instead of mutating in place.
+        noise_removal_cutoff_mode: ``noise_removal``: what ``noise_removal_stdev_cutoff`` is compared against.
+            ``"absolute"`` (the default) keeps pycytominer's behaviour, comparing the raw within-group spread and so tied to the normalization scale.
+            ``"ratio"`` compares the within-group spread to the feature's total spread, and ``"quantile"`` reads the cutoff as a quantile of the observed within-group spreads; both keep a useful subset under the control-based or MAD normalization the package recommends, where the absolute cutoff keeps everything or nothing.
 
     Returns:
         ``None``, or the modified copy.
@@ -299,7 +319,7 @@ def feature_select(
             if noise_removal_perturb_groups not in adata.obs:
                 raise KeyError(f"obs has no column {noise_removal_perturb_groups!r} to group replicates by")
             codes, _ = group_codes(adata, noise_removal_perturb_groups)
-            mask = _op_noise_removal(X, codes, noise_removal_stdev_cutoff)
+            mask = _op_noise_removal(X, codes, noise_removal_stdev_cutoff, mode=noise_removal_cutoff_mode)
         removed[operation] = int((~mask).sum())
         keep[judged] &= mask
 
@@ -309,12 +329,24 @@ def feature_select(
         removed["decorrelate"] = int((~mask).sum())
         keep[survivors[~mask]] = False
 
+    noise_stripped = removed.get("noise_removal", 0)
+    # Only the absolute cutoff is tied to the normalization scale, so only it earns the scale-relative advice.
+    near_total_noise = noise_removal_cutoff_mode == "absolute" and noise_stripped > 0.95 * judged.size
     if not keep.any() and adata.n_vars:
         warnings.warn(
             f"feature_select flagged none of the {adata.n_vars} features as selected; "
             f"uns['mantispy']['feature_select'] says what each operation removed. Every cutoff here is an "
             f"absolute threshold on the scale pp.normalize left the values on, so check it against that "
             f"scale; noise_removal's stdev_cutoff is the usual cause.",
+            UserWarning,
+            stacklevel=3,
+        )
+    elif near_total_noise:
+        warnings.warn(
+            f"noise_removal alone flagged {noise_stripped} of the {judged.size} features it judged for removal "
+            "(more than 95%). Its stdev_cutoff is an absolute threshold on the scale pp.normalize left the values "
+            "on, so it strips nearly everything under the control-based or MAD normalization the package "
+            "recommends. Set noise_removal_cutoff_mode='ratio' or 'quantile' for a scale-relative cutoff.",
             UserWarning,
             stacklevel=3,
         )
