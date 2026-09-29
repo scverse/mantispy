@@ -149,6 +149,7 @@ envs.hatch-test.overrides.matrix.deps.env-vars = [
 envs.hatch-test.dependency-groups = [ "dev", "test" ]
 # CI executes every tutorial here, which keeps their committed outputs honest. Pinned to 3.12 for copairs.
 envs.tutorials.python = "3.12"
+envs.tutorials.scripts.case-studies = "jupyter nbconvert --to notebook --execute --inplace docs/case_studies/*.ipynb"
 envs.tutorials.scripts.run = "sphinx-build -M html docs docs/_build -W -D nb_execution_mode=cache {args}"
 envs.tutorials.dependency-groups = [ "tutorials" ]
 

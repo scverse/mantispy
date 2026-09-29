@@ -684,7 +684,7 @@ def jump_lite(model: str = "openphenom", annotate: bool = True, cache_dir: str |
 
         The trained embeddings here carry the cell count in their leading components, where it can account for more of the variance than either the laboratory or the imaging site.
         The untrained ``"dinov2_random"`` does not, and neither does ``"cp_measure"``, whose per-cell measurements are averaged over the well.
-        Measure it with :func:`~mantispy.metrics.evaluate_correction` before correcting for anything else, and read :doc:`/tutorials/multisite/learned_embeddings` on why removing it is not obviously right.
+        Measure it with :func:`~mantispy.metrics.evaluate_correction` before correcting for anything else, and read :doc:`/case_studies/learned_embeddings` on why removing it is not obviously right.
 
     References:
         :cite:t:`Munoz_2026`, :cite:t:`Chandrasekaran_2023`, :cite:t:`Weisbart_2024`.
