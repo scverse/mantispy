@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from functools import cache
 from importlib.util import find_spec
-from typing import TYPE_CHECKING, TypeVar, cast
+from typing import TYPE_CHECKING, cast
 
 import pandas as pd
 
@@ -38,10 +38,7 @@ def axes(ax: Axes | None, figsize: tuple[float, float]) -> Axes:
     return ax
 
 
-_R = TypeVar("_R", bound="Axes | np.ndarray")
-
-
-def returned(result: _R | None, *, owned: bool | None = None) -> _R | None:
+def returned[R: Axes | np.ndarray](result: R | None, *, owned: bool | None = None) -> R | None:
     """The value a plot hands back under the scanpy-style owned-figure contract.
 
     Returns the drawn axes only when the caller supplied their own ``ax`` (they
