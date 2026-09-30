@@ -32,7 +32,7 @@ pip install 'mantispy[harmony]'
 
 ### Mean average precision
 
-{func}`~mantispy.tl.map` runs copairs, which requires Python below 3.13:
+{func}`~mantispy.tl.map` runs copairs, an optional extra:
 
 ```console
 pip install 'mantispy[map]'
