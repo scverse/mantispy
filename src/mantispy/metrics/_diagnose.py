@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import warnings
+from collections.abc import Callable
 
 import anndata as ad
 import numpy as np
@@ -103,7 +104,10 @@ def _empirical_cell_hit_rate(
     from mantispy.tl._hits import hit_calling
 
     # Each caller reuses one result key, with the extra keyword only hit_calling takes.
-    callers = (("hit_calling", hit_calling, {"method": method}), ("edistance", edistance, {}))
+    callers: tuple[tuple[str, Callable[..., object], dict[str, str]], ...] = (
+        ("hit_calling", hit_calling, {"method": method}),
+        ("edistance", edistance, {}),
+    )
     values = get_matrix(controls)
     wells = np.unique(well_codes)
     called: dict[str, dict[str, int]] = {name: {"well-block": 0, "cell-shuffle": 0} for name, _, _ in callers}
