@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import warnings
+from collections.abc import Callable
 
 import anndata as ad
 import numpy as np
@@ -8,10 +9,10 @@ import pandas as pd
 from anndata import AnnData
 
 from mantispy._core._reduce import get_matrix, group_codes, group_offsets
-from mantispy._core._stats import benjamini_hochberg
+from mantispy._core._stats import _default_well_block, benjamini_hochberg
 from mantispy._core.frames import as_frame
 from mantispy._core.masks import reference_mask
-from mantispy._core.schema import get_resolution, stamp
+from mantispy._core.schema import RESOLUTIONS, stamp
 
 #: How far the observed null rate may exceed the nominal one before it is a failure.
 TOLERANCE = 2.0
@@ -73,6 +74,183 @@ def _empirical_hit_rate(
     return {name: int(value) for name, value in called.items()}
 
 
+def _empirical_cell_hit_rate(
+    controls: AnnData,
+    well_codes: np.ndarray,
+    pseudo_wells: int,
+    n_draws: int,
+    seed: int,
+    n_permutations: int,
+    alpha: float,
+    *,
+    method: str,
+    well_block: str | None,
+) -> dict[str, dict[str, int]]:
+    """Count control-only pseudo-treatments each hit caller calls, under two nulls side by side.
+
+    A pseudo-treatment is every cell of a random subset of control wells, kept whole, since the well
+    structure is what makes the two nulls differ. Each caller runs twice per draw:
+
+    - ``well-block``: the caller with the ``well_block`` unit (``None`` is the physical well), which draws
+      whole wells for the null, the design's exchangeable unit. This is the calibrated rate.
+    - ``cell-shuffle``: the same caller given a block that puts every cell in its own group, so its own
+      well-block permutation engine resamples single cells. Cells within a well are not independent
+      replicates, so this rate is anti-conservative and is the number to distrust.
+
+    Both go through the caller's one code path, so the difference is the null unit alone.
+    ``hit_calling`` runs the ``method`` the caller passed, ``"ks"`` at cell resolution by default.
+    """
+    from mantispy.tl._distance import edistance
+    from mantispy.tl._hits import hit_calling
+
+    # Each caller reuses one result key, with the extra keyword only hit_calling takes.
+    callers: tuple[tuple[str, Callable[..., object], dict[str, str]], ...] = (
+        ("hit_calling", hit_calling, {"method": method}),
+        ("edistance", edistance, {}),
+    )
+    values = get_matrix(controls)
+    wells = np.unique(well_codes)
+    called: dict[str, dict[str, int]] = {name: {"well-block": 0, "cell-shuffle": 0} for name, _, _ in callers}
+    for draw in range(n_draws):
+        rng = np.random.default_rng(seed + draw)
+        picked = rng.choice(wells, size=pseudo_wells, replace=False)
+        labels = np.where(np.isin(well_codes, picked), "__pseudo__", "__reference__")
+        obs = as_frame(controls.obs).copy()
+        obs["Metadata_Perturbation"] = labels
+        obs["Metadata_Control"] = labels == "__reference__"
+        # One block per cell: whole-block resampling then draws single cells, a free cell shuffle.
+        obs["__cell__"] = np.arange(controls.n_obs)
+        scratch = ad.AnnData(X=values.copy(), obs=obs, var=as_frame(controls.var).copy())
+        stamp(scratch, resolution="cell")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            for mode, block in (("well-block", well_block), ("cell-shuffle", "__cell__")):
+                for name, function, extra in callers:
+                    function(
+                        scratch, block=block, n_permutations=n_permutations, seed=draw, key_added="__result__", **extra
+                    )
+                    table = scratch.uns["mantispy"]["__result__"]
+                    row = table.loc[table["group"] == "__pseudo__", "pvalue"].to_numpy()
+                    called[name][mode] += int((row < alpha).sum())
+    return called
+
+
+def _diagnose_cell(
+    adata: AnnData,
+    groupby: str,
+    reference: str | None,
+    block: str | None,
+    n_draws: int,
+    alpha: float,
+    seed: int,
+    n_permutations: int,
+    method: str,
+) -> pd.DataFrame:
+    """Cell-resolution calibration: expose cell-within-well pseudoreplication.
+
+    Real control cells are relabeled as pseudo-treatments of whole control wells, and the false positive
+    rate of each hit caller is reported under the naive cell-shuffle null and the well-block null side by
+    side. See :func:`_empirical_cell_hit_rate` and the ``Notes`` of :func:`diagnose_testing`.
+    """
+    from scipy import stats
+
+    # At cell resolution `block` names the exchangeable unit for the permutation null, the well. The
+    # well-level default "Metadata_Plate" (a blocking covariate there) names no such unit, so it is read as
+    # the physical well; any other value is honored as the user's unit, matching the null their test runs.
+    well_unit = None if block == "Metadata_Plate" else block
+    block_name = "the physical well" if well_unit is None else f"the {well_unit!r} block"
+
+    is_control = reference_mask(adata, reference)
+    codes, keys = group_codes(adata, groupby)
+    if well_unit is not None and well_unit not in adata.obs.columns:
+        raise ValueError(
+            f"diagnose_testing at cell resolution was asked to block on {well_unit!r}, which is not an obs "
+            "column; pass a well column for the well-block null, or leave block at its default for the physical well"
+        )
+    well_codes = _default_well_block(adata, block=well_unit)
+    if well_codes is None:
+        raise ValueError(
+            "diagnose_testing at cell resolution needs a complete (Metadata_Plate, Metadata_Well) with "
+            "replicated wells to draw the well-block null; add it, or aggregate to wells with mt.tl.aggregate"
+        )
+
+    # Wells per treatment, the analogue of the well-level sizes, so the pseudo-treatment matches yours.
+    treatment_wells = [
+        int(np.unique(well_codes[codes == index]).size)
+        for index in range(len(keys))
+        if not is_control[codes == index].all()
+    ]
+    scored = [count for count in treatment_wells if count >= 2]
+    controls = adata[is_control].copy()
+    control_wells = _default_well_block(controls, block=well_unit)
+    n_control_wells = 0 if control_wells is None else int(np.unique(control_wells).size)
+    if not scored:
+        raise ValueError("need at least one treatment on two wells to measure a null against")
+    # A genuine well-block null needs four reference wells left after the pseudo-treatment is drawn, since
+    # hit_calling keeps the well block only with four or more reference wells and otherwise falls back to a
+    # per-cell KS test, plus a pseudo-treatment of at least two wells: at least six reference wells in all.
+    if control_wells is None or n_control_wells < 6:
+        raise ValueError(
+            "diagnose_testing at cell resolution needs at least six reference wells to draw a genuine "
+            "well-block null (four to form the null, two for the pseudo-treatment); "
+            f"{block_name} gives {n_control_wells}. Aggregate to wells with mt.tl.aggregate to test at well level."
+        )
+    assert control_wells is not None  # narrowed by the guard above; the well-block call below needs it non-None
+
+    typical = int(np.median(scored))
+    # Cap the pseudo-treatment so at least four reference wells remain for a real well-block null, with the
+    # two-well floor the design needs; the six-well guard above keeps the floor from ever breaking the cap.
+    pseudo_wells = max(min(typical, n_control_wells - 4), 2)
+    counts = _empirical_cell_hit_rate(
+        controls, control_wells, pseudo_wells, n_draws, seed, n_permutations, alpha, method=method, well_block=well_unit
+    )
+
+    # A calibrated test calls a pseudo-treatment at rate alpha, so the count over n_draws is
+    # Binomial(n_draws, alpha) and the cutoff is its 95th percentile, as the well-level hit-caller rows use.
+    critical = int(stats.binom.ppf(0.95, n_draws, alpha))
+    rows = []
+    for name in ("hit_calling", "edistance"):
+        well_block = counts[name]["well-block"]
+        cell_shuffle = counts[name]["cell-shuffle"]
+        measured = f"method={method!r} and {block_name}" if name == "hit_calling" else block_name
+        rows.append(
+            {
+                "check": f"{name} well-block null rate",
+                "value": f"{well_block} of {n_draws}",
+                "expected": f"<= {critical}",
+                "verdict": _verdict(well_block <= critical, warn=well_block <= critical + 1),
+                "note": (
+                    f"{name} called a control-only pseudo-treatment of {pseudo_wells} wells at p<{alpha} in "
+                    f"{well_block} of {n_draws} draws, drawing whole wells for the null with {measured} as the cell "
+                    f"design requires; a calibrated test exceeds {critical} about 5% of the time by chance. This is "
+                    "the rate to trust."
+                ),
+            }
+        )
+        # Pseudoreplication is present when the cell-shuffle count exceeds both the well-block rate and the
+        # chance cutoff; a clean screen where cells are roughly exchangeable keeps the two rates in line.
+        inflated = cell_shuffle > well_block and cell_shuffle > critical
+        rows.append(
+            {
+                "check": f"{name} cell-shuffle null rate",
+                "value": f"{cell_shuffle} of {n_draws}",
+                "expected": f"<= {well_block} (well-block)",
+                "verdict": _verdict(not inflated, warn=inflated and cell_shuffle <= critical + 1),
+                "note": (
+                    f"the same {name} null permuting single cells instead of whole wells, called in {cell_shuffle} "
+                    f"of {n_draws} draws. Cells within a well are not independent replicates, so a rate above both "
+                    f"the well-block rate of {well_block} and the chance cutoff of {critical} is pseudoreplication"
+                    + (
+                        "; it is inflated here, so cells are not exchangeable on this screen."
+                        if inflated
+                        else "; it is in line with the well-block rate here, so cells are roughly exchangeable."
+                    )
+                ),
+            }
+        )
+    return pd.DataFrame(rows, columns=["check", "value", "expected", "verdict", "note"])
+
+
 def diagnose_testing(
     adata: AnnData,
     groupby: str = "Metadata_Perturbation",
@@ -82,6 +260,8 @@ def diagnose_testing(
     alpha: float = 0.05,
     seed: int = 0,
     n_permutations: int = 200,
+    *,
+    method: str = "ks",
 ) -> pd.DataFrame:
     """Check whether differential testing is calibrated on this screen.
 
@@ -89,24 +269,39 @@ def diagnose_testing(
         adata: Well-level profiles after the normalization and transform you plan to test with, since the results depend on both.
         groupby: As in :func:`~mantispy.tl.differential_features`.
         reference: As in :func:`~mantispy.tl.differential_features`.
-        block: As in :func:`~mantispy.tl.differential_features`.
+        block: At well resolution, as in :func:`~mantispy.tl.differential_features`.
+            At cell resolution it names the exchangeable unit for the permutation null, normally the well; the well-level default ``"Metadata_Plate"`` is read there as the physical well, and any other column is honored so the diagnosed null equals the null your test would run.
         n_draws: Pseudo-treatments drawn from the controls for the empirical null.
             More draws resolve the false positive rate better and take longer.
         alpha: Nominal rate the null is compared against.
         seed: Seed for choosing which control wells stand in for a treatment.
             The two hit callers' permutation nulls are seeded by the draw index instead, so they are identical across calls that differ only in ``seed``.
         n_permutations: Null size for the two hit callers; smaller is faster and coarser.
+        method: Keyword-only. The :func:`~mantispy.tl.hit_calling` method the cell-resolution checks measure, ``"ks"`` by default because the diagnostic is about pseudoreplication.
+            ``"mahalanobis"`` whitens the distances, which divides out the between-well signal the cell-shuffle null exists to expose, so it cannot show that inflation.
+            It is not used at well resolution, which keeps each caller's own default.
 
     Returns:
         A frame with columns ``check``, ``value``, ``expected``, ``verdict`` and ``note``, one row per check that ran, where a ``FAIL`` verdict means the check does not hold on this data.
         The empirical-null rows are absent when every null p-value came back non-finite, and the two hit-caller rows need at least eight reference wells.
 
     Raises:
-        ValueError: The object is annotated at cell resolution, which none of these checks describe.
-        ValueError: No treatment has two wells, or there are fewer than four reference wells, leaving nothing to measure a null against.
+        ValueError: At well resolution, no treatment has two wells, or there are fewer than four reference wells, leaving nothing to measure a null against.
+            At cell resolution, the object is not stamped a known resolution (stamp it with :func:`mantispy.io.stamp`, or aggregate to wells with :func:`~mantispy.tl.aggregate`); or it has no complete, replicated well column, or a ``block`` naming no ``obs`` column, to draw the well-block null from; or fewer than six reference wells, too few to leave four for the null after a two-well pseudo-treatment.
 
     Notes:
-        The checks and what each one detects:
+        At cell resolution the checks change, because cells within a well are not independent replicates and the well-level checks describe well-level testing. Control cells are relabeled as pseudo-treatments of whole control wells and put through the two cell-resolution hit callers under two nulls. Each row's ``note`` names the block the null draws whole, and the ``hit_calling`` rows name ``method`` too, so there is no silent substitution of the test you meant:
+
+        ``hit_calling well-block null rate`` / ``edistance well-block null rate``
+            The caller drawing whole wells for its null, the design's exchangeable unit.
+            The count is compared against the upper tail of ``Binomial(n_draws, alpha)`` as the well-level hit-caller rows are.
+            This is the rate to trust.
+        ``hit_calling cell-shuffle null rate`` / ``edistance cell-shuffle null rate``
+            The same caller with the null permuting single cells instead of whole wells.
+            Cells within a well share the well, so this shrinks the null spread by the cell count rather than the well count and runs above the well-block rate when cells are not exchangeable.
+            The verdict compares the two: it fails when the cell-shuffle count exceeds both the well-block rate and the chance cutoff, the signature of pseudoreplication, and passes when the two rates agree.
+
+        At well resolution the checks and what each one detects:
 
         ``null p < 0.05`` / ``null p < 0.01``
             Control wells relabeled as treatments of the size yours have.
@@ -132,8 +327,17 @@ def diagnose_testing(
     """
     from scipy import stats
 
-    if get_resolution(adata) == "cell":
-        raise ValueError("diagnose_testing describes well-level testing; aggregate first with mt.tl.aggregate")
+    resolution = adata.uns.get("mantispy", {}).get("resolution")
+    if resolution == "cell":
+        return _diagnose_cell(adata, groupby, reference, block, n_draws, alpha, seed, n_permutations, method)
+    if resolution not in RESOLUTIONS:
+        # get_resolution would default an unstamped object to "cell" and route it to the cell path, which then
+        # cannot tell whether its wells are single cells; name the two fixes instead of a missing-column error.
+        raise ValueError(
+            "diagnose_testing cannot tell this object's resolution because it is not stamped, and the checks "
+            "differ by resolution. Stamp it with mt.io.stamp(resolution=...), or aggregate single cells to "
+            "wells with mt.tl.aggregate first."
+        )
 
     obs = as_frame(adata.obs)
     is_control = reference_mask(adata, reference)

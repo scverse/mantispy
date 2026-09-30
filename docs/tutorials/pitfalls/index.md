@@ -4,9 +4,16 @@ A trustworthy backend teaches its own failure modes. Image-based profiling has a
 a confident, plausible-looking number from data that cannot support it, and none of them raise an error. This tier
 collects them: what the symptom looks like, and how mantispy lets you detect it.
 
-The pages that will live here:
+```{toctree}
+:hidden:
+:maxdepth: 1
 
-- **Pseudoreplication.** *Symptom:* a treatment looks highly significant because every cell in a well is counted
+pseudoreplication
+```
+
+The pages here, with the rest to come:
+
+- **[Pseudoreplication](pseudoreplication.ipynb).** *Symptom:* a treatment looks highly significant because every cell in a well is counted
   as an independent replicate, inflating the sample size a hundredfold. *Fix:* aggregate to the well (or plate)
   first with `tl.aggregate`, and treat wells, not cells, as the unit of replication.
 - **Wrong normalization for compounds.** *Symptom:* hits and effect sizes shift when a plate's staining drifts,
