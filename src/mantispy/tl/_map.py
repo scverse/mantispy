@@ -198,7 +198,7 @@ def map(
         Writes the per-group table to ``uns["mantispy"][key_added]`` and joins ``obs[key_added]`` and ``obs[key_added + "_qvalue"]`` back onto the rows.
 
     Raises:
-        ImportError: copairs is not installed, which it is not by default because it needs Python < 3.13.
+        ImportError: copairs is not installed; it is an optional extra.
         ValueError: ``mode`` was passed together with explicit pair arguments or neither was passed, ``mode`` is not one of ``MODES``, ``mode="consistency"`` came without ``annotation_key``, ``mode="activity"`` found no controls, no profile has a negative pair to be ranked against, or the profiles hold missing values, which cannot be ranked.
         KeyError: ``obs`` is missing a column the pair definitions or ``reference`` name.
     """
@@ -206,8 +206,7 @@ def map(
         from copairs import map as _  # noqa: F401 - the scoring imports it again; this is the friendly early guard
     except ImportError as error:  # pragma: no cover - exercised only without the extra
         raise ImportError(
-            "mt.tl.map needs copairs, an optional extra because it requires Python < 3.13. "
-            "Install it with pip install 'mantispy[map]' on Python 3.12 or older."
+            "mt.tl.map needs copairs, an optional extra. Install it with pip install 'mantispy[map]'."
         ) from error
 
     explicit = any([pos_sameby, pos_diffby, neg_sameby, neg_diffby])

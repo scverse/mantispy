@@ -41,14 +41,14 @@ dependencies = [
   # for debug logging (referenced from the issue template)
   "session-info2",
 ]
-# copairs declares requires-python <3.13, so it cannot be a hard dependency of a package
-# that supports 3.13+. mt.tl.map raises with install instructions when it is missing.
 optional-dependencies.harmony = [ "harmonypy>=2" ]
 # The integration benchmark (mt.metrics.evaluate_integration) delegates iLISI/cLISI, the
 # silhouettes and kBET to scib-metrics, the ecosystem standard for them.
 optional-dependencies.integration = [ "scib-metrics>=0.5.1" ]
 optional-dependencies.interactive = [ "plotly>=5" ]
-optional-dependencies.map = [ "copairs>=0.5" ]
+# copairs powers mt.tl.map; kept optional because it is a niche feature that pulls in duckdb and
+# statsmodels. 0.5.5 dropped its <3.13 requires-python cap, so it installs on every supported Python.
+optional-dependencies.map = [ "copairs>=0.5.5" ]
 optional-dependencies.spatial = [
   "dask>=2024.4",
   "geopandas>=1",
@@ -70,7 +70,7 @@ dev = [
 ]
 test = [
   # Reference implementations, used only to assert equivalence. Never imported from src/.
-  "copairs>=0.5; python_version<'3.13'",
+  "copairs>=0.5.5",
   "coverage>=7.10",
   # pp.harmony; harmonypy has no Python 3.14 wheel yet and its source build fails on Linux
   "harmonypy>=2; python_version<'3.14'",
@@ -103,11 +103,11 @@ doc = [
   "sphinxcontrib-katex",
   "sphinxext-opengraph",
 ]
-# Executing the notebooks needs what they call. copairs caps itself below Python 3.13, which is why the
-# tutorials environment pins 3.12 while the docs build itself runs on any version.
+# Executing the notebooks needs what they call. Pinned below Python 3.14 because harmonypy ships no
+# 3.14 wheel yet; the docs build itself renders committed outputs and runs on any version.
 tutorials = [
   { include-group = "doc" },
-  "copairs>=0.5",
+  "copairs>=0.5.5",
   "harmonypy>=2",
   "igraph",
   "ipykernel",
@@ -153,8 +153,9 @@ envs.hatch-test.overrides.matrix.deps.env-vars = [
   { value = "allow", key = "UV_PRERELEASE", if = [ "pre" ] },
 ]
 envs.hatch-test.dependency-groups = [ "dev", "test" ]
-# CI executes every tutorial here, which keeps their committed outputs honest. Pinned to 3.12 for copairs.
-envs.tutorials.python = "3.12"
+# CI executes every tutorial here, which keeps their committed outputs honest. Pinned to 3.13 (harmonypy
+# has no 3.14 wheel yet).
+envs.tutorials.python = "3.13"
 envs.tutorials.scripts.case-studies = "jupyter nbconvert --to notebook --execute --inplace docs/case_studies/*.ipynb"
 envs.tutorials.scripts.run = "sphinx-build -M html docs docs/_build -W -D nb_execution_mode=cache {args}"
 envs.tutorials.dependency-groups = [ "tutorials" ]

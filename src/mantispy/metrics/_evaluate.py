@@ -30,7 +30,7 @@ def _has_scib() -> bool:
 
 
 def _has_copairs() -> bool:
-    """Whether copairs, which adds the mean-average-precision block, can be imported (it needs Python < 3.13)."""
+    """Whether copairs, which adds the mean-average-precision block, can be imported."""
     try:
         from copairs import map as _  # noqa: F401
     except ImportError:
