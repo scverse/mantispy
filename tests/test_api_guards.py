@@ -8,12 +8,12 @@ import mantispy as mt
 
 SRC = pathlib.Path(mt.__file__).parent
 
-#: harmonypy is absent because pp.harmony imports it as an optional runtime dependency.
+#: harmonypy is absent because pp.harmony imports it as an optional runtime dependency;
+#: scib_metrics is absent because metrics.evaluate_correction imports it the same way, behind mantispy[integration].
 REFERENCE_LIBRARIES = {
     "pycytominer",
     "pyod",
     "scib",
-    "scib_metrics",
     "cytominer_eval",
     "scmorph",
 }
