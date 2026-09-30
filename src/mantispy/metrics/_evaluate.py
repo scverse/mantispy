@@ -8,7 +8,7 @@ import pandas as pd
 from mantispy.metrics._common import tidy
 from mantispy.metrics._lisi import _lisi
 from mantispy.metrics._silhouette import _silhouette_batch, _silhouette_label
-from mantispy.metrics._variance import _pc_regression
+from mantispy.metrics._variance import pc_regression
 
 if TYPE_CHECKING:
     from anndata import AnnData
@@ -97,11 +97,11 @@ def evaluate_correction(
             # Without kind, a batch_key such as "Metadata_Site" would be named clisi, like the label row.
             _lisi(adata, key=batch_key, use_rep=rep, perplexity=perplexity, kind="batch"),
             _lisi(adata, key=label_key, use_rep=rep, perplexity=perplexity, kind="label"),
-            _pc_regression(adata, key=batch_key, use_rep=rep),
+            pc_regression(adata, key=batch_key, use_rep=rep),
         ]
         # Two rows called "pc_regression" would collide when the table is pivoted on the metric.
         for covariate in covariates:
-            measured = _pc_regression(adata, key=covariate, use_rep=rep)
+            measured = pc_regression(adata, key=covariate, use_rep=rep)
             frames.append(measured.assign(metric=f"pc_regression:{covariate}"))
     if map_key is not None:
         frames.append(_map_row(adata, map_key, label_key))

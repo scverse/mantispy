@@ -15,4 +15,6 @@ Each returns a tidy frame with `metric`, `representation`, `key` and `value`, so
     metrics.known_relationships
     metrics.evaluate_correction
     metrics.diagnose_testing
+    metrics.pc_regression
+    metrics.batch_variance_explained
 ```
