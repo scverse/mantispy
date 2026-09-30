@@ -1,13 +1,13 @@
 from __future__ import annotations
 
+import warnings
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+import numpy as np
 import pandas as pd
 
-from mantispy.metrics._common import tidy
-from mantispy.metrics._lisi import _lisi
-from mantispy.metrics._silhouette import _silhouette_batch, _silhouette_label
+from mantispy.metrics._common import embedding, tidy
 from mantispy.metrics._variance import pc_regression
 
 if TYPE_CHECKING:
@@ -21,6 +21,8 @@ BETTER = {
     "pc_regression": "lower",
     "mean_average_precision": "higher",
 }
+
+_BATCH_HINTS = ("batch", "plate", "source", "week", "run")
 
 
 def _map_row(adata: AnnData, map_key: str, label_key: str) -> pd.DataFrame:
@@ -55,6 +57,116 @@ def _map_row(adata: AnnData, map_key: str, label_key: str) -> pd.DataFrame:
     return tidy("mean_average_precision", rep, label_key, value)
 
 
+def _lisi_row(scib_metrics: Any, adata: AnnData, key: str, use_rep: str, perplexity: float, kind: str) -> pd.DataFrame:
+    """Median LISI over rows :cite:p:`Korsunsky_2019`, from scib-metrics, or NaN when the row count cannot support ``perplexity``."""
+    from scib_metrics.nearest_neighbors import NeighborsResults
+    from sklearn.neighbors import NearestNeighbors
+
+    values = embedding(adata, use_rep)
+    labels = adata.obs[key].to_numpy()
+    missing = int(pd.isna(labels).sum())
+    if missing:
+        raise ValueError(f"obs[{key!r}] has {missing} missing value(s); drop those rows or fill the column.")
+
+    metric = "ilisi" if kind == "batch" else "clisi"
+    n_neighbors = int(perplexity * 3)
+    if n_neighbors >= adata.n_obs:
+        # Each neighborhood needs n_neighbors + 1 rows; with fewer, scib cannot calibrate the kernel and LISI is undefined.
+        supported = (adata.n_obs - 1) // 3
+        remedy = f"pass a perplexity of at most {supported}" if supported >= 2 else "measure on a larger object"
+        warnings.warn(
+            f"LISI over obs[{key!r}] is undefined at perplexity={perplexity}: the kernel is calibrated over "
+            f"{n_neighbors} neighbors, which needs {n_neighbors + 1} rows, and this object has {adata.n_obs}. "
+            f"A 48-well plate, or a consensus object with one row per perturbation, is the usual cause; "
+            f"to measure it, {remedy}. Returning NaN.",
+            UserWarning,
+            stacklevel=2,
+        )
+        return tidy(metric, use_rep, key, np.nan)
+
+    # Self is kept in the graph (index 0); scib masks it out when calibrating the kernel.
+    distances, indices = NearestNeighbors(n_neighbors=n_neighbors + 1).fit(values).kneighbors(values)
+    neighbors = NeighborsResults(indices=indices, distances=distances)
+    # scale=False returns the raw median LISI, so ilisi stays "higher is better" and clisi "lower is better".
+    knn = scib_metrics.ilisi_knn if kind == "batch" else scib_metrics.clisi_knn
+    value = knn(neighbors, labels, perplexity=perplexity, scale=False)
+    return tidy(metric, use_rep, key, float(value))
+
+
+def _silhouette_label_row(scib_metrics: Any, adata: AnnData, label_key: str, use_rep: str) -> pd.DataFrame:
+    """Label separation rescaled to ``[0, 1]``, from scib-metrics, or NaN when separation is undefined for the object."""
+    values = embedding(adata, use_rep)
+    labels = adata.obs[label_key].to_numpy()
+
+    n_labels = len(pd.unique(labels))
+    if not 2 <= n_labels <= adata.n_obs - 1:
+        # The silhouette needs between 2 and n_obs - 1 distinct labels; scib would raise here without naming the cause.
+        warnings.warn(
+            f"the label silhouette is undefined for obs[{label_key!r}]: it needs between 2 and "
+            f"n_obs - 1 distinct labels, and this object has {n_labels} over {adata.n_obs} rows. "
+            "One row per label, as a consensus object has, is the usual cause. Returning NaN.",
+            UserWarning,
+            stacklevel=2,
+        )
+        return tidy("silhouette_label", use_rep, label_key, np.nan)
+
+    # rescale=True (the default) maps the average silhouette width into [0, 1].
+    value = scib_metrics.silhouette_label(values, labels)
+    return tidy("silhouette_label", use_rep, label_key, float(value))
+
+
+def _silhouette_batch_row(
+    scib_metrics: Any, adata: AnnData, label_key: str, batch_key: str, use_rep: str
+) -> pd.DataFrame:
+    """Batch mixing within each label, from scib-metrics, or NaN when every label is unscorable."""
+    values = embedding(adata, use_rep)
+    labels = adata.obs[label_key].to_numpy()
+    batches = adata.obs[batch_key].to_numpy()
+
+    # scib raises when every label group is undefined; check first so the panel gets NaN, not an error.
+    # A group is scored only when it holds more than one batch but fewer batches than rows.
+    def _scorable(label: object) -> bool:
+        rows = labels == label
+        return 1 < len(np.unique(batches[rows])) < int(rows.sum())
+
+    if not any(_scorable(label) for label in pd.unique(labels)):
+        return tidy("silhouette_batch", use_rep, batch_key, np.nan)
+
+    value = scib_metrics.silhouette_batch(values, labels, batches)
+    return tidy("silhouette_batch", use_rep, batch_key, float(value))
+
+
+def _scib_panel(
+    adata: AnnData, reps: Sequence[str], label_key: str, batch_key: str, perplexity: float
+) -> list[pd.DataFrame]:
+    """The batch-mixing rows scib-metrics owns, one block per representation.
+
+    iLISI/cLISI and the batch and label silhouettes come from scib-metrics :cite:p:`Korsunsky_2019`.
+    A metric that is undefined for the object (too few rows for the perplexity, one label, no scorable batch group) is a NaN row rather than a scib traceback.
+
+    Args:
+        adata: Object holding the representations in ``obsm``.
+        reps: Representations to score.
+        label_key: ``obs`` column with the biological grouping.
+        batch_key: ``obs`` column with the nuisance grouping.
+        perplexity: Perplexity for both LISI rows.
+
+    Returns:
+        One tidy frame per metric per representation.
+    """
+    import scib_metrics
+
+    frames = []
+    for rep in reps:
+        frames += [
+            _silhouette_label_row(scib_metrics, adata, label_key=label_key, use_rep=rep),
+            _silhouette_batch_row(scib_metrics, adata, label_key=label_key, batch_key=batch_key, use_rep=rep),
+            _lisi_row(scib_metrics, adata, key=batch_key, use_rep=rep, perplexity=perplexity, kind="batch"),
+            _lisi_row(scib_metrics, adata, key=label_key, use_rep=rep, perplexity=perplexity, kind="label"),
+        ]
+    return frames
+
+
 def evaluate_correction(
     adata: AnnData,
     *,
@@ -65,7 +177,9 @@ def evaluate_correction(
     map_key: str | None = None,
     perplexity: float = 30,
 ) -> pd.DataFrame:
-    """Run every metric for every representation and stack the results.
+    """Run the correction panel over every representation and stack the results.
+
+    The native PC-regression rows come from :func:`~mantispy.metrics.pc_regression`, and the batch-mixing rows (iLISI, cLISI, the batch and label silhouettes) come from scib-metrics through :func:`_scib_panel`.
 
     Args:
         adata: Object holding the representations in ``obsm``.
@@ -91,20 +205,15 @@ def evaluate_correction(
     """
     frames = []
     for rep in reps:
-        frames += [
-            _silhouette_label(adata, label_key=label_key, use_rep=rep),
-            _silhouette_batch(adata, label_key=label_key, batch_key=batch_key, use_rep=rep),
-            # Without kind, a batch_key such as "Metadata_Site" would be named clisi, like the label row.
-            _lisi(adata, key=batch_key, use_rep=rep, perplexity=perplexity, kind="batch"),
-            _lisi(adata, key=label_key, use_rep=rep, perplexity=perplexity, kind="label"),
-            pc_regression(adata, key=batch_key, use_rep=rep),
-        ]
+        frames.append(pc_regression(adata, key=batch_key, use_rep=rep))
         # Two rows called "pc_regression" would collide when the table is pivoted on the metric.
         for covariate in covariates:
             measured = pc_regression(adata, key=covariate, use_rep=rep)
             frames.append(measured.assign(metric=f"pc_regression:{covariate}"))
     if map_key is not None:
         frames.append(_map_row(adata, map_key, label_key))
+
+    frames += _scib_panel(adata, reps, label_key=label_key, batch_key=batch_key, perplexity=perplexity)
 
     result = pd.concat(frames, ignore_index=True)
     result["better"] = result["metric"].map(BETTER)

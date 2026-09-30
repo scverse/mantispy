@@ -2,32 +2,13 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 
 if TYPE_CHECKING:
     from anndata import AnnData
-
-
-def require_scib_metrics() -> Any:
-    """Import scib-metrics, or raise one actionable error naming the optional extra instead of a deep traceback.
-
-    Returns:
-        The imported ``scib_metrics`` module.
-
-    Raises:
-        ImportError: scib-metrics is not installed.
-    """
-    try:
-        import scib_metrics
-    except ImportError as error:
-        raise ImportError(
-            "mantispy's integration metrics need scib-metrics, an optional dependency. "
-            "Install it with pip install 'mantispy[integration]'."
-        ) from error
-    return scib_metrics
 
 
 def embedding(adata: AnnData, use_rep: str) -> np.ndarray:
