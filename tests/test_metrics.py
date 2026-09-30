@@ -1,4 +1,4 @@
-"""Integration metrics: the definitions follow scib, which nothing here imports, so these tests pin the behaviour rather than an equivalence."""
+"""Correction metrics: PC-regression is native and pinned against a plain-numpy reference; the batch-mixing rows come from scib-metrics, so the panel tests skip when it is absent and one test pins the graceful degradation."""
 
 import numpy as np
 import pandas as pd
@@ -31,6 +31,88 @@ def _value(frame, metric):
     return float(frame.loc[frame["metric"] == metric, "value"].iloc[0])
 
 
+def _pc_regression_pair(seed=0):
+    """An embedding with a categorical and a numeric covariate, needing no optional dependency."""
+    import anndata as ad
+
+    rng = np.random.default_rng(seed)
+    n = 150
+    values = rng.normal(size=(n, 6))
+    obs = pd.DataFrame(
+        {
+            "cat": pd.Categorical([f"g{index % 3}" for index in range(n)]),
+            "num": values[:, 0] * 0.5 + rng.normal(size=n),
+        },
+        index=[str(index) for index in range(n)],
+    )
+    adata = ad.AnnData(X=rng.normal(size=(n, 3)).astype(np.float32), obs=obs)
+    adata.obsm["X_pca"] = values
+    return adata, values
+
+
+def test_pc_regression_matches_a_plain_numpy_reference():
+    """The numba kernels agree with a plain-numpy variance-weighted R^2 to 1e-6 for both a categorical and a numeric covariate."""
+    from mantispy.metrics._common import r_squared
+
+    adata, values = _pc_regression_pair()
+
+    def reference(key):
+        covariate = adata.obs[key]
+        variances = values.var(axis=0, ddof=1)
+        weights = variances / variances.sum()
+        explained = np.array([r_squared(values[:, index], covariate) for index in range(values.shape[1])])
+        return float(np.sum(weights * explained))
+
+    for key in ("cat", "num"):
+        got = float(mt.metrics.pc_regression(adata, key)["value"].iloc[0])
+        assert got == pytest.approx(reference(key), abs=1e-6)
+
+
+def test_pc_regression_is_one_when_the_only_component_is_the_covariate():
+    """A single component that is exactly the covariate explains all of the variance, categorical or numeric."""
+    import anndata as ad
+
+    n = 60
+    rng = np.random.default_rng(1)
+    codes = np.array([index % 3 for index in range(n)])
+    obs = pd.DataFrame(
+        {
+            "cat": pd.Categorical([f"g{code}" for code in codes]),
+            "num": codes.astype(float) + rng.normal(scale=1e-6, size=n),
+        },
+        index=[str(index) for index in range(n)],
+    )
+    adata = ad.AnnData(X=rng.normal(size=(n, 2)).astype(np.float32), obs=obs)
+    adata.obsm["X_pca"] = codes.reshape(-1, 1).astype(float)
+
+    assert mt.metrics.pc_regression(adata, "cat")["value"].iloc[0] == pytest.approx(1.0, abs=1e-9)
+    assert mt.metrics.pc_regression(adata, "num")["value"].iloc[0] == pytest.approx(1.0, abs=1e-6)
+
+
+def test_pc_regression_returns_nan_for_a_constant_covariate():
+    """A single-value covariate has no variance to regress against, so its share is NaN with a warning, not a crash."""
+    import anndata as ad
+
+    rng = np.random.default_rng(2)
+    obs = pd.DataFrame({"batch": ["only"] * 40}, index=[str(index) for index in range(40)])
+    adata = ad.AnnData(X=rng.normal(size=(40, 3)).astype(np.float32), obs=obs)
+    adata.obsm["X_pca"] = rng.normal(size=(40, 4))
+
+    with pytest.warns(UserWarning, match="PC-regression"):
+        value = mt.metrics.pc_regression(adata, "batch")["value"].iloc[0]
+    assert np.isnan(value)
+
+
+def test_batch_variance_explained_covers_every_key():
+    """One PC-regression row per key, stacked into a single tidy frame."""
+    adata, _ = _pc_regression_pair()
+
+    frame = mt.metrics.batch_variance_explained(adata, keys=["cat", "num"])
+    assert set(frame["key"]) == {"cat", "num"}
+    assert (frame["metric"] == "pc_regression").all()
+    assert len(frame) == 2
+
+
 def test_evaluate_correction_compares_representations_and_names_the_map_row_honestly(corrected):
     """Reading one uns table once per representation gave every representation the same mAP, 0.7757 under both X_pca and X_other, inside the function whose purpose is comparing them."""
     pytest.importorskip("copairs")  # copairs declares requires-python <3.13
@@ -48,6 +130,7 @@ def test_evaluate_correction_compares_representations_and_names_the_map_row_hone
 
 def test_evaluate_correction_survives_an_object_where_most_metrics_are_undefined():
     """A consensus object holds one row per perturbation, where the label silhouette, batch mixing and both LISIs are undefined at once, and the table still has to come back with whatever can be measured."""
+    pytest.importorskip("scib_metrics")  # the four undefined rows this asserts on come from the scib panel
     import anndata as ad
 
     rng = np.random.default_rng(0)
@@ -120,6 +203,7 @@ def test_evaluate_correction_moves_the_batch_metrics_when_batches_separate():
     This pins the delegated scib-metrics panel through the one public entry: the tidy schema,
     the metric rows and the directions the metrics move.
     """
+    pytest.importorskip("scib_metrics")
     adata = _batch_split()
 
     frame = mt.metrics.evaluate_correction(
@@ -142,8 +226,8 @@ def test_evaluate_correction_moves_the_batch_metrics_when_batches_separate():
     assert per_rep[("pc_regression", "X_mixed")] < per_rep[("pc_regression", "X_separated")]
 
 
-def test_evaluate_correction_needs_the_integration_extra(corrected, monkeypatch):
-    """Without scib-metrics the one public entry raises a single clear install error, not a scib traceback."""
+def test_evaluate_correction_degrades_to_native_rows_without_scib_metrics(corrected, monkeypatch):
+    """Without scib-metrics the one public entry drops to the native PC-regression rows and warns once, naming what it left out, rather than raising a scib traceback."""
     import builtins
 
     real_import = builtins.__import__
@@ -154,8 +238,18 @@ def test_evaluate_correction_needs_the_integration_extra(corrected, monkeypatch)
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", _no_scib)
-    with pytest.raises(ImportError, match=r"mantispy\[integration\]"):
-        mt.metrics.evaluate_correction(corrected, reps=("X_pca",), perplexity=10)
+
+    with pytest.warns(UserWarning) as record:
+        frame = mt.metrics.evaluate_correction(corrected, reps=("X_pca",), perplexity=10)
+
+    # Only the native rows survive; the batch-mixing rows are gone.
+    assert set(frame["metric"]) == {"pc_regression"}
+    assert list(frame.columns) == ["metric", "representation", "key", "value", "better"]
+    assert np.isfinite(frame["value"]).all()
+
+    # One message names the omitted metrics and the extra that adds them.
+    messages = [str(warning.message) for warning in record]
+    assert any("iLISI" in message and "mantispy[integration]" in message for message in messages)
 
 
 def test_missing_representation_says_how_to_make_one(corrected):
