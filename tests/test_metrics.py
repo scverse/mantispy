@@ -69,6 +69,27 @@ def test_evaluate_correction_survives_an_object_where_most_metrics_are_undefined
     assert np.isfinite(values["pc_regression"])
 
 
+def test_evaluate_correction_returns_nan_for_pc_regression_on_a_single_batch():
+    """scib's PCR raises on a constant covariate; a single-batch object must yield NaN, not abort the panel."""
+    import anndata as ad
+
+    rng = np.random.default_rng(0)
+    obs = pd.DataFrame(
+        {
+            "Metadata_Perturbation": [f"p{index % 4}" for index in range(40)],
+            "Metadata_Batch": ["only"] * 40,  # one batch: the covariate PC-regression scores is constant
+        },
+        index=[str(index) for index in range(40)],
+    )
+    adata = ad.AnnData(X=rng.normal(size=(40, 6)).astype(np.float32), obs=obs)
+    adata.obsm["X_pca"] = rng.normal(size=(40, 4))
+
+    with pytest.warns(UserWarning, match="PC-regression"):
+        frame = mt.metrics.evaluate_correction(adata, perplexity=10)
+
+    assert np.isnan(_value(frame, "pc_regression"))
+
+
 def _batch_split(n=180, seed=0):
     """One object with two embeddings: batches mixed within labels, and batches shifted apart."""
     import anndata as ad

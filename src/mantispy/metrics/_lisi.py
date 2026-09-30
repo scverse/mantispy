@@ -64,7 +64,7 @@ def _lisi(adata: AnnData, key: str, use_rep: str = "X_pca", perplexity: float = 
 
     n_neighbors = int(perplexity * 3)
     if n_neighbors >= adata.n_obs:
-        # With fewer neighbors the bisection cannot reach log(perplexity) and LISI saturates at the number of labels.
+        # Each neighborhood needs n_neighbors + 1 rows; with fewer, scib cannot calibrate the kernel and LISI is undefined.
         supported = (adata.n_obs - 1) // 3
         remedy = f"pass a perplexity of at most {supported}" if supported >= 2 else "measure on a larger object"
         warnings.warn(
@@ -81,8 +81,6 @@ def _lisi(adata: AnnData, key: str, use_rep: str = "X_pca", perplexity: float = 
     distances, indices = NearestNeighbors(n_neighbors=n_neighbors + 1).fit(values).kneighbors(values)
     neighbors = NeighborsResults(indices=indices, distances=distances)
     # scale=False returns the raw median LISI, so ilisi stays "higher is better" and clisi "lower is better".
-    if kind == "batch":
-        value = scib_metrics.ilisi_knn(neighbors, labels, perplexity=perplexity, scale=False)
-    else:
-        value = scib_metrics.clisi_knn(neighbors, labels, perplexity=perplexity, scale=False)
+    knn = scib_metrics.ilisi_knn if kind == "batch" else scib_metrics.clisi_knn
+    value = knn(neighbors, labels, perplexity=perplexity, scale=False)
     return tidy(metric, use_rep, key, float(value))

@@ -12,11 +12,7 @@ if TYPE_CHECKING:
 
 
 def require_scib_metrics() -> Any:
-    """Import scib-metrics or raise one clear error naming the optional extra.
-
-    The integration metrics delegate to scib-metrics, which is optional so that
-    ``import mantispy.metrics`` works without it. This turns a missing dependency into
-    a single actionable message instead of a deep import traceback.
+    """Import scib-metrics, or raise one actionable error naming the optional extra instead of a deep traceback.
 
     Returns:
         The imported ``scib_metrics`` module.
@@ -26,7 +22,7 @@ def require_scib_metrics() -> Any:
     """
     try:
         import scib_metrics
-    except ImportError as error:  # pragma: no cover - exercised only without the extra
+    except ImportError as error:
         raise ImportError(
             "mantispy's integration metrics need scib-metrics, an optional dependency. "
             "Install it with pip install 'mantispy[integration]'."
@@ -67,6 +63,11 @@ def tidy(metric: str, use_rep: str, key: str, value: float) -> pd.DataFrame:
     return pd.DataFrame([{"metric": metric, "representation": use_rep, "key": key, "value": float(value)}])
 
 
+def is_categorical(covariate: pd.Series) -> bool:
+    """Whether a covariate is treated as categorical (one-hot encoded) rather than entering as a number."""
+    return isinstance(covariate.dtype, pd.CategoricalDtype) or not pd.api.types.is_numeric_dtype(covariate)
+
+
 def r_squared(component: np.ndarray, covariate: pd.Series) -> float:
     """R^2 of one component regressed on one covariate, numeric or categorical.
 
@@ -77,11 +78,11 @@ def r_squared(component: np.ndarray, covariate: pd.Series) -> float:
     Returns:
         The share of the component's variance the covariate explains, and ``0.0`` for a constant component, where that share is undefined.
     """
-    if pd.api.types.is_numeric_dtype(covariate) and not isinstance(covariate.dtype, pd.CategoricalDtype):
-        design = np.column_stack([np.ones(component.size), covariate.to_numpy(dtype=float)])
-    else:
+    if is_categorical(covariate):
         dummies = pd.get_dummies(covariate, drop_first=True, dtype=float).to_numpy()
         design = np.column_stack([np.ones(component.size), dummies])
+    else:
+        design = np.column_stack([np.ones(component.size), covariate.to_numpy(dtype=float)])
 
     coefficients, *_ = np.linalg.lstsq(design, component, rcond=None)
     residual = component - design @ coefficients

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -9,7 +10,7 @@ import pandas as pd
 
 from mantispy._core._reduce import get_matrix
 from mantispy._core.frames import as_frame
-from mantispy.metrics._common import embedding, require_scib_metrics, tidy
+from mantispy.metrics._common import embedding, is_categorical, require_scib_metrics, tidy
 
 if TYPE_CHECKING:
     from anndata import AnnData
@@ -27,7 +28,7 @@ def _pc_regression(adata: AnnData, key: str, use_rep: str = "X_pca", n_comps: in
         n_comps: Use only the leading components, or ``None`` for every component the embedding holds.
 
     Returns:
-        A one-row tidy frame holding ``pc_regression``.
+        A one-row tidy frame holding ``pc_regression``, whose value is NaN when ``key`` is constant (a single batch), where the share of variance it explains is undefined.
 
     Raises:
         ImportError: scib-metrics is not installed.
@@ -39,12 +40,21 @@ def _pc_regression(adata: AnnData, key: str, use_rep: str = "X_pca", n_comps: in
     if n_comps is not None:
         values = values[:, :n_comps]
     covariate = as_frame(adata.obs)[key]
-    # A categorical or non-numeric covariate is one-hot encoded by scib; a numeric one enters as it is.
-    categorical = not (
-        pd.api.types.is_numeric_dtype(covariate) and not isinstance(covariate.dtype, pd.CategoricalDtype)
-    )
 
-    value = scib_metrics.utils.principal_component_regression(values, covariate.to_numpy(), categorical=categorical)
+    if covariate.nunique(dropna=False) <= 1:
+        # scib's PCR raises on a constant covariate; return NaN so one undefined metric doesn't abort the panel.
+        warnings.warn(
+            f"PC-regression over obs[{key!r}] is undefined: the covariate is constant (a single batch), "
+            "so there is no variance to regress against. Returning NaN.",
+            UserWarning,
+            stacklevel=2,
+        )
+        return tidy("pc_regression", use_rep, key, np.nan)
+
+    # A categorical or non-numeric covariate is one-hot encoded by scib; a numeric one enters as it is.
+    value = scib_metrics.utils.principal_component_regression(
+        values, covariate.to_numpy(), categorical=is_categorical(covariate)
+    )
     return tidy("pc_regression", use_rep, key, float(value))
 
 
