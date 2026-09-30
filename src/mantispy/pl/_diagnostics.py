@@ -57,7 +57,7 @@ def plate_effects(adata: AnnData, feature: str | None = None, axes: np.ndarray |
     plates = sorted(frame["plate"].unique())
     owned = axes is None
     if axes is None:
-        _, axes = plt.subplots(len(plates), 2, figsize=(9, 3 * len(plates)), squeeze=False)
+        _, axes = plt.subplots(len(plates), 2, figsize=(9, 3 * len(plates)), squeeze=False, layout="constrained")
 
     for index, plate in enumerate(plates):
         block = frame[frame["plate"] == plate]

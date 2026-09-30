@@ -6,7 +6,7 @@
 ```
 
 Metrics do not modify the object.
-Most return a tidy frame with `metric`, `representation`, `key` and `value`, so results from several calls stack; `evaluate_integration` instead returns scib-metrics' benchmark table (or a per-representation mAP frame), so its output switches on what is installed.
+Most return a tidy frame with `metric`, `representation`, `key` and `value`, so results from several calls stack; `evaluate_integration` instead draws the scib-metrics integration panel as a heatmap and returns its numeric results frame, one row per representation.
 
 ```{eval-rst}
 .. autosummary::

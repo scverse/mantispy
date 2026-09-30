@@ -244,6 +244,94 @@ def metrics(table: pd.DataFrame, ax: Axes | None = None) -> Axes | None:
     return _returned(ax)
 
 
+def _integration_heatmap(
+    frame: pd.DataFrame,
+    blocks: dict[str, list[str]],
+    *,
+    aggregate_block: str = "Aggregate",
+    ax: Axes | None = None,
+) -> Axes | None:
+    """The integration-benchmark heatmap :func:`~mantispy.metrics.evaluate_integration` draws.
+
+    Draws one row per representation and one column per metric, the columns grouped into blocks that are
+    separated by a gap and carry a centered header. The metric blocks use the purple-green ``PRGn`` map and
+    the aggregate block a distinct ``YlGnBu``, so summary columns read apart from the metrics they summarize.
+    Every cell is annotated with its value, with the text colour chosen for contrast against the cell.
+
+    Args:
+        frame: Numeric results, one row per representation and one column per metric or aggregate score.
+        blocks: Ordered mapping of block header to the columns it holds, left to right; a column missing from
+            ``frame`` is drawn grey and left blank.
+        aggregate_block: Which block header gets the distinct aggregate colormap.
+        ax: Axes to draw on, or ``None`` for a new figure.
+
+    Returns:
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import Normalize
+    from matplotlib.patches import Rectangle
+
+    reps = [str(name) for name in frame.index]
+    n_rows = len(reps)
+
+    gap = 0.6
+    left_of: dict[str, float] = {}
+    spans: list[tuple[str, float, float]] = []
+    cursor = 0.0
+    for index, (title, columns) in enumerate(blocks.items()):
+        if index:
+            cursor += gap
+        start = cursor
+        for column in columns:
+            left_of[column] = cursor
+            cursor += 1.0
+        spans.append((title, start, cursor))
+    width = cursor
+
+    ax = _axes(ax, (max(width * 0.72 + 1.5, 4.0), n_rows * 0.55 + 2.2))
+    norm = Normalize(vmin=0.0, vmax=1.0, clip=True)
+    metric_cmap = plt.get_cmap("PRGn")
+    aggregate_cmap = plt.get_cmap("YlGnBu")
+
+    for title, _start, _end in spans:
+        cmap = aggregate_cmap if title == aggregate_block else metric_cmap
+        for column in blocks[title]:
+            left = left_of[column]
+            for row, rep in enumerate(reps):
+                value = float(frame.loc[rep, column]) if column in frame.columns else float("nan")
+                if np.isnan(value):
+                    ax.add_patch(Rectangle((left, row), 1.0, 1.0, facecolor="0.9", edgecolor="white", linewidth=1.0))
+                    continue
+                colour = cmap(norm(value))
+                ax.add_patch(Rectangle((left, row), 1.0, 1.0, facecolor=colour, edgecolor="white", linewidth=1.0))
+                luminance = 0.299 * colour[0] + 0.587 * colour[1] + 0.114 * colour[2]
+                ax.text(
+                    left + 0.5,
+                    row + 0.5,
+                    f"{value:.2f}",
+                    ha="center",
+                    va="center",
+                    fontsize=7,
+                    color="white" if luminance < 0.5 else "black",
+                )
+
+    for title, start, end in spans:
+        ax.text((start + end) / 2.0, -0.5, title, ha="center", va="bottom", fontsize=8, fontweight="bold")
+    for column, left in left_of.items():
+        ax.text(left + 0.5, n_rows + 0.15, column, ha="right", va="top", rotation=45, fontsize=7)
+
+    ax.set_yticks([row + 0.5 for row in range(n_rows)])
+    ax.set_yticklabels(reps, fontsize=8)
+    ax.set_xticks([])
+    ax.set_xlim(-0.1, width + 0.1)
+    ax.set_ylim(n_rows + 0.2, -1.3)  # inverted, so the first representation is on top with room for the headers
+    ax.tick_params(length=0)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    return _returned(ax)
+
+
 def similarity(
     adata: AnnData,
     key: str = "similarity",

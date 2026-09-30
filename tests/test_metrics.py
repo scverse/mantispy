@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-matplotlib.use("Agg")  # plot_results_table draws a figure
+matplotlib.use("Agg")  # the integration heatmap draws a figure
 
 import mantispy as mt
 
@@ -133,8 +133,24 @@ def _block_imports(monkeypatch, *blocked):
 def test_evaluate_integration_needs_at_least_one_engine(monkeypatch):
     """With neither scib-metrics nor copairs there is nothing to run, so it raises and names the extra to install."""
     _block_imports(monkeypatch, "scib_metrics", "copairs")
-    with pytest.raises(ImportError, match=r"mantispy\[integration\]"):
+    with pytest.raises(ImportError, match=r"mantispy\[integration,map\]"):
         mt.metrics.evaluate_integration(_scib_ready())
+
+
+def test_evaluate_integration_refuses_one_row_per_perturbation():
+    """A consensus object has no replicate pairs to score, so it fails with a message naming the cause, not a traceback."""
+    import anndata as ad
+
+    rng = np.random.default_rng(0)
+    obs = pd.DataFrame(
+        {"Metadata_Perturbation": [f"p{index}" for index in range(12)], "Metadata_Batch": ["b0", "b1"] * 6},
+        index=[str(index) for index in range(12)],
+    )
+    adata = ad.AnnData(X=rng.normal(size=(12, 4)).astype(np.float32), obs=obs)
+    adata.obsm["X_pca"] = rng.normal(size=(12, 4))
+
+    with pytest.raises(ValueError, match="one row per perturbation"):
+        mt.metrics.evaluate_integration(adata)
 
 
 def test_evaluate_integration_copairs_only_returns_a_per_rep_map_frame(monkeypatch):
@@ -154,60 +170,90 @@ def test_evaluate_integration_copairs_only_returns_a_per_rep_map_frame(monkeypat
     assert np.isfinite(frame["mean_average_precision"]).all()
 
 
-def test_evaluate_integration_scib_only_returns_a_table_with_no_map_row(monkeypatch):
-    """With scib-metrics but no copairs it returns the visual benchmark table and adds no mAP row."""
+def test_evaluate_integration_scib_only_returns_a_frame_without_a_map_block(monkeypatch):
+    """With scib-metrics but no copairs it returns the numeric frame with the aggregates and no mAP column."""
     pytest.importorskip("scib_metrics")
-    from plottable import Table
-
-    from mantispy.metrics import _evaluate
 
     adata = _scib_ready()
     _block_imports(monkeypatch, "copairs")
 
-    table = mt.metrics.evaluate_integration(adata, reps=("X_pca",))
-    assert isinstance(table, Table)
+    frame = mt.metrics.evaluate_integration(adata, reps=("X_pca",))
+    assert isinstance(frame, pd.DataFrame)
+    assert list(frame.index) == ["X_pca"]
+    assert "mean_average_precision" not in frame.columns  # no retrieval block without copairs
+    assert "Total+mAP" not in frame.columns  # and no mantispy total either
+    assert {"Batch correction", "Bio conservation", "Total"} <= set(frame.columns)
+    assert np.isfinite(frame["Total"]).all()
 
-    # The seam the mAP row would be written to carries no such row when copairs is absent.
-    bm = _evaluate._build(
-        adata, reps=("X_pca",), label_key="Metadata_Perturbation", batch_key="Metadata_Batch", with_map=False
-    )
-    assert "mean_average_precision" not in bm._results.index
 
-
-def test_evaluate_integration_both_injects_a_tagged_map_row():
-    """With both installed the mAP row is injected into the Benchmarker's results, tagged as bio conservation."""
+def test_evaluate_integration_both_returns_the_map_column_and_both_totals():
+    """With both installed the frame carries the metric columns, the mAP column and scib's Total beside mantispy's Total+mAP."""
     pytest.importorskip("scib_metrics")
     pytest.importorskip("copairs")
 
+    adata = _scib_ready()
+    adata.obsm["X_other"] = np.asarray(adata.obsm["X_pca"])[:, :4]
+
+    frame = mt.metrics.evaluate_integration(adata, reps=("X_pca", "X_other"))
+    assert isinstance(frame, pd.DataFrame)
+    assert list(frame.index) == ["X_pca", "X_other"]
+    assert "mean_average_precision" in frame.columns
+    assert {"Total", "Total+mAP", "Batch correction", "Bio conservation"} <= set(frame.columns)
+    assert np.isfinite(frame[["Total", "Total+mAP", "mean_average_precision"]].to_numpy()).all()
+
+
+def test_map_is_one_for_separable_labels_and_drops_when_shuffled():
+    """Ground truth: tight, well-separated label clusters retrieve perfectly, and shuffling the labels drops mAP to chance."""
+    pytest.importorskip("copairs")
+    import anndata as ad
+
+    from mantispy.metrics._evaluate import _map_settings, _rep_map
+
+    rng = np.random.default_rng(0)
+    n_labels, per, dim = 5, 6, 8
+    directions = rng.normal(size=(n_labels, dim)) * 5.0
+    rows, labels, batches = [], [], []
+    for label in range(n_labels):
+        for replicate in range(per):
+            rows.append(directions[label] + 0.01 * rng.normal(size=dim))
+            labels.append(f"p{label}")
+            batches.append(f"b{replicate % 2}")
+    obs = pd.DataFrame(
+        {"Metadata_Perturbation": labels, "Metadata_Batch": batches},
+        index=[str(index) for index in range(len(rows))],
+    )
+    adata = ad.AnnData(np.asarray(rows, dtype=np.float32), obs=obs)
+    adata.obsm["X_pca"] = np.asarray(rows)
+
+    settings = _map_settings("replicability", "Metadata_Perturbation", "Metadata_Batch", None)
+    separable = _rep_map(adata, "X_pca", settings)
+    assert separable > 0.95
+
+    shuffled = adata.copy()
+    shuffled.obs["Metadata_Perturbation"] = rng.permutation(shuffled.obs["Metadata_Perturbation"].to_numpy())
+    chance = _rep_map(shuffled, "X_pca", settings)
+    assert chance < 0.6
+    assert chance < separable
+
+
+def test_scib_get_results_keeps_the_public_seam_we_read():
+    """A scib-metrics upgrade that moved the Metric Type row or the aggregate columns would break the reader; fail here first."""
+    pytest.importorskip("scib_metrics")
     from mantispy.metrics import _evaluate
 
     adata = _scib_ready()
-    bm = _evaluate._build(
-        adata, reps=("X_pca",), label_key="Metadata_Perturbation", batch_key="Metadata_Batch", with_map=True
-    )
-
-    assert "mean_average_precision" in bm._results.index
-    assert bm._results.loc["mean_average_precision", "Metric Type"] == "Bio conservation"
-    assert np.isfinite(bm._results.loc["mean_average_precision", "X_pca"])
-
-
-def test_scib_benchmarker_keeps_the_results_seam_we_write_to():
-    """A scib-metrics upgrade that moved `_results` or its `Metric Type` column would break the mAP injection; fail here first."""
-    pytest.importorskip("scib_metrics")
-    from scib_metrics.benchmark import Benchmarker
-
-    adata = _scib_ready()
-    bm = Benchmarker(
+    results = _evaluate._benchmark(
         adata,
-        batch_key="Metadata_Batch",
+        reps=("X_pca",),
         label_key="Metadata_Perturbation",
-        embedding_obsm_keys=["X_pca"],
-        n_jobs=-1,
+        batch_key="Metadata_Batch",
+        min_max_scale=False,
     )
-    bm.benchmark()
 
-    assert hasattr(bm, "_results")
-    assert "Metric Type" in bm._results.columns
+    assert "Metric Type" in results.index
+    assert {"Batch correction", "Bio conservation", "Total"} <= set(results.columns)
+    aggregate = results.loc["Metric Type", ["Batch correction", "Bio conservation", "Total"]]
+    assert (aggregate == "Aggregate score").all()
 
 
 def _gene_map(n_sets=4, per_set=3, n_background=24, n_features=16, noise=0.1, seed=0):
