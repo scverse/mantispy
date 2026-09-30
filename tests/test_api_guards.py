@@ -40,6 +40,11 @@ def test_src_never_imports_a_reference_library():
     assert not offending, offending
 
 
+def test_native_pc_regression_never_imports_scib_metrics():
+    """pc_regression and batch_variance_explained are native numba; scib-metrics appears only inside evaluate_correction's guarded branch, never on the PC-regression path."""
+    assert "scib_metrics" not in _imports(SRC / "metrics" / "_variance.py")
+
+
 def test_only_core_reads_the_matrix_directly():
     """Outside _core every read of X or of a layer goes through get_matrix, so a streaming backend has one place to change."""
     offending = {}
