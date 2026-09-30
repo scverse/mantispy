@@ -141,7 +141,8 @@ def batch_variance_explained(adata: AnnData, keys: Sequence[str], use_rep: str =
 
     Args:
         adata: Object with the embedding to measure in.
-        keys: ``obs`` columns to score, one row of the result each.
+        keys: ``obs`` columns to score, one row of the result each. Any column works, numeric or categorical,
+            not only the batch: a plate position, a cell count or a treatment label are all valid covariates.
         use_rep: ``obsm`` key of the embedding.
 
     Returns:

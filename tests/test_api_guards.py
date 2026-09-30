@@ -9,7 +9,7 @@ import mantispy as mt
 SRC = pathlib.Path(mt.__file__).parent
 
 #: harmonypy is absent because pp.harmony imports it as an optional runtime dependency;
-#: scib_metrics is absent because metrics.evaluate_correction imports it the same way, behind mantispy[integration].
+#: scib_metrics is absent because metrics.evaluate_integration imports it the same way, behind mantispy[integration].
 REFERENCE_LIBRARIES = {
     "pycytominer",
     "pyod",
@@ -41,7 +41,7 @@ def test_src_never_imports_a_reference_library():
 
 
 def test_native_pc_regression_never_imports_scib_metrics():
-    """pc_regression and batch_variance_explained are native numba; scib-metrics appears only inside evaluate_correction's guarded branch, never on the PC-regression path."""
+    """pc_regression and batch_variance_explained are native numba; scib-metrics appears only inside evaluate_integration's guarded branch, never on the PC-regression path."""
     assert "scib_metrics" not in _imports(SRC / "metrics" / "_variance.py")
 
 

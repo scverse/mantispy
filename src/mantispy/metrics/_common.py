@@ -33,7 +33,7 @@ def tidy(metric: str, use_rep: str, key: str, value: float) -> pd.DataFrame:
     """One row in the shape every metric returns, so results from different metrics stack.
 
     Args:
-        metric: Name of the metric, which is what :func:`~mantispy.metrics.evaluate_correction` pivots the table on.
+        metric: Name of the metric, which is what :func:`~mantispy.pl.metrics` pivots the table on.
         use_rep: Representation the value was measured in, or ``"X"`` when it was measured on the matrix itself.
         key: ``obs`` column the metric was scored over.
         value: The measured value.

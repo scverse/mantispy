@@ -1,5 +1,8 @@
+"""The integration benchmark: scib-metrics' standard panel, with a copairs mAP column when copairs is present."""
+
 from __future__ import annotations
 
+import tempfile
 import warnings
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
@@ -7,216 +10,162 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 
-from mantispy.metrics._common import embedding, tidy
-from mantispy.metrics._variance import pc_regression
+from mantispy.metrics._common import embedding
 
 if TYPE_CHECKING:
     from anndata import AnnData
-
-BETTER = {
-    "silhouette_label": "higher",
-    "silhouette_batch": "higher",
-    "ilisi": "higher",
-    "clisi": "lower",
-    "pc_regression": "lower",
-    "mean_average_precision": "higher",
-}
+    from plottable import Table
 
 
-def _map_row(adata: AnnData, map_key: str, label_key: str) -> pd.DataFrame:
-    """The mean mAP of a table :func:`~mantispy.tl.map` wrote, under the representation that run scored.
+def _has_scib() -> bool:
+    """Whether scib-metrics can be imported, the engine behind the benchmark panel."""
+    try:
+        import scib_metrics  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def _has_copairs() -> bool:
+    """Whether copairs can be imported, which adds the mean-average-precision column (it needs Python < 3.13)."""
+    try:
+        from copairs import map as _  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def _mean_map(adata: AnnData, use_rep: str, label_key: str) -> float:
+    """Mean of the per-group mean average precision over ``obsm[use_rep]``, scored with copairs.
+
+    This runs the same copairs path as :func:`~mantispy.tl.map` on the representation, with positive
+    pairs sharing ``label_key`` and negative pairs differing in it, and returns the mean of the
+    ``mean_average_precision`` column. It writes nothing into ``adata``.
 
     Args:
-        adata: Object holding the table and the provenance of the run that wrote it.
-        map_key: Name of that table in ``uns["mantispy"]``.
-        label_key: ``obs`` column to name in the row's ``key``.
+        adata: Object holding the representation in ``obsm`` and the label in ``obs``.
+        use_rep: ``obsm`` key of the representation to score.
+        label_key: ``obs`` column that defines a group of replicates.
 
     Returns:
-        A one-row tidy frame holding ``mean_average_precision``.
-
-    Raises:
-        KeyError: There is no such table.
-        KeyError: Nothing recorded which representation :func:`~mantispy.tl.map` scored.
+        The mean of the per-group mean average precision.
     """
-    store = adata.uns.get("mantispy", {})
-    table = store.get(map_key)
-    if table is None:
-        raise KeyError(f"uns['mantispy'] has no {map_key!r}; run mt.tl.map first")
+    from copairs import map as copairs_map
 
-    # Provenance is keyed by function name, and mt.tl.map records use_rep=None when it scores X.
-    recorded = store.get("params", {}).get("map")
-    if recorded is None:
-        raise KeyError(
-            f"uns['mantispy']['params'] holds no record of mt.tl.map, so the representation behind "
-            f"{map_key!r} is unknown; rerun mt.tl.map to record it"
+    from mantispy._core.frames import as_frame
+
+    features = embedding(adata, use_rep).astype(np.float32)
+    obs = as_frame(adata.obs)
+    meta = obs[[column for column in obs.columns if column.startswith("Metadata_")]].reset_index(drop=True)
+    if label_key not in meta.columns:
+        meta[label_key] = obs[label_key].reset_index(drop=True).to_numpy()
+
+    settings = {"pos_sameby": [label_key], "pos_diffby": [], "neg_sameby": [], "neg_diffby": [label_key]}
+    precision = copairs_map.average_precision(meta, features, **settings, progress_bar=False)
+    # copairs keys its on-disk null cache without the seed, so a shared cache leaks nulls between calls.
+    # The mean average precision itself does not depend on the null, so a small one keeps this fast.
+    with tempfile.TemporaryDirectory() as cache:
+        table = copairs_map.mean_average_precision(
+            precision, sameby=[label_key], null_size=100, threshold=0.05, seed=0, progress_bar=False, cache_dir=cache
         )
-    rep = recorded.get("use_rep") or "X"
-    value = float(pd.DataFrame(table)["mean_average_precision"].mean())
-    return tidy("mean_average_precision", rep, label_key, value)
+    return float(table["mean_average_precision"].mean())
 
 
-def _lisi_row(scib_metrics: Any, adata: AnnData, key: str, use_rep: str, perplexity: float, kind: str) -> pd.DataFrame:
-    """Median LISI over rows :cite:p:`Korsunsky_2019`, from scib-metrics, or NaN when the row count cannot support ``perplexity``."""
-    from scib_metrics.nearest_neighbors import NeighborsResults
-    from sklearn.neighbors import NearestNeighbors
+def _build(adata: AnnData, *, reps: Sequence[str], label_key: str, batch_key: str, with_map: bool) -> Any:
+    """A scib-metrics :class:`~scib_metrics.benchmark.Benchmarker`, benchmarked, with the mAP row injected when asked.
 
-    values = embedding(adata, use_rep)
-    labels = adata.obs[key].to_numpy()
-    missing = int(pd.isna(labels).sum())
-    if missing:
-        raise ValueError(f"obs[{key!r}] has {missing} missing value(s); drop those rows or fill the column.")
+    Kept as a seam so a test can read the benchmarked ``_results`` frame directly. scib-metrics is imported
+    here and only here, so the native PC-regression path never pulls it in.
 
-    metric = "ilisi" if kind == "batch" else "clisi"
-    n_neighbors = int(perplexity * 3)
-    if n_neighbors >= adata.n_obs:
-        # Each neighborhood needs n_neighbors + 1 rows; with fewer, scib cannot calibrate the kernel and LISI is undefined.
-        supported = (adata.n_obs - 1) // 3
-        remedy = f"pass a perplexity of at most {supported}" if supported >= 2 else "measure on a larger object"
-        warnings.warn(
-            f"LISI over obs[{key!r}] is undefined at perplexity={perplexity}: the kernel is calibrated over "
-            f"{n_neighbors} neighbors, which needs {n_neighbors + 1} rows, and this object has {adata.n_obs}. "
-            f"A 48-well plate, or a consensus object with one row per perturbation, is the usual cause; "
-            f"to measure it, {remedy}. Returning NaN.",
-            UserWarning,
-            stacklevel=2,
-        )
-        return tidy(metric, use_rep, key, np.nan)
+    Args:
+        adata: Object holding the representations in ``obsm`` and the label and batch in ``obs``.
+        reps: ``obsm`` keys to compare.
+        label_key: ``obs`` column with the biological grouping.
+        batch_key: ``obs`` column with the nuisance grouping.
+        with_map: Inject a ``mean_average_precision`` row tagged as bio conservation before the caller plots.
 
-    # Self is kept in the graph (index 0); scib masks it out when calibrating the kernel.
-    distances, indices = NearestNeighbors(n_neighbors=n_neighbors + 1).fit(values).kneighbors(values)
-    neighbors = NeighborsResults(indices=indices, distances=distances)
-    # scale=False returns the raw median LISI, so ilisi stays "higher is better" and clisi "lower is better".
-    knn = scib_metrics.ilisi_knn if kind == "batch" else scib_metrics.clisi_knn
-    value = knn(neighbors, labels, perplexity=perplexity, scale=False)
-    return tidy(metric, use_rep, key, float(value))
-
-
-def _silhouette_label_row(scib_metrics: Any, adata: AnnData, label_key: str, use_rep: str) -> pd.DataFrame:
-    """Label separation rescaled to ``[0, 1]``, from scib-metrics, or NaN when separation is undefined for the object."""
-    values = embedding(adata, use_rep)
-    labels = adata.obs[label_key].to_numpy()
-
-    n_labels = len(pd.unique(labels))
-    if not 2 <= n_labels <= adata.n_obs - 1:
-        # The silhouette needs between 2 and n_obs - 1 distinct labels; scib would raise here without naming the cause.
-        warnings.warn(
-            f"the label silhouette is undefined for obs[{label_key!r}]: it needs between 2 and "
-            f"n_obs - 1 distinct labels, and this object has {n_labels} over {adata.n_obs} rows. "
-            "One row per label, as a consensus object has, is the usual cause. Returning NaN.",
-            UserWarning,
-            stacklevel=2,
-        )
-        return tidy("silhouette_label", use_rep, label_key, np.nan)
-
-    # rescale=True (the default) maps the average silhouette width into [0, 1].
-    value = scib_metrics.silhouette_label(values, labels)
-    return tidy("silhouette_label", use_rep, label_key, float(value))
-
-
-def _silhouette_batch_row(
-    scib_metrics: Any, adata: AnnData, label_key: str, batch_key: str, use_rep: str
-) -> pd.DataFrame:
-    """Batch mixing within each label, from scib-metrics, or NaN when every label is unscorable."""
-    values = embedding(adata, use_rep)
-    labels = adata.obs[label_key].to_numpy()
-    batches = adata.obs[batch_key].to_numpy()
-
-    # scib raises when every label group is undefined; check first so the panel gets NaN, not an error.
-    # A group is scored only when it holds more than one batch but fewer batches than rows.
-    def _scorable(label: object) -> bool:
-        rows = labels == label
-        return 1 < len(np.unique(batches[rows])) < int(rows.sum())
-
-    if not any(_scorable(label) for label in pd.unique(labels)):
-        return tidy("silhouette_batch", use_rep, batch_key, np.nan)
-
-    value = scib_metrics.silhouette_batch(values, labels, batches)
-    return tidy("silhouette_batch", use_rep, batch_key, float(value))
-
-
-def _scib_panel(
-    scib_metrics: Any, adata: AnnData, reps: Sequence[str], label_key: str, batch_key: str, perplexity: float
-) -> list[pd.DataFrame]:
-    """The batch-mixing rows scib-metrics owns, one block per representation.
-
-    iLISI/cLISI and the batch and label silhouettes come from scib-metrics :cite:p:`Korsunsky_2019`.
-    A metric that is undefined for the object (too few rows for the perplexity, one label, no scorable batch group) is a NaN row rather than a scib traceback.
+    Returns:
+        The benchmarked ``Benchmarker``.
     """
-    frames = []
-    for rep in reps:
-        frames += [
-            _silhouette_label_row(scib_metrics, adata, label_key=label_key, use_rep=rep),
-            _silhouette_batch_row(scib_metrics, adata, label_key=label_key, batch_key=batch_key, use_rep=rep),
-            _lisi_row(scib_metrics, adata, key=batch_key, use_rep=rep, perplexity=perplexity, kind="batch"),
-            _lisi_row(scib_metrics, adata, key=label_key, use_rep=rep, perplexity=perplexity, kind="label"),
-        ]
-    return frames
+    from scib_metrics.benchmark import Benchmarker
+
+    # progress_bar=False keeps the tqdm bars out of executed notebooks and test logs.
+    bm = Benchmarker(
+        adata,
+        batch_key=batch_key,
+        label_key=label_key,
+        embedding_obsm_keys=list(reps),
+        n_jobs=-1,
+        progress_bar=False,
+    )
+    bm.benchmark()
+    if with_map:
+        # mAP is higher-better and scib min-max scales higher-better metrics, so the colours and the
+        # bio-weighted Total stay correct once the row is tagged as bio conservation.
+        for rep in reps:
+            bm._results.loc["mean_average_precision", rep] = _mean_map(adata, rep, label_key)
+        bm._results.loc["mean_average_precision", "Metric Type"] = "Bio conservation"
+    return bm
 
 
-def evaluate_correction(
+def evaluate_integration(
     adata: AnnData,
     *,
     reps: Sequence[str] = ("X_pca",),
     label_key: str = "Metadata_Perturbation",
     batch_key: str = "Metadata_Batch",
-    covariates: Sequence[str] = (),
-    map_key: str | None = None,
-    perplexity: float = 30,
-) -> pd.DataFrame:
-    """Run the correction panel over every representation and stack the results.
+) -> pd.DataFrame | Table:
+    """Score one or more representations against a batch, with the integration benchmark scib-metrics owns.
 
-    The native rows always run: PC-regression on the batch, PC-regression on each covariate, and the mean mAP row when ``map_key`` is given.
-    The batch-mixing rows (iLISI, cLISI, the batch and label silhouettes) come from scib-metrics, an optional dependency.
-    When scib-metrics is installed those rows are added; when it is not, they are skipped and one message names them and how to add them, so the function returns the native rows rather than raising.
+    The return type follows what is installed:
+
+    - With ``mantispy[integration]`` (scib-metrics), this returns scib-metrics' standard benchmark table:
+      bio conservation, batch correction and the weighted Total, as a :class:`plottable.Table` that draws
+      its own figure. When copairs is also installed, a ``mean_average_precision`` row is added to it.
+    - With only copairs, this returns a native :class:`pandas.DataFrame` of the per-representation mean
+      average precision, one row per entry of ``reps``.
+    - With neither, this raises :class:`ImportError`.
+
+    This function computes no native PC-regression of its own. To audit what a representation spends its
+    variance on besides the label, such as the cell count or the plate position, whose better direction is
+    context-dependent and so is deliberately not in this table, use
+    :func:`~mantispy.metrics.batch_variance_explained` or :func:`~mantispy.metrics.pc_regression`.
 
     Args:
-        adata: Object holding the representations in ``obsm``.
-        reps: Representations to compare, e.g. ``("X_pca", "X_pca_harmony")``.
+        adata: Object holding the representations in ``obsm`` and the label and batch in ``obs``.
+        reps: ``obsm`` keys to compare, e.g. ``("X_pca", "X_pca_harmony")``.
         label_key: ``obs`` column with the biological grouping.
         batch_key: ``obs`` column with the nuisance grouping.
-        covariates: Further ``obs`` columns to measure each representation against, numeric or categorical, one row each.
-            A representation can be dominated by something that is neither the batch nor the label, such as the cell count, and nothing else here would report it.
-        map_key: Name of a table written by :func:`~mantispy.tl.map`, to add its mean mAP as one more row.
-            That table is read rather than recomputed, so the row appears once, under the representation that run scored, and not once per entry of ``reps``.
-        perplexity: Perplexity for both LISI rows (iLISI and cLISI), used only when scib-metrics is installed.
-            The default needs more than 90 rows, and on a smaller object those two rows are NaN unless a smaller value is passed.
 
     Returns:
-        A tidy frame with ``metric``, ``representation``, ``key``, ``value`` and ``better``, the last saying which direction is an improvement for that metric.
-        Without scib-metrics the frame holds the native rows only; with it, the batch-mixing rows are added.
-        A covariate's row has no ``better``: whether its share of the variance should be small depends on what the covariate is.
-        A cell count is a nuisance in a genetic screen, where the layout was not randomized, and partly a treatment effect in a compound screen, where a compound that kills cells is supposed to lower it.
-        A metric that is undefined for this object, such as a LISI whose perplexity the row count cannot support or a silhouette over one row per label, is NaN in that frame rather than an error, so one undefined metric still leaves the others readable.
+        A :class:`plottable.Table` when scib-metrics is installed, or a per-representation mean-average-precision
+        :class:`pandas.DataFrame` when only copairs is.
 
     Raises:
-        KeyError: ``obsm`` holds nothing under one of ``reps``, or ``obs`` no column under one of ``covariates``.
-        KeyError: ``map_key`` names no table, or nothing recorded the representation behind it.
+        ImportError: Neither scib-metrics nor copairs is installed.
     """
-    frames = []
-    for rep in reps:
-        frames.append(pc_regression(adata, key=batch_key, use_rep=rep))
-        # Two rows called "pc_regression" would collide when the table is pivoted on the metric.
-        for covariate in covariates:
-            measured = pc_regression(adata, key=covariate, use_rep=rep)
-            frames.append(measured.assign(metric=f"pc_regression:{covariate}"))
-    if map_key is not None:
-        frames.append(_map_row(adata, map_key, label_key))
+    have_scib = _has_scib()
+    have_copairs = _has_copairs()
 
-    try:
-        import scib_metrics
-    except ImportError:
+    if not have_scib and not have_copairs:
+        raise ImportError(
+            "evaluate_integration needs mantispy[integration] (scib-metrics, and copairs for the mAP "
+            "column). Install it, or use mt.metrics.batch_variance_explained / pc_regression for a "
+            "native batch-variance check."
+        )
+
+    if not have_scib:
         warnings.warn(
-            "scib-metrics is not installed, so the batch-mixing metrics (iLISI, cLISI, the batch and label "
-            "silhouettes) are omitted; only the native PC-regression rows are returned. "
-            "Install it with pip install 'mantispy[integration]' to add them.",
+            "scib-metrics is not installed, so evaluate_integration returns only the per-representation "
+            "mean average precision. Install mantispy[integration] to add the full scib-metrics benchmark "
+            "panel (bio conservation, batch correction and the Total).",
             UserWarning,
             stacklevel=2,
         )
-    else:
-        frames += _scib_panel(
-            scib_metrics, adata, reps, label_key=label_key, batch_key=batch_key, perplexity=perplexity
+        return pd.DataFrame(
+            {"mean_average_precision": [_mean_map(adata, rep, label_key) for rep in reps]},
+            index=pd.Index(list(reps), name="representation"),
         )
 
-    result = pd.concat(frames, ignore_index=True)
-    result["better"] = result["metric"].map(BETTER)
-    return result
+    bm = _build(adata, reps=reps, label_key=label_key, batch_key=batch_key, with_map=have_copairs)
+    return bm.plot_results_table(show=False)

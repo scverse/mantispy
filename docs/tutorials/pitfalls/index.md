@@ -18,7 +18,7 @@ The pages that will live here:
   of doses before fitting, and let the fit report its own uncertainty rather than a single EC50.
 - **A batch correction that makes retrieval worse.** *Symptom:* a correction removes visible plate structure but
   lowers mechanism retrieval, because it also removed biology aligned with the batch. *Fix:* score the correction
-  with `metrics.evaluate_correction` against the uncorrected run, and keep it only when retrieval improves.
+  with `metrics.evaluate_integration` against the uncorrected run, and keep it only when retrieval improves.
 - **The p-value floor of a rank test.** *Symptom:* no group passes multiple-testing correction, or every group
   shares an identical smallest p-value, because a permutation or rank null cannot resolve below `1 / (n + 1)`.
   *Fix:* raise the number of permutations (or `null_size`) until the floor sits below the corrected threshold you

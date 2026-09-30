@@ -198,12 +198,12 @@ def batch_variance(
 
 
 def metrics(table: pd.DataFrame, ax: Axes | None = None) -> Axes | None:
-    """Grouped bars of an :func:`~mantispy.metrics.evaluate_correction` table.
+    """Grouped bars of a tidy metrics table, one group of bars per metric and one bar per representation.
 
     Takes the table instead of an AnnData because the table already holds every representation side by side.
 
     Args:
-        table: A tidy frame with ``metric``, ``representation`` and ``value``, as :func:`~mantispy.metrics.evaluate_correction` returns.
+        table: A tidy frame with ``metric``, ``representation`` and ``value``, as :func:`~mantispy.metrics.known_relationships` returns and as :func:`~mantispy.metrics.batch_variance_explained` rows can be stacked into.
             Its ``better`` column, when present, adds the direction that is an improvement to each tick label.
         ax: Axes to draw on, or ``None`` for a new figure.
 
