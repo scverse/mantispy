@@ -179,7 +179,9 @@ def evaluate_correction(
 ) -> pd.DataFrame:
     """Run the correction panel over every representation and stack the results.
 
-    The native PC-regression rows come from :func:`~mantispy.metrics.pc_regression`, and the batch-mixing rows (iLISI, cLISI, the batch and label silhouettes) come from scib-metrics through :func:`_scib_panel`.
+    The native rows always run: PC-regression on the batch, PC-regression on each covariate, and the mean mAP row when ``map_key`` is given.
+    The batch-mixing rows (iLISI, cLISI, the batch and label silhouettes) come from scib-metrics, an optional dependency.
+    When scib-metrics is installed those rows are added; when it is not, they are skipped and one message names them and how to add them, so the function returns the native rows rather than raising.
 
     Args:
         adata: Object holding the representations in ``obsm``.
@@ -190,11 +192,12 @@ def evaluate_correction(
             A representation can be dominated by something that is neither the batch nor the label, such as the cell count, and nothing else here would report it.
         map_key: Name of a table written by :func:`~mantispy.tl.map`, to add its mean mAP as one more row.
             That table is read rather than recomputed, so the row appears once, under the representation that run scored, and not once per entry of ``reps``.
-        perplexity: Perplexity for both LISI rows (iLISI and cLISI).
+        perplexity: Perplexity for both LISI rows (iLISI and cLISI), used only when scib-metrics is installed.
             The default needs more than 90 rows, and on a smaller object those two rows are NaN unless a smaller value is passed.
 
     Returns:
         A tidy frame with ``metric``, ``representation``, ``key``, ``value`` and ``better``, the last saying which direction is an improvement for that metric.
+        Without scib-metrics the frame holds the native rows only; with it, the batch-mixing rows are added.
         A covariate's row has no ``better``: whether its share of the variance should be small depends on what the covariate is.
         A cell count is a nuisance in a genetic screen, where the layout was not randomized, and partly a treatment effect in a compound screen, where a compound that kills cells is supposed to lower it.
         A metric that is undefined for this object, such as a LISI whose perplexity the row count cannot support or a silhouette over one row per label, is NaN in that frame rather than an error, so one undefined metric still leaves the others readable.
@@ -213,7 +216,18 @@ def evaluate_correction(
     if map_key is not None:
         frames.append(_map_row(adata, map_key, label_key))
 
-    frames += _scib_panel(adata, reps, label_key=label_key, batch_key=batch_key, perplexity=perplexity)
+    try:
+        import scib_metrics  # noqa: F401
+    except ImportError:
+        warnings.warn(
+            "scib-metrics is not installed, so the batch-mixing metrics (iLISI, cLISI, the batch and label "
+            "silhouettes) are omitted; only the native PC-regression rows are returned. "
+            "Install it with pip install 'mantispy[integration]' to add them.",
+            UserWarning,
+            stacklevel=2,
+        )
+    else:
+        frames += _scib_panel(adata, reps, label_key=label_key, batch_key=batch_key, perplexity=perplexity)
 
     result = pd.concat(frames, ignore_index=True)
     result["better"] = result["metric"].map(BETTER)
