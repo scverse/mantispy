@@ -6,9 +6,9 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from mantispy.metrics._common import tidy
-from mantispy.metrics._lisi import lisi
-from mantispy.metrics._silhouette import silhouette_batch, silhouette_label
-from mantispy.metrics._variance import pc_regression
+from mantispy.metrics._lisi import _lisi
+from mantispy.metrics._silhouette import _silhouette_batch, _silhouette_label
+from mantispy.metrics._variance import _pc_regression
 
 if TYPE_CHECKING:
     from anndata import AnnData
@@ -76,7 +76,7 @@ def evaluate_correction(
             A representation can be dominated by something that is neither the batch nor the label, such as the cell count, and nothing else here would report it.
         map_key: Name of a table written by :func:`~mantispy.tl.map`, to add its mean mAP as one more row.
             That table is read rather than recomputed, so the row appears once, under the representation that run scored, and not once per entry of ``reps``.
-        perplexity: Perplexity for both :func:`~mantispy.metrics.lisi` rows.
+        perplexity: Perplexity for both LISI rows (iLISI and cLISI).
             The default needs more than 90 rows, and on a smaller object those two rows are NaN unless a smaller value is passed.
 
     Returns:
@@ -92,16 +92,16 @@ def evaluate_correction(
     frames = []
     for rep in reps:
         frames += [
-            silhouette_label(adata, label_key=label_key, use_rep=rep),
-            silhouette_batch(adata, label_key=label_key, batch_key=batch_key, use_rep=rep),
+            _silhouette_label(adata, label_key=label_key, use_rep=rep),
+            _silhouette_batch(adata, label_key=label_key, batch_key=batch_key, use_rep=rep),
             # Without kind, a batch_key such as "Metadata_Site" would be named clisi, like the label row.
-            lisi(adata, key=batch_key, use_rep=rep, perplexity=perplexity, kind="batch"),
-            lisi(adata, key=label_key, use_rep=rep, perplexity=perplexity, kind="label"),
-            pc_regression(adata, key=batch_key, use_rep=rep),
+            _lisi(adata, key=batch_key, use_rep=rep, perplexity=perplexity, kind="batch"),
+            _lisi(adata, key=label_key, use_rep=rep, perplexity=perplexity, kind="label"),
+            _pc_regression(adata, key=batch_key, use_rep=rep),
         ]
         # Two rows called "pc_regression" would collide when the table is pivoted on the metric.
         for covariate in covariates:
-            measured = pc_regression(adata, key=covariate, use_rep=rep)
+            measured = _pc_regression(adata, key=covariate, use_rep=rep)
             frames.append(measured.assign(metric=f"pc_regression:{covariate}"))
     if map_key is not None:
         frames.append(_map_row(adata, map_key, label_key))

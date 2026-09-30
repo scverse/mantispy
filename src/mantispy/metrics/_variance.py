@@ -1,8 +1,7 @@
-"""Principal-component regression: how much variance a covariate explains."""
+"""Principal-component regression: how much variance a covariate explains, delegated to scib-metrics."""
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -10,14 +9,14 @@ import pandas as pd
 
 from mantispy._core._reduce import get_matrix
 from mantispy._core.frames import as_frame
-from mantispy.metrics._common import embedding, r_squared, tidy
+from mantispy.metrics._common import embedding, require_scib_metrics, tidy
 
 if TYPE_CHECKING:
     from anndata import AnnData
 
 
-def pc_regression(adata: AnnData, key: str, use_rep: str = "X_pca", n_comps: int | None = None) -> pd.DataFrame:
-    """Variance-weighted R^2 of the principal components on ``key``.
+def _pc_regression(adata: AnnData, key: str, use_rep: str = "X_pca", n_comps: int | None = None) -> pd.DataFrame:
+    """Variance-weighted R^2 of the principal components on ``key``, computed by scib-metrics.
 
     The value is the share of total variance the covariate explains, so for a batch key lower is better.
 
@@ -31,34 +30,22 @@ def pc_regression(adata: AnnData, key: str, use_rep: str = "X_pca", n_comps: int
         A one-row tidy frame holding ``pc_regression``.
 
     Raises:
+        ImportError: scib-metrics is not installed.
         KeyError: ``obsm`` holds nothing under ``use_rep``.
     """
+    scib_metrics = require_scib_metrics()
+
     values = embedding(adata, use_rep)
     if n_comps is not None:
         values = values[:, :n_comps]
     covariate = as_frame(adata.obs)[key]
+    # A categorical or non-numeric covariate is one-hot encoded by scib; a numeric one enters as it is.
+    categorical = not (
+        pd.api.types.is_numeric_dtype(covariate) and not isinstance(covariate.dtype, pd.CategoricalDtype)
+    )
 
-    variances = values.var(axis=0, ddof=1)
-    weights = variances / variances.sum()
-    explained = np.array([r_squared(values[:, index], covariate) for index in range(values.shape[1])])
-    return tidy("pc_regression", use_rep, key, float(np.sum(weights * explained)))
-
-
-def batch_variance_explained(adata: AnnData, keys: Sequence[str], use_rep: str = "X_pca") -> pd.DataFrame:
-    """:func:`~mantispy.metrics.pc_regression` for several covariates, stacked into one frame.
-
-    Args:
-        adata: Object with the embedding to measure in.
-        keys: ``obs`` columns to score, one row of the result each.
-        use_rep: ``obsm`` key of the embedding.
-
-    Returns:
-        A tidy frame holding one ``pc_regression`` row per entry of ``keys``.
-
-    Raises:
-        KeyError: ``obsm`` holds nothing under ``use_rep``.
-    """
-    return pd.concat([pc_regression(adata, key, use_rep) for key in keys], ignore_index=True)
+    value = scib_metrics.utils.principal_component_regression(values, covariate.to_numpy(), categorical=categorical)
+    return tidy("pc_regression", use_rep, key, float(value))
 
 
 def variance_carried(

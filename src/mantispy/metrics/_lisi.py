@@ -1,7 +1,10 @@
-"""Local inverse Simpson's index (LISI).
+"""Local inverse Simpson's index (LISI), delegated to scib-metrics.
 
-The effective number of distinct labels in a neighborhood, weighting each neighbor by ``exp(-beta * d)`` with ``beta`` calibrated so the neighborhood's entropy matches the requested perplexity.
-Values match ``harmonypy.lisi.compute_lisi`` :cite:p:`Korsunsky_2019` to machine precision.
+iLISI (over a batch key) and cLISI (over a label key) are computed by scib-metrics
+:cite:p:`Korsunsky_2019` from a neighbour graph derived from ``use_rep``. The unscaled
+median LISI is returned, so ``ilisi`` reads as the effective number of batches in a
+neighbourhood (higher is better mixed) and ``clisi`` as the effective number of labels
+(lower means the biological groups stay separated).
 """
 
 from __future__ import annotations
@@ -12,48 +15,16 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-from mantispy.metrics._common import embedding, tidy
+from mantispy.metrics._common import embedding, require_scib_metrics, tidy
 
 if TYPE_CHECKING:
     from anndata import AnnData
 
-_TOLERANCE = 1e-5
-_MAX_STEPS = 50
-
-
-def _inverse_simpson(distances: np.ndarray, labels: np.ndarray, perplexity: float) -> float:
-    """Inverse Simpson index of one neighborhood, after calibrating the kernel width."""
-    beta, lower, upper = 1.0, -np.inf, np.inf
-    target = np.log(perplexity)
-    weights = np.exp(-distances * beta)
-
-    for _ in range(_MAX_STEPS):
-        total = weights.sum()
-        if total == 0:
-            return 1.0
-        entropy = np.log(total) + beta * np.sum(distances * weights) / total
-        if abs(entropy - target) < _TOLERANCE:
-            break
-        if entropy > target:
-            lower = beta
-            beta = beta * 2 if upper == np.inf else (beta + upper) / 2
-        else:
-            upper = beta
-            beta = beta / 2 if lower == -np.inf else (beta + lower) / 2
-        weights = np.exp(-distances * beta)
-
-    total = weights.sum()
-    if total == 0:
-        return 1.0
-    shares = np.array([weights[labels == value].sum() for value in np.unique(labels)]) / total
-    return float(1.0 / np.sum(shares**2))
-
-
 _BATCH_HINTS = ("batch", "plate", "source", "week", "run")
 
 
-def lisi(adata: AnnData, key: str, use_rep: str = "X_pca", perplexity: float = 30, kind: str = "auto") -> pd.DataFrame:
-    """Median LISI over rows :cite:p:`Korsunsky_2019`.
+def _lisi(adata: AnnData, key: str, use_rep: str = "X_pca", perplexity: float = 30, kind: str = "auto") -> pd.DataFrame:
+    """Median LISI over rows :cite:p:`Korsunsky_2019`, computed by scib-metrics.
 
     Args:
         adata: Object with the embedding to measure in.
@@ -69,10 +40,13 @@ def lisi(adata: AnnData, key: str, use_rep: str = "X_pca", perplexity: float = 3
         A one-row tidy frame holding ``ilisi`` or ``clisi``, whose value is NaN when the object holds too few rows for ``perplexity``, which is what a 48-well plate or a consensus object with one row per perturbation does.
 
     Raises:
+        ImportError: scib-metrics is not installed.
         KeyError: ``obsm`` holds nothing under ``use_rep``.
         ValueError: ``kind`` is not one of the three accepted values.
         ValueError: ``obs[key]`` has missing values.
     """
+    scib_metrics = require_scib_metrics()
+    from scib_metrics.nearest_neighbors import NeighborsResults
     from sklearn.neighbors import NearestNeighbors
 
     if kind not in ("auto", "batch", "label"):
@@ -102,8 +76,13 @@ def lisi(adata: AnnData, key: str, use_rep: str = "X_pca", perplexity: float = 3
             stacklevel=2,
         )
         return tidy(metric, use_rep, key, np.nan)
-    distances, indices = NearestNeighbors(n_neighbors=n_neighbors + 1).fit(values).kneighbors(values)
 
-    # Unsquared distances, as harmonypy uses them; see tests/test_equivalence_harmonypy_lisi.py.
-    scores = [_inverse_simpson(distances[row, 1:], labels[indices[row, 1:]], perplexity) for row in range(adata.n_obs)]
-    return tidy(metric, use_rep, key, float(np.median(scores)))
+    # Self is kept in the graph (index 0); scib masks it out when calibrating the kernel.
+    distances, indices = NearestNeighbors(n_neighbors=n_neighbors + 1).fit(values).kneighbors(values)
+    neighbors = NeighborsResults(indices=indices, distances=distances)
+    # scale=False returns the raw median LISI, so ilisi stays "higher is better" and clisi "lower is better".
+    if kind == "batch":
+        value = scib_metrics.ilisi_knn(neighbors, labels, perplexity=perplexity, scale=False)
+    else:
+        value = scib_metrics.clisi_knn(neighbors, labels, perplexity=perplexity, scale=False)
+    return tidy(metric, use_rep, key, float(value))
