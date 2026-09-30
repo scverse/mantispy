@@ -9,15 +9,19 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 
+from mantispy._core.masks import reference_mask
 from mantispy.metrics._common import embedding
 
 if TYPE_CHECKING:
     from anndata import AnnData
     from matplotlib.axes import Axes
 
+#: The copairs pair-argument keys a caller must fully specify to bypass a preset.
+_PAIR_KEYS = ("pos_sameby", "pos_diffby", "neg_sameby", "neg_diffby")
+
 
 def _has_scib() -> bool:
-    """Whether scib-metrics can be imported, the engine behind the benchmark panel."""
+    """Whether scib-metrics, the engine behind the benchmark panel, can be imported."""
     try:
         import scib_metrics  # noqa: F401
     except ImportError:
@@ -26,7 +30,7 @@ def _has_scib() -> bool:
 
 
 def _has_copairs() -> bool:
-    """Whether copairs can be imported, which adds the mean-average-precision block (it needs Python < 3.13)."""
+    """Whether copairs, which adds the mean-average-precision block, can be imported (it needs Python < 3.13)."""
     try:
         from copairs import map as _  # noqa: F401
     except ImportError:
@@ -37,99 +41,68 @@ def _has_copairs() -> bool:
 def _map_settings(
     map_mode: str, label_key: str, batch_key: str, map_kwargs: dict[str, Any] | None
 ) -> dict[str, list[str]]:
-    """The four copairs pair arguments for the per-representation mAP, generic over the key names.
-
-    ``map_mode="replicability"`` is the ``mAP-nonrep`` of :cite:t:`Arevalo_2024`: a label's replicates retrieve
-    each other against the other labels in the same batch, controls left out. ``map_mode="cross_plate"`` counts
-    only replicates in a different batch, which separates reproducible biology from batch effects. ``map_kwargs``
-    overrides any of the four arguments on top of the chosen preset for full control.
-
-    Args:
-        map_mode: The preset, ``"replicability"`` or ``"cross_plate"``.
-        label_key: ``obs`` column with the biological grouping.
-        batch_key: ``obs`` column with the nuisance grouping.
-        map_kwargs: Overrides for any of ``pos_sameby``, ``pos_diffby``, ``neg_sameby``, ``neg_diffby``, or ``None``.
-
-    Returns:
-        The pair-argument dict copairs takes.
+    """The four copairs pair arguments for the mAP, from the ``replicability``/``cross_plate`` preset plus overrides.
 
     Raises:
-        ValueError: ``map_mode`` is neither preset and ``map_kwargs`` did not fully specify the pairing.
+        ValueError: ``map_mode`` is neither preset and ``map_kwargs`` did not fully specify the four pair arguments.
     """
-    presets = {
-        "replicability": {
-            "pos_sameby": [label_key],
-            "pos_diffby": [],
-            "neg_sameby": [batch_key],
-            "neg_diffby": [label_key],
-        },
-        "cross_plate": {
-            "pos_sameby": [label_key],
-            "pos_diffby": [batch_key],
-            "neg_sameby": [],
-            "neg_diffby": [label_key],
-        },
-    }
-    if map_mode not in presets:
-        if map_kwargs is None:
-            raise ValueError(f"map_mode must be one of {tuple(presets)}, or pass map_kwargs=; got {map_mode!r}")
-        settings = dict(presets["replicability"])
-    else:
-        settings = {key: list(value) for key, value in presets[map_mode].items()}
-    if map_kwargs is not None:
-        settings.update({key: list(value) for key, value in map_kwargs.items()})
-    return settings
+    from mantispy.tl._map import MODES, _resolve_mode
+
+    if map_mode in MODES and map_mode not in ("activity", "consistency"):
+        settings = _resolve_mode(map_mode, label=label_key, batch=batch_key)
+        if map_kwargs is not None:
+            settings.update({key: list(value) for key, value in map_kwargs.items()})
+        return settings
+    if map_kwargs is None or not set(_PAIR_KEYS) <= set(map_kwargs):
+        raise ValueError(
+            f"map_mode must be 'replicability' or 'cross_plate', or pass map_kwargs with all of {_PAIR_KEYS}; "
+            f"got {map_mode!r}"
+        )
+    return {key: list(map_kwargs[key]) for key in _PAIR_KEYS}
 
 
-def _rep_map(adata: AnnData, use_rep: str, settings: dict[str, list[str]], *, null_size: int = 100) -> float:
-    """Mean of the per-group mean average precision over ``obsm[use_rep]``, scored with copairs.
-
-    Shares :func:`~mantispy.tl.map`'s scoring path, so the two never drift, and writes nothing into ``adata``.
-    The controls are left out when ``obs`` marks them, matching the treated-only ``mAP-nonrep``. The null size
-    is kept small because only the mean of ``mean_average_precision`` is read here, not the per-group p-values.
-
-    Args:
-        adata: Object holding the representation in ``obsm`` and the pairing columns in ``obs``.
-        use_rep: ``obsm`` key of the representation to score.
-        settings: The copairs pair arguments from :func:`_map_settings`.
-        null_size: Size of the permutation null, small because only the scores are used.
-
-    Returns:
-        The mean of the per-group mean average precision.
-    """
+def _map_meta(adata: AnnData, settings: dict[str, list[str]]) -> tuple[pd.DataFrame, np.ndarray | None]:
+    """The copairs metadata frame and the treated-row mask, built once so every representation reuses them."""
     from mantispy._core.frames import as_frame
-    from mantispy.tl._map import _score_map
 
-    features = embedding(adata, use_rep).astype(np.float32)
     obs = as_frame(adata.obs)
     needed = sorted({column for group in settings.values() for column in group})
     meta = pd.DataFrame({column: obs[column].reset_index(drop=True).to_numpy() for column in needed})
-    if "Metadata_Control" in obs.columns:
-        treated = ~obs["Metadata_Control"].to_numpy(dtype=bool)
-        meta, features = meta[treated].reset_index(drop=True), features[treated]
+    treated = None
+    if "Metadata_Control" in adata.obs.columns:
+        # reference_mask is the hardened control read: it handles the "True"/"False" categorical an h5ad round trip
+        # leaves and raises on a NaN control rather than silently dropping it, matching mt.tl.map.
+        treated = ~reference_mask(adata, "negcon")
+        meta = meta[treated].reset_index(drop=True)
+    return meta, treated
 
-    table = _score_map(meta, features, settings, null_size=null_size, threshold=0.05, seed=0, warn=False)
+
+def _rep_map(
+    adata: AnnData,
+    use_rep: str,
+    settings: dict[str, list[str]],
+    prepared: tuple[pd.DataFrame, np.ndarray | None] | None = None,
+) -> float:
+    """Mean of the per-group mean average precision over ``obsm[use_rep]``, scored with copairs, controls left out."""
+    from mantispy.tl._map import _score_map
+
+    meta, treated = prepared if prepared is not None else _map_meta(adata, settings)
+    features = embedding(adata, use_rep).astype(np.float32)
+    if treated is not None:
+        features = features[treated]
+
+    # compute_null=False skips the permutation null: only the mean point estimate is read here, not the p-values.
+    table, _ = _score_map(meta, features, settings, null_size=0, threshold=0.05, seed=0, warn=False, compute_null=False)
     return float(table["mean_average_precision"].mean())
 
 
 def _benchmark(
     adata: AnnData, *, reps: Sequence[str], label_key: str, batch_key: str, min_max_scale: bool
 ) -> pd.DataFrame:
-    """scib-metrics' public ``get_results`` frame for the representations.
+    """scib-metrics' public ``get_results`` frame for the representations, kept as a seam a test can read directly.
 
-    Kept as a seam so a test can read the benchmarked frame directly. scib-metrics is imported here and only
-    here, so the native PC-regression path never pulls it in. Only the public ``get_results`` is read, never
-    the private ``_results``, so scib's own Total stays the number scib computes.
-
-    Args:
-        adata: Object holding the representations in ``obsm`` and the label and batch in ``obs``.
-        reps: ``obsm`` keys to compare.
-        label_key: ``obs`` column with the biological grouping.
-        batch_key: ``obs`` column with the nuisance grouping.
-        min_max_scale: Min-max scale each column across the representations, as scib does by default.
-
-    Returns:
-        The ``get_results`` frame: one row per representation plus a ``Metric Type`` row tagging each column.
+    scib-metrics is imported here and only here, and only the public ``get_results`` is read, never the private
+    ``_results``, so scib's own Total stays the number scib computes.
     """
     from scib_metrics.benchmark import Benchmarker
 
@@ -171,6 +144,9 @@ def evaluate_integration(
     correction). ``Total`` is scib's own weighted score, ``0.4`` batch correction and ``0.6`` bio conservation,
     left exactly as scib computes it. ``Total+mAP`` is mantispy's: it folds mAP into the bio group as one more
     bio signal, ``bio' = mean(bio metrics + mAP)``, then reweights ``0.4`` batch correction and ``0.6`` bio'.
+    The mAP is measured over the treated wells only (controls left out), while scib's bio, batch and ``Total``
+    columns use every well, so ``Total`` and ``Total+mAP`` are not strictly apples-to-apples on a control-heavy
+    screen.
 
     The return type is uniform across install states, so the numbers are always reachable:
 
@@ -218,12 +194,23 @@ def evaluate_integration(
             "several covariates) or mt.metrics.pc_regression (a single covariate)."
         )
 
+    reps = tuple(dict.fromkeys(reps))  # a duplicate rep would draw two identically-labelled rows
+
     missing = [key for key in (label_key, batch_key) if key not in adata.obs.columns]
     if missing:
         raise KeyError(f"obs is missing the column(s) the benchmark needs: {missing}")
 
-    counts = adata.obs[label_key].value_counts()
-    if counts.empty or int(counts.max()) < 2:
+    # Count the treated labels, since the mAP drops the controls; value_counts drops NaN labels too.
+    treated_labels = adata.obs[label_key]
+    if "Metadata_Control" in adata.obs.columns:
+        treated_labels = treated_labels[~reference_mask(adata, "negcon")]
+    counts = treated_labels.value_counts()
+    if counts.empty:
+        raise ValueError(
+            f"evaluate_integration found no treated profiles to score: obs[{label_key!r}] is empty or all missing "
+            "once the controls are dropped."
+        )
+    if int(counts.max()) < 2:
         raise ValueError(
             "evaluate_integration needs replicate profiles across batches, and this object looks like one row "
             f"per perturbation (no value of obs[{label_key!r}] has two or more profiles). It scores the "
@@ -233,7 +220,8 @@ def evaluate_integration(
 
     if have_copairs:
         settings = _map_settings(map_mode, label_key, batch_key, map_kwargs)
-        map_values = [_rep_map(adata, rep, settings) for rep in reps]
+        prepared = _map_meta(adata, settings)
+        map_values = [_rep_map(adata, rep, settings, prepared) for rep in reps]
 
     if not have_scib:
         warnings.warn(
@@ -269,14 +257,27 @@ def evaluate_integration(
 
     blocks: dict[str, list[str]] = {"Bio conservation": bio_cols, "Batch correction": batch_cols}
     if have_copairs:
-        data["mean_average_precision"] = map_values
-        bio_prime = (data[bio_cols].sum(axis=1) + data["mean_average_precision"]) / (len(bio_cols) + 1)
-        data["Total+mAP"] = 0.4 * data["Batch correction"] + 0.6 * bio_prime
+        map_column = pd.Series(map_values, index=data.index)
+        if min_max_scale:
+            # Fold the mAP in on the same worst->0, best->1 scale as the bio metrics it joins, so Total+mAP and
+            # the heatmap colour are not a scaled/raw mix.
+            span = map_column.max() - map_column.min()
+            map_column = (map_column - map_column.min()) / span
+        data["mean_average_precision"] = map_column
         blocks["Retrieval"] = ["mean_average_precision"]
-        aggregate_cols = [*aggregate_cols, "Total+mAP"]
+        if bio_cols:
+            bio_prime = (data[bio_cols].sum(axis=1) + data["mean_average_precision"]) / (len(bio_cols) + 1)
+            data["Total+mAP"] = 0.4 * data["Batch correction"] + 0.6 * bio_prime
+            aggregate_cols = [*aggregate_cols, "Total+mAP"]
+        else:
+            warnings.warn(
+                "scib-metrics returned no bio-conservation columns, so Total+mAP is undefined and is left out; the "
+                "mAP is still shown on its own. This usually means a scib-metrics version change.",
+                UserWarning,
+                stacklevel=2,
+            )
     blocks["Aggregate"] = aggregate_cols
 
-    ordered = bio_cols + batch_cols + (["mean_average_precision"] if have_copairs else []) + aggregate_cols
-    data = data[ordered]
+    data = data[[column for columns in blocks.values() for column in columns]]
     _integration_heatmap(data, blocks, ax=ax)
     return data

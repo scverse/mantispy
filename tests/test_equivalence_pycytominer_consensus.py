@@ -52,10 +52,10 @@ def test_default_matches_pycytominer_median():
         .reset_index(drop=True)
     )
     actual = mt.get.to_dataframe(mt.tl.consensus(wells)).sort_values("Metadata_Perturbation").reset_index(drop=True)
-    # Loosened from 1e-5: this cross-implementation comparison drifts by float-reassociation
-    # noise (order 1e-4) under different BLAS and numpy builds, which 1e-5 is too tight to absorb.
+    # A median selects an existing value (an order statistic), not a reassociative reduction, so it agrees
+    # across BLAS and numpy builds to floating-point exactness, unlike the modz case above.
     np.testing.assert_allclose(
-        actual[features].to_numpy(np.float64), expected[features].to_numpy(np.float64), rtol=1e-4, atol=1e-4
+        actual[features].to_numpy(np.float64), expected[features].to_numpy(np.float64), rtol=1e-5, atol=1e-5
     )
 
 

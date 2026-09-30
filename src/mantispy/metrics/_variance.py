@@ -109,6 +109,7 @@ def pc_regression(adata: AnnData, key: str, use_rep: str = "X_pca", n_comps: int
 
     Raises:
         KeyError: ``obsm`` holds nothing under ``use_rep``.
+        ValueError: ``key`` is numeric and has missing values, which cannot be regressed.
     """
     values = np.ascontiguousarray(embedding(adata, use_rep))
     if n_comps is not None:
@@ -128,11 +129,21 @@ def pc_regression(adata: AnnData, key: str, use_rep: str = "X_pca", n_comps: int
     variances = values.var(axis=0, ddof=1)
     weights = variances / variances.sum()
     if is_categorical(covariate):
-        # use_na_sentinel=False gives a missing value its own group rather than the -1 code a numba kernel cannot index.
-        codes = pd.factorize(covariate, use_na_sentinel=False)[0].astype(np.int64)
+        codes = covariate.astype("category").cat.remove_unused_categories().cat.codes.to_numpy().copy()
+        # Fold a missing value into the baseline level, as the old pd.get_dummies(drop_first=True) did, rather than
+        # letting it form its own ANOVA group, which would read as a phantom batch.
+        codes[codes == -1] = 0
+        codes = codes.astype(np.int64)
         explained = _anova_r2(values, codes, int(codes.max()) + 1)
     else:
-        explained = _pearson_r2(values, covariate.to_numpy(dtype=np.float64))
+        numeric = covariate.to_numpy(dtype=np.float64)
+        missing = int(np.isnan(numeric).sum())
+        if missing:
+            raise ValueError(
+                f"PC-regression over obs[{key!r}] has {missing} missing value(s) in a numeric covariate, which "
+                "cannot be regressed. Drop those rows or fill the column first."
+            )
+        explained = _pearson_r2(values, numeric)
     return tidy("pc_regression", use_rep, key, float(np.sum(weights * explained)))
 
 

@@ -17,36 +17,46 @@ from mantispy._core.mutation import inplace_or_copy
 #: Row index for each control and -1 elsewhere, so under ``mode="activity"`` replicates retrieve against controls only.
 REFERENCE_COLUMN = "Metadata_reference_index"
 
+#: The copairs pairings, generic over the key names so :func:`map` and ``evaluate_integration`` share one source.
+#: ``__label__``/``__batch__``/``__annotation__`` are filled in by :func:`_resolve_mode`.
 MODES = {
     # Other plates' controls are beaten trivially yet count in the null, so pooling them inflates activity.
     "activity": {
-        "pos_sameby": ["Metadata_Perturbation", REFERENCE_COLUMN],
+        "pos_sameby": ["__label__", REFERENCE_COLUMN],
         "pos_diffby": [],
-        "neg_sameby": ["Metadata_Plate"],
-        "neg_diffby": ["Metadata_Perturbation", REFERENCE_COLUMN],
+        "neg_sameby": ["__batch__"],
+        "neg_diffby": ["__label__", REFERENCE_COLUMN],
     },
     "consistency": {
         "pos_sameby": ["__annotation__"],
-        "pos_diffby": ["Metadata_Perturbation"],
+        "pos_diffby": ["__label__"],
         "neg_sameby": [],
         "neg_diffby": ["__annotation__"],
     },
     "replicability": {
-        "pos_sameby": ["Metadata_Perturbation"],
+        "pos_sameby": ["__label__"],
         "pos_diffby": [],
-        "neg_sameby": ["Metadata_Plate"],
-        "neg_diffby": ["Metadata_Perturbation"],
+        "neg_sameby": ["__batch__"],
+        "neg_diffby": ["__label__"],
     },
     "cross_plate": {
-        "pos_sameby": ["Metadata_Perturbation"],
-        "pos_diffby": ["Metadata_Plate"],
+        "pos_sameby": ["__label__"],
+        "pos_diffby": ["__batch__"],
         "neg_sameby": [],
-        "neg_diffby": ["Metadata_Perturbation"],
+        "neg_diffby": ["__label__"],
     },
 }
 
 #: The ragged per-group row indices cannot be written to h5ad.
 _UNWRITABLE = ("indices",)
+
+
+def _resolve_mode(mode: str, *, label: str, batch: str, annotation: str | None = None) -> dict[str, list[str]]:
+    """Substitute the ``__label__``/``__batch__``/``__annotation__`` placeholders in a :data:`MODES` preset."""
+    substitutions = {"__label__": label, "__batch__": batch}
+    if annotation is not None:
+        substitutions["__annotation__"] = annotation
+    return {key: [substitutions.get(column, column) for column in value] for key, value in MODES[mode].items()}
 
 
 def _score_map(
@@ -60,27 +70,14 @@ def _score_map(
     distance: str = "cosine",
     drop_positions: np.ndarray | None = None,
     warn: bool = True,
-) -> pd.DataFrame:
+    compute_null: bool = True,
+) -> tuple[pd.DataFrame, list[str]]:
     """The copairs scoring shared by :func:`map` and :func:`~mantispy.metrics.evaluate_integration`.
 
-    Ranks ``features`` by ``distance`` under the copairs pair definitions in ``settings``, runs
-    ``average_precision`` then ``mean_average_precision`` with a per-call null cache, and returns the
-    per-group table. Writes nothing into any object, so both callers share one copairs code path.
-
-    Args:
-        meta: Per-row metadata holding every column named in ``settings``, reset to a plain range index.
-        features: The profiles to rank, one row per row of ``meta``.
-        settings: The four copairs pair arguments (``pos_sameby``, ``pos_diffby``, ``neg_sameby``, ``neg_diffby``).
-        null_size: Size of the permutation null.
-        threshold: Significance threshold passed to copairs.
-        seed: Seed for the permutation null.
-        distance: Distance copairs ranks by.
-        drop_positions: Row positions to drop from the precision table before scoring, or ``None`` for none.
-            :func:`map`'s ``mode="activity"`` uses this to leave the control queries out.
-        warn: Emit the stranded-query and null-size warnings, or stay silent when the caller only needs the scores.
-
-    Returns:
-        The per-group ``mean_average_precision`` table copairs returns, without its ragged ``indices`` column.
+    Returns the per-group ``mean_average_precision`` table (without its ragged ``indices`` column) and the
+    group columns, writing nothing into any object. With ``compute_null=False`` it skips the permutation null
+    and returns just the per-group mean of ``average_precision``, the point estimate the null does not affect,
+    which ``evaluate_integration`` uses so scoring a representation does not pay for discarded permutations.
 
     Raises:
         ValueError: No profile has a negative pair, so there is nothing to score.
@@ -106,9 +103,14 @@ def _score_map(
                 f"{int(stranded.sum())} profile(s) have replicates but no negative pair to rank them against, and are "
                 f"left out. They are in {precision.loc[stranded, scope].drop_duplicates().to_dict('records')}.",
                 UserWarning,
-                stacklevel=3,
+                stacklevel=4,
             )
         precision = precision[~stranded]
+
+    if not compute_null:
+        scored = precision[precision["n_pos_pairs"] > 0]
+        table = scored.groupby(group_columns, as_index=False)["average_precision"].mean()
+        return table.rename(columns={"average_precision": "mean_average_precision"}), group_columns
 
     if warn:
         groups = len(precision.loc[precision["n_pos_pairs"] > 0, group_columns].drop_duplicates())
@@ -119,12 +121,12 @@ def _score_map(
                 f"{groups} groups calls none of them unless at least {math.floor(sharing) + 1} reach that floor "
                 f"together. Raise null_size above {groups / threshold:.0f} for one group to be callable on its own.",
                 UserWarning,
-                stacklevel=3,
+                stacklevel=4,
             )
 
     # copairs keys its on-disk null cache without the seed, so a shared cache leaks nulls between calls.
     with tempfile.TemporaryDirectory() as cache:
-        return copairs_map.mean_average_precision(
+        table = copairs_map.mean_average_precision(
             precision,
             sameby=group_columns,
             null_size=null_size,
@@ -133,6 +135,7 @@ def _score_map(
             progress_bar=False,
             cache_dir=cache,
         ).drop(columns=list(_UNWRITABLE), errors="ignore")
+    return table, group_columns
 
 
 @inplace_or_copy(expects=("well", "perturbation"))
@@ -213,17 +216,13 @@ def map(
     if mode is not None:
         if mode not in MODES:
             raise ValueError(f"mode must be one of {tuple(MODES)}, got {mode!r}")
-        settings = {key: list(value) for key, value in MODES[mode].items()}
+        if mode == "consistency" and annotation_key is None:
+            raise ValueError(
+                "mode='consistency' needs annotation_key=, the obs column holding the mechanism, "
+                "target or gene. For replicate retrieval, use mode='replicability'."
+            )
+        settings = _resolve_mode(mode, label="Metadata_Perturbation", batch="Metadata_Plate", annotation=annotation_key)
         if mode == "consistency":
-            if annotation_key is None:
-                raise ValueError(
-                    "mode='consistency' needs annotation_key=, the obs column holding the mechanism, "
-                    "target or gene. For replicate retrieval, use mode='replicability'."
-                )
-            settings = {
-                key: [annotation_key if column == "__annotation__" else column for column in value]
-                for key, value in settings.items()
-            }
             perturbations = adata.obs["Metadata_Perturbation"].nunique() if "Metadata_Perturbation" in adata.obs else 0
             if perturbations and adata.n_obs > perturbations:
                 warnings.warn(
@@ -272,8 +271,7 @@ def map(
         treated = ~reference_mask(adata, reference)
         meta, features = meta[treated].reset_index(drop=True), features[treated]
 
-    group_columns = [c for c in settings["pos_sameby"] if c != REFERENCE_COLUMN]
-    table = _score_map(
+    table, group_columns = _score_map(
         meta,
         features,
         settings,

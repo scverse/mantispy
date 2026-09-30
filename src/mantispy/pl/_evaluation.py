@@ -203,7 +203,8 @@ def metrics(table: pd.DataFrame, ax: Axes | None = None) -> Axes | None:
     Takes the table instead of an AnnData because the table already holds every representation side by side.
 
     Args:
-        table: A tidy frame with ``metric``, ``representation`` and ``value``, as :func:`~mantispy.metrics.known_relationships` returns and as :func:`~mantispy.metrics.batch_variance_explained` rows can be stacked into.
+        table: A tidy frame with ``metric``, ``representation`` and ``value`` and one row per pair, as :func:`~mantispy.metrics.known_relationships` returns.
+            A :func:`~mantispy.metrics.batch_variance_explained` frame stacks several covariates under one ``metric="pc_regression"``, so rename each to a distinct metric such as ``pc_regression:<key>`` before plotting, or it cannot be pivoted into a grid.
             Its ``better`` column, when present, adds the direction that is an improvement to each tick label.
         ax: Axes to draw on, or ``None`` for a new figure.
 
@@ -254,14 +255,14 @@ def _integration_heatmap(
     """The integration-benchmark heatmap :func:`~mantispy.metrics.evaluate_integration` draws.
 
     Draws one row per representation and one column per metric, the columns grouped into blocks that are
-    separated by a gap and carry a centered header. The metric blocks use the purple-green ``PRGn`` map and
-    the aggregate block a distinct ``YlGnBu``, so summary columns read apart from the metrics they summarize.
-    Every cell is annotated with its value, with the text colour chosen for contrast against the cell.
+    separated by a small gap and carry a centered header. The metric blocks use the purple-green ``PRGn`` map
+    and the aggregate block a distinct ``YlGnBu``, so summary columns read apart from the metrics they
+    summarize. The cells are drawn as true squares and every cell is annotated with its value, with the text
+    colour chosen for contrast against the cell.
 
     Args:
         frame: Numeric results, one row per representation and one column per metric or aggregate score.
-        blocks: Ordered mapping of block header to the columns it holds, left to right; a column missing from
-            ``frame`` is drawn grey and left blank.
+        blocks: Ordered mapping of block header to the columns it holds, left to right.
         aggregate_block: Which block header gets the distinct aggregate colormap.
         ax: Axes to draw on, or ``None`` for a new figure.
 
@@ -272,10 +273,13 @@ def _integration_heatmap(
     from matplotlib.colors import Normalize
     from matplotlib.patches import Rectangle
 
+    if frame.index.has_duplicates:
+        # A duplicate rep would make frame.loc[rep, column] a Series; keep the first and drop the rest.
+        frame = frame[~frame.index.duplicated(keep="first")]
     reps = [str(name) for name in frame.index]
     n_rows = len(reps)
 
-    gap = 0.6
+    gap = 0.3
     left_of: dict[str, float] = {}
     spans: list[tuple[str, float, float]] = []
     cursor = 0.0
@@ -289,7 +293,11 @@ def _integration_heatmap(
         spans.append((title, start, cursor))
     width = cursor
 
-    ax = _axes(ax, (max(width * 0.72 + 1.5, 4.0), n_rows * 0.55 + 2.2))
+    # Roughly 0.45 in per cell plus a small margin; set_aspect below draws the cells square and lets the
+    # inline backend's tight bounding box crop the figure to the grid, so there is little empty border.
+    cell = 0.45
+    ax = _axes(ax, (max(width * cell + 1.6, 3.0), max((n_rows + 2.5) * cell + 0.4, 1.6)))
+    ax.set_aspect("equal")
     norm = Normalize(vmin=0.0, vmax=1.0, clip=True)
     metric_cmap = plt.get_cmap("PRGn")
     aggregate_cmap = plt.get_cmap("YlGnBu")
@@ -299,7 +307,7 @@ def _integration_heatmap(
         for column in blocks[title]:
             left = left_of[column]
             for row, rep in enumerate(reps):
-                value = float(cast(float, frame.loc[rep, column])) if column in frame.columns else float("nan")
+                value = float(cast("float", frame.loc[rep, column]))
                 if np.isnan(value):
                     ax.add_patch(Rectangle((left, row), 1.0, 1.0, facecolor="0.9", edgecolor="white", linewidth=1.0))
                     continue
@@ -317,15 +325,15 @@ def _integration_heatmap(
                 )
 
     for title, start, end in spans:
-        ax.text((start + end) / 2.0, -0.5, title, ha="center", va="bottom", fontsize=8, fontweight="bold")
+        ax.text((start + end) / 2.0, -0.25, title, ha="center", va="bottom", fontsize=8, fontweight="bold")
     for column, left in left_of.items():
-        ax.text(left + 0.5, n_rows + 0.15, column, ha="right", va="top", rotation=45, fontsize=7)
+        ax.text(left + 0.5, n_rows + 0.1, column, ha="right", va="top", rotation=45, fontsize=7)
 
     ax.set_yticks([row + 0.5 for row in range(n_rows)])
     ax.set_yticklabels(reps, fontsize=8)
     ax.set_xticks([])
-    ax.set_xlim(-0.1, width + 0.1)
-    ax.set_ylim(n_rows + 0.2, -1.3)  # inverted, so the first representation is on top with room for the headers
+    ax.set_xlim(-0.05, width + 0.05)
+    ax.set_ylim(n_rows + 0.15, -0.9)  # inverted, so the first representation is on top with room for the headers
     ax.tick_params(length=0)
     for spine in ax.spines.values():
         spine.set_visible(False)

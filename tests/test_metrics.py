@@ -6,8 +6,16 @@ import pandas as pd
 import pytest
 
 matplotlib.use("Agg")  # the integration heatmap draws a figure
+import matplotlib.pyplot as plt
 
 import mantispy as mt
+
+
+@pytest.fixture(autouse=True)
+def close_figures():
+    # The evaluate_integration tests call with ax=None, so the heatmap creates figures that are never returned.
+    yield
+    plt.close("all")
 
 
 def _value(frame, metric):
@@ -86,6 +94,47 @@ def test_pc_regression_returns_nan_for_a_constant_covariate():
     assert np.isnan(value)
 
 
+def test_pc_regression_folds_a_categorical_nan_into_the_baseline_like_the_old_r_squared():
+    """A missing categorical value folds into the baseline level rather than forming its own group, matching the plain-numpy r_squared."""
+    import anndata as ad
+
+    from mantispy.metrics._common import r_squared
+
+    rng = np.random.default_rng(3)
+    n = 120
+    values = rng.normal(size=(n, 5))
+    raw = [f"g{index % 3}" for index in range(n)]
+    for hole in rng.choice(n, size=8, replace=False):
+        raw[hole] = None  # get_dummies(drop_first=True) folded a missing label into the baseline level
+    obs = pd.DataFrame({"cat": pd.Categorical(raw)}, index=[str(index) for index in range(n)])
+    adata = ad.AnnData(X=rng.normal(size=(n, 3)).astype(np.float32), obs=obs)
+    adata.obsm["X_pca"] = values
+
+    variances = values.var(axis=0, ddof=1)
+    weights = variances / variances.sum()
+    explained = np.array([r_squared(values[:, index], obs["cat"]) for index in range(values.shape[1])])
+    expected = float(np.sum(weights * explained))
+
+    got = float(mt.metrics.pc_regression(adata, "cat")["value"].iloc[0])
+    assert np.isfinite(got)
+    assert got == pytest.approx(expected, abs=1e-6)
+
+
+def test_pc_regression_refuses_a_numeric_covariate_with_missing_values():
+    """A numeric covariate with any NaN cannot be regressed, so it raises rather than returning a silent NaN."""
+    import anndata as ad
+
+    rng = np.random.default_rng(4)
+    num = rng.normal(size=60)
+    num[5] = np.nan
+    obs = pd.DataFrame({"num": num}, index=[str(index) for index in range(60)])
+    adata = ad.AnnData(X=rng.normal(size=(60, 3)).astype(np.float32), obs=obs)
+    adata.obsm["X_pca"] = rng.normal(size=(60, 4))
+
+    with pytest.raises(ValueError, match="missing value"):
+        mt.metrics.pc_regression(adata, "num")
+
+
 def test_batch_variance_explained_covers_every_key():
     """One PC-regression row per key, stacked into a single tidy frame."""
     adata, _ = _pc_regression_pair()
@@ -139,6 +188,7 @@ def test_evaluate_integration_needs_at_least_one_engine(monkeypatch):
 
 def test_evaluate_integration_refuses_one_row_per_perturbation():
     """A consensus object has no replicate pairs to score, so it fails with a message naming the cause, not a traceback."""
+    pytest.importorskip("scib_metrics")  # the replicate guard is reached only past the engine-present check
     import anndata as ad
 
     rng = np.random.default_rng(0)
