@@ -152,7 +152,9 @@ def test_the_well_block_null_is_never_a_silent_cell_fallback():
     counts = _null_rate_counts(report)
     for caller in ("hit_calling", "edistance"):
         # A silent cell fallback would report the anti-conservative cell rate here and fail the well-block row.
-        assert verdict[f"{caller} well-block null rate"] != "FAIL", f"{caller} well-block null looks like a cell fallback"
+        assert verdict[f"{caller} well-block null rate"] != "FAIL", (
+            f"{caller} well-block null looks like a cell fallback"
+        )
         assert counts[f"{caller} cell-shuffle null rate"] >= counts[f"{caller} well-block null rate"]
 
     # Five control wells cannot leave four references and a two-well pseudo-treatment, so the call must raise.
@@ -160,7 +162,9 @@ def test_the_well_block_null_is_never_a_silent_cell_fallback():
         n_plates=1, n_wells=49, n_cells=8, n_features=10, n_perturbations=11, effect_size=0.0, seed=0
     )
     too_few_controls = too_few[too_few.obs["Metadata_Control"].to_numpy()].copy()
-    assert int(np.unique(_default_well_block(too_few_controls, block=None)).size) == 5, "the regime is five control wells"
+    assert int(np.unique(_default_well_block(too_few_controls, block=None)).size) == 5, (
+        "the regime is five control wells"
+    )
     with pytest.raises(ValueError, match="at least six reference wells"):
         mt.metrics.diagnose_testing(too_few, n_draws=4, n_permutations=20)
 
