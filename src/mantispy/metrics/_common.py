@@ -33,7 +33,7 @@ def tidy(metric: str, use_rep: str, key: str, value: float) -> pd.DataFrame:
     """One row in the shape every metric returns, so results from different metrics stack.
 
     Args:
-        metric: Name of the metric, which is what :func:`~mantispy.metrics.evaluate_correction` pivots the table on.
+        metric: Name of the metric, which is what :func:`~mantispy.pl.metrics` pivots the table on.
         use_rep: Representation the value was measured in, or ``"X"`` when it was measured on the matrix itself.
         key: ``obs`` column the metric was scored over.
         value: The measured value.
@@ -42,6 +42,11 @@ def tidy(metric: str, use_rep: str, key: str, value: float) -> pd.DataFrame:
         A one-row frame with ``metric``, ``representation``, ``key`` and ``value``.
     """
     return pd.DataFrame([{"metric": metric, "representation": use_rep, "key": key, "value": float(value)}])
+
+
+def is_categorical(covariate: pd.Series) -> bool:
+    """Whether a covariate is treated as categorical (one-hot encoded) rather than entering as a number."""
+    return isinstance(covariate.dtype, pd.CategoricalDtype) or not pd.api.types.is_numeric_dtype(covariate)
 
 
 def r_squared(component: np.ndarray, covariate: pd.Series) -> float:
@@ -54,11 +59,11 @@ def r_squared(component: np.ndarray, covariate: pd.Series) -> float:
     Returns:
         The share of the component's variance the covariate explains, and ``0.0`` for a constant component, where that share is undefined.
     """
-    if pd.api.types.is_numeric_dtype(covariate) and not isinstance(covariate.dtype, pd.CategoricalDtype):
-        design = np.column_stack([np.ones(component.size), covariate.to_numpy(dtype=float)])
-    else:
+    if is_categorical(covariate):
         dummies = pd.get_dummies(covariate, drop_first=True, dtype=float).to_numpy()
         design = np.column_stack([np.ones(component.size), dummies])
+    else:
+        design = np.column_stack([np.ones(component.size), covariate.to_numpy(dtype=float)])
 
     coefficients, *_ = np.linalg.lstsq(design, component, rcond=None)
     residual = component - design @ coefficients

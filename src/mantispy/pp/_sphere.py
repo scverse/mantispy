@@ -245,7 +245,7 @@ def tvn(
         With fewer controls than features the result is narrower than the input, which is why this writes ``obsm`` and never ``X``: ``var`` would no longer describe the columns.
 
         Batch correction methods disagree with each other often enough that one metric is not evidence.
-        Compare this with :func:`~mantispy.pp.harmony` on the same object using :func:`~mantispy.metrics.evaluate_correction`, and on a screen with annotated perturbations also :func:`~mantispy.metrics.known_relationships`, which is the measure :cite:t:`Celik_2024` selects it by.
+        Compare this with :func:`~mantispy.pp.harmony` on the same object using :func:`~mantispy.metrics.evaluate_integration`, and on a screen with annotated perturbations also :func:`~mantispy.metrics.known_relationships`, which is the measure :cite:t:`Celik_2024` selects it by.
 
         Measured that way, it tends to trade replicate consistency for relationship recall, where :func:`~mantispy.pp.harmony` trades the other way.
         Neither buys the other's gain, so which of the two readouts the screen is for is the question to answer before running either.

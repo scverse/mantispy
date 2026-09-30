@@ -1,25 +1,102 @@
-"""Principal-component regression: how much variance a covariate explains."""
+"""Principal-component regression: how much variance a covariate explains, computed natively."""
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
+from numba import njit
 
 from mantispy._core._reduce import get_matrix
 from mantispy._core.frames import as_frame
-from mantispy.metrics._common import embedding, r_squared, tidy
+from mantispy.metrics._common import embedding, is_categorical, tidy
 
 if TYPE_CHECKING:
     from anndata import AnnData
 
 
+@njit(cache=True, nogil=True)
+def _anova_r2(values: np.ndarray, codes: np.ndarray, n_groups: int) -> np.ndarray:
+    """One-way ANOVA R^2 of each column of ``values`` on the integer group ``codes``.
+
+    The value is ``1 - SS_within / SS_total`` per column, the share of the column's variance the grouping explains, and ``0`` for a constant column where that share is undefined.
+    """
+    n_rows, n_cols = values.shape
+    out = np.zeros(n_cols)
+    counts = np.zeros(n_groups)
+    for row in range(n_rows):
+        counts[codes[row]] += 1.0
+
+    sums = np.empty(n_groups)
+    for col in range(n_cols):
+        grand_sum = 0.0
+        for row in range(n_rows):
+            grand_sum += values[row, col]
+        grand_mean = grand_sum / n_rows
+
+        for group in range(n_groups):
+            sums[group] = 0.0
+        for row in range(n_rows):
+            sums[codes[row]] += values[row, col]
+
+        ss_total = 0.0
+        ss_within = 0.0
+        for row in range(n_rows):
+            value = values[row, col]
+            total_diff = value - grand_mean
+            ss_total += total_diff * total_diff
+            within_diff = value - sums[codes[row]] / counts[codes[row]]
+            ss_within += within_diff * within_diff
+
+        out[col] = 0.0 if ss_total == 0.0 else 1.0 - ss_within / ss_total
+    return out
+
+
+@njit(cache=True, nogil=True)
+def _pearson_r2(values: np.ndarray, covariate: np.ndarray) -> np.ndarray:
+    """Squared Pearson correlation of each column of ``values`` with the numeric ``covariate``.
+
+    Returns ``0`` for a column or covariate with no variance, where the correlation is undefined.
+    """
+    n_rows, n_cols = values.shape
+    out = np.zeros(n_cols)
+
+    covariate_sum = 0.0
+    for row in range(n_rows):
+        covariate_sum += covariate[row]
+    covariate_mean = covariate_sum / n_rows
+    covariate_ss = 0.0
+    for row in range(n_rows):
+        centered = covariate[row] - covariate_mean
+        covariate_ss += centered * centered
+
+    for col in range(n_cols):
+        column_sum = 0.0
+        for row in range(n_rows):
+            column_sum += values[row, col]
+        column_mean = column_sum / n_rows
+
+        cross = 0.0
+        column_ss = 0.0
+        for row in range(n_rows):
+            centered = values[row, col] - column_mean
+            cross += centered * (covariate[row] - covariate_mean)
+            column_ss += centered * centered
+
+        denominator = column_ss * covariate_ss
+        out[col] = 0.0 if denominator == 0.0 else (cross * cross) / denominator
+    return out
+
+
 def pc_regression(adata: AnnData, key: str, use_rep: str = "X_pca", n_comps: int | None = None) -> pd.DataFrame:
     """Variance-weighted R^2 of the principal components on ``key``.
 
+    Each component is regressed on ``key`` on its own, a categorical key through a one-way ANOVA R^2 and a numeric key through the squared Pearson correlation, and the per-component R^2 is weighted by that component's share of the total variance.
     The value is the share of total variance the covariate explains, so for a batch key lower is better.
+    The per-component loop runs in a numba kernel and imports no scib.
 
     Args:
         adata: Object with the embedding to measure in.
@@ -28,19 +105,45 @@ def pc_regression(adata: AnnData, key: str, use_rep: str = "X_pca", n_comps: int
         n_comps: Use only the leading components, or ``None`` for every component the embedding holds.
 
     Returns:
-        A one-row tidy frame holding ``pc_regression``.
+        A one-row tidy frame holding ``pc_regression``, whose value is NaN when ``key`` is constant (a single batch), where the share of variance it explains is undefined.
 
     Raises:
         KeyError: ``obsm`` holds nothing under ``use_rep``.
+        ValueError: ``key`` is numeric and has missing values, which cannot be regressed.
     """
-    values = embedding(adata, use_rep)
+    values = np.ascontiguousarray(embedding(adata, use_rep))
     if n_comps is not None:
-        values = values[:, :n_comps]
+        values = np.ascontiguousarray(values[:, :n_comps])
     covariate = as_frame(adata.obs)[key]
+
+    if covariate.nunique(dropna=False) <= 1:
+        # A constant covariate has no variance to regress against, so its share is undefined.
+        warnings.warn(
+            f"PC-regression over obs[{key!r}] is undefined: the covariate is constant (a single batch), "
+            "so there is no variance to regress against. Returning NaN.",
+            UserWarning,
+            stacklevel=2,
+        )
+        return tidy("pc_regression", use_rep, key, np.nan)
 
     variances = values.var(axis=0, ddof=1)
     weights = variances / variances.sum()
-    explained = np.array([r_squared(values[:, index], covariate) for index in range(values.shape[1])])
+    if is_categorical(covariate):
+        codes = covariate.astype("category").cat.remove_unused_categories().cat.codes.to_numpy().copy()
+        # Fold a missing value into the baseline level, as the old pd.get_dummies(drop_first=True) did, rather than
+        # letting it form its own ANOVA group, which would read as a phantom batch.
+        codes[codes == -1] = 0
+        codes = codes.astype(np.int64)
+        explained = _anova_r2(values, codes, int(codes.max()) + 1)
+    else:
+        numeric = covariate.to_numpy(dtype=np.float64)
+        missing = int(np.isnan(numeric).sum())
+        if missing:
+            raise ValueError(
+                f"PC-regression over obs[{key!r}] has {missing} missing value(s) in a numeric covariate, which "
+                "cannot be regressed. Drop those rows or fill the column first."
+            )
+        explained = _pearson_r2(values, numeric)
     return tidy("pc_regression", use_rep, key, float(np.sum(weights * explained)))
 
 
@@ -49,7 +152,8 @@ def batch_variance_explained(adata: AnnData, keys: Sequence[str], use_rep: str =
 
     Args:
         adata: Object with the embedding to measure in.
-        keys: ``obs`` columns to score, one row of the result each.
+        keys: ``obs`` columns to score, one row of the result each. Any column works, numeric or categorical,
+            not only the batch: a plate position, a cell count or a treatment label are all valid covariates.
         use_rep: ``obsm`` key of the embedding.
 
     Returns:

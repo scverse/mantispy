@@ -157,7 +157,7 @@ def regress_out(
         Whether the cell count is a confounder at all depends on the screen.
         In the ORF and CRISPR arms of JUMP, whose plate layouts were not randomized, it is largely technical, and the recipe regresses it out :cite:p:`Chandrasekaran_2023`.
         In a compound screen it is partly a treatment effect (a compound that kills cells is supposed to lower it), so regressing it out removes part of the phenotype along with the nuisance, and the recipe does not.
-        Measure both ways before adopting either; :func:`~mantispy.metrics.evaluate_correction` takes a ``covariates`` argument for exactly this, and :func:`~mantispy.tl.cytotoxicity` asks the question directly.
+        Measure both ways before adopting either; :func:`~mantispy.metrics.batch_variance_explained` scores exactly this, a covariate at a time, and :func:`~mantispy.tl.cytotoxicity` asks the question directly.
 
         A numeric covariate with a missing or infinite value is dropped from that group's design and nothing is regressed out for it there, with a warning.
         A categorical covariate with a missing label is refused instead: the all-zero encoding of a missing category is also the encoding of the level ``drop_first`` removed, so those rows would be corrected as the reference level and take every other row with them.
@@ -365,7 +365,7 @@ def harmony(
 
         Check the result with more than one metric.
         On those JUMP wells Harmony moved the site centroids 36% closer together (mean separation 300 to 192, with unchanged overall spread) but lowered iLISI from 2.01 to 1.02, so the sites moved together globally while neighborhoods stayed site-pure.
-        Batch metrics often disagree like this, which is why :func:`~mantispy.metrics.evaluate_correction` reports several and takes a ``map_key``.
+        Batch metrics often disagree like this, which is why :func:`~mantispy.metrics.evaluate_integration` reports the whole scib-metrics panel rather than one number.
     """
     try:
         import harmonypy

@@ -96,7 +96,7 @@ def test_sphering_hurts_this_dataset(bbbc021):
     """With 330 DMSO wells against 346 features, sphering is underdetermined and amplifies noise.
 
     pycytominer gives the same result, so the loss comes from the method itself.
-    This is why evaluate_correction compares corrections instead of applying a fixed recipe.
+    This is why evaluate_integration compares corrections instead of applying a fixed recipe.
     """
     without = _not_same_compound_accuracy(_treatment_consensus(bbbc021, sphere=False))
     with pytest.warns(UserWarning, match="fewer rows than features"):

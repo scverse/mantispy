@@ -2,6 +2,7 @@
 
 import matplotlib
 import numpy as np
+import pandas as pd
 import pytest
 import scanpy as sc
 
@@ -10,6 +11,26 @@ import matplotlib.pyplot as plt
 
 import mantispy as mt
 from mantispy.ds import synthetic_plate
+
+
+def _metrics_table():
+    """A tidy metrics table in the shape pl.metrics plots: two metrics over two reps, a directional column, and one covariate row that claims no direction."""
+    return pd.DataFrame(
+        {
+            "metric": [
+                "ilisi",
+                "ilisi",
+                "pc_regression",
+                "pc_regression",
+                "pc_regression:Metadata_CellCount",
+                "pc_regression:Metadata_CellCount",
+            ],
+            "representation": ["X_pca", "X_harmony"] * 3,
+            "key": ["Metadata_Batch"] * 4 + ["Metadata_CellCount"] * 2,
+            "value": [1.2, 1.8, 0.4, 0.2, 0.6, 0.5],
+            "better": ["higher", "higher", "lower", "lower", np.nan, np.nan],
+        }
+    )
 
 
 @pytest.fixture
@@ -48,7 +69,7 @@ def close_figures():
         lambda a, ax: mt.pl.replicate_correlation(a, ax=ax),
         lambda a, ax: mt.pl.batch_variance(a, keys=["Metadata_Batch", "Metadata_Plate"], ax=ax),
         lambda a, ax: mt.pl.similarity(a, ax=ax),
-        lambda a, ax: mt.pl.metrics(mt.metrics.evaluate_correction(a, reps=("X_pca",)), ax=ax),
+        lambda a, ax: mt.pl.metrics(_metrics_table(), ax=ax),
     ],
     ids=["map", "replicate_correlation", "batch_variance", "similarity", "metrics"],
 )
@@ -68,21 +89,17 @@ def test_map_plot_draws_the_threshold_actually_used(evaluated):
     assert any(abs(y - -np.log10(0.05)) < 1e-9 for y in lines)
 
 
-def test_metrics_plot_marks_which_direction_is_better(evaluated):
-    table = mt.metrics.evaluate_correction(evaluated, reps=("X_pca",))
+def test_metrics_plot_marks_which_direction_is_better():
     _, ax = plt.subplots()
-    mt.pl.metrics(table, ax=ax)
+    mt.pl.metrics(_metrics_table(), ax=ax)
     assert any("better" in label.get_text() for label in ax.get_xticklabels())
 
 
-def test_metrics_plot_claims_no_direction_for_a_covariate(evaluated):
+def test_metrics_plot_claims_no_direction_for_a_covariate():
     """A covariate row has no direction, because whether its share of the variance should be small depends on what the covariate is.
     Reading the column back without checking it labelled the bar '(nan is better)'."""
-    evaluated.obs["Metadata_CellCount"] = np.arange(evaluated.n_obs, dtype=float)
-    table = mt.metrics.evaluate_correction(evaluated, reps=("X_pca",), covariates=("Metadata_CellCount",))
-
     _, ax = plt.subplots()
-    mt.pl.metrics(table, ax=ax)
+    mt.pl.metrics(_metrics_table(), ax=ax)
     labels = {label.get_text() for label in ax.get_xticklabels()}
     assert "pc_regression:Metadata_CellCount" in labels
     assert not any("nan" in label for label in labels)
