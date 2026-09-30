@@ -44,6 +44,9 @@ dependencies = [
 # copairs declares requires-python <3.13, so it cannot be a hard dependency of a package
 # that supports 3.13+. mt.tl.map raises with install instructions when it is missing.
 optional-dependencies.harmony = [ "harmonypy>=2" ]
+# The integration metrics (mt.metrics.evaluate_correction) delegate iLISI/cLISI, the
+# silhouettes and PC-regression to scib-metrics, the ecosystem standard for them.
+optional-dependencies.integration = [ "scib-metrics>=0.5.1" ]
 optional-dependencies.interactive = [ "plotly>=5" ]
 optional-dependencies.map = [ "copairs>=0.5" ]
 optional-dependencies.spatial = [
@@ -76,6 +79,8 @@ test = [
   # pl interactive gate returns True only when both are importable
   "ipython",
   "leidenalg",
+  # metrics.evaluate_correction delegates to scib-metrics; jaxlib ships cp312-cp315 wheels.
+  "mantispy[integration]",
   "mantispy[spatial]",
   "plotly>=5",
   "pycytominer==1.7.1",
@@ -107,6 +112,7 @@ tutorials = [
   "igraph",
   "ipykernel",
   "leidenalg",
+  "mantispy[integration]",
   "mantispy[interactive]",
 ]
 typecheck = [
@@ -209,6 +215,7 @@ overrides = [
     "pycytominer.*",
     "pyod.*",
     "scanpy.*",
+    "scib_metrics.*",
     "scmorph.*",
     "shapely.*",
     "skimage.*",
