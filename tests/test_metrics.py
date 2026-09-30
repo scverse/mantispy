@@ -69,14 +69,77 @@ def test_evaluate_correction_survives_an_object_where_most_metrics_are_undefined
     assert np.isfinite(values["pc_regression"])
 
 
-def test_batch_variance_explained_covers_every_key(corrected):
-    frame = mt.metrics.batch_variance_explained(corrected, keys=["Metadata_Batch", "Metadata_Plate"])
-    assert set(frame["key"]) == {"Metadata_Batch", "Metadata_Plate"}
+def _batch_split(n=180, seed=0):
+    """One object with two embeddings: batches mixed within labels, and batches shifted apart."""
+    import anndata as ad
+
+    rng = np.random.default_rng(seed)
+    # Coprime counts so every label spans every batch; otherwise the batch silhouette is undefined.
+    n_labels, n_batches = 5, 3
+    labels = np.array([f"p{index % n_labels}" for index in range(n)])
+    batches = np.array([f"b{index % n_batches}" for index in range(n)])
+    signal = np.eye(8)[[int(label[1:]) for label in labels]] * 3.0  # labels separable in both reps
+    base = rng.normal(size=(n, 8)) + signal
+    shift = np.zeros((n, 8))
+    shift[:, 7] = np.array([int(batch[1:]) for batch in batches]) * 8.0  # a strong batch axis
+
+    obs = pd.DataFrame(
+        {"Metadata_Perturbation": labels, "Metadata_Batch": batches},
+        index=[str(index) for index in range(n)],
+    )
+    adata = ad.AnnData(X=base.astype(np.float32), obs=obs)
+    adata.obsm["X_mixed"] = base
+    adata.obsm["X_separated"] = base + shift
+    return adata
+
+
+def test_evaluate_correction_moves_the_batch_metrics_when_batches_separate():
+    """A batch-separated representation scores worse on every batch metric than a batch-mixed one.
+
+    This pins the delegated scib-metrics panel through the one public entry: the tidy schema,
+    the metric rows and the directions the metrics move.
+    """
+    adata = _batch_split()
+
+    frame = mt.metrics.evaluate_correction(
+        adata,
+        reps=("X_mixed", "X_separated"),
+        label_key="Metadata_Perturbation",
+        batch_key="Metadata_Batch",
+        perplexity=10,
+    )
+
+    assert list(frame.columns) == ["metric", "representation", "key", "value", "better"]
+    per_rep = frame.set_index(["metric", "representation"])["value"]
+    for metric in ("silhouette_label", "silhouette_batch", "ilisi", "clisi", "pc_regression"):
+        assert np.isfinite(per_rep[(metric, "X_mixed")])
+        assert np.isfinite(per_rep[(metric, "X_separated")])
+
+    # Mixing is better: higher iLISI and batch silhouette, lower PC-regression on the batch.
+    assert per_rep[("ilisi", "X_mixed")] > per_rep[("ilisi", "X_separated")]
+    assert per_rep[("silhouette_batch", "X_mixed")] > per_rep[("silhouette_batch", "X_separated")]
+    assert per_rep[("pc_regression", "X_mixed")] < per_rep[("pc_regression", "X_separated")]
+
+
+def test_evaluate_correction_needs_the_integration_extra(corrected, monkeypatch):
+    """Without scib-metrics the one public entry raises a single clear install error, not a scib traceback."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _no_scib(name, *args, **kwargs):
+        if name == "scib_metrics" or name.startswith("scib_metrics."):
+            raise ImportError("simulated missing scib-metrics")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _no_scib)
+    with pytest.raises(ImportError, match=r"mantispy\[integration\]"):
+        mt.metrics.evaluate_correction(corrected, reps=("X_pca",), perplexity=10)
 
 
 def test_missing_representation_says_how_to_make_one(corrected):
     with pytest.raises(KeyError, match="sc.pp.pca"):
-        mt.metrics.silhouette_label(corrected, label_key="Metadata_Perturbation", use_rep="X_nope")
+        mt.metrics.evaluate_correction(corrected, reps=("X_nope",), perplexity=10)
 
 
 def _gene_map(n_sets=4, per_set=3, n_background=24, n_features=16, noise=0.1, seed=0):
