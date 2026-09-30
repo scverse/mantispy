@@ -194,7 +194,7 @@ def evaluate_integration(
         min_max_scale: Colour and score each metric column scaled across the representations, as scib does by
             default. Off by default so a single representation still has honest absolute values to colour by.
         map_mode: The copairs pairing for mAP, ``"replicability"`` (the Arevalo ``mAP-nonrep`` default) or
-            ``"cross_plate"``. See :func:`_map_settings`.
+            ``"cross_plate"``. See ``_map_settings``.
         map_kwargs: Overrides for any of the four copairs pair arguments, on top of ``map_mode``.
         ax: Axes to draw the heatmap on, or ``None`` for a new figure.
 

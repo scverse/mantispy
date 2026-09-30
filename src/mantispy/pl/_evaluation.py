@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 import pandas as pd
@@ -299,7 +299,7 @@ def _integration_heatmap(
         for column in blocks[title]:
             left = left_of[column]
             for row, rep in enumerate(reps):
-                value = float(frame.loc[rep, column]) if column in frame.columns else float("nan")
+                value = float(cast(float, frame.loc[rep, column])) if column in frame.columns else float("nan")
                 if np.isnan(value):
                     ax.add_patch(Rectangle((left, row), 1.0, 1.0, facecolor="0.9", edgecolor="white", linewidth=1.0))
                     continue
