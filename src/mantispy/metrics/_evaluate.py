@@ -22,8 +22,6 @@ BETTER = {
     "mean_average_precision": "higher",
 }
 
-_BATCH_HINTS = ("batch", "plate", "source", "week", "run")
-
 
 def _map_row(adata: AnnData, map_key: str, label_key: str) -> pd.DataFrame:
     """The mean mAP of a table :func:`~mantispy.tl.map` wrote, under the representation that run scored.
@@ -137,25 +135,13 @@ def _silhouette_batch_row(
 
 
 def _scib_panel(
-    adata: AnnData, reps: Sequence[str], label_key: str, batch_key: str, perplexity: float
+    scib_metrics: Any, adata: AnnData, reps: Sequence[str], label_key: str, batch_key: str, perplexity: float
 ) -> list[pd.DataFrame]:
     """The batch-mixing rows scib-metrics owns, one block per representation.
 
     iLISI/cLISI and the batch and label silhouettes come from scib-metrics :cite:p:`Korsunsky_2019`.
     A metric that is undefined for the object (too few rows for the perplexity, one label, no scorable batch group) is a NaN row rather than a scib traceback.
-
-    Args:
-        adata: Object holding the representations in ``obsm``.
-        reps: Representations to score.
-        label_key: ``obs`` column with the biological grouping.
-        batch_key: ``obs`` column with the nuisance grouping.
-        perplexity: Perplexity for both LISI rows.
-
-    Returns:
-        One tidy frame per metric per representation.
     """
-    import scib_metrics
-
     frames = []
     for rep in reps:
         frames += [
@@ -217,7 +203,7 @@ def evaluate_correction(
         frames.append(_map_row(adata, map_key, label_key))
 
     try:
-        import scib_metrics  # noqa: F401
+        import scib_metrics
     except ImportError:
         warnings.warn(
             "scib-metrics is not installed, so the batch-mixing metrics (iLISI, cLISI, the batch and label "
@@ -227,7 +213,9 @@ def evaluate_correction(
             stacklevel=2,
         )
     else:
-        frames += _scib_panel(adata, reps, label_key=label_key, batch_key=batch_key, perplexity=perplexity)
+        frames += _scib_panel(
+            scib_metrics, adata, reps, label_key=label_key, batch_key=batch_key, perplexity=perplexity
+        )
 
     result = pd.concat(frames, ignore_index=True)
     result["better"] = result["metric"].map(BETTER)
