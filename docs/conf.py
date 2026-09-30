@@ -130,4 +130,6 @@ nitpick_ignore = [
     ("py:class", "optional"),
     # Python 3.14 moved pathlib internals into pathlib._local, so this xref cannot resolve
     ("py:class", "pathlib._local.Path"),
+    # plottable ships no intersphinx inventory, so its Table type in evaluate_integration cannot resolve
+    ("py:class", "plottable.Table"),
 ]
