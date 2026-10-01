@@ -4,6 +4,12 @@ import numpy as np
 import pytest
 
 import mantispy as mt
+from mantispy.pp._sphere import _extend_epsilon
+
+
+def _recipe_grid():
+    """The fixed jump-profiling-recipe grid the auto search starts from."""
+    return 10.0 ** np.random.default_rng((6, 12, 2022)).uniform(-5.0, 3.0, 25)
 
 
 def test_a_plate_with_one_control_well_raises_rather_than_zeroing_it(wells):
@@ -115,22 +121,38 @@ def _combined_map(adata):
     ) / 2
 
 
-def test_auto_grid_is_the_recipe_grid_and_seed_deterministic():
-    """The sweep uses the recipe's fixed log-uniform grid, reproduced from the same seed."""
+def test_auto_starts_from_the_recipe_grid_and_is_seed_deterministic():
+    """The search still scores the recipe's fixed grid, reproduced from the same seed, and is deterministic."""
     pytest.importorskip("copairs")
     adata = _plantable()
     mt.pp.sphere(adata, method="ZCA", epsilon="auto")
 
     grid = np.asarray(adata.uns["mantispy"]["sphere_epsilon"]["grid"])
-    expected = 10.0 ** np.random.default_rng((6, 12, 2022)).uniform(-5.0, 3.0, 25)
-    assert grid.shape == (25,)
-    np.testing.assert_allclose(grid, expected)
-    assert grid[0] == expected[0]
-    assert grid[-1] == expected[-1]
+    recipe = _recipe_grid()
+    # Every recipe candidate is still scored; opportunistic sampling only adds more around and beyond it.
+    assert grid.shape[0] >= recipe.shape[0]
+    assert np.isin(recipe, grid).all()
+
+    again = _plantable()
+    mt.pp.sphere(again, method="ZCA", epsilon="auto")
+    np.testing.assert_array_equal(grid, np.asarray(again.uns["mantispy"]["sphere_epsilon"]["grid"]))
+    assert adata.uns["mantispy"]["sphere_epsilon"]["epsilon"] == again.uns["mantispy"]["sphere_epsilon"]["epsilon"]
+
+
+def test_auto_probes_both_epsilon_regimes():
+    """Opportunistic sampling always steps past both the low and the high end of the recipe grid."""
+    pytest.importorskip("copairs")
+    adata = _plantable()
+    mt.pp.sphere(adata, method="ZCA", epsilon="auto")
+
+    grid = np.asarray(adata.uns["mantispy"]["sphere_epsilon"]["grid"])
+    recipe = _recipe_grid()
+    assert grid.min() < recipe.min()
+    assert grid.max() > recipe.max()
 
 
 def test_auto_records_chosen_value_grid_and_scores():
-    """uns holds the chosen float alongside every candidate and its score."""
+    """uns holds the chosen float alongside every candidate and its score, sorted by epsilon."""
     pytest.importorskip("copairs")
     adata = _plantable()
     mt.pp.sphere(adata, method="ZCA", epsilon="auto")
@@ -138,8 +160,9 @@ def test_auto_records_chosen_value_grid_and_scores():
     info = adata.uns["mantispy"]["sphere_epsilon"]
     grid = np.asarray(info["grid"])
     scores = np.asarray(info["scores"])
-    assert grid.shape == (25,)
-    assert scores.shape == (25,)
+    assert grid.shape == scores.shape
+    assert grid.shape[0] >= 25
+    assert np.all(np.diff(grid) > 0)
     assert isinstance(info["epsilon"], float)
     assert info["epsilon"] == pytest.approx(grid[int(np.argmax(scores))])
     assert np.isfinite(adata.X).all()
@@ -156,13 +179,54 @@ def test_auto_beats_the_fixed_default_and_picks_an_interior_candidate():
     grid = np.asarray(info["grid"])
     best = int(np.argmax(scores))
 
-    # The grid is in sample order, not sorted, so "edge" means the extreme epsilon value, not the end index.
+    # The grid is sorted by epsilon, so "edge" means the extreme epsilon value: the optimum is interior to it.
     assert grid.min() < grid[best] < grid.max()
     assert scores[best] > scores[int(np.argmin(grid))]
     assert scores[best] > scores[int(np.argmax(grid))]
 
     fixed = mt.pp.sphere(adata, method="ZCA", epsilon=1e-6, copy=True)
     assert scores[best] > _combined_map(fixed)
+
+
+def test_extend_epsilon_walks_into_the_high_regime():
+    """An optimum above the recipe grid is reached by expanding the high end."""
+
+    def objective(epsilon):  # a single peak well above the grid's top
+        return -((np.log10(epsilon) - 6.0) ** 2)
+
+    scored = {float(candidate): objective(float(candidate)) for candidate in _recipe_grid()}
+    _extend_epsilon(scored, objective)
+
+    assert max(scored) > _recipe_grid().max()  # it sampled beyond the high end
+    assert max(scored, key=scored.get) > 1e3  # and chose a high-regime value
+
+
+def test_extend_epsilon_walks_into_the_low_regime():
+    """An optimum below the recipe grid is reached by expanding the low end."""
+
+    def objective(epsilon):  # a single peak well below the grid's bottom
+        return -((np.log10(epsilon) + 7.0) ** 2)
+
+    scored = {float(candidate): objective(float(candidate)) for candidate in _recipe_grid()}
+    _extend_epsilon(scored, objective)
+
+    assert min(scored) < _recipe_grid().min()  # it sampled past the low end
+    assert max(scored, key=scored.get) < 1e-5  # and chose a low-regime value
+
+
+def test_extend_epsilon_refines_an_interior_optimum():
+    """An optimum between two coarse grid points is approached by bisection, not expansion."""
+
+    def objective(epsilon):  # a single peak at epsilon == 1, between recipe candidates
+        return -(np.log10(epsilon) ** 2)
+
+    scored = {float(candidate): objective(float(candidate)) for candidate in _recipe_grid()}
+    before = max(scored, key=scored.get)
+    _extend_epsilon(scored, objective)
+    after = max(scored, key=scored.get)
+
+    assert len(scored) > 25  # more candidates were sampled
+    assert abs(np.log10(after)) < abs(np.log10(before))  # the refinement landed closer to the true optimum
 
 
 def test_auto_without_the_columns_or_reference_it_needs_names_the_gap():

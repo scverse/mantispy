@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import math
 import warnings
+from collections.abc import Callable
 
 import numpy as np
 from anndata import AnnData
@@ -86,10 +88,61 @@ def _fit(reference: np.ndarray, method: str, epsilon: float) -> tuple[np.ndarray
     return centre, scale, _whiten(singular, right, n_obs, method, epsilon)
 
 
-def _select_epsilon(adata: AnnData, X: np.ndarray, method: str, reference: str | None) -> tuple[float, np.ndarray]:
-    """Pick ``epsilon`` by jump-profiling-recipe's sweep, returning it and the control mask it scored against.
+# Opportunistic sampling for epsilon="auto": how far past the recipe grid to wander, the step, and when to stop.
+_EPSILON_BOUNDS = (1e-8, 1e8)
+_EPSILON_STEP = 10.0
+_EPSILON_TOLERANCE = 1e-4
+_EPSILON_REFINE_ROUNDS = 3
 
-    Each candidate on the recipe's fixed grid is fitted on the reference and scored by the mean of its activity and replicability mAP; the finite argmax is kept and written to ``uns["mantispy"]["sphere_epsilon"]``.
+
+def _extend_epsilon(scored: dict[float, float], evaluate: Callable[[float], float]) -> None:
+    """Grow an epsilon sweep past both ends of the grid and refine around the best, scoring in place.
+
+    The recipe grid can miss the optimum: it may sit past either end, so walk outward from both the low
+    and the high end while the score keeps improving (up to a cap); or it may fall between two coarse
+    points, so bisect towards the best's neighbours. ``scored`` maps each epsilon to its score and gains
+    an entry for every new candidate.
+    """
+    low_cap, high_cap = _EPSILON_BOUNDS
+
+    # Probe both regimes, low and high, so a boundary optimum is never missed.
+    for direction in (_EPSILON_STEP, 1.0 / _EPSILON_STEP):
+        candidate = max(scored) if direction > 1.0 else min(scored)
+        previous = scored[candidate]
+        while low_cap <= candidate * direction <= high_cap:
+            candidate *= direction
+            score = evaluate(candidate)
+            scored[candidate] = score
+            if score <= previous + _EPSILON_TOLERANCE:
+                break
+            previous = score
+
+    # Refine around the best by bisecting towards its neighbours, since the grid is coarse.
+    for _ in range(_EPSILON_REFINE_ROUNDS):
+        candidates = sorted(scored)
+        best = max(candidates, key=lambda candidate: scored[candidate])
+        index = candidates.index(best)
+        neighbours = []
+        if index > 0:
+            neighbours.append(math.sqrt(candidates[index - 1] * best))
+        if index < len(candidates) - 1:
+            neighbours.append(math.sqrt(best * candidates[index + 1]))
+        fresh = [midpoint for midpoint in neighbours if midpoint not in scored]
+        if not fresh:
+            break
+        improved = False
+        for midpoint in fresh:
+            scored[midpoint] = evaluate(midpoint)
+            if scored[midpoint] > scored[best] + _EPSILON_TOLERANCE:
+                improved = True
+        if not improved:
+            break
+
+
+def _select_epsilon(adata: AnnData, X: np.ndarray, method: str, reference: str | None) -> tuple[float, np.ndarray]:
+    """Pick ``epsilon`` for ``epsilon="auto"``, returning it and the control mask it scored against.
+
+    The jump-profiling-recipe's fixed grid gives a reproducible base; each candidate is fitted on the reference and scored by the mean of its activity and replicability mAP. The search then samples past both ends of the grid and between points when the best sits there, so the chosen value can fall outside the recipe's range. The finite argmax, the full set of candidates and their scores are written to ``uns["mantispy"]["sphere_epsilon"]``.
     """
     try:
         # Fail here with a friendly message when copairs is absent; the scoring imports it again.
@@ -144,19 +197,16 @@ def _select_epsilon(adata: AnnData, X: np.ndarray, method: str, reference: str |
             "or more wells. Pass a float epsilon."
         )
 
-    # Everything that does not depend on the candidate is built once, so the loop only re-whitens and re-scores.
+    # Everything that does not depend on the candidate is built once, so each score only re-whitens and re-scores.
     centre, scale, singular, right, n_obs = _decompose(X[is_control], method)
     standardized = (X - centre) / scale
 
-    # The recipe's fixed grid and seed, so the candidate set is reproducible across runs.
-    grid = 10.0 ** np.random.default_rng((6, 12, 2022)).uniform(-5.0, 3.0, 25)
-    scores = np.full_like(grid, -np.inf)
-    for index, candidate in enumerate(grid):
-        W = _whiten(singular, right, n_obs, method, candidate)
-        features = (standardized @ W).astype(np.float32)
-        # A non-finite profile makes this candidate's mAP non-finite, so leave the score at -inf.
+    def evaluate(candidate: float) -> float:
+        """Score one epsilon by the mean of its activity and replicability mAP; -inf when non-finite."""
+        features = (standardized @ _whiten(singular, right, n_obs, method, candidate)).astype(np.float32)
+        # A non-finite profile makes this candidate's mAP non-finite, so it can never be chosen.
         if not np.isfinite(features).all():
-            continue
+            return -np.inf
         activity_table, _ = _score_map(
             activity_meta,
             features,
@@ -181,15 +231,22 @@ def _select_epsilon(adata: AnnData, X: np.ndarray, method: str, reference: str |
         score = (
             activity_table["mean_average_precision"].mean() + replicability_table["mean_average_precision"].mean()
         ) / 2
-        scores[index] = score if np.isfinite(score) else -np.inf
+        return float(score) if np.isfinite(score) else -np.inf
 
-    if not np.isfinite(scores).any():
+    # The recipe's fixed grid and seed give a reproducible base; opportunistic sampling then grows it.
+    base = 10.0 ** np.random.default_rng((6, 12, 2022)).uniform(-5.0, 3.0, 25)
+    scored = {float(candidate): evaluate(float(candidate)) for candidate in base}
+    _extend_epsilon(scored, evaluate)
+
+    if not any(np.isfinite(score) for score in scored.values()):
         raise ValueError(
             "sphere(epsilon='auto') scored every candidate as non-finite, so none can be chosen. The "
             "profiles are not finite after whitening; drop features or rows with missing values first "
             "with mt.pp.feature_select (drop_na_columns) or mt.pp.drop_na."
         )
-    # Scores start at -inf and any non-finite candidate stays -inf, so argmax never lands on a NaN.
+    grid = np.array(sorted(scored))
+    scores = np.array([scored[candidate] for candidate in grid])
+    # Non-finite candidates stay -inf, so argmax never lands on a NaN.
     chosen = float(grid[int(np.argmax(scores))])
     adata.uns.setdefault("mantispy", {})["sphere_epsilon"] = {"epsilon": chosen, "grid": grid, "scores": scores}
     return chosen, is_control
@@ -215,9 +272,9 @@ def sphere(
             The ``-cor`` variants whiten the correlation instead of the covariance, so high-variance features do not dominate.
         reference: Rows to fit on: ``"negcon"`` for the controls, ``None`` for everything, or the name of a boolean ``obs`` column.
         epsilon: Regularization added to the singular values, or ``"auto"`` to pick it from the data.
-            ``"auto"`` sweeps the jump-profiling-recipe grid, scoring each candidate by the mean of its activity and replicability mAP on the transformed profiles, and keeps the argmax.
-            It needs copairs, ``Metadata_Perturbation``, ``Metadata_Plate`` and a negcon reference; the sweep is global, so ``by`` only changes how the chosen value is applied.
-            The grid, the per-candidate scores and the chosen value are written to ``uns["mantispy"]["sphere_epsilon"]``.
+            ``"auto"`` scores each candidate by the mean of its activity and replicability mAP on the transformed profiles and keeps the argmax, starting from the jump-profiling-recipe grid and then sampling past both ends and between points when the best sits there, so the chosen value can fall outside the recipe's range.
+            It needs copairs, ``Metadata_Perturbation``, ``Metadata_Plate`` and a negcon reference; the search is global, so ``by`` only changes how the chosen value is applied.
+            Every candidate, its score and the chosen value are written to ``uns["mantispy"]["sphere_epsilon"]``.
         by: Fit and apply separately within each group of this column, e.g. per batch.
         key_added: Write to ``layers[key_added]`` instead of overwriting ``X``.
         copy: Return a modified copy instead of mutating in place.

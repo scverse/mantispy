@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning][].
 ## [Unreleased]
 
 ### Added
-- `mantispy.pp`: `sphere(epsilon="auto")` chooses the whitening regularization by the jump-profiling-recipe mAP sweep (the mean of activity and replicability mAP, fitted on the controls) instead of the fixed default, which lies below the recipe search range.
+- `mantispy.pp`: `sphere(epsilon="auto")` chooses the whitening regularization by the jump-profiling-recipe mAP sweep (the mean of activity and replicability mAP, fitted on the controls) instead of the fixed default, which lies below the recipe search range. The search samples past both ends of the recipe grid and between points when the best sits there, so the chosen value can fall outside the recipe's range when the data calls for it.
 
 - `mantispy.io`: `read_profiles` for profile files, CellProfiler `ExportToSpreadsheet` directories and CytoTable parquet parts; `read_plate` for a Cell Painting Gallery source or an `ExportForSpatialData` plate folder as `SpatialData`; `read_jump`, `read`, `write` and `validate`
 - `mantispy.ds`: the generated `synthetic_plate` and `blobs`; `bbbc021`, `rohban`, `pki` and `jump_target2` with the annotations the analyses need; five further Cell Painting Gallery accessions
