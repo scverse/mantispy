@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import math
 import warnings
 from collections.abc import Callable
@@ -144,14 +145,12 @@ def _select_epsilon(adata: AnnData, X: np.ndarray, method: str, reference: str |
 
     The jump-profiling-recipe's fixed grid gives a reproducible base; each candidate is fitted on the reference and scored by the mean of its activity and replicability mAP. The search then samples past both ends of the grid and between points when the best sits there, so the chosen value can fall outside the recipe's range. The finite argmax, the full set of candidates and their scores are written to ``uns["mantispy"]["sphere_epsilon"]``.
     """
-    try:
-        # Fail here with a friendly message when copairs is absent; the scoring imports it again.
-        from copairs import map as _
-    except ImportError as error:  # pragma: no cover - exercised only without the extra
+    # Fail here with a friendly message when copairs is absent; the scoring imports it for real.
+    if importlib.util.find_spec("copairs") is None:  # pragma: no cover - exercised only without the extra
         raise ImportError(
             "sphere(epsilon='auto') scores candidates with copairs, an optional extra. "
             "Install it with pip install 'mantispy[map]', or pass a float epsilon."
-        ) from error
+        )
 
     from mantispy._core.frames import as_frame
     from mantispy.tl._map import REFERENCE_COLUMN, _resolve_mode, _score_map
