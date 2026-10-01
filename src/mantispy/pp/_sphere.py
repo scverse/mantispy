@@ -139,6 +139,11 @@ def _select_epsilon(adata: AnnData, X: np.ndarray, method: str, reference: str |
     activity_meta = base_meta.copy()
     activity_meta[REFERENCE_COLUMN] = np.where(is_control, np.arange(adata.n_obs), -1)
     treated_meta = base_meta[treated].reset_index(drop=True)
+    if treated_meta["Metadata_Perturbation"].value_counts().max() < 2:
+        raise ValueError(
+            "sphere(epsilon='auto') needs replicate pairs to score, but no perturbation has two "
+            "or more wells. Pass a float epsilon."
+        )
 
     # The recipe's fixed grid and seed, so the candidate set is reproducible across runs.
     grid = 10.0 ** np.random.default_rng((6, 12, 2022)).uniform(-5.0, 3.0, 25)
@@ -221,7 +226,6 @@ def sphere(
     Raises:
         ImportError: ``epsilon="auto"`` was asked but copairs, the extra the sweep scores with, is not installed.
         ValueError: If ``method`` is unknown, ``epsilon`` is neither a float nor ``"auto"``, ``reference`` selects no rows, a group has fewer than two reference rows, the reference holds missing or infinite values, a ``-cor`` method meets a zero-variance feature, the reference matrix is not full rank, ``epsilon="auto"`` is asked without the columns and reference the sweep needs, or every ``epsilon="auto"`` candidate scored non-finite.
-        copairs.matching.UnpairedException: ``epsilon="auto"`` was asked on an object with no replicate pairs, so the sweep has nothing to score.
     """
     if method not in METHODS:
         raise ValueError(f"method must be one of {METHODS}, got {method!r}")
