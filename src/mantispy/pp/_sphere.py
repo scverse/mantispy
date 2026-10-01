@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import importlib.util
+import math
 import warnings
+from collections.abc import Callable
 
 import numpy as np
 from anndata import AnnData
@@ -13,10 +16,10 @@ from mantispy._core.mutation import inplace_or_copy
 METHODS = ("ZCA", "ZCA-cor", "PCA", "PCA-cor")
 
 
-def _fit(reference: np.ndarray, method: str, epsilon: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Return ``(center, scale, W)`` for the requested whitening.
+def _decompose(reference: np.ndarray, method: str) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, int]:
+    """Return ``(centre, scale, singular, right, n_obs)``: the epsilon-independent part of :func:`_fit`.
 
-    Follows pycytominer's ``Spherize``: epsilon is added to the singular values, and when there are no more rows than features the null directions are padded with the smallest non-zero singular value.
+    Factored out so a sweep over epsilon pays for the centre, scale and SVD once rather than per candidate.
     """
     # A missing value would otherwise surface as "LinAlgError: SVD did not converge".
     if not np.isfinite(reference).all():
@@ -50,7 +53,7 @@ def _fit(reference: np.ndarray, method: str, epsilon: float) -> tuple[np.ndarray
             "than features the covariance is singular and the transform amplifies noise. Select fewer "
             "features first, or use more controls.",
             UserWarning,
-            stacklevel=4,
+            stacklevel=5,
         )
     # Centering costs one degree of freedom, so a full-rank reference has rank min(n_vars, n_obs - 1).
     rank = np.linalg.matrix_rank(centered)
@@ -65,12 +68,187 @@ def _fit(reference: np.ndarray, method: str, epsilon: float) -> tuple[np.ndarray
     _, singular, right = np.linalg.svd(centered, full_matrices=n_obs <= n_vars)
     if n_obs <= n_vars:
         singular = np.concatenate((singular[:rank], np.repeat(singular[rank - 1], n_vars - rank)))
-    singular = singular + epsilon
+    return centre, scale, singular, right, n_obs
 
+
+def _whiten(singular: np.ndarray, right: np.ndarray, n_obs: int, method: str, epsilon: float) -> np.ndarray:
+    """Build the whitening matrix from a decomposition, regularizing the singular values with ``epsilon``."""
+    singular = singular + epsilon
     W = (right / singular[:, np.newaxis]).transpose() * np.sqrt(n_obs - 1)
     if method.startswith("ZCA"):
         W = W @ right
-    return centre, scale, W
+    return W
+
+
+def _fit(reference: np.ndarray, method: str, epsilon: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return ``(centre, scale, W)`` for the requested whitening.
+
+    Follows pycytominer's ``Spherize``: epsilon is added to the singular values, and when there are no more rows than features the null directions are padded with the smallest non-zero singular value.
+    """
+    centre, scale, singular, right, n_obs = _decompose(reference, method)
+    return centre, scale, _whiten(singular, right, n_obs, method, epsilon)
+
+
+# Opportunistic sampling for epsilon="auto": how far past the recipe grid to wander, the step, and when to stop.
+_EPSILON_BOUNDS = (1e-8, 1e8)
+_EPSILON_STEP = 10.0
+_EPSILON_TOLERANCE = 1e-4
+_EPSILON_REFINE_ROUNDS = 3
+
+
+def _extend_epsilon(scored: dict[float, float], evaluate: Callable[[float], float]) -> None:
+    """Grow an epsilon sweep past both ends of the grid and refine around the best, scoring in place.
+
+    The recipe grid can miss the optimum: it may sit past either end, so walk outward from both the low
+    and the high end while the score keeps improving (up to a cap); or it may fall between two coarse
+    points, so bisect towards the best's neighbours. ``scored`` maps each epsilon to its score and gains
+    an entry for every new candidate.
+    """
+    low_cap, high_cap = _EPSILON_BOUNDS
+
+    # Probe both regimes, low and high, so a boundary optimum is never missed.
+    for direction in (_EPSILON_STEP, 1.0 / _EPSILON_STEP):
+        candidate = max(scored) if direction > 1.0 else min(scored)
+        previous = scored[candidate]
+        while low_cap <= candidate * direction <= high_cap:
+            candidate *= direction
+            score = evaluate(candidate)
+            scored[candidate] = score
+            if score <= previous + _EPSILON_TOLERANCE:
+                break
+            previous = score
+
+    # Refine around the best by bisecting towards its neighbours, since the grid is coarse.
+    for _ in range(_EPSILON_REFINE_ROUNDS):
+        candidates = sorted(scored)
+        best = max(candidates, key=lambda candidate: scored[candidate])
+        index = candidates.index(best)
+        neighbours = []
+        if index > 0:
+            neighbours.append(math.sqrt(candidates[index - 1] * best))
+        if index < len(candidates) - 1:
+            neighbours.append(math.sqrt(best * candidates[index + 1]))
+        fresh = [midpoint for midpoint in neighbours if midpoint not in scored]
+        if not fresh:
+            break
+        improved = False
+        for midpoint in fresh:
+            scored[midpoint] = evaluate(midpoint)
+            if scored[midpoint] > scored[best] + _EPSILON_TOLERANCE:
+                improved = True
+        if not improved:
+            break
+
+
+def _select_epsilon(adata: AnnData, X: np.ndarray, method: str, reference: str | None) -> tuple[float, np.ndarray]:
+    """Pick ``epsilon`` for ``epsilon="auto"``, returning it and the control mask it scored against.
+
+    The jump-profiling-recipe's fixed grid gives a reproducible base; each candidate is fitted on the reference and scored by the mean of its activity and replicability mAP. The search then samples past both ends of the grid and between points when the best sits there, so the chosen value can fall outside the recipe's range. The finite argmax, the full set of candidates and their scores are written to ``uns["mantispy"]["sphere_epsilon"]``.
+    """
+    # Fail here with a friendly message when copairs is absent; the scoring imports it for real.
+    if importlib.util.find_spec("copairs") is None:  # pragma: no cover - exercised only without the extra
+        raise ImportError(
+            "sphere(epsilon='auto') scores candidates with copairs, an optional extra. "
+            "Install it with pip install 'mantispy[map]', or pass a float epsilon."
+        )
+
+    from mantispy._core.frames import as_frame
+    from mantispy.tl._map import REFERENCE_COLUMN, _resolve_mode, _score_map
+
+    reference_column = "Metadata_Control" if reference == "negcon" else reference
+    missing = []
+    if "Metadata_Perturbation" not in adata.obs:
+        missing.append("'Metadata_Perturbation' to group replicates by")
+    if "Metadata_Plate" not in adata.obs:
+        missing.append("'Metadata_Plate' to draw the negatives from")
+    if reference is None:
+        missing.append("a negcon reference, but reference=None selects every row as the reference")
+    elif reference_column not in adata.obs:
+        missing.append(f"{reference_column!r} to select the negcon reference")
+    if missing:
+        raise ValueError(
+            "sphere(epsilon='auto') scores activity and replicability mAP to choose epsilon, which needs "
+            + "; and ".join(missing)
+            + ". Pass a float epsilon to skip the search."
+        )
+
+    is_control = reference_mask(adata, reference)
+    if not is_control.any():
+        raise ValueError(
+            f"sphere(epsilon='auto') found no reference rows selected by reference={reference!r}, "
+            "so there is nothing to score the candidates against."
+        )
+
+    obs = as_frame(adata.obs)
+    base_meta = obs[[column for column in obs.columns if column.startswith("Metadata_")]].reset_index(drop=True)
+    activity = _resolve_mode("activity", label="Metadata_Perturbation", batch="Metadata_Plate")
+    replicability = _resolve_mode("replicability", label="Metadata_Perturbation", batch="Metadata_Plate")
+    treated = ~is_control
+
+    control_positions = np.flatnonzero(is_control)
+    activity_meta = base_meta.copy()
+    activity_meta[REFERENCE_COLUMN] = np.where(is_control, np.arange(adata.n_obs), -1)
+    treated_meta = base_meta[treated].reset_index(drop=True)
+    # Guarded before _decompose so a no-replicate screen does not pay a throwaway SVD.
+    if treated_meta.empty or treated_meta["Metadata_Perturbation"].value_counts().max() < 2:
+        raise ValueError(
+            "sphere(epsilon='auto') needs replicate pairs to score, but no perturbation has two "
+            "or more wells. Pass a float epsilon."
+        )
+
+    # Everything that does not depend on the candidate is built once, so each score only re-whitens and re-scores.
+    centre, scale, singular, right, n_obs = _decompose(X[is_control], method)
+    standardized = (X - centre) / scale
+
+    def evaluate(candidate: float) -> float:
+        """Score one epsilon by the mean of its activity and replicability mAP; -inf when non-finite."""
+        features = (standardized @ _whiten(singular, right, n_obs, method, candidate)).astype(np.float32)
+        # A non-finite profile makes this candidate's mAP non-finite, so it can never be chosen.
+        if not np.isfinite(features).all():
+            return -np.inf
+        activity_table, _ = _score_map(
+            activity_meta,
+            features,
+            activity,
+            null_size=0,
+            threshold=1.0,
+            seed=0,
+            drop_positions=control_positions,
+            warn=False,
+            compute_null=False,
+        )
+        replicability_table, _ = _score_map(
+            treated_meta,
+            features[treated],
+            replicability,
+            null_size=0,
+            threshold=1.0,
+            seed=0,
+            warn=False,
+            compute_null=False,
+        )
+        score = (
+            activity_table["mean_average_precision"].mean() + replicability_table["mean_average_precision"].mean()
+        ) / 2
+        return float(score) if np.isfinite(score) else -np.inf
+
+    # The recipe's fixed grid and seed give a reproducible base; opportunistic sampling then grows it.
+    base = 10.0 ** np.random.default_rng((6, 12, 2022)).uniform(-5.0, 3.0, 25)
+    scored = {float(candidate): evaluate(float(candidate)) for candidate in base}
+    _extend_epsilon(scored, evaluate)
+
+    if not any(np.isfinite(score) for score in scored.values()):
+        raise ValueError(
+            "sphere(epsilon='auto') scored every candidate as non-finite, so none can be chosen. The "
+            "profiles are not finite after whitening; drop features or rows with missing values first "
+            "with mt.pp.feature_select (drop_na_columns) or mt.pp.drop_na."
+        )
+    grid = np.array(sorted(scored))
+    scores = np.array([scored[candidate] for candidate in grid])
+    # Non-finite candidates stay -inf, so argmax never lands on a NaN.
+    chosen = float(grid[int(np.argmax(scores))])
+    adata.uns.setdefault("mantispy", {})["sphere_epsilon"] = {"epsilon": chosen, "grid": grid, "scores": scores}
+    return chosen, is_control
 
 
 @inplace_or_copy()
@@ -78,7 +256,7 @@ def sphere(
     adata: AnnData,
     method: str = "ZCA-cor",
     reference: str | None = "negcon",
-    epsilon: float = 1e-6,
+    epsilon: float | str = 1e-6,
     by: str | None = None,
     key_added: str | None = None,
     copy: bool = False,
@@ -92,7 +270,10 @@ def sphere(
             ``"PCA"`` and ``"PCA-cor"`` return principal components, which ``var`` no longer describes, and warn about it unless ``key_added`` is set.
             The ``-cor`` variants whiten the correlation instead of the covariance, so high-variance features do not dominate.
         reference: Rows to fit on: ``"negcon"`` for the controls, ``None`` for everything, or the name of a boolean ``obs`` column.
-        epsilon: Regularization added to the singular values.
+        epsilon: Regularization added to the singular values, or ``"auto"`` to pick it from the data.
+            ``"auto"`` scores each candidate by the mean of its activity and replicability mAP on the transformed profiles and keeps the argmax, starting from the jump-profiling-recipe grid and then sampling past both ends and between points when the best sits there, so the chosen value can fall outside the recipe's range.
+            It needs copairs, ``Metadata_Perturbation``, ``Metadata_Plate`` and a negcon reference; the search is global, so ``by`` only changes how the chosen value is applied.
+            Every candidate, its score and the chosen value are written to ``uns["mantispy"]["sphere_epsilon"]``.
         by: Fit and apply separately within each group of this column, e.g. per batch.
         key_added: Write to ``layers[key_added]`` instead of overwriting ``X``.
         copy: Return a modified copy instead of mutating in place.
@@ -102,7 +283,8 @@ def sphere(
         Writes ``X`` or ``layers[key_added]``.
 
     Raises:
-        ValueError: If ``method`` is unknown, ``reference`` selects no rows, a group has fewer than two reference rows, the reference holds missing or infinite values, a ``-cor`` method meets a zero-variance feature, or the reference matrix is not full rank.
+        ImportError: ``epsilon="auto"`` was asked but copairs, the extra the sweep scores with, is not installed.
+        ValueError: If ``method`` is unknown, ``epsilon`` is neither a float nor ``"auto"``, ``reference`` selects no rows, a group has fewer than two reference rows, the reference holds missing or infinite values, a ``-cor`` method meets a zero-variance feature, the reference matrix is not full rank, ``epsilon="auto"`` is asked without the columns and reference the sweep needs, or every ``epsilon="auto"`` candidate scored non-finite.
     """
     if method not in METHODS:
         raise ValueError(f"method must be one of {METHODS}, got {method!r}")
@@ -116,7 +298,18 @@ def sphere(
         )
 
     X = get_matrix(adata).astype(np.float64)
-    mask = reference_mask(adata, reference)
+
+    auto = epsilon == "auto"
+    if auto:
+        epsilon, mask = _select_epsilon(adata, X, method, reference)
+    elif isinstance(epsilon, bool) or not isinstance(epsilon, int | float):
+        # bool is an int subclass, so reject it before the float path turns `singular + True` into a transform.
+        raise ValueError(f"epsilon must be a float or 'auto', got {epsilon!r}")
+    else:
+        mask = reference_mask(adata, reference)
+        # Keep uns["mantispy"]["sphere_epsilon"] authoritative: a float call leaves no earlier sweep behind.
+        adata.uns.get("mantispy", {}).pop("sphere_epsilon", None)
+
     if not mask.any():
         raise ValueError(f"no reference rows selected by reference={reference!r}")
 
