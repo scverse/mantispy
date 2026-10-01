@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning][].
 ## [Unreleased]
 
 ### Added
+- `mantispy.pp`: `detect_plate_position` reports a cross-validated R2 of a control-fit smooth position map per plate, so a plate-position correction can be gated on whether a learnable position artifact actually exists.
 
 - `mantispy.io`: `read_profiles` for profile files, CellProfiler `ExportToSpreadsheet` directories and CytoTable parquet parts; `read_plate` for a Cell Painting Gallery source or an `ExportForSpatialData` plate folder as `SpatialData`; `read_jump`, `read`, `write` and `validate`
 - `mantispy.ds`: the generated `synthetic_plate` and `blobs`; `bbbc021`, `rohban`, `pki` and `jump_target2` with the annotations the analyses need; five further Cell Painting Gallery accessions

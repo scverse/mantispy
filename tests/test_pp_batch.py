@@ -125,6 +125,72 @@ def test_one_infinity_does_not_spread_across_features(gradient_cells):
     assert np.isfinite(corrected).all()
 
 
+def _control_plate(n_wells, n_features, gradient, noise, seed):
+    """A plate of only control wells, carrying either a smooth row/column gradient or iid noise.
+
+    Args:
+        n_wells: Number of control wells, laid out on the standard grid.
+        n_features: Number of features.
+        gradient: Plant a smooth row/column gradient shared across features; otherwise iid noise.
+        noise: Standard deviation of the per-well noise added on top of a gradient.
+        seed: Seed for reproducibility.
+    """
+    import anndata as ad
+
+    from mantispy._core.plate import PLATE_FORMATS, well_name
+    from mantispy._core.schema import stamp
+
+    n_rows, n_cols = PLATE_FORMATS[next(size for size in sorted(PLATE_FORMATS) if size >= n_wells)]
+    wells = [well_name(row, col) for row in range(n_rows) for col in range(n_cols)][:n_wells]
+    rows = np.array([well_row(well) for well in wells], dtype=float)
+    cols = np.array([well_col(well) for well in wells], dtype=float)
+
+    generator = np.random.default_rng(seed)
+    if gradient:
+        smooth = (3.0 * rows / rows.max() + 2.0 * cols / cols.max())[:, None]
+        values = smooth + generator.normal(0.0, noise, (n_wells, n_features))
+    else:
+        values = generator.normal(0.0, 1.0, (n_wells, n_features))
+
+    obs = pd.DataFrame(
+        {"Metadata_Plate": "P1", "Metadata_Well": wells, "Metadata_Control": True},
+        index=[str(index) for index in range(n_wells)],
+    )
+    adata = ad.AnnData(
+        X=values.astype(np.float32),
+        obs=obs,
+        var=pd.DataFrame(index=[f"Cells_AreaShape_F{index}" for index in range(n_features)]),
+    )
+    stamp(adata, resolution="well")
+    return adata
+
+
+def test_detect_plate_position_fires_on_a_smooth_gradient():
+    adata = _control_plate(n_wells=96, n_features=12, gradient=True, noise=0.1, seed=0)
+    mt.pp.detect_plate_position(adata)
+    row = adata.uns["mantispy"]["plate_position_detection"].set_index("plate").loc["P1"]
+    assert row["cv_r2_median"] > 0
+    assert row["frac_features_positive"] > 0.8
+    assert row["reason"] == ""
+
+
+def test_detect_plate_position_does_not_fire_on_noise():
+    adata = _control_plate(n_wells=96, n_features=12, gradient=False, noise=0.0, seed=0)
+    mt.pp.detect_plate_position(adata)
+    row = adata.uns["mantispy"]["plate_position_detection"].set_index("plate").loc["P1"]
+    assert row["cv_r2_median"] <= 0
+
+
+def test_detect_plate_position_records_too_few_controls_without_raising():
+    adata = _control_plate(n_wells=12, n_features=12, gradient=True, noise=0.1, seed=0)
+    mt.pp.detect_plate_position(adata, min_controls=20)
+    row = adata.uns["mantispy"]["plate_position_detection"].set_index("plate").loc["P1"]
+    assert np.isnan(row["cv_r2_median"])
+    assert np.isnan(row["frac_features_positive"])
+    assert "control wells" in row["reason"]
+    assert row["n_controls"] == 12
+
+
 def _two_plates(count_means=(1500.0, 1500.0), slope=0.0, n=192, n_features=30, seed=0):
     """Two plates with identical biology, differing only in how confluent they are."""
     from mantispy.ds import synthetic_plate

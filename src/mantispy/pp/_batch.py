@@ -111,6 +111,170 @@ def correct_plate_position(
     return None
 
 
+def _gaussian_kernel_1d(sigma: float) -> np.ndarray:
+    """A normalized 1D Gaussian kernel, truncated at the width :mod:`scipy.ndimage` uses by default."""
+    radius = int(4.0 * sigma + 0.5)
+    offsets = np.arange(-radius, radius + 1)
+    kernel = np.exp(-0.5 * (offsets / sigma) ** 2)
+    return kernel / kernel.sum()
+
+
+def _convolve_axis(grid: np.ndarray, kernel: np.ndarray, axis: int) -> np.ndarray:
+    """Convolve ``grid`` with a 1D ``kernel`` along one axis, padding with zeros so empty cells contribute nothing."""
+    radius = kernel.size // 2
+    grid = np.moveaxis(grid, axis, 0)
+    padded = np.zeros((grid.shape[0] + 2 * radius, *grid.shape[1:]), dtype=grid.dtype)
+    padded[radius : radius + grid.shape[0]] = grid
+    out = np.zeros_like(grid)
+    for offset, weight in enumerate(kernel):
+        out += weight * padded[offset : offset + grid.shape[0]]
+    return np.moveaxis(out, 0, axis)
+
+
+def _smooth_grid(grid: np.ndarray, sigma: float) -> np.ndarray:
+    """Gaussian-smooth a ``(rows, columns, features)`` grid over its two spatial axes only.
+
+    Uses :func:`scipy.ndimage.gaussian_filter` when SciPy is importable, and a separable NumPy
+    convolution otherwise; both pad with zeros so a position with no data borrows only from its neighbours.
+    """
+    try:
+        from scipy.ndimage import gaussian_filter
+    except ImportError:  # pragma: no cover - SciPy is a hard dependency
+        kernel = _gaussian_kernel_1d(sigma)
+        return _convolve_axis(_convolve_axis(grid, kernel, 0), kernel, 1)
+    return gaussian_filter(grid, sigma=(sigma, sigma, 0.0), mode="constant", cval=0.0)
+
+
+@inplace_or_copy()
+def detect_plate_position(
+    adata: AnnData,
+    by: str = "Metadata_Plate",
+    reference: str | None = "negcon",
+    sigma: float = 1.5,
+    n_splits: int = 5,
+    min_controls: int = 20,
+    seed: int = 0,
+    key_added: str = "plate_position_detection",
+    copy: bool = False,
+) -> AnnData | None:
+    """Test whether a plate carries a position artifact that generalizes, to gate the correction on it.
+
+    A per-plate position effect is often overfit noise rather than a real artifact: with few controls
+    on a large grid, the apparent structure is the controls' own scatter, and :func:`correct_plate_position`
+    would then subtract signal. This detector fits a smooth position map on the control wells under
+    cross-validation and scores how well it predicts held-out controls, so a plate is corrected only when
+    the position structure is learnable.
+
+    Per plate, on the control wells selected by ``reference``, each well is reduced to one value per grid
+    position. Across cross-validation folds a position map is fitted on the training controls as their
+    per-position mean, Gaussian-smoothed over the plate grid: the summed values and the well counts are
+    smoothed separately and divided, so an empty position borrows from its neighbours, and a position no
+    neighbour reaches takes the training grand mean. Each held-out control is predicted from its own
+    position's cell of the map. A cross-validated coefficient of determination is then formed per feature
+    from the held-out residuals against the plate's control grand mean, and summarized per plate.
+
+    Args:
+        adata: Object to inspect, at cell or well resolution.
+        by: Column identifying the plate.
+        reference: Wells to fit and score on, usually ``"negcon"`` (the controls); see :func:`correct_plate_position`.
+        sigma: Width of the Gaussian that smooths the position map over the plate grid.
+        n_splits: Number of cross-validation folds over the control wells.
+        min_controls: Fewest control wells a plate needs to be scored; a plate below it is recorded unscored.
+        seed: Seed for the fold assignment.
+        key_added: Key under ``uns["mantispy"]`` for the result table.
+        copy: Return a modified copy instead of writing in place.
+
+    Returns:
+        ``None``, or the modified copy.
+        Writes a per-plate table to ``uns["mantispy"][key_added]`` with one row per plate and the columns
+        ``plate``, ``n_controls``, ``cv_r2_median``, ``frac_features_positive`` and ``reason``.
+        A positive ``cv_r2_median`` means the position structure generalizes and the plate has a learnable
+        artifact worth correcting; a value at or below zero means the apparent structure does not generalize,
+        so :func:`correct_plate_position` would remove noise and should be skipped. A plate with too few
+        controls is recorded with missing scores and a ``reason``, and is neither scored nor, by this reading,
+        a candidate for correction.
+
+    Raises:
+        KeyError: If ``reference`` names a column that is not present.
+
+    Notes:
+        This pairs with :func:`correct_plate_position` as its gate: detect first, then correct only the
+        plates whose artifact is learnable.
+    """
+    X = get_matrix(adata)
+    wells = adata.obs["Metadata_Well"].to_numpy()
+    all_rows = np.array([well_row(well) for well in wells])
+    all_columns = np.array([well_col(well) for well in wells])
+    is_control = reference_mask(adata, reference)
+    codes, keys = group_codes(adata, by)
+
+    table: dict[str, list] = {
+        "plate": [],
+        "n_controls": [],
+        "cv_r2_median": [],
+        "frac_features_positive": [],
+        "reason": [],
+    }
+    for group, key in enumerate(keys):
+        selected = np.flatnonzero(codes == group)
+        n_grid_rows = all_rows[selected].max() + 1
+        n_grid_columns = all_columns[selected].max() + 1
+        control = selected[is_control[selected]]
+
+        # Reduce each control well (one grid position) to its mean, so cells in a well do not count as separate observations.
+        linear = all_rows[control] * n_grid_columns + all_columns[control]
+        positions, inverse = np.unique(linear, return_inverse=True)
+        n_controls = positions.size
+        values = np.zeros((n_controls, adata.n_vars))
+        np.add.at(values, inverse, X[control].astype(np.float64))
+        values /= np.bincount(inverse, minlength=n_controls)[:, None]
+        well_rows, well_columns = positions // n_grid_columns, positions % n_grid_columns
+
+        if n_controls < min_controls:
+            table["plate"].append(str(key))
+            table["n_controls"].append(int(n_controls))
+            table["cv_r2_median"].append(float("nan"))
+            table["frac_features_positive"].append(float("nan"))
+            table["reason"].append(f"only {n_controls} control wells")
+            continue
+
+        grand_mean = values.mean(axis=0)
+        splits = min(n_splits, n_controls)
+        order = np.random.default_rng(seed).permutation(n_controls)
+        ss_res = np.zeros(adata.n_vars)
+        ss_tot = np.zeros(adata.n_vars)
+        for fold in np.array_split(order, splits):
+            held_out = fold
+            train = np.setdiff1d(order, fold, assume_unique=True)
+
+            sums = np.zeros((n_grid_rows, n_grid_columns, adata.n_vars))
+            counts = np.zeros((n_grid_rows, n_grid_columns, 1))
+            np.add.at(sums, (well_rows[train], well_columns[train]), values[train])
+            np.add.at(counts, (well_rows[train], well_columns[train], 0), 1.0)
+            smooth_sums = _smooth_grid(sums, sigma)
+            smooth_counts = _smooth_grid(counts, sigma)[..., 0]
+
+            position_map = np.broadcast_to(values[train].mean(axis=0), (n_grid_rows, n_grid_columns, adata.n_vars)).copy()
+            reached = smooth_counts > 1e-9
+            position_map[reached] = smooth_sums[reached] / smooth_counts[reached, None]
+
+            predicted = position_map[well_rows[held_out], well_columns[held_out]]
+            ss_res += ((values[held_out] - predicted) ** 2).sum(axis=0)
+            ss_tot += ((values[held_out] - grand_mean) ** 2).sum(axis=0)
+
+        cv_r2 = np.where(ss_tot > 0, 1.0 - ss_res / np.where(ss_tot > 0, ss_tot, 1.0), np.nan)
+        scored = np.isfinite(cv_r2)
+        table["plate"].append(str(key))
+        table["n_controls"].append(int(n_controls))
+        table["cv_r2_median"].append(float(np.median(cv_r2[scored])) if scored.any() else float("nan"))
+        table["frac_features_positive"].append(float((cv_r2[scored] > 0).mean()) if scored.any() else float("nan"))
+        table["reason"].append("")
+
+    adata.uns.setdefault("mantispy", {})[key_added] = pd.DataFrame(table)
+    get_logger().info("detect_plate_position scored position artifacts per %s into uns['mantispy'][%r]", by, key_added)
+    return None
+
+
 @inplace_or_copy()
 def regress_out(
     adata: AnnData,
