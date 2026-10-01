@@ -50,7 +50,7 @@ def _decompose(reference: np.ndarray, method: str) -> tuple[np.ndarray, np.ndarr
             "than features the covariance is singular and the transform amplifies noise. Select fewer "
             "features first, or use more controls.",
             UserWarning,
-            stacklevel=4,
+            stacklevel=5,
         )
     # Centering costs one degree of freedom, so a full-rank reference has rank min(n_vars, n_obs - 1).
     rank = np.linalg.matrix_rank(centered)
@@ -133,26 +133,28 @@ def _select_epsilon(adata: AnnData, X: np.ndarray, method: str, reference: str |
     replicability = _resolve_mode("replicability", label="Metadata_Perturbation", batch="Metadata_Plate")
     treated = ~is_control
 
-    # Everything that does not depend on the candidate is built once, so the loop only re-whitens and re-scores.
-    centre, scale, singular, right, n_obs = _decompose(X[is_control], method)
     control_positions = np.flatnonzero(is_control)
     activity_meta = base_meta.copy()
     activity_meta[REFERENCE_COLUMN] = np.where(is_control, np.arange(adata.n_obs), -1)
     treated_meta = base_meta[treated].reset_index(drop=True)
-    if treated_meta["Metadata_Perturbation"].value_counts().max() < 2:
+    # Guarded before _decompose so a no-replicate screen does not pay a throwaway SVD.
+    if treated_meta.empty or treated_meta["Metadata_Perturbation"].value_counts().max() < 2:
         raise ValueError(
             "sphere(epsilon='auto') needs replicate pairs to score, but no perturbation has two "
             "or more wells. Pass a float epsilon."
         )
+
+    # Everything that does not depend on the candidate is built once, so the loop only re-whitens and re-scores.
+    centre, scale, singular, right, n_obs = _decompose(X[is_control], method)
+    standardized = (X - centre) / scale
 
     # The recipe's fixed grid and seed, so the candidate set is reproducible across runs.
     grid = 10.0 ** np.random.default_rng((6, 12, 2022)).uniform(-5.0, 3.0, 25)
     scores = np.full_like(grid, -np.inf)
     for index, candidate in enumerate(grid):
         W = _whiten(singular, right, n_obs, method, candidate)
-        features = (((X - centre) / scale) @ W).astype(np.float32)
-        # A non-finite profile makes this candidate's mAP non-finite; np.argmax would then silently keep
-        # grid[0], so leave the score at -inf and let np.nanargmax rank it last.
+        features = (standardized @ W).astype(np.float32)
+        # A non-finite profile makes this candidate's mAP non-finite, so leave the score at -inf.
         if not np.isfinite(features).all():
             continue
         activity_table, _ = _score_map(
@@ -187,7 +189,8 @@ def _select_epsilon(adata: AnnData, X: np.ndarray, method: str, reference: str |
             "profiles are not finite after whitening; drop features or rows with missing values first "
             "with mt.pp.feature_select (drop_na_columns) or mt.pp.drop_na."
         )
-    chosen = float(grid[int(np.nanargmax(scores))])
+    # Scores start at -inf and any non-finite candidate stays -inf, so argmax never lands on a NaN.
+    chosen = float(grid[int(np.argmax(scores))])
     adata.uns.setdefault("mantispy", {})["sphere_epsilon"] = {"epsilon": chosen, "grid": grid, "scores": scores}
     return chosen, is_control
 
@@ -240,15 +243,13 @@ def sphere(
 
     X = get_matrix(adata).astype(np.float64)
 
-    auto = isinstance(epsilon, str)
+    auto = epsilon == "auto"
     if auto:
-        if epsilon != "auto":
-            raise ValueError(f"epsilon must be a float or 'auto', got {epsilon!r}")
         epsilon, mask = _select_epsilon(adata, X, method, reference)
-    else:
+    elif isinstance(epsilon, bool) or not isinstance(epsilon, int | float):
         # bool is an int subclass, so reject it before the float path turns `singular + True` into a transform.
-        if isinstance(epsilon, bool) or not isinstance(epsilon, int | float):
-            raise ValueError(f"epsilon must be a float or 'auto', got {epsilon!r}")
+        raise ValueError(f"epsilon must be a float or 'auto', got {epsilon!r}")
+    else:
         mask = reference_mask(adata, reference)
         # Keep uns["mantispy"]["sphere_epsilon"] authoritative: a float call leaves no earlier sweep behind.
         adata.uns.get("mantispy", {}).pop("sphere_epsilon", None)
@@ -276,10 +277,6 @@ def sphere(
         adata.X = result
     else:
         adata.layers[key_added] = result
-    if auto:
-        # @inplace_or_copy snapshots epsilon="auto" before recording; stage the resolved float so the
-        # decorator records what actually ran under uns["mantispy"]["params"]["sphere"].
-        adata.uns.setdefault("mantispy", {})["params_resolved"] = {"epsilon": epsilon}
     return None
 
 

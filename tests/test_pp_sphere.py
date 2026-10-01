@@ -181,6 +181,29 @@ def test_auto_without_the_columns_or_reference_it_needs_names_the_gap():
         mt.pp.sphere(missing_reference, method="ZCA", epsilon="auto")
 
 
+def test_auto_without_replicate_pairs_raises():
+    """A screen where every perturbation is a singleton cannot be scored, so the guard fires."""
+    pytest.importorskip("copairs")
+    adata = _plantable()
+    treated = ~adata.obs["Metadata_Control"].to_numpy(dtype=bool)
+    labels = adata.obs["Metadata_Perturbation"].to_numpy().copy()
+    labels[treated] = [f"singleton{index}" for index in range(int(treated.sum()))]
+    adata.obs["Metadata_Perturbation"] = labels
+
+    with pytest.raises(ValueError, match="needs replicate pairs to score"):
+        mt.pp.sphere(adata, method="ZCA", epsilon="auto")
+
+
+def test_auto_with_no_treated_wells_raises():
+    """An all-controls object leaves nothing to score, and an empty count must not read nan < 2 as False."""
+    pytest.importorskip("copairs")
+    adata = _plantable()
+    adata.obs["Metadata_Control"] = np.ones(adata.n_obs, dtype=bool)
+
+    with pytest.raises(ValueError, match="needs replicate pairs to score"):
+        mt.pp.sphere(adata, method="ZCA", epsilon="auto")
+
+
 def test_a_string_epsilon_other_than_auto_is_rejected():
     adata = _plantable()
     with pytest.raises(ValueError, match="epsilon must be a float or 'auto'"):
