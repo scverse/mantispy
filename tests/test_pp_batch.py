@@ -125,7 +125,7 @@ def test_one_infinity_does_not_spread_across_features(gradient_cells):
     assert np.isfinite(corrected).all()
 
 
-def _control_plate(n_wells, n_features, gradient, noise, seed):
+def _control_plate(n_wells, n_features, gradient, seed, noise=0.0, plate="P1"):
     """A plate of only control wells, carrying either a smooth row/column gradient or iid noise.
 
     Args:
@@ -134,6 +134,7 @@ def _control_plate(n_wells, n_features, gradient, noise, seed):
         gradient: Plant a smooth row/column gradient shared across features; otherwise iid noise.
         noise: Standard deviation of the per-well noise added on top of a gradient.
         seed: Seed for reproducibility.
+        plate: Value for the ``Metadata_Plate`` column, so several plates can be concatenated.
     """
     import anndata as ad
 
@@ -147,13 +148,14 @@ def _control_plate(n_wells, n_features, gradient, noise, seed):
 
     generator = np.random.default_rng(seed)
     if gradient:
-        smooth = (3.0 * rows / rows.max() + 2.0 * cols / cols.max())[:, None]
+        # A plate that fits in one row or one column has no span to divide by.
+        smooth = (3.0 * rows / max(rows.max(), 1.0) + 2.0 * cols / max(cols.max(), 1.0))[:, None]
         values = smooth + generator.normal(0.0, noise, (n_wells, n_features))
     else:
         values = generator.normal(0.0, 1.0, (n_wells, n_features))
 
     obs = pd.DataFrame(
-        {"Metadata_Plate": "P1", "Metadata_Well": wells, "Metadata_Control": True},
+        {"Metadata_Plate": plate, "Metadata_Well": wells, "Metadata_Control": True},
         index=[str(index) for index in range(n_wells)],
     )
     adata = ad.AnnData(
@@ -175,10 +177,29 @@ def test_detect_plate_position_fires_on_a_smooth_gradient():
 
 
 def test_detect_plate_position_does_not_fire_on_noise():
-    adata = _control_plate(n_wells=96, n_features=12, gradient=False, noise=0.0, seed=0)
+    adata = _control_plate(n_wells=96, n_features=12, gradient=False, seed=0)
     mt.pp.detect_plate_position(adata)
     row = adata.uns["mantispy"]["plate_position_detection"].set_index("plate").loc["P1"]
     assert row["cv_r2_median"] <= 0
+    assert row["frac_features_positive"] < 0.5
+    assert row["reason"] == ""
+
+
+def test_detect_plate_position_scores_each_plate_independently():
+    import anndata as ad
+
+    gradient = _control_plate(n_wells=96, n_features=12, gradient=True, noise=0.1, seed=0, plate="P1")
+    noise = _control_plate(n_wells=96, n_features=12, gradient=False, seed=1, plate="P2")
+    adata = ad.concat([gradient, noise], index_unique="-")
+
+    mt.pp.detect_plate_position(adata)
+    table = adata.uns["mantispy"]["plate_position_detection"].set_index("plate")
+
+    assert set(table.index) == {"P1", "P2"}
+    assert table.loc["P1", "cv_r2_median"] > 0
+    assert table.loc["P1", "frac_features_positive"] > 0.8
+    assert table.loc["P2", "cv_r2_median"] <= 0
+    assert (table["reason"] == "").all()
 
 
 def test_detect_plate_position_records_too_few_controls_without_raising():

@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from anndata import AnnData
 
-from mantispy._core._numba import MEDIAN, _polish_planes, grouped_stat
+from mantispy._core._numba import MEAN, MEDIAN, _polish_planes, grouped_stat
 from mantispy._core._reduce import get_matrix, group_codes
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
@@ -111,37 +111,13 @@ def correct_plate_position(
     return None
 
 
-def _gaussian_kernel_1d(sigma: float) -> np.ndarray:
-    """A normalized 1D Gaussian kernel, truncated at the width :mod:`scipy.ndimage` uses by default."""
-    radius = int(4.0 * sigma + 0.5)
-    offsets = np.arange(-radius, radius + 1)
-    kernel = np.exp(-0.5 * (offsets / sigma) ** 2)
-    return kernel / kernel.sum()
-
-
-def _convolve_axis(grid: np.ndarray, kernel: np.ndarray, axis: int) -> np.ndarray:
-    """Convolve ``grid`` with a 1D ``kernel`` along one axis, padding with zeros so empty cells contribute nothing."""
-    radius = kernel.size // 2
-    grid = np.moveaxis(grid, axis, 0)
-    padded = np.zeros((grid.shape[0] + 2 * radius, *grid.shape[1:]), dtype=grid.dtype)
-    padded[radius : radius + grid.shape[0]] = grid
-    out = np.zeros_like(grid)
-    for offset, weight in enumerate(kernel):
-        out += weight * padded[offset : offset + grid.shape[0]]
-    return np.moveaxis(out, 0, axis)
-
-
 def _smooth_grid(grid: np.ndarray, sigma: float) -> np.ndarray:
     """Gaussian-smooth a ``(rows, columns, features)`` grid over its two spatial axes only.
 
-    Uses :func:`scipy.ndimage.gaussian_filter` when SciPy is importable, and a separable NumPy
-    convolution otherwise; both pad with zeros so a position with no data borrows only from its neighbours.
+    Pads with zeros so a position with no data borrows only from its neighbours.
     """
-    try:
-        from scipy.ndimage import gaussian_filter
-    except ImportError:  # pragma: no cover - SciPy is a hard dependency
-        kernel = _gaussian_kernel_1d(sigma)
-        return _convolve_axis(_convolve_axis(grid, kernel, 0), kernel, 1)
+    from scipy.ndimage import gaussian_filter
+
     return gaussian_filter(grid, sigma=(sigma, sigma, 0.0), mode="constant", cval=0.0)
 
 
@@ -176,10 +152,12 @@ def detect_plate_position(
     Args:
         adata: Object to inspect, at cell or well resolution.
         by: Column identifying the plate.
-        reference: Wells to fit and score on, usually ``"negcon"`` (the controls); see :func:`correct_plate_position`.
+        reference: Wells to fit and score on, defaulting to the controls (``"negcon"``), unlike
+            :func:`correct_plate_position`, which fits on every well by default; see there.
         sigma: Width of the Gaussian that smooths the position map over the plate grid.
         n_splits: Number of cross-validation folds over the control wells.
         min_controls: Fewest control wells a plate needs to be scored; a plate below it is recorded unscored.
+            Clamped to the two the cross-validation needs at minimum.
         seed: Seed for the fold assignment.
         key_added: Key under ``uns["mantispy"]`` for the result table.
         copy: Return a modified copy instead of writing in place.
@@ -196,17 +174,20 @@ def detect_plate_position(
 
     Raises:
         KeyError: If ``reference`` names a column that is not present.
+        ValueError: If the reference column has missing values.
+        TypeError: If the reference column is not boolean.
 
     Notes:
         This pairs with :func:`correct_plate_position` as its gate: detect first, then correct only the
         plates whose artifact is learnable.
     """
-    X = get_matrix(adata)
     wells = adata.obs["Metadata_Well"].to_numpy()
     all_rows = np.array([well_row(well) for well in wells])
     all_columns = np.array([well_col(well) for well in wells])
     is_control = reference_mask(adata, reference)
     codes, keys = group_codes(adata, by)
+    # Two folds need two controls; np.array_split(order, 0) would also raise.
+    min_controls = max(min_controls, 2)
 
     table: dict[str, list] = {
         "plate": [],
@@ -215,46 +196,54 @@ def detect_plate_position(
         "frac_features_positive": [],
         "reason": [],
     }
+
+    def record(key: object, n_controls: int, cv_r2_median: float, frac_positive: float, reason: str) -> None:
+        table["plate"].append(str(key))
+        table["n_controls"].append(int(n_controls))
+        table["cv_r2_median"].append(float(cv_r2_median))
+        table["frac_features_positive"].append(float(frac_positive))
+        table["reason"].append(reason)
+
     for group, key in enumerate(keys):
         selected = np.flatnonzero(codes == group)
         n_grid_rows = all_rows[selected].max() + 1
         n_grid_columns = all_columns[selected].max() + 1
         control = selected[is_control[selected]]
 
-        # Reduce each control well (one grid position) to its mean, so cells in a well do not count as separate observations.
+        # One grid position per control well, so several cells in a well are not separate observations.
         linear = all_rows[control] * n_grid_columns + all_columns[control]
         positions, inverse = np.unique(linear, return_inverse=True)
         n_controls = positions.size
-        values = np.zeros((n_controls, adata.n_vars))
-        np.add.at(values, inverse, X[control].astype(np.float64))
-        values /= np.bincount(inverse, minlength=n_controls)[:, None]
         well_rows, well_columns = positions // n_grid_columns, positions % n_grid_columns
 
         if n_controls < min_controls:
-            table["plate"].append(str(key))
-            table["n_controls"].append(int(n_controls))
-            table["cv_r2_median"].append(float("nan"))
-            table["frac_features_positive"].append(float("nan"))
-            table["reason"].append(f"only {n_controls} control wells")
+            record(key, n_controls, float("nan"), float("nan"), f"only {n_controls} control wells")
+            continue
+        splits = min(n_splits, n_controls)
+        if splits < 2:
+            record(key, n_controls, float("nan"), float("nan"), "need at least two cross-validation folds")
             continue
 
+        # grouped_stat skips NaN and inf, so a control well carrying one still contributes its finite features.
+        values = grouped_stat(get_matrix(adata, rows=control), inverse, n_controls, MEAN).astype(np.float64)
         grand_mean = values.mean(axis=0)
-        splits = min(n_splits, n_controls)
         order = np.random.default_rng(seed).permutation(n_controls)
         ss_res = np.zeros(adata.n_vars)
         ss_tot = np.zeros(adata.n_vars)
-        for fold in np.array_split(order, splits):
-            held_out = fold
-            train = np.setdiff1d(order, fold, assume_unique=True)
+        for held_out in np.array_split(order, splits):
+            train = np.setdiff1d(order, held_out, assume_unique=True)
 
+            # Each position is a distinct grid cell, so the scatter indices are unique: plain assignment.
             sums = np.zeros((n_grid_rows, n_grid_columns, adata.n_vars))
             counts = np.zeros((n_grid_rows, n_grid_columns, 1))
-            np.add.at(sums, (well_rows[train], well_columns[train]), values[train])
-            np.add.at(counts, (well_rows[train], well_columns[train], 0), 1.0)
+            sums[well_rows[train], well_columns[train]] = values[train]
+            counts[well_rows[train], well_columns[train], 0] = 1.0
             smooth_sums = _smooth_grid(sums, sigma)
             smooth_counts = _smooth_grid(counts, sigma)[..., 0]
 
-            position_map = np.broadcast_to(values[train].mean(axis=0), (n_grid_rows, n_grid_columns, adata.n_vars)).copy()
+            position_map = np.broadcast_to(
+                values[train].mean(axis=0), (n_grid_rows, n_grid_columns, adata.n_vars)
+            ).copy()
             reached = smooth_counts > 1e-9
             position_map[reached] = smooth_sums[reached] / smooth_counts[reached, None]
 
@@ -262,13 +251,16 @@ def detect_plate_position(
             ss_res += ((values[held_out] - predicted) ** 2).sum(axis=0)
             ss_tot += ((values[held_out] - grand_mean) ** 2).sum(axis=0)
 
-        cv_r2 = np.where(ss_tot > 0, 1.0 - ss_res / np.where(ss_tot > 0, ss_tot, 1.0), np.nan)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            cv_r2 = np.where(ss_tot > 0, 1.0 - ss_res / ss_tot, np.nan)
         scored = np.isfinite(cv_r2)
-        table["plate"].append(str(key))
-        table["n_controls"].append(int(n_controls))
-        table["cv_r2_median"].append(float(np.median(cv_r2[scored])) if scored.any() else float("nan"))
-        table["frac_features_positive"].append(float((cv_r2[scored] > 0).mean()) if scored.any() else float("nan"))
-        table["reason"].append("")
+        record(
+            key,
+            n_controls,
+            float(np.median(cv_r2[scored])) if scored.any() else float("nan"),
+            float((cv_r2[scored] > 0).mean()) if scored.any() else float("nan"),
+            "",
+        )
 
     adata.uns.setdefault("mantispy", {})[key_added] = pd.DataFrame(table)
     get_logger().info("detect_plate_position scored position artifacts per %s into uns['mantispy'][%r]", by, key_added)
