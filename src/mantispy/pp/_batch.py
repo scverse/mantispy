@@ -258,7 +258,7 @@ def detect_plate_position(
 
             # Fit the same additive row+col polish the corrector applies, on the training controls only.
             grid = np.full((n_grid_rows * n_grid_columns, adata.n_vars), np.nan)
-            grid[well_rows[train] * n_grid_columns + well_columns[train]] = values[train]
+            grid[positions[train]] = values[train]
             row_effect, column_effect = _median_polish_stack(
                 grid.reshape(n_grid_rows, n_grid_columns, adata.n_vars), max_iter, tol
             )
