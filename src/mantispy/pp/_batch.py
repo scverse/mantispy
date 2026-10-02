@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from anndata import AnnData
 
-from mantispy._core._numba import MEAN, MEDIAN, _polish_planes, grouped_stat
+from mantispy._core._numba import MEDIAN, _polish_planes, grouped_stat
 from mantispy._core._reduce import get_matrix, group_codes
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
@@ -18,7 +18,7 @@ from mantispy._core.masks import reference_mask
 from mantispy._core.mutation import inplace_or_copy
 from mantispy._core.plate import well_col, well_row
 
-METHODS = ("median_polish",)
+METHODS = ("b_score", "median_polish")
 
 
 def _median_polish_stack(grids: np.ndarray, max_iter: int, tol: float) -> tuple[np.ndarray, np.ndarray]:
@@ -35,9 +35,10 @@ def _median_polish_stack(grids: np.ndarray, max_iter: int, tol: float) -> tuple[
 @inplace_or_copy()
 def correct_plate_position(
     adata: AnnData,
-    method: str = "median_polish",
+    method: str = "b_score",
     by: str = "Metadata_Plate",
     reference: str | None = None,
+    plates: Sequence[object] | None = None,
     max_iter: int = 10,
     tol: float = 1e-4,
     key_added: str | None = None,
@@ -45,13 +46,19 @@ def correct_plate_position(
 ) -> AnnData | None:
     """Remove row and column position effects, per plate and per feature.
 
+    Both methods fit the row and column effects with Tukey's two-way median polish, which is robust to a few extreme wells.
+
     Args:
         adata: Object to correct, at cell or well resolution.
-        method: Only ``"median_polish"`` (Tukey), which is robust to a few extreme wells.
+        method: ``"b_score"`` (default) is the B-score of :cite:t:`Brideau_2003`: the median-polish residual, divided by the plate's median absolute deviation, so each feature becomes a robust, position-corrected z-score per plate.
+            ``"median_polish"`` subtracts the row and column effects only, keeping each feature's original level and units.
+            The B-score is the screening standard for calling hits against a positional gradient; it also re-scales each plate, so it doubles as a normalization and should not be followed by a second per-plate scaling.
         by: Column identifying the plate.
         reference: Fit the row and column effects on these rows only.
             ``"negcon"`` is the usual choice, so that treatments laid out in particular columns are not absorbed into a column effect.
             ``None`` fits on every well.
+        plates: Correct only these ``by`` values and leave every other plate untouched.
+            ``None`` corrects every plate. Pair it with :func:`detect_plate_position` to correct only the plates whose artifact is learnable.
         max_iter: Maximum number of median-polish iterations.
         tol: Convergence tolerance of the median polish.
         key_added: Write to ``layers[key_added]`` instead of overwriting ``X``.
@@ -59,14 +66,16 @@ def correct_plate_position(
 
     Returns:
         ``None``, or the modified copy.
-        Writes ``X`` or ``layers[key_added]``, and the fitted effects per plate to ``uns["mantispy"]["plate_position"]``.
+        Writes ``X`` or ``layers[key_added]``, and the fitted effects per corrected plate to ``uns["mantispy"]["plate_position"]``.
 
     Raises:
-        ValueError: If ``method`` is unknown, or a plate holds no reference rows.
+        ValueError: If ``method`` is unknown, a corrected plate holds no reference rows, or ``plates`` names a value absent from ``by``.
 
     Notes:
         The polish is fitted on the well grid.
-        At cell resolution each well is first reduced to its median, and the fitted effect is then subtracted from every cell of that well.
+        At cell resolution each well is first reduced to its median, and the fit is then applied to every cell of that well.
+        The B-score's level and scale are taken from the fitted wells, so with a ``reference`` they are the reference wells' median and spread.
+        That scale is a per-well statistic; at cell resolution the per-cell B-score is therefore standardized only on average, not to an exact unit MAD.
     """
     if method not in METHODS:
         raise ValueError(f"method must be one of {METHODS}, got {method!r}")
@@ -78,11 +87,18 @@ def correct_plate_position(
 
     fit_mask = reference_mask(adata, reference)
     codes, keys = group_codes(adata, by)
+    chosen = None if plates is None else {str(plate) for plate in plates}
+    if chosen is not None:
+        unknown = chosen - {str(key) for key in keys}
+        if unknown:
+            raise ValueError(f"plates not found in {by!r}: {sorted(unknown)}")
     # Promote one plate at a time: float64 copies of the input and output would take four times the matrix in memory.
     out = np.array(X, dtype=np.float32)
     effects: dict[str, dict[str, list]] = {}
 
     for group, key in enumerate(keys):
+        if chosen is not None and str(key) not in chosen:
+            continue
         selected = np.flatnonzero(codes == group)
         fit_rows = selected[fit_mask[selected]]
         if fit_rows.size == 0:
@@ -100,7 +116,18 @@ def correct_plate_position(
 
         row_effect, column_effect = _median_polish_stack(grid.reshape(n_rows, n_columns, adata.n_vars), max_iter, tol)
         adjustment = row_effect[rows[selected]] + column_effect[columns[selected]]
-        out[selected] = (X[selected].astype(np.float64) - adjustment).astype(np.float32)
+        corrected = X[selected].astype(np.float64) - adjustment
+        if method == "b_score":
+            # The B-score standardizes the median-polish residual against the plate's own spread.
+            fit_residual = grid[occupied] - (row_effect[occupied // n_columns] + column_effect[occupied % n_columns])
+            with warnings.catch_warnings():  # a feature all-NaN on the fit wells has no level or spread
+                warnings.simplefilter("ignore", RuntimeWarning)
+                level = np.nanmedian(fit_residual, axis=0)
+                scale = np.nanmedian(np.abs(fit_residual - level), axis=0)
+            # Leave such a feature as the median-polish residual rather than wiping it to NaN.
+            level = np.where(np.isfinite(level), level, 0.0)
+            corrected = (corrected - level) / np.where(scale > 0, scale, 1.0)
+        out[selected] = corrected.astype(np.float32)
         effects[str(key)] = {"row": row_effect.T.tolist(), "col": column_effect.T.tolist()}
 
     if key_added is None:
@@ -111,53 +138,45 @@ def correct_plate_position(
     return None
 
 
-def _smooth_grid(grid: np.ndarray, sigma: float) -> np.ndarray:
-    """Gaussian-smooth a ``(rows, columns, features)`` grid over its two spatial axes only.
-
-    Pads with zeros so a position with no data borrows only from its neighbours.
-    """
-    from scipy.ndimage import gaussian_filter
-
-    return gaussian_filter(grid, sigma=(sigma, sigma, 0.0), mode="constant", cval=0.0)
-
-
 @inplace_or_copy()
 def detect_plate_position(
     adata: AnnData,
     by: str = "Metadata_Plate",
     reference: str | None = "negcon",
-    sigma: float = 1.5,
     n_splits: int = 5,
     min_controls: int = 20,
+    max_iter: int = 10,
+    tol: float = 1e-4,
     seed: int = 0,
     key_added: str = "plate_position_detection",
     copy: bool = False,
 ) -> AnnData | None:
-    """Test whether a plate carries a position artifact that generalizes, to gate the correction on it.
+    """Test whether the plate-position correction generalizes, to gate it per plate.
 
-    A per-plate position effect is often overfit noise rather than a real artifact: with few controls
-    on a large grid, the apparent structure is the controls' own scatter, and :func:`correct_plate_position`
-    would then subtract signal. This detector fits a smooth position map on the control wells under
-    cross-validation and scores how well it predicts held-out controls, so a plate is corrected only when
-    the position structure is learnable.
+    A per-plate row and column effect is often mis-estimated rather than a real artifact: with few
+    controls on a large grid, the apparent gradient is the controls' own scatter, and
+    :func:`correct_plate_position` would then subtract signal. This is a correctability gate, not an
+    artifact detector: it cross-validates the very model the corrector applies -- the additive row and
+    column median polish -- and reports whether it predicts held-out controls better than their plate
+    level. A plate is worth correcting only when that model generalizes.
 
     Per plate, on the control wells selected by ``reference``, each well is reduced to one value per grid
-    position. Across cross-validation folds a position map is fitted on the training controls as their
-    per-position mean, Gaussian-smoothed over the plate grid: the summed values and the well counts are
-    smoothed separately and divided, so an empty position borrows from its neighbours, and a position no
-    neighbour reaches takes the training grand mean. Each held-out control is predicted from its own
-    position's cell of the map. A cross-validated coefficient of determination is then formed per feature
-    from the held-out residuals against the plate's control grand mean, and summarized per plate.
+    position. Across cross-validation folds the row and column effects are fitted on the training controls
+    by the same median polish as :func:`correct_plate_position`, and a plate level is taken as the median
+    of the training controls once their effects are removed. Each held-out control is predicted from that
+    level plus its own row and column effect, and a cross-validated coefficient of determination is formed
+    per feature from the held-out residuals against the level alone, then summarized per plate.
 
     Args:
         adata: Object to inspect, at cell or well resolution.
         by: Column identifying the plate.
         reference: Wells to fit and score on, defaulting to the controls (``"negcon"``), unlike
-            :func:`correct_plate_position`, which fits on every well by default; see there.
-        sigma: Width of the Gaussian that smooths the position map over the plate grid.
+            :func:`correct_plate_position`, which fits on every well by default; see there. Pass the same
+            ``reference`` to both so the gate validates what the correction will remove.
         n_splits: Number of cross-validation folds over the control wells.
         min_controls: Fewest control wells a plate needs to be scored; a plate below it is recorded unscored.
-            Clamped to the two the cross-validation needs at minimum.
+        max_iter: Maximum number of median-polish iterations, as in :func:`correct_plate_position`.
+        tol: Convergence tolerance of the median polish, as in :func:`correct_plate_position`.
         seed: Seed for the fold assignment.
         key_added: Key under ``uns["mantispy"]`` for the result table.
         copy: Return a modified copy instead of writing in place.
@@ -166,11 +185,12 @@ def detect_plate_position(
         ``None``, or the modified copy.
         Writes a per-plate table to ``uns["mantispy"][key_added]`` with one row per plate and the columns
         ``plate``, ``n_controls``, ``cv_r2_median``, ``frac_features_positive`` and ``reason``.
-        A positive ``cv_r2_median`` means the position structure generalizes and the plate has a learnable
-        artifact worth correcting; a value at or below zero means the apparent structure does not generalize,
-        so :func:`correct_plate_position` would remove noise and should be skipped. A plate with too few
-        controls is recorded with missing scores and a ``reason``, and is neither scored nor, by this reading,
-        a candidate for correction.
+        A positive ``cv_r2_median`` means the correction generalizes to held-out controls and the plate is
+        worth correcting; a value at or below zero means it predicts them no better than their plate level,
+        so :func:`correct_plate_position` would remove scatter and should be skipped. A value at or below
+        zero is a decision to skip, not a verdict that the plate is clean, and a real but non-additive or
+        weakly-estimated effect can score this way. A plate with too few controls is recorded with missing
+        scores and a ``reason``; unscored means unknown, so inspect it rather than read it as negative.
 
     Raises:
         KeyError: If ``reference`` names a column that is not present.
@@ -178,16 +198,18 @@ def detect_plate_position(
         TypeError: If the reference column is not boolean.
 
     Notes:
-        This pairs with :func:`correct_plate_position` as its gate: detect first, then correct only the
-        plates whose artifact is learnable.
+        This pairs with :func:`correct_plate_position` as its gate: detect first, then pass the passing
+        plates to the corrector's ``plates`` argument so only they are corrected.
+        It is also a quality-control signal on its own: a plate whose position structure is strong and
+        generalizing can be excluded or inspected rather than corrected, which on multivariate profiles,
+        where correcting rarely helps, is often the better choice. Whether correcting helps is a question
+        for the downstream metric, not for this score.
     """
     wells = adata.obs["Metadata_Well"].to_numpy()
     all_rows = np.array([well_row(well) for well in wells])
     all_columns = np.array([well_col(well) for well in wells])
     is_control = reference_mask(adata, reference)
     codes, keys = group_codes(adata, by)
-    # Two folds need two controls; np.array_split(order, 0) would also raise.
-    min_controls = max(min_controls, 2)
 
     table: dict[str, list] = {
         "plate": [],
@@ -224,43 +246,47 @@ def detect_plate_position(
             record(key, n_controls, float("nan"), float("nan"), "need at least two cross-validation folds")
             continue
 
-        # grouped_stat skips NaN and inf, so a control well carrying one still contributes its finite features.
-        values = grouped_stat(get_matrix(adata, rows=control), inverse, n_controls, MEAN).astype(np.float64)
-        grand_mean = values.mean(axis=0)
+        # One value per control well; non-finite entries become NaN so later nan-aware steps skip them
+        # per feature, as the comment promises. MEDIAN matches the reduction correct_plate_position fits on.
+        values = grouped_stat(get_matrix(adata, rows=control), inverse, n_controls, MEDIAN).astype(np.float64)
+        values[~np.isfinite(values)] = np.nan
         order = np.random.default_rng(seed).permutation(n_controls)
         ss_res = np.zeros(adata.n_vars)
         ss_tot = np.zeros(adata.n_vars)
         for held_out in np.array_split(order, splits):
             train = np.setdiff1d(order, held_out, assume_unique=True)
 
-            # Each position is a distinct grid cell, so the scatter indices are unique: plain assignment.
-            sums = np.zeros((n_grid_rows, n_grid_columns, adata.n_vars))
-            counts = np.zeros((n_grid_rows, n_grid_columns, 1))
-            sums[well_rows[train], well_columns[train]] = values[train]
-            counts[well_rows[train], well_columns[train], 0] = 1.0
-            smooth_sums = _smooth_grid(sums, sigma)
-            smooth_counts = _smooth_grid(counts, sigma)[..., 0]
+            # Fit the same additive row+col polish the corrector applies, on the training controls only.
+            grid = np.full((n_grid_rows * n_grid_columns, adata.n_vars), np.nan)
+            grid[well_rows[train] * n_grid_columns + well_columns[train]] = values[train]
+            row_effect, column_effect = _median_polish_stack(
+                grid.reshape(n_grid_rows, n_grid_columns, adata.n_vars), max_iter, tol
+            )
+            # A row or column with no training control has no estimable effect: zero it, so the polish's
+            # grand-level bookkeeping does not leak a spurious offset and the score stays offset-invariant.
+            seen_row = np.zeros(n_grid_rows, dtype=bool)
+            seen_row[well_rows[train]] = True
+            seen_column = np.zeros(n_grid_columns, dtype=bool)
+            seen_column[well_columns[train]] = True
+            row_effect[~seen_row] = 0.0
+            column_effect[~seen_column] = 0.0
 
-            position_map = np.broadcast_to(
-                values[train].mean(axis=0), (n_grid_rows, n_grid_columns, adata.n_vars)
-            ).copy()
-            reached = smooth_counts > 1e-9
-            position_map[reached] = smooth_sums[reached] / smooth_counts[reached, None]
-
-            predicted = position_map[well_rows[held_out], well_columns[held_out]]
-            ss_res += ((values[held_out] - predicted) ** 2).sum(axis=0)
-            ss_tot += ((values[held_out] - grand_mean) ** 2).sum(axis=0)
+            # The polish centres its effects, so the plate level is what remains once they are removed.
+            adjustment = row_effect[well_rows] + column_effect[well_columns]
+            with warnings.catch_warnings():  # a feature all-NaN on the training controls has no level
+                warnings.simplefilter("ignore", RuntimeWarning)
+                level = np.nanmedian(values[train] - adjustment[train], axis=0)
+            predicted = level + adjustment[held_out]
+            ss_res += np.nansum((values[held_out] - predicted) ** 2, axis=0)
+            ss_tot += np.nansum((values[held_out] - level) ** 2, axis=0)
 
         with np.errstate(divide="ignore", invalid="ignore"):
             cv_r2 = np.where(ss_tot > 0, 1.0 - ss_res / ss_tot, np.nan)
         scored = np.isfinite(cv_r2)
-        record(
-            key,
-            n_controls,
-            float(np.median(cv_r2[scored])) if scored.any() else float("nan"),
-            float((cv_r2[scored] > 0).mean()) if scored.any() else float("nan"),
-            "",
-        )
+        if not scored.any():
+            record(key, n_controls, float("nan"), float("nan"), "no feature had the variance to be scored")
+            continue
+        record(key, n_controls, float(np.median(cv_r2[scored])), float((cv_r2[scored] > 0).mean()), "")
 
     adata.uns.setdefault("mantispy", {})[key_added] = pd.DataFrame(table)
     get_logger().info("detect_plate_position scored position artifacts per %s into uns['mantispy'][%r]", by, key_added)

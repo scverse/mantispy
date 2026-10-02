@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning][].
 ## [Unreleased]
 
 ### Added
-- `mantispy.pp`: `detect_plate_position` reports a cross-validated R2 of a control-fit smooth position map per plate, so a plate-position correction can be gated on whether a learnable position artifact actually exists.
+- `mantispy.pp`: `correct_plate_position` now defaults to the B-score (`method="b_score"`), the median-polish residual divided by the plate's median absolute deviation, which is the screening standard for calling hits against a positional gradient; `method="median_polish"` keeps the previous behaviour of subtracting the row and column effects in the data's own units. It also takes a `plates` argument to correct only chosen plates.
+- `mantispy.pp`: `detect_plate_position` cross-validates, per plate, the row and column median polish the correction is built on, reporting whether it predicts held-out controls better than their plate level, so the correction can be gated on whether it actually generalizes.
 
 - `mantispy.io`: `read_profiles` for profile files, CellProfiler `ExportToSpreadsheet` directories and CytoTable parquet parts; `read_plate` for a Cell Painting Gallery source or an `ExportForSpatialData` plate folder as `SpatialData`; `read_jump`, `read`, `write` and `validate`
 - `mantispy.ds`: the generated `synthetic_plate` and `blobs`; `bbbc021`, `rohban`, `pki` and `jump_target2` with the annotations the analyses need; five further Cell Painting Gallery accessions
