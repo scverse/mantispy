@@ -10,4 +10,5 @@ pre-rendered from committed outputs rather than executed in the build, and re-ru
 learned_embeddings
 cross_laboratory
 crispr
+plate_position
 ```
