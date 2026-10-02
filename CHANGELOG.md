@@ -11,8 +11,9 @@ and this project adheres to [Semantic Versioning][].
 ## [Unreleased]
 
 ### Added
+- `mantispy.pp`: `correct_plate_position` now defaults to the B-score (`method="b_score"`), the median-polish residual divided by the plate's median absolute deviation, which is the screening standard for calling hits against a positional gradient; `method="median_polish"` keeps the previous behaviour of subtracting the row and column effects in the data's own units. It also takes a `plates` argument to correct only chosen plates.
+- `mantispy.pp`: `detect_plate_position` cross-validates, per plate, the row and column median polish the correction is built on, reporting whether it predicts held-out controls better than their plate level, so the correction can be gated on whether it actually generalizes.
 - `mantispy.pp`: `sphere(epsilon="auto")` chooses the whitening regularization by the jump-profiling-recipe mAP sweep (the mean of activity and replicability mAP, fitted on the controls) instead of the fixed default, which lies below the recipe search range. The search samples past both ends of the recipe grid and between points when the best sits there, so the chosen value can fall outside the recipe's range when the data calls for it.
-
 - `mantispy.io`: `read_profiles` for profile files, CellProfiler `ExportToSpreadsheet` directories and CytoTable parquet parts; `read_plate` for a Cell Painting Gallery source or an `ExportForSpatialData` plate folder as `SpatialData`; `read_jump`, `read`, `write` and `validate`
 - `mantispy.ds`: the generated `synthetic_plate` and `blobs`; `bbbc021`, `rohban`, `pki` and `jump_target2` with the annotations the analyses need; five further Cell Painting Gallery accessions
 - `mantispy.ds`: `jump_cells`, `jump_export` and `jump_plate`, the single cells, one CellProfiler export directory and the images of `BR00121438`, the plate `jump_target2` reads well profiles for; `jump_cells(selected=True)` returns only the features `var['selected']` marks

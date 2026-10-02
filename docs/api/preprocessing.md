@@ -68,6 +68,7 @@ Annotate, quality-control, normalize, select and batch-correct profiles.
     pp.sphere
     pp.tvn
     pp.correct_plate_position
+    pp.detect_plate_position
     pp.regress_out
     pp.harmony
 ```
