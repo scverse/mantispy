@@ -186,10 +186,29 @@ def test_jump_target2_rejects_a_plate_it_does_not_have():
         mt.ds.jump_target2(plates=["nope"])
 
 
-def test_unexpressed_genes_thresholds_the_reference(monkeypatch):
-    """A gene is unexpressed if any of its reference rows is below the cutoff; the columns are gene/zfpkm."""
-    expression = pd.DataFrame({"gene": ["A", "A", "B", "C", "C"], "zfpkm": [-4.0, 1.0, -0.5, -2.0, -3.5]})
-    monkeypatch.setattr(_jump, "jump_metadata", lambda name: expression)
-    assert _jump.unexpressed_genes(zfpkm_cutoff=-3.0) == {"A", "C"}
-    assert _jump.unexpressed_genes(zfpkm_cutoff=-1.0) == {"A", "C"}
-    assert _jump.unexpressed_genes(zfpkm_cutoff=-10.0) == set()
+@pytest.fixture
+def depmap_expression():
+    """A DepMap-shaped log2(TPM+1) matrix: model ids in the index, 'SYMBOL (ENTREZ)' columns."""
+    return pd.DataFrame(
+        {"TP53 (7157)": [0.0, 4.1], "MYC (4609)": [5.3, 0.0], "XIST (7503)": [0.0, 2.2]},
+        index=["ACH-000001", "ACH-000002"],
+    )
+
+
+def test_unexpressed_genes_reads_a_depmap_matrix_by_model_id(depmap_expression):
+    """Zero-TPM genes are the columns at or below the cutoff for the chosen model; the entrez suffix is stripped."""
+    assert _jump.unexpressed_genes(depmap_expression, "ACH-000001") == {"TP53", "XIST"}
+    assert _jump.unexpressed_genes(depmap_expression, "ACH-000002") == {"MYC"}
+    assert _jump.unexpressed_genes(depmap_expression, "ACH-000001", tpm_cutoff=3.0) == {"TP53", "XIST"}
+    assert _jump.unexpressed_genes(depmap_expression, "ACH-000001", tpm_cutoff=6.0) == {"TP53", "MYC", "XIST"}
+
+
+def test_unexpressed_genes_reads_a_depmap_matrix_from_a_csv_path(depmap_expression, tmp_path):
+    path = tmp_path / "OmicsExpression.csv"
+    depmap_expression.to_csv(path)
+    assert _jump.unexpressed_genes(path, "ACH-000001") == {"TP53", "XIST"}
+
+
+def test_unexpressed_genes_rejects_an_unknown_model_id(depmap_expression):
+    with pytest.raises(ValueError, match="not a model id"):
+        _jump.unexpressed_genes(depmap_expression, "U2OS")

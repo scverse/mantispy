@@ -142,6 +142,8 @@ def hit_calling(
     Each group is scored against the half of the reference rows that did not fit the centroid and covariance, and its null is the other ways to draw a group of its size from the group and those controls pooled.
     Under the null the two are exchangeable, so the null is calibrated; bootstrapping the controls alone is not, because it is centred on that sample's own median rather than the population's and leaves the error in that centre out of its spread.
 
+    This calibrates each group against control wells; :func:`mantispy.tl.empirical_fdr` instead calibrates a per-gene score against control genes that cannot respond, for a genetic screen where non-expressed genes are the better null.
+
     This wants a well-replicated design.
     The statistic is a group's median distance, so a group of one or two wells is dominated by whichever wells it holds and no number of permutations recovers that; :func:`mantispy.tl.map` with ``mode="activity"`` ranks replicate pairs instead and is the usual readout on screens with little replication.
     JUMP-Target-2 read as a single plate gives every compound one well and is the common way to land in that regime, while the same plate map read across several of them gives one well per plate.

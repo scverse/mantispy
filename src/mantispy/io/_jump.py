@@ -18,6 +18,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 from anndata import AnnData
 
@@ -33,7 +34,6 @@ TABLES = (
     "orf",
     "perturbation_control",
     "gene_chromosome_map",
-    "gene_expression",
 )
 
 #: JUMP's negative control: DMSO, under its JCP identifier.
@@ -163,17 +163,34 @@ def _chromosome_arms() -> pd.Series:
     return loci.astype(str).str.extract(r"^(\w+?[pq])", expand=False)
 
 
-def unexpressed_genes(zfpkm_cutoff: float = -3.0) -> set[str]:
-    """Gene symbols that are not expressed in the Recursion U2OS reference, as jump-profiling-recipe defines them.
+def unexpressed_genes(
+    expression: str | Path | pd.DataFrame,
+    cell_line: str,
+    *,
+    tpm_cutoff: float = 0.0,
+) -> set[str]:
+    """Gene symbols a cell line does not express, read from DepMap as an empirical null for hit calling.
 
-    A gene counts as unexpressed if any of its rows in the reference has a zFPKM below `zfpkm_cutoff`,
-    matching ``df[df.zfpkm < cutoff].gene.unique()`` in the recipe's chromosome-arm correction.
+    The reference is always a DepMap expression matrix you have downloaded, so the null is tied to the screened cell line rather than to any hard-coded reference.
+    Nothing is downloaded or re-hosted; point it at the file from the DepMap data page, such as ``OmicsExpressionProteinCodingGenesTPMLogp1.csv`` (one row per model, gene columns named ``"SYMBOL (ENTREZ)"``, holding log2(TPM+1)).
+    The cell line is named by its DepMap model id, DepMap's own key, so the lookup reuses their identifier directly.
+    A gene is unexpressed when its value is at or below `tpm_cutoff`, which is zero for the zero-TPM genes PERISCOPE uses.
 
     Args:
-        zfpkm_cutoff: The zFPKM below which a gene is called unexpressed.
+        expression: A DepMap expression matrix, as a path or a loaded frame indexed by model id.
+        cell_line: The DepMap model id to read, such as ``"ACH-000364"`` for U2OS.
+        tpm_cutoff: The log2(TPM+1) value at or below which a gene is called unexpressed.
 
     Returns:
         The set of unexpressed gene symbols.
+
+    Raises:
+        ValueError: `cell_line` is not a row of the expression matrix.
     """
-    expression = jump_metadata("gene_expression")
-    return set(expression.loc[expression["zfpkm"] < zfpkm_cutoff, "gene"].astype(str))
+    frame = expression if isinstance(expression, pd.DataFrame) else pd.read_csv(expression, index_col=0)
+    if cell_line not in frame.index:
+        raise ValueError(f"cell_line={cell_line!r} is not a model id in the expression matrix")
+    symbols = frame.columns.to_series().str.replace(r"\s*\(\d+\)\s*$", "", regex=True)
+    row = pd.Series(np.asarray(frame.loc[cell_line]).ravel(), index=frame.columns)
+    values = pd.to_numeric(row, errors="coerce").to_numpy()
+    return set(symbols[values <= tpm_cutoff].astype(str))

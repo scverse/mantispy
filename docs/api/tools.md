@@ -38,6 +38,7 @@ Aggregate profiles and ask what the perturbations did.
     :toctree: generated
 
     tl.hit_calling
+    tl.empirical_fdr
     tl.edistance
     tl.effect_size
     tl.wasserstein_features
