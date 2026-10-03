@@ -58,7 +58,7 @@ def empirical_fdr(
 
     Raises:
         TypeError: `control_genes` is a string rather than a collection of gene names.
-        ValueError: `criterion` is not one of :data:`CRITERIA`, or no control gene is present in the object, or every control gene has a missing score.
+        ValueError: `criterion` is not one of ``CRITERIA``, or no control gene is present in the object, or every control gene has a missing score.
         KeyError: `score`, or `group`, is not an ``obs`` column.
 
     Notes:
