@@ -69,6 +69,7 @@ Annotate, quality-control, normalize, select and batch-correct profiles.
     pp.tvn
     pp.correct_plate_position
     pp.detect_plate_position
+    pp.correct_chromosome_arm
     pp.regress_out
     pp.harmony
 ```

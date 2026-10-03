@@ -25,12 +25,21 @@ from mantispy._core.logging import get_logger
 from mantispy.io._profiles import _read_frame, read_profiles
 
 #: Pinned by sha256 in the dataset registry because the upstream repository is mutable.
-TABLES = ("plate", "well", "compound", "crispr", "perturbation_control", "gene_chromosome_map")
+TABLES = (
+    "plate",
+    "well",
+    "compound",
+    "crispr",
+    "orf",
+    "perturbation_control",
+    "gene_chromosome_map",
+    "gene_expression",
+)
 
 #: JUMP's negative control: DMSO, under its JCP identifier.
 NEGATIVE_CONTROL = "JCP2022_033924"
 
-KINDS = ("compound", "crispr")
+KINDS = ("compound", "crispr", "orf")
 
 _JOIN_ON = ["Metadata_Source", "Metadata_Plate", "Metadata_Well"]
 
@@ -87,7 +96,7 @@ def join_jump_annotation(obs: pd.DataFrame, kind: str = "compound") -> pd.DataFr
     Returns:
         A new frame with ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_Perturbation_Type`` and ``Metadata_Control`` joined onto `obs`, missing on the wells the annotation does not cover.
         For ``"compound"`` the perturbation is the ``Metadata_JCP2022`` compound id, ``Metadata_Perturbation_Type`` is ``"compound"``, it adds ``Metadata_InChIKey``, and ``Metadata_Control`` marks :data:`NEGATIVE_CONTROL`.
-        For ``"crispr"`` ``Metadata_Gene`` and ``Metadata_Perturbation`` are the gene symbol (its guides are the replicates), ``Metadata_Perturbation_Type`` is ``"crispr"``, ``Metadata_Control_Type`` is ``"negcon"``, ``"poscon"`` or ``"trt"``, ``Metadata_Control`` marks the no-guide and non-targeting wells, and ``Metadata_ChromosomeArm`` is the arm the gene sits on, such as ``"1p"``, missing for a gene without a mapped locus.
+        For ``"crispr"`` and ``"orf"`` ``Metadata_Gene`` and ``Metadata_Perturbation`` are the gene symbol (its reagents are the replicates), ``Metadata_Perturbation_Type`` is the kind, ``Metadata_Control_Type`` is ``"negcon"``, ``"poscon"`` or ``"trt"``, ``Metadata_Control`` marks the negative-control wells, and ``Metadata_ChromosomeArm`` is the arm the gene sits on, such as ``"1p"``, missing for a gene without a mapped locus.
 
     Raises:
         ValueError: `kind` is not one of :data:`KINDS`.
@@ -106,20 +115,20 @@ def join_jump_annotation(obs: pd.DataFrame, kind: str = "compound") -> pd.DataFr
         joined["Metadata_Control"] = (joined["Metadata_JCP2022"] == NEGATIVE_CONTROL).to_numpy()
         return joined
 
-    genes = jump_metadata("crispr")[["Metadata_JCP2022", "Metadata_Symbol"]].rename(
+    genes = jump_metadata(kind)[["Metadata_JCP2022", "Metadata_Symbol"]].rename(
         columns={"Metadata_Symbol": "Metadata_Gene"}
     )
     controls = jump_metadata("perturbation_control")
-    controls = controls.loc[
-        controls["Metadata_modality"] == "crispr", ["Metadata_JCP2022", "Metadata_pert_type"]
-    ].rename(columns={"Metadata_pert_type": "Metadata_Control_Type"})
+    controls = controls.loc[controls["Metadata_modality"] == kind, ["Metadata_JCP2022", "Metadata_pert_type"]].rename(
+        columns={"Metadata_pert_type": "Metadata_Control_Type"}
+    )
     for table in (genes, controls):
         joined = joined.merge(table, on="Metadata_JCP2022", how="left", validate="m:1")
     joined["Metadata_Control_Type"] = joined["Metadata_Control_Type"].fillna("trt")
-    # The gene is the replication unit here: JUMP's mAP benchmark scores the CRISPR arm at the gene level,
-    # treating the several guides per gene as its replicates. The guide reagent stays in Metadata_JCP2022.
+    # The gene is the replication unit here: JUMP's mAP benchmark scores the genetic arms at the gene level,
+    # treating the several reagents per gene as its replicates. The reagent stays in Metadata_JCP2022.
     joined["Metadata_Perturbation"] = joined["Metadata_Gene"].fillna(joined["Metadata_JCP2022"]).astype(str)
-    joined["Metadata_Perturbation_Type"] = "crispr"
+    joined["Metadata_Perturbation_Type"] = kind
     joined["Metadata_Control"] = (joined["Metadata_Control_Type"] == "negcon").to_numpy()
     joined["Metadata_ChromosomeArm"] = joined["Metadata_Gene"].map(_chromosome_arms())
     return joined
@@ -152,3 +161,19 @@ def _chromosome_arms() -> pd.Series:
     """The chromosome arm of every gene symbol, read off its cytogenetic locus as jump-profiling-recipe does."""
     loci = jump_metadata("gene_chromosome_map").drop_duplicates("Approved_symbol").set_index("Approved_symbol")["Locus"]
     return loci.astype(str).str.extract(r"^(\w+?[pq])", expand=False)
+
+
+def unexpressed_genes(zfpkm_cutoff: float = -3.0) -> set[str]:
+    """Gene symbols that are not expressed in the Recursion U2OS reference, as jump-profiling-recipe defines them.
+
+    A gene counts as unexpressed if any of its rows in the reference has a zFPKM below `zfpkm_cutoff`,
+    matching ``df[df.zfpkm < -3].gene.unique()`` in the recipe's chromosome-arm correction.
+
+    Args:
+        zfpkm_cutoff: The zFPKM below which a gene is called unexpressed.
+
+    Returns:
+        The set of unexpressed gene symbols.
+    """
+    expression = jump_metadata("gene_expression")
+    return set(expression.loc[expression["zfpkm"] < zfpkm_cutoff, "gene"].astype(str))

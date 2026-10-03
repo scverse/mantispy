@@ -503,3 +503,67 @@ def test_regress_out_says_so_when_a_missing_covariate_value_disables_it(value):
     with pytest.warns(UserWarning, match="Metadata_CellCount"):
         mt.pp.regress_out(adata, keys=["Metadata_CellCount"], by=None)
     assert np.array_equal(np.asarray(adata.X), before)
+
+
+def _crispr_arm_plate(arm_background, genes, arms, unexpressed_bio, treated_bio, n_features=3):
+    """One well per gene: X = arm background + a per-gene offset, so a known background sits on each arm."""
+    import anndata as ad
+
+    from mantispy._core.schema import stamp
+
+    rows = []
+    for gene, arm in zip(genes, arms, strict=True):
+        base = np.array(arm_background.get(arm, [0.0] * n_features), dtype=float)
+        offset = unexpressed_bio.get(gene, treated_bio.get(gene, 0.0))
+        rows.append(base + offset)
+    adata = ad.AnnData(
+        X=np.array(rows, dtype=np.float32),
+        obs=pd.DataFrame(
+            {"Metadata_Gene": genes, "Metadata_ChromosomeArm": arms},
+            index=[f"w{i}" for i in range(len(genes))],
+        ),
+        var=pd.DataFrame(index=[f"Cells_Intensity_F{i}" for i in range(n_features)]),
+    )
+    stamp(adata, resolution="well")
+    return adata
+
+
+def test_correct_chromosome_arm_matches_the_hand_computed_background():
+    # 1q has 22 unexpressed genes (> min_genes), so its background is estimated and removed; 1p has too few.
+    unexp_q = [f"q{i}" for i in range(22)]
+    trt_q = ["QT1", "QT2"]
+    genes = unexp_q + trt_q + ["p0", "p1", "PT"]
+    arms = ["1q"] * (len(unexp_q) + len(trt_q)) + ["1p"] * 3
+    # Give the unexpressed wells spread so the background is a real mean, not a constant.
+    unexpressed_bio = {g: float(i % 3) for i, g in enumerate(unexp_q)} | {"p0": 0.0, "p1": 0.0}
+    treated_bio = {"QT1": 7.0, "QT2": -4.0, "PT": 2.0}
+    arm_background = {"1q": [10.0, 10.0, 10.0], "1p": [5.0, 5.0, 5.0]}
+    adata = _crispr_arm_plate(arm_background, genes, arms, unexpressed_bio, treated_bio)
+
+    raw = adata.X.copy()
+    on_q = adata.obs["Metadata_ChromosomeArm"].to_numpy() == "1q"
+    is_unexp = adata.obs["Metadata_Gene"].isin(unexp_q).to_numpy()
+    expected_background = raw[on_q & is_unexp].mean(axis=0)
+
+    mt.pp.correct_chromosome_arm(adata, unexpressed=set(unexp_q))
+
+    np.testing.assert_allclose(adata.X[on_q], raw[on_q] - expected_background, rtol=1e-5, atol=1e-5)
+    np.testing.assert_array_equal(adata.X[~on_q], raw[~on_q])  # 1p has too few unexpressed genes
+    assert adata.uns["mantispy"]["chromosome_arm"] == {"1q": 22}
+
+
+def test_correct_chromosome_arm_leaves_unmapped_wells_untouched():
+    genes = [f"q{i}" for i in range(22)] + ["NOARM1", "NOARM2"]
+    arms = ["1q"] * 22 + [None, None]
+    adata = _crispr_arm_plate({"1q": [3.0, 3.0]}, genes, arms, dict.fromkeys(genes[:22], 0.0), {}, n_features=2)
+    raw = adata.X.copy()
+    mt.pp.correct_chromosome_arm(adata, unexpressed=set(genes[:22]))
+    unmapped = adata.obs["Metadata_ChromosomeArm"].isna().to_numpy()
+    np.testing.assert_array_equal(adata.X[unmapped], raw[unmapped])
+
+
+def test_correct_chromosome_arm_requires_its_columns():
+    adata = _crispr_arm_plate({"1q": [1.0]}, ["q0"], ["1q"], {"q0": 0.0}, {}, n_features=1)
+    del adata.obs["Metadata_Gene"]
+    with pytest.raises(KeyError, match="Metadata_Gene"):
+        mt.pp.correct_chromosome_arm(adata, unexpressed=set())
