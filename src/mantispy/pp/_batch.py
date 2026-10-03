@@ -180,7 +180,7 @@ def correct_chromosome_arm(
     if unexpressed is None:
         from mantispy.io._jump import unexpressed_genes
 
-        unexpressed = unexpressed_genes(zfpkm_cutoff)
+        unexpressed = unexpressed_genes(zfpkm_cutoff=zfpkm_cutoff)
 
     obs = as_frame(adata.obs)
     gene_symbols = obs[gene].astype(str)

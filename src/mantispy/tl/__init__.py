@@ -8,6 +8,7 @@ from mantispy.tl._differential import differential_features
 from mantispy.tl._distance import edistance
 from mantispy.tl._dose import dose_direction, dose_features, dose_response, dose_trajectory
 from mantispy.tl._effect import effect_size, wasserstein_features
+from mantispy.tl._empirical_fdr import empirical_fdr
 from mantispy.tl._enrich import enrich, feature_sets, rank_features, rank_sets
 from mantispy.tl._heterogeneity import (
     cell_cycle_phase,
@@ -39,6 +40,7 @@ __all__ = [
     "differential_features",
     "edistance",
     "effect_size",
+    "empirical_fdr",
     "enrich",
     "enrich_hits",
     "feature_sets",

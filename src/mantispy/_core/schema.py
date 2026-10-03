@@ -124,6 +124,7 @@ UNS_RESULTS: tuple[str, ...] = (
     "wasserstein",
     "consensus_weights",
     "hits",
+    "empirical_fdr",
     "edistance",
     "edistance_pairwise",
     "dose_response",

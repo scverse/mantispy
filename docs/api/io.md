@@ -14,6 +14,7 @@ Read profiles, plates and JUMP data into `AnnData` or `SpatialData`, and check t
     io.read_profiles
     io.read_plate
     io.read_jump
+    io.unexpressed_genes
     io.read
     io.write
     io.stamp
