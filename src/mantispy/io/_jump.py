@@ -34,7 +34,6 @@ TABLES = (
     "orf",
     "perturbation_control",
     "gene_chromosome_map",
-    "gene_expression",
 )
 
 #: JUMP's negative control: DMSO, under its JCP identifier.
@@ -165,66 +164,33 @@ def _chromosome_arms() -> pd.Series:
 
 
 def unexpressed_genes(
-    expression: str | Path | pd.DataFrame | None = None,
+    expression: str | Path | pd.DataFrame,
+    cell_line: str,
     *,
-    cell_line: str | None = None,
-    models: str | Path | pd.DataFrame | None = None,
     tpm_cutoff: float = 0.0,
-    zfpkm_cutoff: float = -3.0,
 ) -> set[str]:
-    """Gene symbols that are not expressed in the screened cell line, as an empirical null for hit calling.
+    """Gene symbols a cell line does not express, read from DepMap as an empirical null for hit calling.
 
-    With no `expression` it reads JUMP's Recursion U2OS reference and calls a gene unexpressed when its zFPKM is below `zfpkm_cutoff`, matching ``df[df.zfpkm < cutoff].gene.unique()`` in jump-profiling-recipe's chromosome-arm correction.
-
-    With `expression` it reads a DepMap expression matrix you have downloaded, so the null can be built for any cell line DepMap covers.
+    The reference is always a DepMap expression matrix you have downloaded, so the null is tied to the screened cell line rather than to any hard-coded reference.
     Nothing is downloaded or re-hosted; point it at the file from the DepMap data page, such as ``OmicsExpressionProteinCodingGenesTPMLogp1.csv`` (one row per model, gene columns named ``"SYMBOL (ENTREZ)"``, holding log2(TPM+1)).
+    The cell line is named by its DepMap model id, DepMap's own key, so the lookup reuses their identifier directly.
     A gene is unexpressed when its value is at or below `tpm_cutoff`, which is zero for the zero-TPM genes PERISCOPE uses.
 
     Args:
-        expression: A DepMap expression matrix, as a path or a loaded frame indexed by model, or ``None`` for the JUMP reference.
-        cell_line: Which row of `expression` to read, a DepMap model id such as ``"ACH-000012"`` or, with `models`, a cell-line name such as ``"U2OS"``.
-        models: DepMap's ``Model.csv``, as a path or frame, used to resolve a cell-line name in `cell_line` to its model id; unused when `cell_line` is already a model id.
-        tpm_cutoff: The log2(TPM+1) value at or below which a gene is called unexpressed in the DepMap path.
-        zfpkm_cutoff: The zFPKM below which a gene is called unexpressed in the JUMP path.
+        expression: A DepMap expression matrix, as a path or a loaded frame indexed by model id.
+        cell_line: The DepMap model id to read, such as ``"ACH-000364"`` for U2OS.
+        tpm_cutoff: The log2(TPM+1) value at or below which a gene is called unexpressed.
 
     Returns:
         The set of unexpressed gene symbols.
 
     Raises:
-        ValueError: `expression` is given without `cell_line`, or the cell line is not found.
+        ValueError: `cell_line` is not a row of the expression matrix.
     """
-    if expression is None:
-        reference = jump_metadata("gene_expression")
-        return set(reference.loc[reference["zfpkm"] < zfpkm_cutoff, "gene"].astype(str))
-    if cell_line is None:
-        raise ValueError("cell_line is required when expression is given, to pick which model's row to read")
     frame = expression if isinstance(expression, pd.DataFrame) else pd.read_csv(expression, index_col=0)
-    model_id = _resolve_model(cell_line, frame, models)
+    if cell_line not in frame.index:
+        raise ValueError(f"cell_line={cell_line!r} is not a model id in the expression matrix")
     symbols = frame.columns.to_series().str.replace(r"\s*\(\d+\)\s*$", "", regex=True)
-    row = pd.Series(np.asarray(frame.loc[model_id]).ravel(), index=frame.columns)
+    row = pd.Series(np.asarray(frame.loc[cell_line]).ravel(), index=frame.columns)
     values = pd.to_numeric(row, errors="coerce").to_numpy()
     return set(symbols[values <= tpm_cutoff].astype(str))
-
-
-def _resolve_model(cell_line: str, expression: pd.DataFrame, models: str | Path | pd.DataFrame | None) -> str:
-    """Turn a model id or cell-line name into the model id that indexes the expression matrix."""
-    if cell_line in expression.index:
-        return cell_line
-    if models is None:
-        raise ValueError(
-            f"cell_line={cell_line!r} is not a row of the expression matrix; pass models=Model.csv to resolve a "
-            "cell-line name to its DepMap model id."
-        )
-    table = models if isinstance(models, pd.DataFrame) else pd.read_csv(models)
-    wanted = cell_line.strip().upper()
-    name_columns = [column for column in ("StrippedCellLineName", "CellLineName", "cell_line_name") if column in table]
-    hits = table.loc[
-        table[name_columns].apply(lambda col: col.astype(str).str.upper().str.strip()).eq(wanted).any(axis=1)
-    ]
-    ids = hits["ModelID"].astype(str).unique() if "ModelID" in hits else hits.iloc[:, 0].astype(str).unique()
-    ids = sorted(model for model in ids if model in expression.index)
-    if not ids:
-        raise ValueError(f"cell_line={cell_line!r} matched no model present in the expression matrix")
-    if len(ids) > 1:
-        get_logger().warning("cell_line=%r matched %d models %s; using %s", cell_line, len(ids), ids, ids[0])
-    return ids[0]

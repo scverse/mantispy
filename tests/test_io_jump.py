@@ -186,18 +186,9 @@ def test_jump_target2_rejects_a_plate_it_does_not_have():
         mt.ds.jump_target2(plates=["nope"])
 
 
-def test_unexpressed_genes_thresholds_the_reference(monkeypatch):
-    """A gene is unexpressed if any of its reference rows is below the cutoff; the columns are gene/zfpkm."""
-    expression = pd.DataFrame({"gene": ["A", "A", "B", "C", "C"], "zfpkm": [-4.0, 1.0, -0.5, -2.0, -3.5]})
-    monkeypatch.setattr(_jump, "jump_metadata", lambda name: expression)
-    assert _jump.unexpressed_genes(zfpkm_cutoff=-3.0) == {"A", "C"}
-    assert _jump.unexpressed_genes(zfpkm_cutoff=-1.0) == {"A", "C"}
-    assert _jump.unexpressed_genes(zfpkm_cutoff=-10.0) == set()
-
-
 @pytest.fixture
 def depmap_expression():
-    """A DepMap-shaped log2(TPM+1) matrix: models in the index, 'SYMBOL (ENTREZ)' columns."""
+    """A DepMap-shaped log2(TPM+1) matrix: model ids in the index, 'SYMBOL (ENTREZ)' columns."""
     return pd.DataFrame(
         {"TP53 (7157)": [0.0, 4.1], "MYC (4609)": [5.3, 0.0], "XIST (7503)": [0.0, 2.2]},
         index=["ACH-000001", "ACH-000002"],
@@ -206,42 +197,18 @@ def depmap_expression():
 
 def test_unexpressed_genes_reads_a_depmap_matrix_by_model_id(depmap_expression):
     """Zero-TPM genes are the columns at or below the cutoff for the chosen model; the entrez suffix is stripped."""
-    assert _jump.unexpressed_genes(depmap_expression, cell_line="ACH-000001") == {"TP53", "XIST"}
-    assert _jump.unexpressed_genes(depmap_expression, cell_line="ACH-000002") == {"MYC"}
-    assert _jump.unexpressed_genes(depmap_expression, cell_line="ACH-000001", tpm_cutoff=3.0) == {"TP53", "XIST"}
-    assert _jump.unexpressed_genes(depmap_expression, cell_line="ACH-000001", tpm_cutoff=6.0) == {"TP53", "MYC", "XIST"}
-
-
-def test_unexpressed_genes_resolves_a_cell_line_name_through_models(depmap_expression):
-    models = pd.DataFrame({"ModelID": ["ACH-000001", "ACH-000002"], "StrippedCellLineName": ["U2OS", "HELA"]})
-    assert _jump.unexpressed_genes(depmap_expression, cell_line="u2os", models=models) == {"TP53", "XIST"}
+    assert _jump.unexpressed_genes(depmap_expression, "ACH-000001") == {"TP53", "XIST"}
+    assert _jump.unexpressed_genes(depmap_expression, "ACH-000002") == {"MYC"}
+    assert _jump.unexpressed_genes(depmap_expression, "ACH-000001", tpm_cutoff=3.0) == {"TP53", "XIST"}
+    assert _jump.unexpressed_genes(depmap_expression, "ACH-000001", tpm_cutoff=6.0) == {"TP53", "MYC", "XIST"}
 
 
 def test_unexpressed_genes_reads_a_depmap_matrix_from_a_csv_path(depmap_expression, tmp_path):
     path = tmp_path / "OmicsExpression.csv"
     depmap_expression.to_csv(path)
-    assert _jump.unexpressed_genes(path, cell_line="ACH-000001") == {"TP53", "XIST"}
+    assert _jump.unexpressed_genes(path, "ACH-000001") == {"TP53", "XIST"}
 
 
-def test_unexpressed_genes_needs_a_cell_line_for_depmap(depmap_expression):
-    with pytest.raises(ValueError, match="cell_line is required"):
-        _jump.unexpressed_genes(depmap_expression)
-
-
-def test_unexpressed_genes_rejects_an_unknown_cell_line(depmap_expression):
-    with pytest.raises(ValueError, match="not a row"):
-        _jump.unexpressed_genes(depmap_expression, cell_line="U2OS")
-    with pytest.raises(ValueError, match="no model"):
-        _jump.unexpressed_genes(
-            depmap_expression,
-            cell_line="NOPE",
-            models=pd.DataFrame({"ModelID": ["ACH-000001"], "StrippedCellLineName": ["U2OS"]}),
-        )
-
-
-def test_unexpressed_genes_picks_a_duplicate_name_model_stably(depmap_expression):
-    """A name mapping to several models resolves to the first by sorted id, not by row order."""
-    models = pd.DataFrame({"ModelID": ["ACH-000002", "ACH-000001"], "StrippedCellLineName": ["DUP", "DUP"]})
-    reversed_models = models.iloc[::-1].reset_index(drop=True)
-    assert _jump.unexpressed_genes(depmap_expression, cell_line="DUP", models=models) == {"TP53", "XIST"}
-    assert _jump.unexpressed_genes(depmap_expression, cell_line="DUP", models=reversed_models) == {"TP53", "XIST"}
+def test_unexpressed_genes_rejects_an_unknown_model_id(depmap_expression):
+    with pytest.raises(ValueError, match="not a model id"):
+        _jump.unexpressed_genes(depmap_expression, "U2OS")

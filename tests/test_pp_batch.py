@@ -569,10 +569,8 @@ def test_correct_chromosome_arm_requires_its_columns():
         mt.pp.correct_chromosome_arm(adata, unexpressed=set())
 
 
-def test_correct_chromosome_arm_reads_the_default_unexpressed_set(monkeypatch):
-    """unexpressed=None reads unexpressed_genes(), which reads the gene_expression table; exercise that path."""
-    from mantispy.io import _jump
-
+def test_correct_chromosome_arm_reads_unexpressed_from_depmap():
+    """With no unexpressed set it reads the DepMap matrix for the given model id."""
     unexp_q = [f"q{i}" for i in range(22)]
     genes = unexp_q + ["QT1", "p0"]
     arms = ["1q"] * 23 + ["1p"]
@@ -580,15 +578,21 @@ def test_correct_chromosome_arm_reads_the_default_unexpressed_set(monkeypatch):
         {"1q": [10.0, 10.0], "1p": [5.0, 5.0]}, genes, arms, dict.fromkeys(unexp_q, 0.0), {"QT1": 7.0}, n_features=2
     )
 
-    # The reference table has lowercase gene/zfpkm columns; the 22 q-genes sit below the cutoff, QT1 above it.
-    expression = pd.DataFrame({"gene": [*unexp_q, "QT1"], "zfpkm": [-5.0] * 22 + [2.0]})
-    monkeypatch.setattr(_jump, "jump_metadata", lambda name: expression)
+    # DepMap-shaped matrix: the 22 q-genes are zero-TPM in this model, QT1 is expressed.
+    expression = pd.DataFrame({**{f"{g} (1)": [0.0] for g in unexp_q}, "QT1 (2)": [7.3]}, index=["ACH-000001"])
 
     raw = adata.X.copy()
-    mt.pp.correct_chromosome_arm(adata)  # unexpressed=None -> default path
+    mt.pp.correct_chromosome_arm(adata, expression=expression, cell_line="ACH-000001")
     on_q = adata.obs["Metadata_ChromosomeArm"].to_numpy() == "1q"
     assert adata.uns["mantispy"]["chromosome_arm"] == {"1q": 22}
     np.testing.assert_array_equal(adata.X[~on_q], raw[~on_q])
+
+
+def test_correct_chromosome_arm_needs_a_reference():
+    """Without a ready-made set, a DepMap matrix and model id are required; nothing is hard-coded."""
+    adata = _crispr_arm_plate({"1q": [1.0]}, ["q0"], ["1q"], {"q0": 0.0}, {}, n_features=1)
+    with pytest.raises(ValueError, match="DepMap"):
+        mt.pp.correct_chromosome_arm(adata)
 
 
 def test_correct_chromosome_arm_rejects_a_bare_string():

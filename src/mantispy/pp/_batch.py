@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Collection, Sequence
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -142,26 +143,32 @@ def correct_plate_position(
 def correct_chromosome_arm(
     adata: AnnData,
     *,
+    expression: str | Path | pd.DataFrame | None = None,
+    cell_line: str | None = None,
     gene: str = "Metadata_Gene",
     arm: str = "Metadata_ChromosomeArm",
     unexpressed: Collection[str] | None = None,
-    zfpkm_cutoff: float = -3.0,
+    tpm_cutoff: float = 0.5,
     min_genes: int = 20,
     key_added: str | None = None,
     copy: bool = False,
 ) -> AnnData | None:
     """Remove the chromosome-arm (proximity-bias) background from CRISPR knockout profiles.
 
-    A CRISPR cut can change the copy number along the gene's chromosome arm, so knockouts on the same arm tend to share a background that is not their biology. Following :cite:t:`Chandrasekaran_2023`'s profiling recipe, this subtracts, from every well on an arm, the mean profile of that arm's wells whose gene is not expressed in a reference cell line, since an unexpressed gene's knockout carries only the arm background.
+    A CRISPR cut can change the copy number along the gene's chromosome arm, so knockouts on the same arm tend to share a background that is not their biology. Following :cite:t:`Chandrasekaran_2023`'s profiling recipe, this subtracts, from every well on an arm, the mean profile of that arm's wells whose gene is not expressed in the screened cell line, since an unexpressed gene's knockout carries only the arm background.
+
+    The unexpressed genes are read from DepMap for the screened cell line, so the correction is tied to the line rather than to any hard-coded reference. Pass the DepMap expression matrix and the cell line's model id, or a ready-made set of unexpressed genes.
 
     This is for CRISPR knockout data. ORF overexpression wells carry no such arm background, so do not run it on them even though :func:`mantispy.pp.annotate_jump` also gives them a chromosome arm.
 
     Args:
         adata: Object to correct, with one perturbed gene per well.
+        expression: A DepMap expression matrix, as a path or a loaded frame, read by :func:`mantispy.io.unexpressed_genes` when `unexpressed` is not given.
+        cell_line: The DepMap model id of the screened line, such as ``"ACH-000364"`` for U2OS.
         gene: Column holding each well's gene symbol.
         arm: Column holding each well's chromosome arm, such as ``"1p"``. Wells with no arm are left untouched. :func:`mantispy.ds.jump_crispr` writes both columns.
-        unexpressed: Gene symbols counted as unexpressed. ``None`` reads the Recursion U2OS reference JUMP ships, calling a gene unexpressed when its zFPKM falls below `zfpkm_cutoff`.
-        zfpkm_cutoff: The zFPKM below which a gene is unexpressed, used only when `unexpressed` is ``None``.
+        unexpressed: Gene symbols counted as unexpressed. When ``None``, they are read from `expression` for `cell_line`.
+        tpm_cutoff: The log2(TPM+1) value at or below which a gene counts as unexpressed, used when `unexpressed` is ``None``. The default admits lowly-expressed genes, not only those at zero TPM, so that enough genes sit on each arm to estimate its background, matching the permissive threshold the recipe uses.
         min_genes: Correct an arm only when more than this many of its unexpressed genes are present, so the background is estimated from enough wells.
         key_added: Write to ``layers[key_added]`` instead of overwriting ``X``.
         copy: Return a modified copy instead of mutating in place.
@@ -172,15 +179,21 @@ def correct_chromosome_arm(
 
     Raises:
         KeyError: `gene` or `arm` is not a column of ``adata.obs``.
+        ValueError: neither `unexpressed` nor both `expression` and `cell_line` are given.
     """
     for column in (gene, arm):
         if column not in adata.obs:
             raise KeyError(f"adata.obs has no {column!r} column")
 
     if unexpressed is None:
+        if expression is None or cell_line is None:
+            raise ValueError(
+                "pass unexpressed=, or both expression= (a DepMap matrix) and cell_line= (its model id), "
+                "so the unexpressed genes come from the screened cell line rather than a hard-coded reference"
+            )
         from mantispy.io._jump import unexpressed_genes
 
-        unexpressed = unexpressed_genes(zfpkm_cutoff=zfpkm_cutoff)
+        unexpressed = unexpressed_genes(expression, cell_line, tpm_cutoff=tpm_cutoff)
 
     obs = as_frame(adata.obs)
     gene_symbols = obs[gene].astype(str)
