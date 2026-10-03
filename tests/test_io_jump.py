@@ -105,6 +105,38 @@ def test_a_crispr_well_is_named_by_its_gene_and_its_controls_by_their_type(fake_
     assert list(obs["Metadata_ChromosomeArm"].astype(object).fillna("")) == ["", "", "16p", "1p"]
 
 
+def test_an_orf_well_is_named_by_its_gene_like_a_crispr_well(monkeypatch):
+    """ORF annotation runs the same gene branch, keyed off the orf table and the orf modality."""
+    tables = {
+        "orf": pd.DataFrame(
+            {
+                "Metadata_JCP2022": ["JCP2022_900002", "JCP2022_900003"],
+                "Metadata_Symbol": ["NAT1", "PLK1"],
+            }
+        ),
+        "perturbation_control": pd.DataFrame(
+            {
+                "Metadata_JCP2022": ["JCP2022_900002"],
+                "Metadata_pert_type": ["negcon"],
+                "Metadata_Name": ["NAT1"],
+                "Metadata_modality": ["orf"],
+            }
+        ),
+        "gene_chromosome_map": pd.DataFrame({"Approved_symbol": ["PLK1"], "Locus": ["16p12.2"], "Chromosome": ["16"]}),
+    }
+    monkeypatch.setattr(_jump, "jump_metadata", tables.__getitem__)
+
+    wells = mt.ds.synthetic_plate(n_wells=2, n_cells=1, n_features=3, seed=0)
+    wells.obs["Metadata_JCP2022"] = ["JCP2022_900002", "JCP2022_900003"]
+    mt.pp.annotate_jump(wells, kind="orf")
+
+    obs = wells.obs
+    assert list(obs["Metadata_Perturbation"].astype(str)) == ["NAT1", "PLK1"]
+    assert set(obs["Metadata_Perturbation_Type"].astype(str)) == {"orf"}
+    assert list(obs["Metadata_Control_Type"].astype(str)) == ["negcon", "trt"]
+    assert list(obs["Metadata_ChromosomeArm"].astype(object).fillna("")) == ["", "16p"]
+
+
 def test_corum_reads_one_row_per_complex_and_member(tmp_path, monkeypatch):
     from mantispy.ds import _datasets
 
@@ -152,3 +184,12 @@ def test_jump_target2_counts_a_source_that_publishes_only_the_object_count():
 def test_jump_target2_rejects_a_plate_it_does_not_have():
     with pytest.raises(KeyError, match="available:"):
         mt.ds.jump_target2(plates=["nope"])
+
+
+def test_unexpressed_genes_thresholds_the_reference(monkeypatch):
+    """A gene is unexpressed if any of its reference rows is below the cutoff; the columns are gene/zfpkm."""
+    expression = pd.DataFrame({"gene": ["A", "A", "B", "C", "C"], "zfpkm": [-4.0, 1.0, -0.5, -2.0, -3.5]})
+    monkeypatch.setattr(_jump, "jump_metadata", lambda name: expression)
+    assert _jump.unexpressed_genes(zfpkm_cutoff=-3.0) == {"A", "C"}
+    assert _jump.unexpressed_genes(zfpkm_cutoff=-1.0) == {"A", "C"}
+    assert _jump.unexpressed_genes(zfpkm_cutoff=-10.0) == set()

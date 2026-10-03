@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import warnings
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from typing import Any
 
 import numpy as np
@@ -135,6 +135,84 @@ def correct_plate_position(
     else:
         adata.layers[key_added] = out
     adata.uns.setdefault("mantispy", {})["plate_position"] = effects
+    return None
+
+
+@inplace_or_copy()
+def correct_chromosome_arm(
+    adata: AnnData,
+    *,
+    gene: str = "Metadata_Gene",
+    arm: str = "Metadata_ChromosomeArm",
+    unexpressed: Collection[str] | None = None,
+    zfpkm_cutoff: float = -3.0,
+    min_genes: int = 20,
+    key_added: str | None = None,
+    copy: bool = False,
+) -> AnnData | None:
+    """Remove the chromosome-arm (proximity-bias) background from CRISPR knockout profiles.
+
+    A CRISPR cut can change the copy number along the gene's chromosome arm, so knockouts on the same arm tend to share a background that is not their biology. Following :cite:t:`Chandrasekaran_2023`'s profiling recipe, this subtracts, from every well on an arm, the mean profile of that arm's wells whose gene is not expressed in a reference cell line, since an unexpressed gene's knockout carries only the arm background.
+
+    This is for CRISPR knockout data. ORF overexpression wells carry no such arm background, so do not run it on them even though :func:`mantispy.pp.annotate_jump` also gives them a chromosome arm.
+
+    Args:
+        adata: Object to correct, with one perturbed gene per well.
+        gene: Column holding each well's gene symbol.
+        arm: Column holding each well's chromosome arm, such as ``"1p"``. Wells with no arm are left untouched. :func:`mantispy.ds.jump_crispr` writes both columns.
+        unexpressed: Gene symbols counted as unexpressed. ``None`` reads the Recursion U2OS reference JUMP ships, calling a gene unexpressed when its zFPKM falls below `zfpkm_cutoff`.
+        zfpkm_cutoff: The zFPKM below which a gene is unexpressed, used only when `unexpressed` is ``None``.
+        min_genes: Correct an arm only when more than this many of its unexpressed genes are present, so the background is estimated from enough wells.
+        key_added: Write to ``layers[key_added]`` instead of overwriting ``X``.
+        copy: Return a modified copy instead of mutating in place.
+
+    Returns:
+        ``None``, or the modified copy.
+        Writes ``X`` or ``layers[key_added]``, and the corrected arms with the count of unexpressed genes behind each to ``uns["mantispy"]["chromosome_arm"]``.
+
+    Raises:
+        KeyError: `gene` or `arm` is not a column of ``adata.obs``.
+    """
+    for column in (gene, arm):
+        if column not in adata.obs:
+            raise KeyError(f"adata.obs has no {column!r} column")
+
+    if unexpressed is None:
+        from mantispy.io._jump import unexpressed_genes
+
+        unexpressed = unexpressed_genes(zfpkm_cutoff)
+
+    obs = as_frame(adata.obs)
+    gene_symbols = obs[gene].astype(str)
+    arms = obs[arm]
+    # isin over the gene column, not a Python membership loop: it is the codebase idiom, and a bare
+    # string passed as `unexpressed` raises here instead of silently matching its characters.
+    is_unexpressed = gene_symbols.isin(unexpressed).to_numpy()
+    genes = gene_symbols.to_numpy()
+
+    X = get_matrix(adata)
+    out = np.array(X, dtype=np.float32)
+    corrected: dict[str, int] = {}
+
+    for key in pd.unique(arms[arms.notna()]):
+        on_arm = (arms == key).to_numpy()
+        unexpressed_on_arm = on_arm & is_unexpressed
+        n_genes = np.unique(genes[unexpressed_on_arm]).size
+        if n_genes <= min_genes:
+            continue
+        with warnings.catch_warnings():  # a feature all-NaN across the unexpressed wells has no background
+            warnings.simplefilter("ignore", RuntimeWarning)
+            background = np.nanmean(X[unexpressed_on_arm].astype(np.float64), axis=0)
+        background = np.where(np.isfinite(background), background, 0.0)
+        out[on_arm] = (X[on_arm].astype(np.float64) - background).astype(np.float32)
+        corrected[str(key)] = int(n_genes)
+
+    get_logger().info("chromosome-arm correction: corrected %d arm(s)", len(corrected))
+    if key_added is None:
+        adata.X = out
+    else:
+        adata.layers[key_added] = out
+    adata.uns.setdefault("mantispy", {})["chromosome_arm"] = corrected
     return None
 
 

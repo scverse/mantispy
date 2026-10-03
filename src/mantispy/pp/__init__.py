@@ -1,7 +1,13 @@
 """Preprocessing."""
 
 from mantispy.pp._annotate import annotate_controls, annotate_jump, find_perturbation_key
-from mantispy.pp._batch import correct_plate_position, detect_plate_position, harmony, regress_out
+from mantispy.pp._batch import (
+    correct_chromosome_arm,
+    correct_plate_position,
+    detect_plate_position,
+    harmony,
+    regress_out,
+)
 from mantispy.pp._chatterjee import feature_select_chatterjee
 from mantispy.pp._feature_qc import feature_batch_sensitivity, feature_reproducibility
 from mantispy.pp._image_qc import filter_images, image_qc
@@ -19,6 +25,7 @@ __all__ = [
     "annotate_controls",
     "annotate_jump",
     "calculate_qc_metrics",
+    "correct_chromosome_arm",
     "correct_plate_position",
     "decorr_threshold_sweep",
     "detect_plate_position",

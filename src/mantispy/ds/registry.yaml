@@ -4679,12 +4679,18 @@ datasets:
     - name: jump_crispr.csv.gz
       url: https://raw.githubusercontent.com/jump-cellpainting/datasets/c68deb2babc83747e6b14d8a77e5655138a6086a/metadata/crispr.csv.gz
       sha256: 55e36e6802c6fc5f8e5d5258554368d64601f1847205e0fceb28a2c246c8d1ed
+    - name: jump_orf.csv.gz
+      url: https://raw.githubusercontent.com/jump-cellpainting/datasets/c68deb2babc83747e6b14d8a77e5655138a6086a/metadata/orf.csv.gz
+      sha256: 9c7ec4b0fa460a3a30f270a15f11b5e85cef9dd105c8a0ab8ab50f6cc98894b8
     - name: jump_perturbation_control.csv
       url: https://raw.githubusercontent.com/jump-cellpainting/datasets/76cb0231ac6ae253f36d2df2b28837676ad571fd/metadata/perturbation_control.csv
       sha256: f513c4017555efa486d07c3e9924944d5b0c44d2f2e76ca6e1fc934f5f718ef6
     - name: jump_gene_chromosome_map.tsv
       url: https://raw.githubusercontent.com/broadinstitute/jump-profiling-recipe/e8b7f32244194bafc08219d9a66a8a528b0ff4ce/inputs/metadata/gene_chromosome_map.tsv
       sha256: 98d0753cea22d6d72cb32ef32ef0b807fe8b993c1ad4364c627a7c7634c51c68
+    - name: jump_gene_expression.csv.gz
+      url: https://raw.githubusercontent.com/broadinstitute/jump-profiling-recipe/e8b7f32244194bafc08219d9a66a8a528b0ff4ce/inputs/metadata/Recursion_U2OS_expression_data.csv.gz
+      sha256: 3806408d7dfaadb3fd1e08680b1f38c3c4a30130326558423037d33b6ff11953
 
   corum:
     type: mantispy

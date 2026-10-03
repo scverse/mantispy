@@ -116,6 +116,7 @@ UNS_RESULTS: tuple[str, ...] = (
     "well_qc",
     "plate_position",
     "plate_position_detection",
+    "chromosome_arm",
     "map",
     "percent_replicating",
     "grit",
