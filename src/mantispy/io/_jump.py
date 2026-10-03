@@ -174,7 +174,7 @@ def unexpressed_genes(
 ) -> set[str]:
     """Gene symbols that are not expressed in the screened cell line, as an empirical null for hit calling.
 
-    With no `expression` this reads JUMP's Recursion U2OS reference and calls a gene unexpressed when its zFPKM is below `zfpkm_cutoff`, matching ``df[df.zfpkm < cutoff].gene.unique()`` in jump-profiling-recipe's chromosome-arm correction.
+    With no `expression` it reads JUMP's Recursion U2OS reference and calls a gene unexpressed when its zFPKM is below `zfpkm_cutoff`, matching ``df[df.zfpkm < cutoff].gene.unique()`` in jump-profiling-recipe's chromosome-arm correction.
 
     With `expression` it reads a DepMap expression matrix you have downloaded, so the null can be built for any cell line DepMap covers.
     Nothing is downloaded or re-hosted; point it at the file from the DepMap data page, such as ``OmicsExpressionProteinCodingGenesTPMLogp1.csv`` (one row per model, gene columns named ``"SYMBOL (ENTREZ)"``, holding log2(TPM+1)).
@@ -222,7 +222,9 @@ def _resolve_model(cell_line: str, expression: pd.DataFrame, models: str | Path 
         table[name_columns].apply(lambda col: col.astype(str).str.upper().str.strip()).eq(wanted).any(axis=1)
     ]
     ids = hits["ModelID"].astype(str).unique() if "ModelID" in hits else hits.iloc[:, 0].astype(str).unique()
-    ids = [model for model in ids if model in expression.index]
+    ids = sorted(model for model in ids if model in expression.index)
     if not ids:
         raise ValueError(f"cell_line={cell_line!r} matched no model present in the expression matrix")
+    if len(ids) > 1:
+        get_logger().warning("cell_line=%r matched %d models %s; using %s", cell_line, len(ids), ids, ids[0])
     return ids[0]

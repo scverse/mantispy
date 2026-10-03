@@ -109,3 +109,38 @@ def test_it_reads_the_gene_from_a_group_column():
     mt.tl.empirical_fdr(adata, control_genes={"a", "b"}, score="score", group="gene", alpha=0.5)
     assert adata.obs["empirical_fdr_control"].tolist() == [True, True, False, False]
     assert bool(adata.obs["empirical_fdr"].to_numpy()[2])  # the high-scoring c is a hit
+
+
+def test_a_nan_score_is_never_a_hit(genes):
+    adata, controls = genes
+    adata.obs.loc["hit0", "score"] = np.nan
+    mt.tl.empirical_fdr(adata, control_genes=controls, score="score")
+    assert np.isnan(adata.obs["empirical_fdr_pvalue"]["hit0"])
+    assert not bool(adata.obs["empirical_fdr"]["hit0"])
+
+
+def test_no_pvalue_is_zero(genes):
+    """Add-one smoothing keeps the strongest genes off a zero tail probability."""
+    adata, controls = genes
+    mt.tl.empirical_fdr(adata, control_genes=controls, score="score")
+    p = adata.obs["empirical_fdr_pvalue"].to_numpy()
+    assert np.nanmin(p) > 0
+
+
+def test_few_controls_warn(genes):
+    adata, _ = genes
+    with pytest.warns(UserWarning, match="control genes"):
+        mt.tl.empirical_fdr(adata, control_genes={"ctrl0", "ctrl1", "ctrl2"}, score="score")
+
+
+def test_all_control_scores_missing_raises(genes):
+    adata, controls = genes
+    adata.obs.loc[list(controls), "score"] = np.nan
+    with pytest.raises(ValueError, match="missing"):
+        mt.tl.empirical_fdr(adata, control_genes=controls, score="score")
+
+
+def test_a_missing_group_column_is_reported(genes):
+    adata, controls = genes
+    with pytest.raises(KeyError, match="group"):
+        mt.tl.empirical_fdr(adata, control_genes=controls, score="score", group="nope")

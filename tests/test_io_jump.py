@@ -237,3 +237,11 @@ def test_unexpressed_genes_rejects_an_unknown_cell_line(depmap_expression):
             cell_line="NOPE",
             models=pd.DataFrame({"ModelID": ["ACH-000001"], "StrippedCellLineName": ["U2OS"]}),
         )
+
+
+def test_unexpressed_genes_picks_a_duplicate_name_model_stably(depmap_expression):
+    """A name mapping to several models resolves to the first by sorted id, not by row order."""
+    models = pd.DataFrame({"ModelID": ["ACH-000002", "ACH-000001"], "StrippedCellLineName": ["DUP", "DUP"]})
+    reversed_models = models.iloc[::-1].reset_index(drop=True)
+    assert _jump.unexpressed_genes(depmap_expression, cell_line="DUP", models=models) == {"TP53", "XIST"}
+    assert _jump.unexpressed_genes(depmap_expression, cell_line="DUP", models=reversed_models) == {"TP53", "XIST"}

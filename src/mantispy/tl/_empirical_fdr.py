@@ -36,7 +36,9 @@ def empirical_fdr(
     This is the calibration PERISCOPE applies with non-expressed genes, generalized to any per-gene score and any control set (:func:`mantispy.io.unexpressed_genes` builds one).
 
     The score is yours to choose and must rise with the strength of the phenotype.
-    A count of features that differ from the controls (from :func:`~mantispy.tl.differential_features`) is unbounded and separates the controls from the rest well; a bounded score such as the activity mean average precision of :func:`~mantispy.tl.map` saturates, so a handful of off-target controls at its ceiling block the low tail.
+    A count of the features that separate a gene from the controls works well, from a per-feature test such as the Mann-Whitney p-values of :func:`~mantispy.tl.effect_size` or the moderated t of :func:`~mantispy.tl.differential_features`.
+    An unbounded count separates the controls from the rest; a bounded score such as the activity mean average precision of :func:`~mantispy.tl.map` saturates, so a handful of off-target controls at its ceiling block the low tail.
+    This calibrates against control genes that cannot respond, where :func:`~mantispy.tl.hit_calling` calibrates each group against control wells; use this when a set of non-responding genes is the better null.
 
     Args:
         adata: One row per gene, with the score in ``obs`` and a column (or index) naming the gene.
@@ -56,12 +58,12 @@ def empirical_fdr(
 
     Raises:
         TypeError: `control_genes` is a string rather than a collection of gene names.
-        ValueError: `criterion` is not one of :data:`CRITERIA`, or no control gene is present in the object.
+        ValueError: `criterion` is not one of :data:`CRITERIA`, or no control gene is present in the object, or every control gene has a missing score.
         KeyError: `score`, or `group`, is not an ``obs`` column.
 
     Notes:
         Two quantities come out, answering different questions.
-        The p-value is the fraction of control genes that reach a gene's score or beyond, so a cutoff on it fixes the rate at which a control gene is called, the way PERISCOPE sets its threshold.
+        The p-value is the share of control genes that reach a gene's score or beyond, with one added to the count and to the control total so a gene past every control gets a small positive value rather than zero, so a cutoff on it fixes the rate at which a control gene is called, the way PERISCOPE sets its threshold.
         It does not account for the number of genes tested, so the share of real false positives in a p-value hit list is higher than the cutoff whenever many genes carry no phenotype.
         The q-value is a target-decoy false discovery rate: at a gene's score it compares the fraction of controls reaching it with the fraction of all tested genes reaching it, and is made monotone from the permissive end.
         It estimates the share of the hit list that is false, so it is the honest rate to quote, and it can sit well above the p-value cutoff when the controls and the tested genes overlap.
@@ -90,11 +92,13 @@ def empirical_fdr(
     control = is_control & finite
     target = ~is_control & finite
     n_control = int(control.sum())
-    if n_control == 0:
+    if not is_control.any():
         raise ValueError(
             "no control gene is present in the object; control_genes shares no name with "
             f"{'obs[' + group + ']' if group else 'the index'}."
         )
+    if n_control == 0:
+        raise ValueError(f"every control gene has a missing {score!r}, so there is no null to calibrate against")
     if n_control < _FEW_CONTROLS:
         warnings.warn(
             f"only {n_control} control genes are present, so the null is coarse and the smallest resolvable "
@@ -115,15 +119,20 @@ def empirical_fdr(
     qvalue = np.full(adata.n_obs, np.nan)
     if n_target:
         scores = values[target]
-        pvalue[target] = at_or_above(control_sorted, scores) / n_control
-        decoy_rate = at_or_above(control_sorted, scores) / n_control
+        decoy_count = at_or_above(control_sorted, scores)
+        # Add one to the count and to the control total, so a gene past every control gets 1 / (n_control + 1)
+        # rather than a zero tail probability that would overstate the strongest genes.
+        p = (decoy_count + 1) / (n_control + 1)
+        pvalue[target] = p
+        # Every query is itself a target, so at_or_above(target_sorted, .) is at least one and target_rate is positive.
         target_rate = at_or_above(target_sorted, scores) / n_target
-        fdr = np.where(target_rate > 0, decoy_rate / target_rate, np.inf)
+        fdr = (decoy_count / n_control) / target_rate
         order = np.argsort(scores)[::-1]
         monotone = np.minimum.accumulate(fdr[order][::-1])[::-1]
         q = np.empty(n_target)
-        q[order] = np.clip(monotone, 0.0, 1.0)
-        qvalue[target] = q
+        q[order] = monotone
+        # A false discovery rate cannot be more confident than the gene's own tail probability.
+        qvalue[target] = np.clip(np.maximum(q, p), 0.0, 1.0)
 
     chosen = pvalue if criterion == "p" else qvalue
     is_hit = np.zeros(adata.n_obs, dtype=bool)
