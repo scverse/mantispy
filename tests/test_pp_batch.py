@@ -567,3 +567,32 @@ def test_correct_chromosome_arm_requires_its_columns():
     del adata.obs["Metadata_Gene"]
     with pytest.raises(KeyError, match="Metadata_Gene"):
         mt.pp.correct_chromosome_arm(adata, unexpressed=set())
+
+
+def test_correct_chromosome_arm_reads_the_default_unexpressed_set(monkeypatch):
+    """unexpressed=None reads unexpressed_genes(), which reads the gene_expression table; exercise that path."""
+    from mantispy.io import _jump
+
+    unexp_q = [f"q{i}" for i in range(22)]
+    genes = unexp_q + ["QT1", "p0"]
+    arms = ["1q"] * 23 + ["1p"]
+    adata = _crispr_arm_plate(
+        {"1q": [10.0, 10.0], "1p": [5.0, 5.0]}, genes, arms, dict.fromkeys(unexp_q, 0.0), {"QT1": 7.0}, n_features=2
+    )
+
+    # The reference table has lowercase gene/zfpkm columns; the 22 q-genes sit below the cutoff, QT1 above it.
+    expression = pd.DataFrame({"gene": [*unexp_q, "QT1"], "zfpkm": [-5.0] * 22 + [2.0]})
+    monkeypatch.setattr(_jump, "jump_metadata", lambda name: expression)
+
+    raw = adata.X.copy()
+    mt.pp.correct_chromosome_arm(adata)  # unexpressed=None -> default path
+    on_q = adata.obs["Metadata_ChromosomeArm"].to_numpy() == "1q"
+    assert adata.uns["mantispy"]["chromosome_arm"] == {"1q": 22}
+    np.testing.assert_array_equal(adata.X[~on_q], raw[~on_q])
+
+
+def test_correct_chromosome_arm_rejects_a_bare_string():
+    """A bare string as `unexpressed` would silently match its characters; isin raises instead."""
+    adata = _crispr_arm_plate({"1q": [1.0]}, ["q0"], ["1q"], {"q0": 0.0}, {}, n_features=1)
+    with pytest.raises(TypeError):
+        mt.pp.correct_chromosome_arm(adata, unexpressed="q0")

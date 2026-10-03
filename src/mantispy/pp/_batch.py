@@ -152,7 +152,9 @@ def correct_chromosome_arm(
 ) -> AnnData | None:
     """Remove the chromosome-arm (proximity-bias) background from CRISPR knockout profiles.
 
-    A CRISPR knockout changes the copy number of its whole chromosome arm, so knockouts on the same arm share a background that is not their biology. Following :cite:t:`Chandrasekaran_2023`'s profiling recipe, this subtracts, from every well on an arm, the mean profile of that arm's wells whose gene is not expressed in a reference cell line, since an unexpressed gene's knockout carries only the arm background.
+    A CRISPR cut can change the copy number along the gene's chromosome arm, so knockouts on the same arm tend to share a background that is not their biology. Following :cite:t:`Chandrasekaran_2023`'s profiling recipe, this subtracts, from every well on an arm, the mean profile of that arm's wells whose gene is not expressed in a reference cell line, since an unexpressed gene's knockout carries only the arm background.
+
+    This is for CRISPR knockout data. ORF overexpression wells carry no such arm background, so do not run it on them even though :func:`mantispy.pp.annotate_jump` also gives them a chromosome arm.
 
     Args:
         adata: Object to correct, with one perturbed gene per well.
@@ -179,12 +181,14 @@ def correct_chromosome_arm(
         from mantispy.io._jump import unexpressed_genes
 
         unexpressed = unexpressed_genes(zfpkm_cutoff)
-    unexpressed = set(unexpressed)
 
     obs = as_frame(adata.obs)
-    genes = obs[gene].astype(str).to_numpy()
+    gene_symbols = obs[gene].astype(str)
     arms = obs[arm]
-    is_unexpressed = np.array([symbol in unexpressed for symbol in genes])
+    # isin over the gene column, not a Python membership loop: it is the codebase idiom, and a bare
+    # string passed as `unexpressed` raises here instead of silently matching its characters.
+    is_unexpressed = gene_symbols.isin(unexpressed).to_numpy()
+    genes = gene_symbols.to_numpy()
 
     X = get_matrix(adata)
     out = np.array(X, dtype=np.float32)

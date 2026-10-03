@@ -184,3 +184,12 @@ def test_jump_target2_counts_a_source_that_publishes_only_the_object_count():
 def test_jump_target2_rejects_a_plate_it_does_not_have():
     with pytest.raises(KeyError, match="available:"):
         mt.ds.jump_target2(plates=["nope"])
+
+
+def test_unexpressed_genes_thresholds_the_reference(monkeypatch):
+    """A gene is unexpressed if any of its reference rows is below the cutoff; the columns are gene/zfpkm."""
+    expression = pd.DataFrame({"gene": ["A", "A", "B", "C", "C"], "zfpkm": [-4.0, 1.0, -0.5, -2.0, -3.5]})
+    monkeypatch.setattr(_jump, "jump_metadata", lambda name: expression)
+    assert _jump.unexpressed_genes(zfpkm_cutoff=-3.0) == {"A", "C"}
+    assert _jump.unexpressed_genes(zfpkm_cutoff=-1.0) == {"A", "C"}
+    assert _jump.unexpressed_genes(zfpkm_cutoff=-10.0) == set()

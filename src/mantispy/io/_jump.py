@@ -167,7 +167,7 @@ def unexpressed_genes(zfpkm_cutoff: float = -3.0) -> set[str]:
     """Gene symbols that are not expressed in the Recursion U2OS reference, as jump-profiling-recipe defines them.
 
     A gene counts as unexpressed if any of its rows in the reference has a zFPKM below `zfpkm_cutoff`,
-    matching ``df[df.zfpkm < -3].gene.unique()`` in the recipe's chromosome-arm correction.
+    matching ``df[df.zfpkm < cutoff].gene.unique()`` in the recipe's chromosome-arm correction.
 
     Args:
         zfpkm_cutoff: The zFPKM below which a gene is called unexpressed.
