@@ -11,6 +11,7 @@ from mantispy.tl._effect import effect_size, wasserstein_features
 from mantispy.tl._empirical_fdr import empirical_fdr
 from mantispy.tl._enrich import enrich, feature_sets, rank_features, rank_sets
 from mantispy.tl._gene_aggregation import aggregate_guides
+from mantispy.tl._guide_activity import guide_activity
 from mantispy.tl._heterogeneity import (
     cell_cycle_phase,
     cluster_composition,
@@ -49,6 +50,7 @@ __all__ = [
     "feature_signature",
     "gene_sets",
     "grit",
+    "guide_activity",
     "hit_calling",
     "map",
     "moa_enrichment",

@@ -16,7 +16,7 @@ from mantispy._core.mutation import inplace_or_copy
 METHODS = ("stouffer", "fisher")
 
 _FEW_CONTROLS = 50
-#: p-values are clipped into this range so a guide at 0 or 1 does not send its z to infinity.
+#: p-values are clipped to [_P_CLIP, 1 - _P_CLIP] so a guide at 0 or 1 does not send its z to +/-infinity.
 _P_CLIP = 1e-12
 
 
@@ -48,17 +48,18 @@ def aggregate_guides(
     """Combine a gene's guides into one hit call, calibrated against non-targeting controls.
 
     A gene in a pooled CRISPR screen is targeted by many guides, and a call must pool them rather than treat each guide as its own result.
-    This takes a per-guide score that rises with the strength of the phenotype, combines the guides of each gene, and calibrates the combined statistic against random same-size groups of non-targeting-control (NTC) guides.
+    This takes a one-sided per-guide p-value, small when a guide shows a phenotype, combines the guides of each gene into one statistic, and calibrates that statistic against random same-size groups of non-targeting-control (NTC) guides.
     Matching the group size matters because the combined statistic's null depends on how many guides a gene has.
 
-    The score is a one-sided per-guide p-value, small when the guide shows a phenotype, as produced by the activity mean average precision of :func:`~mantispy.tl.map`, or by :func:`~mantispy.tl.effect_size` or :func:`~mantispy.tl.hit_calling` against the negative controls.
-    ``"stouffer"`` turns each p into a z and sums the z's, so it rewards a consistent effect across a gene's guides; ``"fisher"`` combines the p's and fires when any one guide is strongly significant, which is more powerful for a gene with a single potent guide but is carried by a lone off-target reagent.
+    :func:`~mantispy.tl.guide_activity` produces the per-guide p-value this reads, scoring each guide against a reference control class.
+    The scoring reference and the ``control`` null must be two different control classes, or the null is scored against itself; a screen that carries both intergenic and non-targeting guides can set the scale with one and keep the other as the null.
+    ``"stouffer"`` turns each p into a z and sums the z's, so it rewards a consistent effect across a gene's guides; ``"fisher"`` combines the p's and fires when any one guide is strongly significant, which is more powerful for a gene with a single potent guide but lets one off-target reagent carry the gene to a false call.
     This combines per-guide evidence within a gene, where :func:`~mantispy.tl.empirical_fdr` calibrates an already-per-gene score against a set of non-responding genes.
 
     Args:
         adata: One row per guide, with the score, the guide id and the gene in ``obs``.
-        score: ``obs`` column holding the one-sided per-guide p-value, small for a stronger phenotype.
-        guide: ``obs`` column naming the guide; one scored row per guide is expected.
+        score: ``obs`` column holding the one-sided per-guide p-value in ``[0, 1]``, small for a stronger phenotype.
+        guide: ``obs`` column naming the guide; one scored row per guide is expected, and a repeated id warns.
         gene: ``obs`` column naming the gene the guide targets.
         control: The value of `gene` that marks the non-targeting guides forming the null, such as ``"nontargeting"``.
         method: ``"stouffer"`` (default) or ``"fisher"`` (see above and Notes).
@@ -77,7 +78,7 @@ def aggregate_guides(
         Non-targeting guides, guides with a missing score, and genes left with no scored guide get a missing ``pvalue`` and ``qvalue`` and are never hits.
 
     Raises:
-        ValueError: `method` is not one of ``METHODS``, `weight` or `direction` is given with ``"fisher"``, no control guide is present, or no gene has a scored guide.
+        ValueError: `method` is not one of ``METHODS``, `weight` or `direction` is given with ``"fisher"``, `alpha` is not in ``(0, 1)``, `n_null` is below one, a finite `score` falls outside ``[0, 1]`` (so it is not a p-value), no control guide is present, or no gene has a scored guide.
         KeyError: `score`, `guide`, `gene`, `weight` or `direction` is not an ``obs`` column.
 
     Notes:
@@ -95,6 +96,10 @@ def aggregate_guides(
         raise ValueError("weight is only supported for method='stouffer'; Fisher combines p-values directly")
     if method == "fisher" and direction is not None:
         raise ValueError("direction is only supported for method='stouffer'; a one-sided p already fixes the direction")
+    if not 0.0 < alpha < 1.0:
+        raise ValueError(f"alpha must be in (0, 1), got {alpha}")
+    if n_null < 1:
+        raise ValueError(f"n_null must be at least one, got {n_null}")
 
     obs = as_frame(adata.obs)
     for name, value in (("score", score), ("guide", guide), ("gene", gene)):
@@ -105,7 +110,16 @@ def aggregate_guides(
             raise KeyError(f"{name}={optional!r} is not an obs column")
 
     genes = obs[gene].astype(str).to_numpy()
-    p = np.clip(pd.to_numeric(obs[score], errors="coerce").to_numpy(dtype=float), _P_CLIP, 1.0)  # clip keeps NaN
+    raw = pd.to_numeric(obs[score], errors="coerce").to_numpy(dtype=float)
+    finite = np.isfinite(raw)
+    if finite.any() and (raw[finite].min() < 0.0 or raw[finite].max() > 1.0):
+        raise ValueError(
+            f"score={score!r} must be a one-sided p-value in [0, 1], but it ranges "
+            f"[{raw[finite].min():.3g}, {raw[finite].max():.3g}]. A score where large means a stronger phenotype "
+            "is reversed; pass its complement, or the activity p-value from mt.tl.guide_activity."
+        )
+    # Clip both ends: isf(0)=+inf and isf(1)=-inf, and a guide at 1.0 would otherwise be dropped as non-finite.
+    p = np.clip(raw, _P_CLIP, 1.0 - _P_CLIP)  # clip keeps NaN
     z = stats.norm.isf(p)  # one-sided: small p -> large positive z
     if direction is not None:
         sign = np.sign(pd.to_numeric(obs[direction], errors="coerce").to_numpy(dtype=float))
@@ -136,6 +150,16 @@ def aggregate_guides(
     ctrl_z, ctrl_p, ctrl_w = z[control_scored], p[control_scored], w[control_scored]
     rng = np.random.default_rng(seed)
 
+    # One scored row per guide is expected; repeated ids mean guide-level rows were not collapsed.
+    scored_guides = obs[guide].astype(str).to_numpy()[scored & ~is_control]
+    if pd.Series(scored_guides).duplicated().any():
+        warnings.warn(
+            f"obs[{guide!r}] repeats ids among scored guides, so some guides are counted more than once. "
+            "Pass one row per guide (collapse replicate wells or cells first).",
+            UserWarning,
+            stacklevel=3,
+        )
+
     # One combined statistic per gene, over its scored, non-control guides.
     tested = scored & ~is_control
     frame = pd.DataFrame({"gene": genes[tested], "z": z[tested], "p": p[tested], "w": w[tested]})
@@ -162,17 +186,22 @@ def aggregate_guides(
     null_by_k: dict[int, np.ndarray] = {}
     for k in sorted(set(k_list)):
         if k <= n_control:
-            idx = np.argsort(rng.random((n_null, n_control)), axis=1)[:, :k]
+            # argpartition picks the k smallest random keys per row without a full sort.
+            idx = np.argpartition(rng.random((n_null, n_control)), k - 1, axis=1)[:, :k]
         else:
             idx = rng.integers(0, n_control, size=(n_null, k))
-        draws = np.array([_combine(ctrl_z[row], ctrl_p[row], ctrl_w[row], method) for row in idx])
+        if method == "stouffer":
+            gz, gw = ctrl_z[idx], ctrl_w[idx]
+            draws = (gw * gz).sum(axis=1) / np.sqrt((gw**2).sum(axis=1))
+        else:
+            draws = -2.0 * np.log(ctrl_p[idx]).sum(axis=1)
         null_by_k[k] = np.sort(draws)
 
     names = np.array(gene_names)
     stat = np.array(stat_list)
     k_arr = np.array(k_list)
     pvalue = np.empty(names.size)
-    for i, (s, k) in enumerate(zip(stat, k_arr)):
+    for i, (s, k) in enumerate(zip(stat, k_arr, strict=True)):
         nd = null_by_k[k]
         at_or_above = nd.size - np.searchsorted(nd, s, side="left")
         pvalue[i] = (at_or_above + 1) / (nd.size + 1)

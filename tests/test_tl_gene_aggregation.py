@@ -93,7 +93,7 @@ def test_control_guides_and_unscored_guides_are_never_hits_and_get_no_pvalue(ada
 def test_the_gene_call_is_broadcast_onto_every_guide_row(adata):
     _call(adata)
     obs = adata.obs
-    for gene, sub in obs[obs["Metadata_Gene"] != "nontargeting"].groupby("Metadata_Gene"):
+    for _gene, sub in obs[obs["Metadata_Gene"] != "nontargeting"].groupby("Metadata_Gene"):
         assert sub["gene_aggregation_qvalue"].nunique(dropna=False) == 1  # one gene -> one value on all its guides
 
 
@@ -139,3 +139,59 @@ def test_bad_method_and_misplaced_weight_or_direction_are_rejected(adata):
 def test_a_control_label_absent_from_the_data_is_an_error(adata):
     with pytest.raises(ValueError, match="no control guide is present"):
         mt.tl.aggregate_guides(adata, score="p", guide="Metadata_sgRNA", gene="Metadata_Gene", control="absent_label")
+
+
+def test_a_guide_at_p_one_is_kept_not_dropped(adata):
+    # p == 1.0 (the weakest guide a rank-based score can produce) must stay in its gene and the null,
+    # not be silently dropped by a clip to exactly 1.0 that would send its z to -inf.
+    adata.obs.loc[adata.obs["Metadata_sgRNA"] == "hit0_0", "p"] = 1.0
+    adata.obs.loc[adata.obs["Metadata_sgRNA"] == "ntc0", "p"] = 1.0
+    table = _call(adata)
+    assert int(table.loc[table["gene"] == "hit0", "n_guides"].iloc[0]) == 4  # all four guides kept
+
+
+def test_a_score_outside_the_unit_interval_is_rejected(adata):
+    adata.obs["effect"] = 1.0 - adata.obs["p"]  # a reversed score where large means a stronger phenotype
+    adata.obs.loc[adata.obs.index[0], "effect"] = 5.0  # push it clearly out of [0, 1]
+    with pytest.raises(ValueError, match=r"must be a one-sided p-value in \[0, 1\]"):
+        mt.tl.aggregate_guides(
+            adata, score="effect", guide="Metadata_sgRNA", gene="Metadata_Gene", control="nontargeting"
+        )
+
+
+def test_weighting_a_gene_s_guides_changes_its_statistic():
+    rng = np.random.default_rng(3)
+    genes = ["wg"] * 4 + ["nontargeting"] * 400
+    z = np.concatenate([[4.0, 0.0, 0.0, 0.0], rng.normal(0, 1.0, 400)])
+    base = pd.DataFrame(
+        {"Metadata_Gene": genes, "Metadata_sgRNA": [f"g{i}" for i in range(404)], "p": stats.norm.sf(z)}
+    )
+    equal = _call(AnnData(np.zeros((404, 1), "float32"), obs=base.copy()))
+    weighted_obs = base.copy()
+    weighted_obs["w"] = [10.0, 1.0, 1.0, 1.0] + [1.0] * 400  # up-weight the one strong guide
+    weighted = _call(AnnData(np.zeros((404, 1), "float32"), obs=weighted_obs), weight="w")
+    assert (
+        weighted.loc[weighted["gene"] == "wg", "statistic"].iloc[0]
+        > equal.loc[equal["gene"] == "wg", "statistic"].iloc[0]
+    )
+
+
+def test_direction_lets_opposing_guides_cancel():
+    rng = np.random.default_rng(4)
+    # four strongly active guides of one gene, two moving each way; the one-sided p is small for all.
+    genes = ["dg"] * 4 + ["nontargeting"] * 400
+    p = np.concatenate([[1e-4, 1e-4, 1e-4, 1e-4], stats.norm.sf(rng.normal(0, 1.0, 400))])
+    obs = pd.DataFrame({"Metadata_Gene": genes, "Metadata_sgRNA": [f"g{i}" for i in range(404)], "p": p})
+    without = _call(AnnData(np.zeros((404, 1), "float32"), obs=obs.copy()))
+    obs["dir"] = [1.0, 1.0, -1.0, -1.0] + [1.0] * 400  # the gene's guides disagree in direction
+    with_dir = _call(AnnData(np.zeros((404, 1), "float32"), obs=obs), direction="dir")
+    stat_without = without.loc[without["gene"] == "dg", "statistic"].iloc[0]
+    stat_with = with_dir.loc[with_dir["gene"] == "dg", "statistic"].iloc[0]
+    assert stat_with < stat_without  # cancellation pulls the combined statistic down
+    assert abs(stat_with) < 1.0  # opposing guides roughly cancel
+
+
+def test_repeated_guide_ids_warn(adata):
+    adata.obs.loc[adata.obs["Metadata_sgRNA"] == "hit0_1", "Metadata_sgRNA"] = "hit0_0"  # a duplicate id
+    with pytest.warns(UserWarning, match="repeats ids"):
+        _call(adata)
