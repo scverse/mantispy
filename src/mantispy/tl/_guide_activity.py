@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import numpy as np
-import pandas as pd
 from anndata import AnnData
 
 from mantispy._core._reduce import get_matrix
@@ -67,7 +66,9 @@ def guide_activity(
     mad = MAD_TO_SIGMA * np.nanmedian(np.abs(ref - median), axis=0)
     varying = mad > 1e-9
     if not varying.any():
-        raise ValueError(f"every feature is constant across the {reference!r} guides, so there is no scale to score against")
+        raise ValueError(
+            f"every feature is constant across the {reference!r} guides, so there is no scale to score against"
+        )
 
     z = (x[:, varying] - median[varying]) / mad[varying]
     activity = np.sqrt(np.nanmean(z**2, axis=1))
