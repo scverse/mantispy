@@ -272,6 +272,52 @@ def test_a_label_column_mixing_lists_and_scalars_is_rejected(profiles):
 
 
 @requires_copairs
+def test_label_sep_splits_a_delimited_string_into_the_same_scores(profiles):
+    """A stored 'A|B' string split by label_sep must score exactly as the equivalent list column, since a list
+    column cannot be written to h5ad and a delimited string can."""
+    delimited = {"pert00": "A", "pert01": "A", "pert02": "A|B", "pert03": "B", "pert04": "B"}
+    as_list = {"pert00": ["A"], "pert01": ["A"], "pert02": ["A", "B"], "pert03": ["B"], "pert04": ["B"]}
+
+    strings = _consensus_with_moa(profiles, delimited)
+    mt.tl.map(strings, mode="consistency", annotation_key="Metadata_MOA", label_sep="|", null_size=200, seed=0)
+
+    listed = _consensus_with_moa(profiles, as_list)
+    mt.tl.map(listed, mode="consistency", annotation_key="Metadata_MOA", null_size=200, seed=0)
+
+    split_scores = strings.uns["mantispy"]["map"].set_index("Metadata_MOA")["mean_average_precision"].sort_index()
+    list_scores = listed.uns["mantispy"]["map"].set_index("Metadata_MOA")["mean_average_precision"].sort_index()
+    np.testing.assert_allclose(split_scores.to_numpy(), list_scores.to_numpy())
+
+
+@requires_copairs
+def test_a_missing_multilabel_entry_is_left_unscored(profiles):
+    """A row with no annotation becomes an empty label set and joins no class, rather than erroring."""
+    assignment = {"pert00": ["A"], "pert01": ["A"], "pert02": ["A", "B"], "pert03": ["B"], "pert04": None}
+    signatures = _consensus_with_moa(profiles, assignment)
+    mt.tl.map(signatures, mode="consistency", annotation_key="Metadata_MOA", null_size=200, seed=0)
+    assert set(signatures.uns["mantispy"]["map"]["Metadata_MOA"]) == {"A", "B"}
+
+
+@requires_copairs
+def test_multilabel_clears_a_stale_single_label_obs_column(profiles):
+    """The single-label path writes obs[key]; a later multilabel run must not leave those per-row columns behind to
+    disagree with the per-class table."""
+    single = {"pert00": "A", "pert01": "A", "pert02": "A", "pert03": "B", "pert04": "B"}
+    signatures = _consensus_with_moa(profiles, single)
+    mt.tl.map(signatures, mode="consistency", annotation_key="Metadata_MOA", null_size=200, seed=0)
+    assert "map" in signatures.obs.columns
+
+    perturbations = signatures.obs["Metadata_Perturbation"].astype(str)
+    as_list = {"pert00": ["A"], "pert01": ["A"], "pert02": ["A", "B"], "pert03": ["B"], "pert04": ["B"]}
+    signatures.obs["Metadata_MOA"] = pd.Series(
+        [as_list[p] for p in perturbations], index=signatures.obs.index, dtype=object
+    )
+    mt.tl.map(signatures, mode="consistency", annotation_key="Metadata_MOA", null_size=200, seed=0)
+    assert "map" not in signatures.obs.columns
+    assert "map_qvalue" not in signatures.obs.columns
+
+
+@requires_copairs
 def test_map_result_survives_a_round_trip(profiles, tmp_path):
     """copairs returns a ragged 'indices' column that h5ad cannot store."""
     mt.tl.map(profiles, mode="activity", null_size=200)

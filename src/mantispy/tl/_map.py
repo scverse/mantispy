@@ -50,6 +50,9 @@ MODES = {
 #: The ragged per-group row indices cannot be written to h5ad.
 _UNWRITABLE = ("indices",)
 
+#: Types that mark an annotation cell as a list of labels rather than one scalar label.
+_LIST_LIKE = (list, tuple, set, np.ndarray)
+
 
 def _resolve_mode(mode: str, *, label: str, batch: str, annotation: str | None = None) -> dict[str, list[str]]:
     """Substitute the ``__label__``/``__batch__``/``__annotation__`` placeholders in a :data:`MODES` preset."""
@@ -65,10 +68,13 @@ def _list_valued(series: pd.Series) -> bool:
     A perturbation with several annotations (targets, mechanisms) is a list; a string is one label, not a list of
     characters. A column that mixes the two cannot be read either way and is rejected.
     """
+    # Lists can only live in an object column, so a numeric, boolean or categorical column is scalar without a scan.
+    if series.dtype != object:
+        return False
     present = series.dropna()
     if present.empty:
         return False
-    is_list = present.map(lambda value: isinstance(value, (list, tuple, set, np.ndarray)))
+    is_list = present.map(lambda value: isinstance(value, _LIST_LIKE))
     if bool(is_list.all()):
         return True
     if bool(is_list.any()):
@@ -178,6 +184,7 @@ def map(
     neg_diffby: Sequence[str] = (),
     mode: str | None = None,
     annotation_key: str | None = None,
+    label_sep: str | None = None,
     reference: str | None = "negcon",
     use_rep: str | None = None,
     null_size: int = 10_000,
@@ -207,14 +214,15 @@ def map(
                 Do perturbations sharing an annotation look more alike than those that do not?
                 This is the phenotypic consistency of :cite:t:`Kalinin_2025`.
                 Needs ``annotation_key`` (a mechanism, target or gene column) and is meant for consensus profiles of perturbations already known to be active.
-                When ``annotation_key`` holds a list of labels per row, a pair is positive if the two lists share any label, and a perturbation with several labels is scored toward each of its classes.
+                When ``annotation_key`` holds a list of labels per row, a pair is positive if the two lists share any label, and a perturbation with several labels is scored toward each of its classes. This multilabel scoring is supported through ``mode="consistency"``.
             ``"replicability"``
                 Do a perturbation's replicates retrieve each other against the other perturbations on the query's plate?
                 This is the ``mAP-nonrep`` of :cite:t:`Arevalo_2024`, which leaves the controls out; ``reference=None`` keeps them in.
             ``"cross_plate"``
                 Do a perturbation's replicates on other plates retrieve each other against all other profiles?
                 A replicate counts only if it is on a different plate, which separates reproducible biology from plate effects.
-        annotation_key: The ``obs`` column ``mode="consistency"`` groups by. A column holding a list of labels per row is scored as multilabel (see the mode description); a scalar column is a single label.
+        annotation_key: The ``obs`` column ``mode="consistency"`` groups by. A column holding a list of labels per row is scored as multilabel (see the mode description); a scalar column is a single label. A list-valued ``obs`` column does not survive ``write_h5ad``, so store the labels as a delimited string, which does survive, and split it with ``label_sep``.
+        label_sep: Split a string ``annotation_key`` on this separator into a list of labels per row, so a stored ``"MEK|ERK"`` is scored as multilabel. ``None`` leaves the column as it is. An entry that is already a list, or is missing, is left untouched.
         reference: Which rows are the negative controls, which ``mode="activity"`` retrieves against and ``mode="replicability"`` leaves out: ``"negcon"``, the name of a boolean ``obs`` column, or ``None`` for none.
         use_rep: Score ``obsm[use_rep]`` instead of ``X``.
         null_size: Size of the permutation null.
@@ -228,7 +236,8 @@ def map(
     Returns:
         ``None``, or the modified copy.
         Writes the per-group table to ``uns["mantispy"][key_added]`` and joins ``obs[key_added]`` and ``obs[key_added + "_qvalue"]`` back onto the rows.
-        A multilabel annotation has no single score per row, so it writes the per-class table to ``uns`` only and leaves ``obs`` untouched.
+        A group with one member has no within-group pair to score, so it is absent from the table.
+        A multilabel annotation has no single score per row, so it writes the per-class table to ``uns`` only and clears ``obs[key_added]`` and ``obs[key_added + "_qvalue"]``.
 
     Raises:
         ImportError: copairs is not installed; it is an optional extra.
@@ -306,6 +315,10 @@ def map(
     # A positive-pair column holding a list per row is a multilabel annotation: a pair is positive when the two
     # label sets intersect. A profile with several labels is scored once per label, toward each of its classes.
     label_columns = [c for c in settings["pos_sameby"] if c != REFERENCE_COLUMN and c in meta.columns]
+    if label_sep is not None:
+        # Split a stored delimited string into the list of labels the detection below looks for.
+        for column in label_columns:
+            meta[column] = meta[column].map(lambda value: value.split(label_sep) if isinstance(value, str) else value)
     multilabel = [c for c in label_columns if _list_valued(meta[c])]
     if len(multilabel) > 1:
         raise ValueError(
@@ -314,8 +327,9 @@ def map(
         )
     multilabel_col = multilabel[0] if multilabel else None
     if multilabel_col is not None:
+        # A missing annotation becomes an empty label set: the row joins no class and copairs leaves it unscored.
         meta[multilabel_col] = meta[multilabel_col].map(
-            lambda value: list(value) if isinstance(value, (list, tuple, set, np.ndarray)) else []
+            lambda value: list(value) if isinstance(value, _LIST_LIKE) else []
         )
 
     table, group_columns = _score_map(
@@ -339,7 +353,11 @@ def map(
 
     if multilabel_col is not None:
         # A row carries several labels, so there is no single per-row score to join back; the per-class table in
-        # uns is the result, keyed by the label the score belongs to.
+        # uns is the result, keyed by the label the score belongs to. Clear any per-row columns a single-label run
+        # left behind, so obs cannot disagree with the table just written.
+        stale = [c for c in (key_added, f"{key_added}_qvalue") if c in obs.columns]
+        if stale:
+            adata.obs = obs.drop(columns=stale)
         return None
 
     lookup = table.set_index(group_columns)
