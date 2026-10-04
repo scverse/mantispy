@@ -59,6 +59,26 @@ def _resolve_mode(mode: str, *, label: str, batch: str, annotation: str | None =
     return {key: [substitutions.get(column, column) for column in value] for key, value in MODES[mode].items()}
 
 
+def _list_valued(series: pd.Series) -> bool:
+    """Whether a label column holds a list of labels per row rather than one scalar label.
+
+    A perturbation with several annotations (targets, mechanisms) is a list; a string is one label, not a list of
+    characters. A column that mixes the two cannot be read either way and is rejected.
+    """
+    present = series.dropna()
+    if present.empty:
+        return False
+    is_list = present.map(lambda value: isinstance(value, (list, tuple, set, np.ndarray)))
+    if bool(is_list.all()):
+        return True
+    if bool(is_list.any()):
+        raise ValueError(
+            f"label column {series.name!r} mixes list-valued and scalar entries, so it is neither single-label "
+            "nor multilabel. Give every row a list, or every row one scalar label."
+        )
+    return False
+
+
 def _score_map(
     meta: pd.DataFrame,
     features: np.ndarray,
@@ -69,6 +89,7 @@ def _score_map(
     seed: int,
     distance: str = "cosine",
     drop_positions: np.ndarray | None = None,
+    multilabel_col: str | None = None,
     warn: bool = True,
     compute_null: bool = True,
 ) -> tuple[pd.DataFrame, list[str]]:
@@ -79,12 +100,22 @@ def _score_map(
     and returns just the per-group mean of ``average_precision``, the point estimate the null does not affect,
     which ``evaluate_integration`` uses so scoring a representation does not pay for discarded permutations.
 
+    With ``multilabel_col`` set, a positive pair shares at least one of that column's labels, and copairs splits a
+    profile with several labels into one scored row per label, so it counts toward each of its classes.
+
     Raises:
         ValueError: No profile has a negative pair, so there is nothing to score.
     """
     from copairs import map as copairs_map
 
-    precision = copairs_map.average_precision(meta, features, **settings, distance=distance, progress_bar=False)
+    if multilabel_col is not None:
+        from copairs.map import multilabel as copairs_multilabel
+
+        precision = copairs_multilabel.average_precision(
+            meta, features, **settings, multilabel_col=multilabel_col, distance=distance, progress_bar=False
+        )
+    else:
+        precision = copairs_map.average_precision(meta, features, **settings, distance=distance, progress_bar=False)
     if drop_positions is not None:
         precision = precision[~precision.index.isin(drop_positions)]
     group_columns = [column for column in settings["pos_sameby"] if column != REFERENCE_COLUMN]
@@ -176,13 +207,14 @@ def map(
                 Do perturbations sharing an annotation look more alike than those that do not?
                 This is the phenotypic consistency of :cite:t:`Kalinin_2025`.
                 Needs ``annotation_key`` (a mechanism, target or gene column) and is meant for consensus profiles of perturbations already known to be active.
+                When ``annotation_key`` holds a list of labels per row, a pair is positive if the two lists share any label, and a perturbation with several labels is scored toward each of its classes.
             ``"replicability"``
                 Do a perturbation's replicates retrieve each other against the other perturbations on the query's plate?
                 This is the ``mAP-nonrep`` of :cite:t:`Arevalo_2024`, which leaves the controls out; ``reference=None`` keeps them in.
             ``"cross_plate"``
                 Do a perturbation's replicates on other plates retrieve each other against all other profiles?
                 A replicate counts only if it is on a different plate, which separates reproducible biology from plate effects.
-        annotation_key: The ``obs`` column ``mode="consistency"`` groups by.
+        annotation_key: The ``obs`` column ``mode="consistency"`` groups by. A column holding a list of labels per row is scored as multilabel (see the mode description); a scalar column is a single label.
         reference: Which rows are the negative controls, which ``mode="activity"`` retrieves against and ``mode="replicability"`` leaves out: ``"negcon"``, the name of a boolean ``obs`` column, or ``None`` for none.
         use_rep: Score ``obsm[use_rep]`` instead of ``X``.
         null_size: Size of the permutation null.
@@ -196,10 +228,11 @@ def map(
     Returns:
         ``None``, or the modified copy.
         Writes the per-group table to ``uns["mantispy"][key_added]`` and joins ``obs[key_added]`` and ``obs[key_added + "_qvalue"]`` back onto the rows.
+        A multilabel annotation has no single score per row, so it writes the per-class table to ``uns`` only and leaves ``obs`` untouched.
 
     Raises:
         ImportError: copairs is not installed; it is an optional extra.
-        ValueError: ``mode`` was passed together with explicit pair arguments or neither was passed, ``mode`` is not one of ``MODES``, ``mode="consistency"`` came without ``annotation_key``, ``mode="activity"`` found no controls, no profile has a negative pair to be ranked against, or the profiles hold missing values, which cannot be ranked.
+        ValueError: ``mode`` was passed together with explicit pair arguments or neither was passed, ``mode`` is not one of ``MODES``, ``mode="consistency"`` came without ``annotation_key``, ``mode="activity"`` found no controls, no profile has a negative pair to be ranked against, the profiles hold missing values, which cannot be ranked, a label column mixes list-valued and scalar entries, or more than one positive-pair column is list-valued.
         KeyError: ``obs`` is missing a column the pair definitions or ``reference`` name.
     """
     try:
@@ -270,6 +303,21 @@ def map(
         treated = ~reference_mask(adata, reference)
         meta, features = meta[treated].reset_index(drop=True), features[treated]
 
+    # A positive-pair column holding a list per row is a multilabel annotation: a pair is positive when the two
+    # label sets intersect. A profile with several labels is scored once per label, toward each of its classes.
+    label_columns = [c for c in settings["pos_sameby"] if c != REFERENCE_COLUMN and c in meta.columns]
+    multilabel = [c for c in label_columns if _list_valued(meta[c])]
+    if len(multilabel) > 1:
+        raise ValueError(
+            f"mAP scores against one multilabel column at a time, but these positive-pair columns are all "
+            f"list-valued: {multilabel}. Keep one as the label and flatten the rest."
+        )
+    multilabel_col = multilabel[0] if multilabel else None
+    if multilabel_col is not None:
+        meta[multilabel_col] = meta[multilabel_col].map(
+            lambda value: list(value) if isinstance(value, (list, tuple, set, np.ndarray)) else []
+        )
+
     table, group_columns = _score_map(
         meta,
         features,
@@ -279,6 +327,7 @@ def map(
         seed=seed,
         distance=distance,
         drop_positions=drop_positions,
+        multilabel_col=multilabel_col,
     )
 
     if mode == "activity":
@@ -287,6 +336,11 @@ def map(
         table = table.drop(columns=[REFERENCE_COLUMN], errors="ignore")
 
     adata.uns.setdefault("mantispy", {})[key_added] = table
+
+    if multilabel_col is not None:
+        # A row carries several labels, so there is no single per-row score to join back; the per-class table in
+        # uns is the result, keyed by the label the score belongs to.
+        return None
 
     lookup = table.set_index(group_columns)
     index = pd.MultiIndex.from_frame(obs[group_columns]) if len(group_columns) > 1 else pd.Index(obs[group_columns[0]])

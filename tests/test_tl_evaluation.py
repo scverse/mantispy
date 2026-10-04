@@ -217,6 +217,60 @@ def test_consistency_does_not_count_a_perturbation_agreeing_with_itself(profiles
     )
 
 
+def _consensus_with_moa(profiles, assignment):
+    """One row per perturbation, with ``Metadata_MOA`` set from a {perturbation: value} map."""
+    treated = profiles[~profiles.obs["Metadata_Control"].to_numpy()].copy()
+    signatures = mt.tl.consensus(treated, method="median", min_replicates=1)
+    perturbations = signatures.obs["Metadata_Perturbation"].astype(str)
+    signatures.obs["Metadata_MOA"] = pd.Series(
+        [assignment[p] for p in perturbations], index=signatures.obs.index, dtype=object
+    )
+    return signatures
+
+
+@requires_copairs
+def test_multilabel_scores_a_perturbation_toward_each_of_its_labels(profiles):
+    """A list of labels per row is multilabel: a pair is positive if the lists intersect, and a perturbation with
+    two labels is scored toward both classes."""
+    both = ["pert00", "pert01", "pert02", "pert03", "pert04"]
+    assignment = {"pert00": ["A"], "pert01": ["A"], "pert02": ["A", "B"], "pert03": ["B"], "pert04": ["B"]}
+    signatures = _consensus_with_moa(profiles, assignment)
+    assert set(signatures.obs["Metadata_Perturbation"].astype(str)) == set(both)
+
+    mt.tl.map(signatures, mode="consistency", annotation_key="Metadata_MOA", null_size=200, seed=0)
+    table = signatures.uns["mantispy"]["map"]
+
+    # Both classes are scored, each over its three members (pert02 is in both).
+    assert set(table["Metadata_MOA"]) == {"A", "B"}
+    # A list-valued annotation has no single per-row score, so obs is left untouched.
+    assert "map" not in signatures.obs.columns
+
+
+@requires_copairs
+def test_single_element_lists_match_the_single_label_column(profiles):
+    """Wrapping each scalar label in a one-element list must score exactly as the scalar column does."""
+    scalar = {"pert00": "A", "pert01": "A", "pert02": "A", "pert03": "B", "pert04": "B"}
+    as_list = {perturbation: [label] for perturbation, label in scalar.items()}
+
+    single = _consensus_with_moa(profiles, scalar)
+    mt.tl.map(single, mode="consistency", annotation_key="Metadata_MOA", null_size=200, seed=0)
+
+    listed = _consensus_with_moa(profiles, as_list)
+    mt.tl.map(listed, mode="consistency", annotation_key="Metadata_MOA", null_size=200, seed=0)
+
+    single_scores = single.uns["mantispy"]["map"].set_index("Metadata_MOA")["mean_average_precision"].sort_index()
+    listed_scores = listed.uns["mantispy"]["map"].set_index("Metadata_MOA")["mean_average_precision"].sort_index()
+    np.testing.assert_allclose(single_scores.to_numpy(), listed_scores.to_numpy())
+
+
+@requires_copairs
+def test_a_label_column_mixing_lists_and_scalars_is_rejected(profiles):
+    mixed = {"pert00": ["A"], "pert01": "A", "pert02": ["A", "B"], "pert03": "B", "pert04": "B"}
+    signatures = _consensus_with_moa(profiles, mixed)
+    with pytest.raises(ValueError, match="mixes list-valued and scalar"):
+        mt.tl.map(signatures, mode="consistency", annotation_key="Metadata_MOA", null_size=200)
+
+
 @requires_copairs
 def test_map_result_survives_a_round_trip(profiles, tmp_path):
     """copairs returns a ragged 'indices' column that h5ad cannot store."""
