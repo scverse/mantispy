@@ -44,9 +44,7 @@ def adata():
 
 
 def _call(adata, **kw):
-    mt.tl.aggregate_guides(
-        adata, score="p", guide="Metadata_sgRNA", gene="Metadata_Gene", control="nontargeting", **kw
-    )
+    mt.tl.aggregate_guides(adata, score="p", guide="Metadata_sgRNA", gene="Metadata_Gene", control="nontargeting", **kw)
     return adata.uns["mantispy"]["gene_aggregation"]
 
 
@@ -103,9 +101,7 @@ def test_a_singleton_gene_is_scored_against_the_single_guide_null():
     rng = np.random.default_rng(2)
     genes = ["solo"] + ["nontargeting"] * 400
     z = np.concatenate([[5.0], rng.normal(0, 1.0, 400)])
-    obs = pd.DataFrame(
-        {"Metadata_Gene": genes, "Metadata_sgRNA": [f"g{i}" for i in range(401)], "p": stats.norm.sf(z)}
-    )
+    obs = pd.DataFrame({"Metadata_Gene": genes, "Metadata_sgRNA": [f"g{i}" for i in range(401)], "p": stats.norm.sf(z)})
     table = _call(AnnData(np.zeros((401, 1), "float32"), obs=obs))
     solo = table[table["gene"] == "solo"]
     assert len(solo) == 1
@@ -115,17 +111,31 @@ def test_a_singleton_gene_is_scored_against_the_single_guide_null():
 
 def test_bad_method_and_misplaced_weight_or_direction_are_rejected(adata):
     with pytest.raises(ValueError, match="method must be one of"):
-        mt.tl.aggregate_guides(adata, score="p", guide="Metadata_sgRNA", gene="Metadata_Gene",
-                               control="nontargeting", method="median")
+        mt.tl.aggregate_guides(
+            adata, score="p", guide="Metadata_sgRNA", gene="Metadata_Gene", control="nontargeting", method="median"
+        )
     with pytest.raises(ValueError, match="weight is only supported"):
-        mt.tl.aggregate_guides(adata, score="p", guide="Metadata_sgRNA", gene="Metadata_Gene",
-                               control="nontargeting", method="fisher", weight="p")
+        mt.tl.aggregate_guides(
+            adata,
+            score="p",
+            guide="Metadata_sgRNA",
+            gene="Metadata_Gene",
+            control="nontargeting",
+            method="fisher",
+            weight="p",
+        )
     with pytest.raises(ValueError, match="direction is only supported"):
-        mt.tl.aggregate_guides(adata, score="p", guide="Metadata_sgRNA", gene="Metadata_Gene",
-                               control="nontargeting", method="fisher", direction="p")
+        mt.tl.aggregate_guides(
+            adata,
+            score="p",
+            guide="Metadata_sgRNA",
+            gene="Metadata_Gene",
+            control="nontargeting",
+            method="fisher",
+            direction="p",
+        )
 
 
 def test_a_control_label_absent_from_the_data_is_an_error(adata):
     with pytest.raises(ValueError, match="no control guide is present"):
-        mt.tl.aggregate_guides(adata, score="p", guide="Metadata_sgRNA", gene="Metadata_Gene",
-                               control="absent_label")
+        mt.tl.aggregate_guides(adata, score="p", guide="Metadata_sgRNA", gene="Metadata_Gene", control="absent_label")
