@@ -10,6 +10,7 @@ from mantispy.tl._dose import dose_direction, dose_features, dose_response, dose
 from mantispy.tl._effect import effect_size, wasserstein_features
 from mantispy.tl._empirical_fdr import empirical_fdr
 from mantispy.tl._enrich import enrich, feature_sets, rank_features, rank_sets
+from mantispy.tl._gene_aggregation import aggregate_guides
 from mantispy.tl._heterogeneity import (
     cell_cycle_phase,
     cluster_composition,
@@ -28,6 +29,7 @@ from mantispy.tl._transport import transport
 
 __all__ = [
     "aggregate",
+    "aggregate_guides",
     "cell_cycle_phase",
     "cluster",
     "cluster_composition",

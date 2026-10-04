@@ -39,6 +39,7 @@ Aggregate profiles and ask what the perturbations did.
 
     tl.hit_calling
     tl.empirical_fdr
+    tl.aggregate_guides
     tl.edistance
     tl.effect_size
     tl.wasserstein_features
