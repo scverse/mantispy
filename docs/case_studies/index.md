@@ -11,5 +11,6 @@ learned_embeddings
 cross_laboratory
 crispr
 empirical_fdr
+gene_aggregation
 plate_position
 ```
