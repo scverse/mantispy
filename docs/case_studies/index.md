@@ -12,5 +12,6 @@ cross_laboratory
 crispr
 empirical_fdr
 gene_aggregation
+scorer_benchmark
 plate_position
 ```

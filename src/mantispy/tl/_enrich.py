@@ -169,7 +169,7 @@ def enrich(
             Built from ``by`` when omitted.
         by: Passed to :func:`feature_sets` when ``net`` is not given.
         method: One of ``METHODS``.
-            ``"ulm"`` fits a linear model per set and is the usual choice; ``"mlm"`` fits all sets jointly, which handles overlapping sets; ``"ora"`` is an over-representation test on the extremes; ``"aucell"``, ``"gsea"``, ``"gsva"``, ``"zscore"``, ``"waggr"`` and ``"viper"`` are the remaining decoupler scorers.
+            The default ``"ulm"`` fits a linear model per set, which is among the best at recovering a known perturbation in decoupler's own benchmark (the scorer-benchmark case study justifies the choice); ``"mlm"`` fits all sets jointly, which handles overlapping sets; ``"ora"`` is an over-representation test on the extremes; ``"aucell"``, ``"gsea"``, ``"gsva"``, ``"zscore"``, ``"waggr"`` and ``"viper"`` are the remaining decoupler scorers.
             ``"consensus"`` runs a panel of the single methods and combines their calls, decoupler's robustness feature.
         methods: The panel for ``method="consensus"``, each entry one of the single methods (``METHODS`` without ``"consensus"``).
             Defaults to ``CONSENSUS_PANEL``.
