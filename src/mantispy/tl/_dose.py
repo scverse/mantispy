@@ -299,6 +299,7 @@ def dose_response(
     It is the product of the three weights of the ToxCast pipeline (Feshuk et al. 2023): the confidence that the curve beats a constant fit, that at least one concentration's median response clears the cutoff, and that the fitted asymptote clears it.
     The EPA reads ``hitcall >= 0.9`` as active.
     It needs controls to set a baseline and a cutoff, or an explicit ``cutoff``, and is ``NaN`` without them.
+    ``hits_row_distance`` is non-negative, so ``top`` is non-negative and the call reads activity as a rise above the cutoff; a signed response column is scored by the same arithmetic from the sign of its fitted ``top``, a path the default response never takes.
 
     The arithmetic is ported from ``tcplfit2``'s ``hitcontinner`` and ``toplikelihood``, including its Student-t error model on four degrees of freedom.
     The model set is where the numbers will differ: ``tcplfit2`` picks a winner among ten models, mantispy between two, the logistic and a line in log dose anchored at the lowest dose.
