@@ -9,7 +9,7 @@ from mantispy._core.logging import get_logger
 from mantispy._core.mutation import inplace_or_copy
 
 
-@inplace_or_copy(expects=("well", "perturbation"))
+@inplace_or_copy(expects=("well", "aggregate"))
 def network_enrichment(
     adata: AnnData,
     similarity_key: str = "similarity",

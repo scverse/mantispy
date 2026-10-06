@@ -11,7 +11,7 @@ from mantispy._core._distance import energy_distance, pairwise_sqeuclidean
 from mantispy._core._reduce import group_codes, group_offsets, representation
 from mantispy._core._stats import (
     _default_well_block,
-    _is_cell_resolution,
+    _is_object_resolution,
     _split_wells,
     benjamini_hochberg,
     permutation_pvalue,
@@ -174,7 +174,7 @@ def edistance(
         control_rows = np.sort(generator.choice(control_rows, size=max_reference, replace=False))
 
     block_codes = _default_well_block(adata, block=block)
-    if block_codes is None and block is None and _is_cell_resolution(adata):
+    if block_codes is None and block is None and _is_object_resolution(adata):
         warnings.warn(
             "edistance is at cell resolution and no usable block was given, so the null permutes single cells. "
             "Cells within a well are not independent replicates (they share the well, its plate position, seeding "

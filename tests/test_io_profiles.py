@@ -167,7 +167,7 @@ def test_a_directory_of_parquet_parts_reads_as_cells(tmp_path):
 
     adata = mt.io.read_profiles(tmp_path)
     assert adata.shape == (7, 2)
-    assert adata.uns["mantispy"]["resolution"] == "cell"
+    assert adata.uns["mantispy"]["resolution"] == "object"
     assert {"Metadata_Plate", "Metadata_Well", "Metadata_ImageNumber"} <= set(adata.obs.columns)
     assert mt.io.validate(adata).ok, mt.io.validate(adata).errors
 
@@ -222,8 +222,10 @@ def test_index_columns_name_the_observations(tmp_path):
 def test_stamp_refuses_what_the_resolution_needs_and_obs_lacks():
     """Stamping regardless would push the failure into whichever tool ran next."""
     adata = ad.AnnData(np.zeros((3, 2), dtype=np.float32), obs=pd.DataFrame(index=list("abc")))
+    with pytest.raises(ValueError, match="no resolution to stamp"):
+        mt.io.stamp(adata)  # no resolution, and the object records none
     with pytest.raises(ValueError, match=r"Metadata_Plate.*Metadata_Well"):
-        mt.io.stamp(adata)
+        mt.io.stamp(adata, resolution="well")
     with pytest.raises(ValueError, match="resolution must be one of"):
         mt.io.stamp(adata, resolution="plate")
     assert "mantispy" not in adata.uns

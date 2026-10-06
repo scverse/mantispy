@@ -114,7 +114,7 @@ def signature_convergence(
 METRICS = {"signature_stability": signature_stability, "convergence": signature_convergence}
 
 
-@inplace_or_copy(expects=("well", "perturbation"))
+@inplace_or_copy(expects=("well", "aggregate"))
 def replicate_saturation(
     adata: AnnData,
     groupby: str = "Metadata_Perturbation",
@@ -202,7 +202,7 @@ def replicate_saturation(
     return None
 
 
-@inplace_or_copy(expects=("well", "perturbation"))
+@inplace_or_copy(expects=("well", "aggregate"))
 def cytotoxicity(
     adata: AnnData,
     groupby: str = "Metadata_Perturbation",

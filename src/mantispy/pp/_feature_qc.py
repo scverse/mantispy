@@ -55,7 +55,7 @@ def intraclass_correlation(X: np.ndarray, codes: np.ndarray, n_groups: int) -> n
     return np.clip(icc, -1.0, 1.0)
 
 
-@inplace_or_copy(expects=("well", "perturbation"))
+@inplace_or_copy(expects=("well", "aggregate"))
 def feature_reproducibility(
     adata: AnnData,
     groupby: str = "Metadata_Perturbation",

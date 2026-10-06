@@ -126,7 +126,7 @@ def test_jump_export_is_an_export_directory_that_reads() -> None:
 def test_jump_cells_holds_controls_and_treatments_at_cell_resolution() -> None:
     adata = mt.ds.jump_cells()
 
-    assert adata.uns["mantispy"]["resolution"] == "cell"
+    assert adata.uns["mantispy"]["resolution"] == "object"
     assert adata.obs["Metadata_Well"].nunique() == 24
     assert adata.obs["Metadata_Site"].nunique() == 4
     assert bool(adata.obs["Metadata_Control"].any()) and not bool(adata.obs["Metadata_Control"].all())
@@ -348,7 +348,7 @@ def test_scallops_arv471_loads_clean_cell_resolution(tmp_path, monkeypatch):
     adata = _assemble_scallops_arv471()
 
     assert adata.shape == (clean, 9)
-    assert adata.uns["mantispy"]["resolution"] == "cell"
+    assert adata.uns["mantispy"]["resolution"] == "object"
     report = mt.io.validate(adata)
     assert report.ok, report.errors
     assert adata.obs_names.is_unique
@@ -454,7 +454,7 @@ def test_cp_posh_loads_clean_cell_resolution(tmp_path, monkeypatch):
     adata = _assemble_cp_posh()
 
     assert adata.shape == (cells, len(_CP_POSH_FIXTURE_FEATURES))
-    assert adata.uns["mantispy"]["resolution"] == "cell"
+    assert adata.uns["mantispy"]["resolution"] == "object"
     assert adata.X.dtype == np.float32
     report = mt.io.validate(adata)
     assert report.ok, report.errors

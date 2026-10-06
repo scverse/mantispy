@@ -616,7 +616,9 @@ def _assemble_jump_lite(model: str, annotate: bool, cache_dir: str | Path | None
     """
     adata = _profiles("jump_lite", cache_dir, select=lambda name: name == f"{model}.parquet")
     if model != "cp_measure":
+        # Every non-cp_measure jump_lite model is a learned embedding, so its axes are embedding dimensions.
         empty = empty_annotation(adata.var_names)
+        empty["feature_kind"] = "embedding"
         adata.var[empty.columns] = empty
 
     (counts_path,) = _files("jump_lite", cache_dir, select=lambda name: name == "cell_count.parquet")
@@ -832,7 +834,7 @@ def _assemble_scallops_arv471(cache_dir: str | Path | None = None) -> AnnData:
     # The raw well is a rowless integer; prefix a synthetic row letter so from_dataframe's normalize_well can pad it.
     frame["Metadata_Well"] = ("W" + df["well"].astype(int).astype(str)).to_numpy()
 
-    adata = from_dataframe(frame, resolution="cell")
+    adata = from_dataframe(frame, resolution="object")
     return _finish_guide_screen(adata, "scallops_arv471")
 
 
@@ -936,8 +938,11 @@ def _assemble_cp_posh(cache_dir: str | Path | None = None) -> AnnData:
         index=pd.Index(df["ID"].astype(str).to_numpy()),
     )
     obs = categorize_metadata(obs)
-    adata = ad.AnnData(X=df[features].to_numpy(dtype=np.float32), obs=obs, var=empty_annotation(features))
-    stamp(adata, resolution="cell")
+    # cp_posh features are CellProfiler measurements whose names do not follow the parser's grammar.
+    var = empty_annotation(features)
+    var["feature_kind"] = "measurement"
+    adata = ad.AnnData(X=df[features].to_numpy(dtype=np.float32), obs=obs, var=var)
+    stamp(adata, resolution="object")
     return _finish_guide_screen(adata, "cp_posh")
 
 
@@ -1042,7 +1047,7 @@ def _read_site(directory: Path, source: str, channels: Sequence[str]) -> AnnData
     adata = read_profiles(
         directory,
         primary_object="Cytoplasm",
-        resolution="cell",
+        resolution="object",
         channels=channels,
         index_columns=("Metadata_Plate", "Metadata_Well", "Metadata_Site", "Metadata_ObjectNumber"),
     )
@@ -1080,7 +1085,7 @@ def _assemble_cells(entry: DatasetEntry, cache_dir: str | Path | None, *, annota
     if annotate:
         adata.obs = join_jump_annotation(as_frame(adata.obs)).set_axis(adata.obs_names)
         _mark_selected(adata)
-    stamp(adata, resolution="cell")
+    stamp(adata, resolution="object")
     adata.uns["mantispy"]["dataset"] = entry.metadata["accession"]
     get_logger().info(
         "jump_cells: %d cells x %d features from %d field(s) of view in %d well(s)",

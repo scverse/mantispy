@@ -39,7 +39,7 @@ def cell_counts(
         KeyError: Profiles carry no ``count_key``.
     """
     obs = as_frame(adata.obs)
-    cells = get_resolution(adata) == "cell"
+    cells = get_resolution(adata, default="object") == "object"
     if cells:
         codes, keys = group_codes(adata, ["Metadata_Plate", "Metadata_Well"])
         counts = np.bincount(codes, minlength=len(keys))
@@ -182,7 +182,7 @@ def qc(adata: AnnData, figsize: tuple[float, float] = (12, 8)) -> np.ndarray | N
     import matplotlib.pyplot as plt
 
     figure, axes = plt.subplots(2, 2, figsize=figsize)
-    if get_resolution(adata) == "cell" or "Metadata_CellCount" in adata.obs:
+    if get_resolution(adata, default="object") == "object" or "Metadata_CellCount" in adata.obs:
         cell_counts(adata, ax=axes[0, 0])
 
     if "qc_n_nan" in adata.var:
