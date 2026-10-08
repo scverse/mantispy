@@ -15,7 +15,9 @@ from mantispy._core.masks import reference_mask
 from mantispy._core.mutation import inplace_or_copy
 
 #: Row index for each control and -1 elsewhere, so under ``mode="activity"`` replicates retrieve against controls only.
-REFERENCE_COLUMN = "Metadata_reference_index"
+# A transient per-row index of the reference set, added for copairs and dropped before return. It is
+# not metadata, so it does not wear the Metadata_ prefix (cf. the "__label__" helper column).
+REFERENCE_COLUMN = "__reference_index__"
 
 #: The copairs pairings, generic over the key names so :func:`map` and ``evaluate_integration`` share one source.
 #: ``__label__``/``__batch__``/``__annotation__`` are filled in by :func:`_resolve_mode`.
@@ -175,7 +177,7 @@ def _score_map(
     return table, group_columns
 
 
-@inplace_or_copy(expects=("well", "perturbation"))
+@inplace_or_copy(expects=("well", "aggregate"))
 def map(
     adata: AnnData,
     pos_sameby: Sequence[str] | None = None,

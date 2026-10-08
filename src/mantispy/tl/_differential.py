@@ -89,7 +89,7 @@ def _fit(values: np.ndarray, design: np.ndarray) -> tuple[np.ndarray, np.ndarray
     return coefficients[1], np.full(values.shape[1], unit), sigma2, df
 
 
-@inplace_or_copy(expects=("well", "perturbation"))
+@inplace_or_copy(expects=("well", "aggregate"))
 def differential_features(
     adata: AnnData,
     groupby: str = "Metadata_Perturbation",
@@ -149,7 +149,7 @@ def differential_features(
     """
     from scipy import stats
 
-    if get_resolution(adata) == "cell":
+    if get_resolution(adata) == "object":
         raise ValueError(
             "differential_features needs well-level profiles; testing per cell treats cells as "
             "independent replicates and inflates the false discovery rate. Aggregate first with "

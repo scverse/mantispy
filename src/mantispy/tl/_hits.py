@@ -13,7 +13,7 @@ from mantispy._core._distance import mahalanobis_transform
 from mantispy._core._reduce import group_codes, group_offsets, representation
 from mantispy._core._stats import (
     _default_well_block,
-    _is_cell_resolution,
+    _is_object_resolution,
     _split_wells,
     benjamini_hochberg,
     permutation_pvalue,
@@ -225,7 +225,7 @@ def hit_calling(
         raise ValueError(f"covariance must be one of {COVARIANCES}, got {covariance!r}")
 
     block_codes = _default_well_block(adata, block=block)
-    if block_codes is None and block is None and _is_cell_resolution(adata):
+    if block_codes is None and block is None and _is_object_resolution(adata):
         warnings.warn(
             "the object is at cell resolution and no usable block was given, so the test treats cells as "
             "independent draws. Cells within a well are not independent replicates (they share the well, "

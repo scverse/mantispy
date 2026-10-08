@@ -53,7 +53,7 @@ def gene_sets(source: str = "hallmark", organism: str = "human") -> pd.DataFrame
     return net[["source", "target", "weight"]]
 
 
-@inplace_or_copy(expects="perturbation")
+@inplace_or_copy(expects="aggregate")
 def pathway_coherence(
     adata: AnnData,
     net: pd.DataFrame,
@@ -140,7 +140,7 @@ def pathway_coherence(
     return None
 
 
-@inplace_or_copy(expects="perturbation")
+@inplace_or_copy(expects="aggregate")
 def enrich_hits(
     adata: AnnData,
     net: pd.DataFrame,

@@ -24,7 +24,7 @@ def clustered():
         obs=pd.DataFrame({"Metadata_Perturbation": [f"p{i}" for i in range(18)]}, index=[f"p{i}" for i in range(18)]),
         var=pd.DataFrame(index=[f"f{i}" for i in range(30)]),
     )
-    adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "perturbation"}
+    adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "aggregate"}
     mt.tl.cluster(adata, use_rep=None)
     return adata
 
@@ -41,6 +41,6 @@ def test_dendrogram_returns_axes_with_every_leaf(clustered):
 
 def test_dendrogram_needs_a_linkage_tree():
     adata = ad.AnnData(X=np.zeros((3, 2), dtype=np.float32))
-    adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "perturbation"}
+    adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "aggregate"}
     with pytest.raises(KeyError, match="cluster_linkage"):
         mt.pl.dendrogram(adata)

@@ -14,7 +14,7 @@ from mantispy._core.masks import feature_mask, reference_mask
 from mantispy._core.mutation import inplace_or_copy
 
 
-@inplace_or_copy(expects="cell")
+@inplace_or_copy(expects="object")
 def well_qc(
     adata: AnnData,
     min_cells: int = 50,

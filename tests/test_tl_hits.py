@@ -470,7 +470,7 @@ def _cell_adata(values, plate, well, perturbation, control, n_features):
         obs=obs,
         var=pd.DataFrame(index=[f"Cells_AreaShape_f{i}" for i in range(n_features)]),
     )
-    stamp(adata, resolution="cell")
+    stamp(adata, resolution="object")
     return adata
 
 

@@ -104,7 +104,7 @@ def _area_cells(nuclei_first: bool):
         index=[str(index) for index in range(40)],
     )
     adata = ad.AnnData(X=values, obs=obs, var=parse_feature_names(names))
-    stamp(adata, resolution="cell")
+    stamp(adata, resolution="object")
     return adata
 
 

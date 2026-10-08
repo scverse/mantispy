@@ -89,7 +89,7 @@ def consensus(
         use_rep: Reduce this ``obsm`` representation (e.g. an embedding from :func:`~mantispy.pp.tvn`/:func:`~mantispy.pp.harmony`) instead of ``X``; the result's ``X`` holds the reduced representation and ``var`` is a plain range index, since the axes are not named features.
 
     Returns:
-        A new object at ``"perturbation"`` resolution, one row per group, with ``Metadata_ReplicateCount`` and the metadata that is constant within a group.
+        A new object at ``"aggregate"`` resolution, one row per group, with ``Metadata_ReplicateCount`` and the metadata that is constant within a group.
         ``uns["mantispy"]["consensus_weights"]`` keeps the weight given to every input row, including the rows of groups dropped for having too few replicates, so a signature can be traced back to its replicates.
         Under ``method="median"`` no weights are computed and every row is recorded as 1.0, since a median is not a weighted sum.
 
@@ -139,7 +139,7 @@ def consensus(
         obs=obs.loc[keep].reset_index(drop=True).set_axis(pd.Index([str(i) for i in range(int(keep.sum()))])),
         var=var,
     )
-    stamp(result, resolution="perturbation")
+    stamp(result, resolution="aggregate", grouped_by=[by])
     result.uns["mantispy"]["consensus_weights"] = pd.DataFrame(
         {"group": [str(keys[code]) for code in codes], "weight": weights}
     )

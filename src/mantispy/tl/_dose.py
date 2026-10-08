@@ -957,7 +957,7 @@ def dose_trajectory(
             Two is its ends; more describes the path between them, and cannot add detail a short window does not have.
 
     Returns:
-        A new object of compounds by features-and-positions, at ``"perturbation"`` resolution.
+        A new object of compounds by features-and-positions, at ``"aggregate"`` resolution.
         ``var`` carries ``feature`` and ``position``, beside the schema's remaining annotation columns, left empty because a resampled path is not a measurement they describe; ``obs`` carries ``n_doses`` and the window's ends.
         Compounds whose window holds fewer than two concentrations are left out, since a single point is not a path.
 
@@ -1024,7 +1024,7 @@ def dose_trajectory(
             "can tell apart, so two positions carry the same name and the object would have duplicate "
             "var_names. Ask for fewer positions."
         )
-    var = annotation(index, feature=np.tile(labelled, n_positions), position=position)
+    var = annotation(index, feature=np.tile(labelled, n_positions), position=position, feature_kind="derived")
     result = ad.AnnData(
         X=np.array(paths, dtype=np.float32) if paths else np.empty((0, var.shape[0]), dtype=np.float32),
         obs=pd.DataFrame(records, columns=[compound_key, "n_doses", "window_low", "window_high"]).set_axis(
@@ -1032,7 +1032,7 @@ def dose_trajectory(
         ),
         var=var,
     )
-    stamp(result, resolution="perturbation")
+    stamp(result, resolution="aggregate", grouped_by=[compound_key])
     record_params(
         result,
         "dose_trajectory",

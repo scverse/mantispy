@@ -15,7 +15,7 @@ from mantispy._core._reduce import group_codes, reduce_grouped, reduced_var
 from mantispy._core.frames import as_frame, categorize_metadata
 from mantispy._core.logging import get_logger
 from mantispy._core.provenance import record_params
-from mantispy._core.schema import get_resolution, resolution_for, stamp
+from mantispy._core.schema import REQUIRED_UNS, get_resolution, resolution_for, stamp
 
 FUNCTIONS = {"median": MEDIAN, "mean": MEAN}
 
@@ -56,7 +56,7 @@ def aggregate(
         `count_key` is the number of cells behind a row, so its scope follows ``by``: grouping by site counts the cells of one field of view, grouping by well those of every field.
         Profiles contribute the cells they carry rather than one each, and profiles that carry no count give an unknown one.
         `site_key` is the number of fields that contributed cells, summed where the rows carry it and counted from ``Metadata_Site`` otherwise.
-        The resolution recorded is ``"well"`` when ``by`` holds both ``Metadata_Plate`` and ``Metadata_Well``, since a finer grouping such as one row per site is still per-well or finer, and ``"perturbation"`` otherwise.
+        The resolution recorded is ``"well"`` when ``by`` holds both ``Metadata_Plate`` and ``Metadata_Well``, since a finer grouping such as one row per site is still per-well or finer, and ``"aggregate"`` otherwise.
 
     Raises:
         ValueError: ``func`` is not one of ``FUNCTIONS``, or ``use_rep`` and ``layer`` are both given, or ``use_rep`` is not a 2-D representation in ``obsm``.
@@ -73,8 +73,9 @@ def aggregate(
     codes, _ = group_codes(adata, columns)
     frame = as_frame(adata.obs)
     tallies = {count_key: counts}
-    # The recorded resolution decides, not the column: a cell may carry its well's count as a covariate.
-    if get_resolution(adata) != "cell":
+    # The recorded resolution, not the column, decides count handling: an object may carry its well's
+    # count as a covariate. get_resolution raises on an unstamped object rather than assume object-level.
+    if get_resolution(adata) != "object":
         tallies[count_key] = np.full(len(keys), np.nan)
         for column in (count_key, site_key):
             if column in frame:
@@ -93,10 +94,10 @@ def aggregate(
 
     var = reduced_var(adata, use_rep, values.shape[1])
     result = ad.AnnData(X=values[keep].astype(np.float32), obs=obs, var=var)
-    stamp(result, resolution=resolution_for(columns))
+    stamp(result, resolution=resolution_for(columns), grouped_by=columns)
     store = adata.uns.get("mantispy", {})
     result.uns["mantispy"].update({key: deepcopy(value) for key, value in store.items() if key in _INHERITED})
-    dropped = sorted(set(store) - _INHERITED - {"resolution", "schema_version", "params"})
+    dropped = sorted(set(store) - _INHERITED - set(REQUIRED_UNS) - {"params"})
     if dropped:
         get_logger().debug("aggregate dropped %s, which describe the input rows", dropped)
     result.uns["mantispy"]["aggregated_from"] = {

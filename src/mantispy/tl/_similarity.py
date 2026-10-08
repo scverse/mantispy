@@ -52,7 +52,7 @@ def similarity_matrix(values: np.ndarray, metric: str = "cosine") -> np.ndarray:
     return matrix.astype(np.float32)
 
 
-@inplace_or_copy(expects=("well", "perturbation"))
+@inplace_or_copy(expects=("well", "aggregate"))
 def similarity(
     adata: AnnData,
     metric: str = "cosine",
@@ -106,7 +106,7 @@ def _non_replicate_pool(matrix: np.ndarray, codes: np.ndarray, block: int = 2048
     return np.concatenate(parts) if parts else np.empty(0, dtype=matrix.dtype)
 
 
-@inplace_or_copy(expects=("well", "perturbation"))
+@inplace_or_copy(expects=("well", "aggregate"))
 def percent_replicating(
     adata: AnnData,
     groupby: str = "Metadata_Perturbation",
@@ -175,7 +175,7 @@ def percent_replicating(
     return None
 
 
-@inplace_or_copy(expects=("well", "perturbation"))
+@inplace_or_copy(expects=("well", "aggregate"))
 def grit(
     adata: AnnData,
     groupby: str = "Metadata_Perturbation",

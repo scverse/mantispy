@@ -240,7 +240,7 @@ def synthetic_plate(
         obs=obs,
         var=parse_feature_names(names, channels=channels),
     )
-    stamp(adata, resolution="cell")
+    stamp(adata, resolution="object")
     adata.uns["mantispy"]["channels"] = channels
     adata.uns["mantispy"]["image_table"] = image_table
     adata.uns["mantispy"]["truth"] = truth

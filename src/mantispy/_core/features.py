@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from importlib.resources import files
 from typing import Any
 
@@ -39,9 +39,10 @@ COLUMNS = [
     "radial_bin",
     "params",
     "is_feature",
+    "feature_kind",
 ]
 
-_TEXT_COLUMNS = ["object", "feature_group", "feature", "channel", "radial_bin", "params"]
+_TEXT_COLUMNS = ["object", "feature_group", "feature", "channel", "radial_bin", "params", "feature_kind"]
 _FLOAT_COLUMNS = ["scale", "angle", "gray_levels"]
 
 NON_FEATURE_GROUPS = frozenset(
@@ -233,6 +234,15 @@ def _parse_one(name: str, channels: frozenset[str]) -> dict:
     return row
 
 
+def measurement_kind(is_feature: Iterable[Any]) -> pd.Categorical:
+    """``feature_kind`` for measured features: ``"measurement"`` where ``is_feature``, else null.
+
+    The sole source of this rule, shared by the name parser and schema migration so a measured feature
+    is tagged the same way regardless of which path built the object.
+    """
+    return pd.Categorical(["measurement" if flag else None for flag in is_feature])
+
+
 def parse_feature_names(names: Sequence[str], channels: Sequence[str] | None = None) -> pd.DataFrame:
     """Parse ``names`` into a table of feature annotations indexed by name.
 
@@ -255,6 +265,7 @@ def parse_feature_names(names: Sequence[str], channels: Sequence[str] | None = N
         channel_set = frozenset(channels if channels is not None else _infer_channels(names))
         rows = [_parse_one(str(name), channel_set) for name in names]
     parsed = pd.DataFrame(rows, index=pd.Index(names), columns=COLUMNS)
+    parsed["feature_kind"] = measurement_kind(parsed["is_feature"].fillna(False))
     for column in _TEXT_COLUMNS:
         parsed[column] = parsed[column].astype("category")
     for column in _FLOAT_COLUMNS:

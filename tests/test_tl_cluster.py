@@ -20,7 +20,7 @@ def planted():
         obs=pd.DataFrame({"Metadata_Perturbation": [f"p{i}" for i in range(24)]}, index=[str(i) for i in range(24)]),
         var=pd.DataFrame(index=[f"f{i}" for i in range(30)]),
     )
-    adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "perturbation"}
+    adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "aggregate"}
     return adata
 
 
@@ -110,7 +110,7 @@ def test_stability_criterion_does_not_over_segment_moderate_groups():
         obs=pd.DataFrame({"Metadata_Perturbation": [f"p{i}" for i in range(24)]}, index=[str(i) for i in range(24)]),
         var=pd.DataFrame(index=[f"f{i}" for i in range(12)]),
     )
-    adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "perturbation"}
+    adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "aggregate"}
 
     truth = np.repeat([0, 1, 2], 8)
     mt.tl.cluster(adata, use_rep=None, criterion="stability")
@@ -134,7 +134,7 @@ def test_stability_window_restricts_the_sweep_to_a_height_band():
         obs=pd.DataFrame({"Metadata_Perturbation": [f"p{i}" for i in range(48)]}, index=[str(i) for i in range(48)]),
         var=pd.DataFrame(index=[f"f{i}" for i in range(40)]),
     )
-    adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "perturbation"}
+    adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "aggregate"}
 
     truth = np.repeat(np.arange(6), 8)
 
@@ -174,7 +174,7 @@ def test_stability_window_lifts_the_cluster_ceiling():
         obs=pd.DataFrame({"Metadata_Perturbation": [f"p{i}" for i in range(60)]}, index=[str(i) for i in range(60)]),
         var=pd.DataFrame(index=[f"f{i}" for i in range(40)]),
     )
-    adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "perturbation"}
+    adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "aggregate"}
 
     # Reproduce the default correlation/average tree to find the 30-cluster plateau: the 30 within-pair merges are the
     # lowest heights, so between the 30th and 31st sorted merge exactly 30 clusters stand.

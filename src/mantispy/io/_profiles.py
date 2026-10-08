@@ -16,9 +16,11 @@ import pandas as pd
 from mantispy._core.features import _infer_channels, empty_annotation, parse_feature_names
 from mantispy._core.frames import as_frame, categorize_metadata
 from mantispy._core.logging import get_logger, report_drop
+from mantispy._core.masks import feature_mask
 from mantispy._core.plate import normalize_well
 from mantispy._core.provenance import record_params
 from mantispy._core.schema import (
+    FEATURE_KINDS,
     REQUIRED_OBS,
     REQUIRED_VAR,
     RESOLUTIONS,
@@ -319,7 +321,7 @@ def read_profiles(
         primary_object: For an export directory, the object one row of the result is.
         strict_one_to_one: For an export directory, raise when another object does not match the primary object exactly once.
             ``False`` keeps the first match.
-        resolution: Resolution to record, ``"cell"`` for a directory and ``"well"`` for files when omitted.
+        resolution: Resolution to record, ``"object"`` for a directory and ``"well"`` for files when omitted.
 
     Returns:
         An :class:`~anndata.AnnData` at the recorded resolution, with the parsed feature annotation in ``var``, the metadata in ``obs`` with pycytominer's per-well counts copied to ``Metadata_CellCount`` and ``Metadata_SiteCount``, and the schema stamp, the resolution, the channel vocabulary, this call's parameters and, from an export directory, the per-image quality table under ``uns["mantispy"]``.
@@ -351,7 +353,7 @@ def read_profiles(
                 "share ImageNumbers."
             )
         directory = files[0]
-        resolution = resolution or "cell"
+        resolution = resolution or "object"
         if export_prefix(directory) is not None:
             frame, image, found = read_export(directory, primary_object, objects, strict_one_to_one)
             vocabulary = vocabulary if vocabulary is not None else (found or None)
@@ -470,7 +472,14 @@ def write(adata: ad.AnnData, path: str | Path) -> None:
         adata.write_h5ad(path)
 
 
-def stamp(adata: ad.AnnData, resolution: str | None = None, copy: bool = False) -> ad.AnnData | None:
+def stamp(
+    adata: ad.AnnData,
+    resolution: str | None = None,
+    *,
+    feature_kind: str | None = None,
+    grouped_by: Sequence[str] | None = None,
+    copy: bool = False,
+) -> ad.AnnData | None:
     """Mark an :class:`~anndata.AnnData` built elsewhere as a mantispy object.
 
     Every reader here, and every tool that returns a new object, records this already.
@@ -478,9 +487,13 @@ def stamp(adata: ad.AnnData, resolution: str | None = None, copy: bool = False) 
 
     Args:
         adata: The object to stamp.
-        resolution: What one row is: ``"cell"``, ``"well"`` or ``"perturbation"``.
+        resolution: What one row is: ``"object"``, ``"well"`` or ``"aggregate"``.
             ``obs`` has to carry the columns that resolution requires.
-            The default keeps whatever resolution the object already records, and falls back to ``"well"`` for an object that records none, so re-stamping a subset does not quietly demote it.
+            ``None`` keeps whatever resolution the object already records; an object that records none must be given one, since guessing could silently mislabel it (the internal ``schema.stamp`` and ``schema.get_resolution`` also refuse to assume one).
+        feature_kind: The representation every feature carries: ``"measurement"``, ``"embedding"`` or ``"derived"``.
+            Pass it when the whole matrix is one kind (a matrix of embeddings is ``"embedding"``); it fills every feature.
+            Leave it ``None`` only when ``var["feature_kind"]`` is already complete and valid (as a mantispy-read object's is).
+        grouped_by: For ``"aggregate"`` resolution, the columns that define one row; required there since there is no default.
         copy: Return a stamped copy instead of stamping in place.
 
     Returns:
@@ -505,24 +518,62 @@ def stamp(adata: ad.AnnData, resolution: str | None = None, copy: bool = False) 
         >>> import anndata as ad
         >>> import mantispy as mt
         >>> adata = ad.AnnData(embeddings, obs=metadata)  # doctest: +SKIP
-        >>> mt.io.stamp(adata, resolution="well")  # doctest: +SKIP
+        >>> mt.io.stamp(adata, resolution="well", feature_kind="embedding")  # doctest: +SKIP
     """
+    store = adata.uns.get("mantispy", {})
+    store = store if isinstance(store, dict) else {}
     if resolution is None:
-        resolution = adata.uns.get("mantispy", {}).get("resolution", "well")
+        resolution = store.get("resolution")
+    if resolution is None:
+        raise ValueError(
+            f"no resolution to stamp; pass resolution=... (one of {RESOLUTIONS}). mt.io.stamp does not "
+            "assume one, so it cannot silently mislabel an object."
+        )
     if resolution not in RESOLUTIONS:
         raise ValueError(f"resolution must be one of {RESOLUTIONS}, got {resolution!r}")
 
-    # Checked before the copy, so a call that is going to be rejected does not duplicate X first.
+    # Every check that can fail runs before the copy, so a rejected stamp never duplicates X and never
+    # leaves adata half-stamped (non-atomic stamping was a real defect).
     missing_obs = [column for column in REQUIRED_OBS[resolution] if column not in adata.obs]
     if missing_obs:
         raise ValueError(
             f"obs is missing {missing_obs}, which every {resolution}-resolution object needs. Add the "
             "column(s), or stamp at a resolution whose requirements obs meets."
         )
+    if resolution == "aggregate" and grouped_by is None and "grouped_by" not in store:
+        raise ValueError(
+            "stamping at 'aggregate' resolution needs grouped_by=[...] naming the columns that define "
+            "one row, since there is no default and the object records none."
+        )
+    _require_feature_kind(adata, feature_kind)
 
     target = adata.copy() if copy else adata
     if absent := [column for column in REQUIRED_VAR if column not in target.var]:
         empty = empty_annotation(target.var.index)
         target.var[absent] = empty[absent]
-    _record(target, resolution=resolution)
+    if feature_kind is not None:
+        kinds = as_frame(target.var)["feature_kind"].astype("object")
+        kinds[feature_mask(target, "is_feature")] = feature_kind
+        target.var["feature_kind"] = kinds.to_numpy()
+    _record(target, resolution=resolution, grouped_by=grouped_by)
     return target if copy else None
+
+
+def _require_feature_kind(adata: ad.AnnData, feature_kind: str | None) -> None:
+    """Check (without mutating) that :func:`stamp` can give every feature a valid ``feature_kind``.
+
+    Either the caller declares a uniform kind, or ``var["feature_kind"]`` is already complete and valid.
+    mantispy never infers the kind from feature names, so an object that declares neither is refused.
+    """
+    if feature_kind is not None:
+        if feature_kind not in FEATURE_KINDS:
+            raise ValueError(f"feature_kind must be one of {FEATURE_KINDS}, got {feature_kind!r}")
+        return
+    is_feature = feature_mask(adata, "is_feature")
+    kinds = as_frame(adata.var)["feature_kind"] if "feature_kind" in adata.var else None
+    if kinds is None or (is_feature.any() and not kinds[is_feature].isin(FEATURE_KINDS).all()):
+        raise ValueError(
+            f"feature_kind is required for every feature but is missing or invalid. Pass feature_kind= "
+            f"(one of {FEATURE_KINDS}) for a uniform representation, or set adata.var['feature_kind'] per "
+            "feature before stamping; mantispy does not infer it from feature names."
+        )

@@ -121,7 +121,7 @@ def _empirical_cell_hit_rate(
         # One block per cell: whole-block resampling then draws single cells, a free cell shuffle.
         obs["__cell__"] = np.arange(controls.n_obs)
         scratch = ad.AnnData(X=values.copy(), obs=obs, var=as_frame(controls.var).copy())
-        stamp(scratch, resolution="cell")
+        stamp(scratch, resolution="object")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             for mode, block in (("well-block", well_block), ("cell-shuffle", "__cell__")):
@@ -328,11 +328,11 @@ def diagnose_testing(
     from scipy import stats
 
     resolution = adata.uns.get("mantispy", {}).get("resolution")
-    if resolution == "cell":
+    if resolution == "object":
         return _diagnose_cell(adata, groupby, reference, block, n_draws, alpha, seed, n_permutations, method)
     if resolution not in RESOLUTIONS:
-        # get_resolution would default an unstamped object to "cell" and route it to the cell path, which then
-        # cannot tell whether its wells are single cells; name the two fixes instead of a missing-column error.
+        # Read uns directly: an unstamped object cannot tell whether its wells are single cells, so name
+        # the two fixes instead of letting get_resolution raise a bare missing-resolution error.
         raise ValueError(
             "diagnose_testing cannot tell this object's resolution because it is not stamped, and the checks "
             "differ by resolution. Stamp it with mt.io.stamp(resolution=...), or aggregate single cells to "

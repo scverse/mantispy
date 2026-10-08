@@ -39,7 +39,7 @@ def _blocked_similarity(
     return similarity
 
 
-@inplace_or_copy(expects=("well", "perturbation"))
+@inplace_or_copy(expects=("well", "aggregate"))
 def nn_moa_classify(
     adata: AnnData,
     moa_key: str = "Metadata_MOA",
@@ -125,7 +125,7 @@ def nn_moa_classify(
     return None
 
 
-@inplace_or_copy(expects=("well", "perturbation"))
+@inplace_or_copy(expects=("well", "aggregate"))
 def moa_enrichment(
     adata: AnnData,
     moa_key: str = "Metadata_MOA",

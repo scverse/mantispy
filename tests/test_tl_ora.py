@@ -29,7 +29,7 @@ def screen():
         obs=pd.DataFrame({"Metadata_Gene": genes, "cluster": clusters}, index=[str(i) for i in range(30)]),
         var=pd.DataFrame(index=["a", "b", "c"]),
     )
-    adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "perturbation"}
+    adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "aggregate"}
     return adata
 
 
@@ -64,7 +64,7 @@ def test_ora_handles_a_control_with_no_gene(net):
         obs=pd.DataFrame({"Metadata_Gene": genes, "cluster": clusters}, index=[str(i) for i in range(31)]),
         var=pd.DataFrame(index=["a", "b", "c"]),
     )
-    adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "perturbation"}
+    adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "aggregate"}
     mt.tl.ora(adata, groupby="cluster", net=net, tmin=1)
     table = adata.uns["mantispy"]["ora"]
     assert "ctrl" not in set(table["group"])
@@ -99,7 +99,7 @@ def test_padj_by_group_is_less_conservative_than_pooling_every_group():
         ),
         var=pd.DataFrame(index=["a", "b", "c"]),
     )
-    adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "perturbation"}
+    adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "aggregate"}
 
     pooled, per_group = adata.copy(), adata.copy()
     mt.tl.ora(pooled, groupby="cluster", net=net, tmin=1, padj_by="all")
@@ -135,7 +135,7 @@ def test_min_overlap_scopes_the_tested_and_corrected_sets():
         ),
         var=pd.DataFrame(index=["a", "b", "c"]),
     )
-    adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "perturbation"}
+    adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "aggregate"}
 
     # 1. min_overlap=1 keeps only the sets grp's genes hit (X and Y), not the zero-overlap set Z.
     one = adata.copy()

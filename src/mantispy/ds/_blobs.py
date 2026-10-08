@@ -164,7 +164,7 @@ def blobs(
     cells_obs.index = pd.Index(cells_obs["region"].astype(str) + ":" + cells_obs["Metadata_ObjectNumber"].astype(str))
     var = parse_feature_names(list(frames[0].columns), channels=CELL_PAINTING_CHANNELS)
     table = ad.AnnData(pd.concat(frames, ignore_index=True).to_numpy(np.float32), obs=cells_obs, var=var)
-    stamp(table, resolution="cell")
+    stamp(table, resolution="object")
     tables = {
         "cells": TableModel.parse(
             table,

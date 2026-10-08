@@ -33,7 +33,7 @@ def screen():
         obs=pd.DataFrame({"Metadata_Gene": genes}, index=[str(i) for i in range(12)]),
         var=pd.DataFrame(index=[f"f{i}" for i in range(10)]),
     )
-    adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "perturbation"}
+    adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "aggregate"}
     return adata
 
 
@@ -96,7 +96,7 @@ def test_enrich_hits_uses_the_screened_genes_as_the_background():
         ),
         var=pd.DataFrame(index=["Cells_AreaShape_Area", "Cells_AreaShape_Perimeter"]),
     )
-    stamp(adata, resolution="perturbation")
+    stamp(adata, resolution="aggregate", grouped_by=["Metadata_Gene"])
 
     net = pd.DataFrame(
         {
@@ -134,7 +134,7 @@ def _screen_of_200_genes(hits_qvalue):
         ),
         var=pd.DataFrame(index=["Cells_AreaShape_Area", "Cells_AreaShape_Perimeter"]),
     )
-    stamp(adata, resolution="perturbation")
+    stamp(adata, resolution="aggregate", grouped_by=["Metadata_Gene"])
     return adata, genes
 
 

@@ -16,27 +16,30 @@ from mantispy._core.schema import REQUIRED_OBS
 MAD_TO_SIGMA = 1.4826
 
 
-def _is_cell_resolution(adata: AnnData) -> bool:
-    """Whether the object is explicitly stamped cell resolution (an unstamped object is not)."""
-    return adata.uns.get("mantispy", {}).get("resolution") == "cell"
+def _is_object_resolution(adata: AnnData) -> bool:
+    """Whether each row is one primary segmented object, i.e. explicitly stamped ``object`` resolution.
+
+    An unstamped object is not: the pseudoreplication safeguards must not assume object-level rows.
+    """
+    return adata.uns.get("mantispy", {}).get("resolution") == "object"
 
 
 def _default_well_block(adata: AnnData, *, block: str | Sequence[str] | None = None) -> np.ndarray | None:
     """Per-row codes of the design's exchangeable unit, the well, or ``None`` when there is none to draw.
 
-    A permutation null at cell resolution must resample whole wells rather than cells, since cells within a well
-    share the well and are not independent replicates. This centralizes the choice of that unit:
+    A permutation null at object resolution must resample whole wells rather than objects, since objects within a
+    well share the well and are not independent replicates. This centralizes the choice of that unit:
 
     - ``block`` given: its groups, whatever they are.
-    - otherwise, on an object stamped cell resolution that carries a complete ``(Metadata_Plate, Metadata_Well)``
-      with more than one cell in some well, the physical well.
-    - otherwise ``None``, so the caller can warn and fall back to a cell-level null.
+    - otherwise, on an object stamped ``object`` resolution that carries a complete ``(Metadata_Plate, Metadata_Well)``
+      with more than one object in some well, the physical well.
+    - otherwise ``None``, so the caller can warn and fall back to an object-level null.
     """
     if block is not None:
         return group_codes(adata, block)[0]
-    if not _is_cell_resolution(adata):
+    if not _is_object_resolution(adata):
         return None
-    well = list(REQUIRED_OBS["cell"])
+    well = list(REQUIRED_OBS["object"])
     obs = as_frame(adata.obs)
     if not set(well) <= set(adata.obs) or bool(obs[well].isna().to_numpy().any()):
         # group_codes rejects gaps, so a well column with any missing value is unusable.

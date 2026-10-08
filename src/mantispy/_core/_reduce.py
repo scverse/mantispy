@@ -63,7 +63,8 @@ def reduced_var(adata: AnnData, use_rep: str | None, n_cols: int) -> pd.DataFram
     ``use_rep`` reduces an embedding whose axes are not named features, so its ``var`` is a plain range index over ``n_cols``; otherwise the source ``var`` is carried over unchanged.
     """
     if use_rep is not None:
-        return annotation(pd.Index([str(index) for index in range(n_cols)]))
+        # The axes of a learned representation are embedding dimensions, not measurements.
+        return annotation(pd.Index([str(index) for index in range(n_cols)]), feature_kind="embedding")
     return as_frame(adata.var).copy()
 
 

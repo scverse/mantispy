@@ -142,7 +142,7 @@ def _null_wells(layout, n_controls):
         obs=obs,
         var=pd.DataFrame(index=[f"Cells_AreaShape_f{i}" for i in range(4)]),
     )
-    stamp(adata, resolution="cell")
+    stamp(adata, resolution="object")
     return adata
 
 
@@ -197,7 +197,7 @@ def _clustered_wells(layout: dict[str, dict[int, int]], n_clusters: int):
         var=pd.DataFrame(index=[f"Cells_AreaShape_f{index}" for index in range(4)]),
     )
     assert obs["leiden"].nunique() == n_clusters
-    stamp(adata, resolution="cell")
+    stamp(adata, resolution="object")
     return adata
 
 

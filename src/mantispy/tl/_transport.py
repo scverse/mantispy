@@ -95,7 +95,7 @@ def _level_pairs(frame: pd.DataFrame, levels: list[str], unit_key: str) -> dict[
     return buckets
 
 
-@inplace_or_copy(expects=("well", "perturbation"))
+@inplace_or_copy(expects=("well", "aggregate"))
 def transport(
     adata: AnnData,
     by: str | list[str] = "Metadata_Plate",

@@ -14,7 +14,7 @@ from mantispy._core._distance import pairwise_sqeuclidean
 from mantispy._core._reduce import get_matrix, group_codes, group_offsets, representation
 from mantispy._core._stats import (
     _default_well_block,
-    _is_cell_resolution,
+    _is_object_resolution,
     _split_wells,
     benjamini_hochberg,
     permutation_pvalue,
@@ -131,10 +131,12 @@ def cluster_composition(
     obs = _group_obs(adata, columns, keys, codes, {"Metadata_CellCount": cell_count})[measured]
     obs["Metadata_ClusteredCellCount"] = totals.astype(int)
     obs.index = pd.Index([str(row) for row in range(len(obs))])
-    var = annotation(pd.Index(labels), object="Cluster", feature_group="Composition", feature=labels)
+    var = annotation(
+        pd.Index(labels), object="Cluster", feature_group="Composition", feature=labels, feature_kind="derived"
+    )
 
     result = ad.AnnData(X=fractions.astype(np.float32), obs=obs, var=var)
-    stamp(result, resolution="well")
+    stamp(result, resolution="well", grouped_by=columns)
     test, dispersion = _composition_test(result, counts, reference)
     result.uns["mantispy"]["composition_test"] = test
     result.uns["mantispy"]["composition_dispersion"] = dispersion
@@ -230,7 +232,7 @@ def _composition_test(composition: AnnData, counts: np.ndarray, reference: str |
     return table, dispersion
 
 
-@inplace_or_copy(expects="cell")
+@inplace_or_copy(expects="object")
 def cell_cycle_phase(
     adata: AnnData,
     dna_feature: str | None = None,
@@ -317,7 +319,7 @@ def cell_cycle_phase(
     return None
 
 
-@inplace_or_copy(expects="cell")
+@inplace_or_copy(expects="object")
 def subpopulation_hits(
     adata: AnnData,
     cluster_key: str = "leiden",
@@ -392,7 +394,7 @@ def subpopulation_hits(
     groups = obs[groupby].astype(str).to_numpy()
 
     block_codes = _default_well_block(adata, block=block)
-    if block_codes is None and block is None and _is_cell_resolution(adata):
+    if block_codes is None and block is None and _is_object_resolution(adata):
         warnings.warn(
             "subpopulation_hits is at cell resolution with no usable well column, so its p-values come from the "
             "analytic KS approximation on cell counts. Cells within a well are not independent replicates, so "
@@ -478,7 +480,7 @@ def subpopulation_hits(
     return None
 
 
-@inplace_or_copy(expects="cell")
+@inplace_or_copy(expects="object")
 def neighbors_local_density(
     adata: AnnData,
     k: int = 15,

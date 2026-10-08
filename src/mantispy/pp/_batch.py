@@ -594,7 +594,7 @@ def _independent(design: np.ndarray) -> np.ndarray:
     return np.array(keep, dtype=int)
 
 
-@inplace_or_copy(expects=("well", "perturbation"))
+@inplace_or_copy(expects=("well", "aggregate"))
 def harmony(
     adata: AnnData,
     batch_key: str = "Metadata_Batch",

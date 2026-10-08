@@ -90,6 +90,7 @@ def feature_signature(
         wide.columns.rename(None),
         **{column: parts[column] for column in by},
         n_features=family.value_counts().reindex(wide.columns),
+        feature_kind="derived",
     )
 
     signature = ad.AnnData(
@@ -107,7 +108,7 @@ def feature_signature(
                 values = per_group[column].reindex(signature.obs_names)
                 if values.notna().any():
                     signature.obs[column] = values.to_numpy()
-    stamp(signature, resolution="perturbation")
+    stamp(signature, resolution="aggregate", grouped_by=["Metadata_Perturbation"])
     get_logger().info(
         "feature_signature: %d perturbations by %d families, from %d features",
         signature.n_obs,

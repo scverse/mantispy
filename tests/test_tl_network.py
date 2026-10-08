@@ -30,7 +30,7 @@ def _screen(gene_order, edges, seed=0):
         ),
         var=pd.DataFrame(index=[f"f{i}" for i in range(50)]),
     )
-    adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "perturbation"}
+    adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "aggregate"}
     mt.tl.similarity(adata, metric="pearson")
     return adata
 
@@ -70,6 +70,6 @@ def test_similarity_must_be_computed_first(edges):
         obs=pd.DataFrame({"Metadata_Gene": ["G0", "G1", "G2", "G3"]}, index=list("abcd")),
         var=pd.DataFrame(index=["x", "y", "z"]),
     )
-    adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "perturbation"}
+    adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "aggregate"}
     with pytest.raises(KeyError, match="similarity"):
         mt.tl.network_enrichment(adata, edges=edges)

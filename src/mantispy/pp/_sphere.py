@@ -396,7 +396,7 @@ def _symmetric_power(matrix: np.ndarray, power: float) -> np.ndarray:
     return (vectors * eigenvalues**power) @ vectors.T
 
 
-@inplace_or_copy(expects=("well", "perturbation"))
+@inplace_or_copy(expects=("well", "aggregate"))
 def tvn(
     adata: AnnData,
     batch_key: str = "Metadata_Batch",

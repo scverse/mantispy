@@ -352,7 +352,7 @@ def _cell_table(files: Sequence[Path], masks: Mapping[str, npt.NDArray], channel
         ignore_index=True,
     ).rename(columns={"ImageNumber": "Metadata_ImageNumber", "ObjectNumber": "Metadata_ObjectNumber"})
     # Guessing channels from the column names would invent entries like 'tubeness' and 'Overflow'.
-    adata = from_dataframe(frame, resolution="cell", channels=channels)
+    adata = from_dataframe(frame, resolution="object", channels=channels)
     obs = cast("pd.DataFrame", adata.obs)
     keys = obs.pop("Metadata_Key").astype(str).str.rsplit("-", n=2, expand=True)
     plates, wells, sites = (keys[i].astype(str) for i in range(3))

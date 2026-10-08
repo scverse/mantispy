@@ -44,7 +44,7 @@ def _inert_p_value(pure_noise_screen, controls_elsewhere: int) -> float:
     here.X[:, 0] += 10
     there.X[:, 1] += 10
     wells = ad.concat([here, there], keys=["P1", "P2"], index_unique=":")
-    mt.io.stamp(wells, resolution="well")
+    mt.io.stamp(wells, resolution="well", feature_kind="measurement")
     mt.tl.map(wells, mode="activity", null_size=2000)
     return float(wells.uns["mantispy"]["map"]["p_value"].item())
 
@@ -71,7 +71,7 @@ def test_a_plate_without_controls_calls_nothing_active(pure_noise_screen):
     there = pure_noise_screen(n_control=0, n_groups=1, per_group=6, n_features=12, seed=1)
     there.obs["Metadata_Plate"], there.obs["Metadata_Perturbation"] = "P2", "stranded"
     wells = ad.concat([here, there], keys=["P1", "P2"], index_unique=":")
-    mt.io.stamp(wells, resolution="well")
+    mt.io.stamp(wells, resolution="well", feature_kind="measurement")
 
     with pytest.warns(UserWarning, match="no negative pair"):
         mt.tl.map(wells, mode="activity", null_size=200)
@@ -99,7 +99,7 @@ def test_a_p_value_does_not_depend_on_earlier_calls(pure_noise_screen, tmp_path,
     other_plate.obs["Metadata_Plate"] = "P2"
     other_plate.obs["Metadata_Perturbation"] = "q" + other_plate.obs["Metadata_Perturbation"].astype(str)
     both = ad.concat([alone, other_plate], index_unique=":", keys=["P1", "P2"])
-    mt.io.stamp(both, resolution="well")
+    mt.io.stamp(both, resolution="well", feature_kind="measurement")
 
     def p_values(*objects):
         for adata in objects:

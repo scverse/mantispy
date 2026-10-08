@@ -97,7 +97,7 @@ def _stability_cut(
     return parts[best], float(grid[best]), float(smooth[best])
 
 
-@inplace_or_copy(expects="perturbation")
+@inplace_or_copy(expects="aggregate")
 def cluster(
     adata: AnnData,
     use_rep: str | None = "X_pca",
