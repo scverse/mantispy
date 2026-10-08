@@ -192,14 +192,30 @@ def build_export(tmp_path: Path, *, plate: str = PLATE, failed: str | None = Non
                     "error": error,
                 }
             )
-        obs += [{"region_key": f"{field}__Cells", "label_id": i + 1, "ImageNumber": number} for i in range(2)]
+        # ExportForSpatialData carries the schema-2.0 identity (spec §18): canonical plate and well, the
+        # source image number, the primary object type, and the object number within the image.
+        well, site = field.split("_")[0], int(field.split("_")[1])
+        obs += [
+            {
+                "Metadata_Plate": plate,
+                "Metadata_Well": well,
+                "Metadata_Site": site,
+                "Metadata_ImageNumber": number,
+                "Metadata_ObjectType": "Cells",
+                "Metadata_ObjectNumber": i + 1,
+                "region": f"{field}__Cells",
+            }
+            for i in range(2)
+        ]
 
     adata = ad.AnnData(
         np.arange(len(obs) * 3, dtype="float32").reshape(len(obs), 3),
-        obs=pd.DataFrame(obs).astype({"label_id": "int32", "ImageNumber": "int32"}),
+        obs=pd.DataFrame(obs).astype(
+            {"Metadata_Site": "int32", "Metadata_ImageNumber": "int32", "Metadata_ObjectNumber": "int32"}
+        ),
         var=pd.DataFrame(index=["Cells__AreaShape_Area", "Cells__Intensity_MeanIntensity_DNA", "Nuclei__A"]),
     )
-    adata.obs_names = [f"{str(row['region_key']).rsplit('__', 1)[0]}_{row['label_id']}" for row in obs]
+    adata.obs_names = [f"{str(row['region']).rsplit('__', 1)[0]}_{row['Metadata_ObjectNumber']}" for row in obs]
     adata.uns["cellprofiler_mapping"] = {
         "elements": pd.DataFrame(rows, columns=list(ELEMENT_COLUMNS)),
         "image_channels": pd.DataFrame(
@@ -207,9 +223,9 @@ def build_export(tmp_path: Path, *, plate: str = PLATE, failed: str | None = Non
         ),
     }
     adata.uns["spatialdata_attrs"] = {
-        "region": sorted(set(adata.obs["region_key"])),
-        "region_key": "region_key",
-        "instance_key": "label_id",
+        "region": sorted(set(adata.obs["region"])),
+        "region_key": "region",
+        "instance_key": "Metadata_ObjectNumber",
     }
     (folder / "tables").mkdir(parents=True, exist_ok=True)
     adata.write_h5ad(folder / "tables" / f"{PREFIX}.h5ad")

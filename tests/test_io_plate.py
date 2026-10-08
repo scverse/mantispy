@@ -134,7 +134,7 @@ def test_a_lazy_read_holds_no_file_descriptor(export: Path) -> None:
 
 @pytest.mark.parametrize(
     ("drop", "match"),
-    [("manifest", "ExportForSpatialData writes the manifest"), ("region_key", "region_key")],
+    [("manifest", "ExportForSpatialData writes the manifest"), ("region", "region")],
 )
 def test_a_table_the_reader_cannot_use_says_which_module_writes_one(export: Path, drop: str, match: str) -> None:
     path = export / "tables" / f"{PREFIX}.h5ad"
@@ -142,12 +142,39 @@ def test_a_table_the_reader_cannot_use_says_which_module_writes_one(export: Path
     if drop == "manifest":
         del adata.uns["cellprofiler_mapping"]["elements"]
     else:
-        del cast("pd.DataFrame", adata.obs)["region_key"]
+        del cast("pd.DataFrame", adata.obs)["region"]
         del adata.uns["spatialdata_attrs"]
     adata.write_h5ad(path)
 
     with pytest.raises(ValueError, match=match):
         mt.io.read_plate(export)
+
+
+def test_the_export_table_satisfies_the_schema_and_links_by_object_number(export: Path) -> None:
+    """The cells table meets schema 2.0 and links to its primary-object labels by region + ObjectNumber (§18, §19)."""
+    cells = mt.io.read_plate(export).tables["cells"]
+
+    mt.io.validate(cells, raise_on_error=True)
+    assert cells.uns["mantispy"]["resolution"] == "object"
+    assert (cells.var["feature_kind"] == "measurement").all()
+    assert {"region", "Metadata_ObjectNumber", "Metadata_ImageID"} <= set(cells.obs.columns)
+    assert "label_id" not in cells.obs.columns
+
+    attrs = cells.uns[sd.models.TableModel.ATTRS_KEY]
+    assert attrs["region_key"] == "region"
+    assert attrs["instance_key"] == "Metadata_ObjectNumber"
+
+
+def test_region_and_object_number_address_a_real_label_instance(export: Path) -> None:
+    """Every row's region + Metadata_ObjectNumber is an instance value present in that label element."""
+    sdata = mt.io.read_plate(export)
+    cells = sdata.tables["cells"]
+
+    region = f"{FIELDS[0]}__Cells"
+    numbers = cells.obs.loc[cells.obs["region"] == region, "Metadata_ObjectNumber"].to_numpy()
+    present = np.unique(np.asarray(sdata.labels[region]))
+    assert set(numbers.tolist()) == {1, 2}
+    assert set(numbers.tolist()) <= set(present.tolist())
 
 
 def test_an_export_root_is_read_through_its_plate_folders(export: Path, make_export) -> None:
