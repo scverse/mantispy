@@ -19,8 +19,8 @@ IMAGE_CHANNELS = "image_channels"
 ELEMENT_IMAGE = "image"
 ELEMENT_LABELS = "labels"
 STATUS_OK = "ok"
-REGION_KEY = "region_key"
-INSTANCE_KEY = "label_id"
+REGION_KEY = "region"
+INSTANCE_KEY = "Metadata_ObjectNumber"
 
 # CellProfiler narrows label arrays to the object count, so fields of one plate would otherwise disagree.
 LABEL_DTYPE = np.uint32
@@ -101,11 +101,14 @@ def read_cellprofiler_export(path: Path | str, *, lazy: bool = True) -> SpatialD
 
     Raises:
         FileNotFoundError: No table under ``path/tables``, or the manifest names an array that is not there.
-        ValueError: Several tables under ``path/tables``, or the table carries no element manifest, or it has no ``region_key`` column to join its rows onto the label arrays.
+        ValueError: Several tables under ``path/tables``, or the table carries no element manifest, or it has no ``region`` column to join its rows onto the label arrays, or it does not satisfy the schema at object resolution.
     """
     from spatialdata import SpatialData
     from spatialdata.models import Image2DModel, Labels2DModel, TableModel
     from spatialdata.transformations import Identity
+
+    from mantispy._core.schema import validate
+    from mantispy.io._profiles import stamp
 
     plate = Path(path)
     adata = ad.read_h5ad(_table_path(plate))
@@ -139,6 +142,10 @@ def read_cellprofiler_export(path: Path | str, *, lazy: bool = True) -> SpatialD
         regions = sorted(set(named.tolist()) & set(labels))
         table = adata[np.isin(named, regions)].copy()
         table.obs[REGION_KEY] = pd.Categorical(np.asarray(table.obs[REGION_KEY], dtype=str), categories=regions)
+        # The export carries the identity columns (spec §18); stamp mints Metadata_ImageID from them and
+        # tags the measurements. The table must satisfy the schema before it becomes a SpatialData table (§19).
+        stamp(table, resolution="object", feature_kind="measurement")
+        validate(table, raise_on_error=True)
         # TableModel.parse refuses to run while ATTRS_KEY is still set.
         table.uns.pop(TableModel.ATTRS_KEY, None)
         tables["cells"] = TableModel.parse(table, region=regions, region_key=REGION_KEY, instance_key=INSTANCE_KEY)
