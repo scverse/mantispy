@@ -277,7 +277,8 @@ def make_image_id(obs: pd.DataFrame) -> np.ndarray:
             f"cannot mint Metadata_ImageID: {incomplete} contain missing values; fill them before "
             "stamping at object resolution."
         )
-    return block.astype(str).agg("|".join, axis=1).to_numpy(dtype=object)
+    rows = block.astype(str).to_numpy()
+    return np.array(["|".join(row) for row in rows], dtype=object)
 
 
 def object_number_within(image_id: np.ndarray | pd.Series) -> np.ndarray:
