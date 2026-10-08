@@ -250,3 +250,19 @@ def test_stamp_leaves_an_annotation_that_is_already_there_alone():
     for column in parsed.columns:
         # .equals, not ==: a column the parser left empty holds NaN, which is not equal to itself.
         assert obj.var[column].equals(var[column]), f"{column} kept what the parser found"
+
+
+def test_stamp_mints_object_identity_for_an_external_object():
+    """mt.io.stamp(resolution="object") must accept an externally built object, minting its identity."""
+    obj = ad.AnnData(
+        np.ones((4, 2), dtype=np.float32),
+        obs=pd.DataFrame(
+            {"Metadata_Plate": ["P1"] * 4, "Metadata_Well": ["A01", "A01", "A02", "A02"]},
+            index=[str(i) for i in range(4)],
+        ),
+        var=parse_feature_names(["Cells_AreaShape_Area", "Cells_Intensity_MeanIntensity_DNA"], channels=["DNA"]),
+    )
+    mt.io.stamp(obj, resolution="object")
+    assert {"Metadata_ImageID", "Metadata_ObjectType", "Metadata_ObjectNumber"} <= set(obj.obs.columns)
+    assert not obj.obs[["Metadata_ImageID", "Metadata_ObjectNumber"]].duplicated().any()
+    assert mt.io.validate(obj).ok, mt.io.validate(obj).errors

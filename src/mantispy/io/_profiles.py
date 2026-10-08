@@ -21,6 +21,7 @@ from mantispy._core.plate import normalize_well
 from mantispy._core.provenance import record_params
 from mantispy._core.schema import (
     FEATURE_KINDS,
+    OBJECT_IDENTITY,
     REQUIRED_OBS,
     REQUIRED_VAR,
     RESOLUTIONS,
@@ -273,10 +274,9 @@ def _image_table(image: pd.DataFrame, obs: pd.DataFrame) -> pd.DataFrame:
     """
     quality = [c for c in image.columns if "ImageQuality" in c]
     table = image[["ImageNumber", *quality]].set_index("ImageNumber")
+    present = [c for c in ("Metadata_Plate", "Metadata_Well", "Metadata_Site") if c in obs.columns]
     by_number = obs.groupby("Metadata_ImageNumber", observed=True)
-    if present := [c for c in ("Metadata_Plate", "Metadata_Well", "Metadata_Site") if c in obs.columns]:
-        table = table.join(by_number[present].first(), how="left")
-    table = table.join(by_number["Metadata_ImageID"].first(), how="left")
+    table = table.join(by_number[[*present, "Metadata_ImageID"]].first(), how="left")
     return table.dropna(subset=["Metadata_ImageID"]).set_index("Metadata_ImageID")
 
 
@@ -542,7 +542,14 @@ def stamp(
 
     # Every check that can fail runs before the copy, so a rejected stamp never duplicates X and never
     # leaves adata half-stamped (non-atomic stamping was a real defect).
-    missing_obs = [column for column in REQUIRED_OBS[resolution] if column not in adata.obs]
+    minted: dict[str, np.ndarray] = {}
+    if resolution == "object":
+        # Mint the object-identity columns so an externally built object stamps like a reader-produced
+        # one; done on a copy here, it raises now (pre-mutation) if obs carries no source identity.
+        identity = ensure_object_identity(as_frame(adata.obs).copy())
+        minted = {column: identity[column].to_numpy() for column in OBJECT_IDENTITY}
+    present = set(adata.obs.columns) | set(minted)
+    missing_obs = [column for column in REQUIRED_OBS[resolution] if column not in present]
     if missing_obs:
         raise ValueError(
             f"obs is missing {missing_obs}, which every {resolution}-resolution object needs. Add the "
@@ -556,6 +563,8 @@ def stamp(
     _require_feature_kind(adata, feature_kind)
 
     target = adata.copy() if copy else adata
+    for column, values in minted.items():
+        target.obs[column] = values
     if absent := [column for column in REQUIRED_VAR if column not in target.var]:
         empty = empty_annotation(target.var.index)
         target.var[absent] = empty[absent]

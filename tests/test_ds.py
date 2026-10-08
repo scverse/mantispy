@@ -142,7 +142,8 @@ def test_jump_cells_keeps_the_quality_of_every_field_and_where_each_cell_sits() 
     images = adata.uns["mantispy"]["image_table"]
 
     assert len(images) == 24 * 4 and images.index.is_unique
-    assert adata.obs["Metadata_ImageNumber"].isin(images.index).all()
+    assert images.index.name == "Metadata_ImageID"
+    assert adata.obs["Metadata_ImageID"].isin(images.index).all()
     assert np.isfinite(as_frame(adata.obs)[["Metadata_Center_X", "Metadata_Center_Y"]].to_numpy(dtype=float)).all()
     assert not any("_Center_" in name for name in adata.var_names)
 

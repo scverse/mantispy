@@ -47,15 +47,16 @@ RESOLUTIONS = ("object", "well", "aggregate")
 #: Old (schema 1.0) resolution names :func:`migrate` translates to the current ones.
 RESOLUTION_RENAMES: dict[str, str] = {"cell": "object", "perturbation": "aggregate"}
 
+#: The obs columns that identify one primary object, filled by :func:`ensure_object_identity`.
+OBJECT_IDENTITY = ("Metadata_ImageID", "Metadata_ObjectType", "Metadata_ObjectNumber")
+
 #: Allowed values of ``var["feature_kind"]``: a directly measured morphology feature, a
 #: learned-embedding dimension, or a feature a mantispy transformation produced (composition,
 #: signature, trajectory). The name parser only produces ``measurement``.
 FEATURE_KINDS = ("measurement", "embedding", "derived")
 
 #: Identifier columns required in ``obs``, per resolution. An object-level row must be identifiable
-#: without parsing ``obs_names``: ``Metadata_ImageID`` says which field of view it came from,
-#: ``Metadata_ObjectType`` names the primary object set, and ``Metadata_ObjectNumber`` is the instance
-#: number within the image; the pair ``(Metadata_ImageID, Metadata_ObjectNumber)`` is unique.
+#: without parsing ``obs_names``; the pair ``(Metadata_ImageID, Metadata_ObjectNumber)`` is unique.
 REQUIRED_OBS: dict[str, tuple[str, ...]] = {
     "object": ("Metadata_Plate", "Metadata_Well", "Metadata_ImageID", "Metadata_ObjectType", "Metadata_ObjectNumber"),
     "well": ("Metadata_Plate", "Metadata_Well"),
@@ -267,8 +268,16 @@ def make_image_id(obs: pd.DataFrame) -> np.ndarray:
             f"cannot mint Metadata_ImageID: obs carries none of {_IMAGE_ID_COLUMNS}. Add a source "
             "identity column (e.g. Metadata_Plate) before stamping at object resolution."
         )
-    parts = [obs[column].astype(str).to_numpy() for column in columns]
-    return np.array(["|".join(values) for values in zip(*parts, strict=True)], dtype=object)
+    block = obs[columns]
+    if block.isna().to_numpy().any():
+        # astype(str) would otherwise stringify a NaN into the id, so refuse clearly rather than build a
+        # "nan"-bearing identifier that silently collides or breaks the join.
+        incomplete = [column for column in columns if block[column].isna().any()]
+        raise ValueError(
+            f"cannot mint Metadata_ImageID: {incomplete} contain missing values; fill them before "
+            "stamping at object resolution."
+        )
+    return block.astype(str).agg("|".join, axis=1).to_numpy(dtype=object)
 
 
 def object_number_within(image_id: np.ndarray | pd.Series) -> np.ndarray:
@@ -555,6 +564,23 @@ def validate(adata: AnnData, *, raise_on_error: bool = False) -> ValidationRepor
     return report
 
 
+def _rekey_legacy_image_table(store: dict, identity: pd.DataFrame) -> None:
+    """Re-key a 1.0 ``image_table`` from the source image number to ``Metadata_ImageID`` (spec 8).
+
+    A 1.0 export keyed the table by the integer CellProfiler image number; under 2.0 obs joins to it
+    through ``Metadata_ImageID``, so the two would otherwise be disjoint. Only re-keys when obs still
+    carries ``Metadata_ImageNumber`` to map through and every table row maps.
+    """
+    table = store.get("image_table")
+    if not isinstance(table, pd.DataFrame) or table.index.name == "Metadata_ImageID":
+        return
+    if "Metadata_ImageNumber" not in identity:
+        return
+    mapping = identity.groupby("Metadata_ImageNumber", observed=True)["Metadata_ImageID"].first().to_dict()
+    if set(table.index) <= set(mapping):
+        store["image_table"] = table.rename(index=mapping).rename_axis("Metadata_ImageID")
+
+
 def migrate(adata: AnnData, copy: bool = False) -> AnnData | None:
     """Bring an object written by an earlier mantispy up to :data:`SCHEMA_VERSION`.
 
@@ -620,19 +646,15 @@ def migrate(adata: AnnData, copy: bool = False) -> AnnData | None:
             )
         feature_kind = measurement_kind(is_feature)
 
-    # Object identity (M2): derive the fields a 1.0 object predates. make_image_id raises clearly when
-    # obs carries no source identity at all, matching migrate's "correctness over a silent guess" stance.
-    image_id = object_type = object_number = None
-    if resolution == "object":
-        obs = as_frame(target.obs)
-        image_id = obs["Metadata_ImageID"].to_numpy() if "Metadata_ImageID" in obs else make_image_id(obs)
-        object_number = (
-            obs["Metadata_ObjectNumber"].to_numpy()
-            if "Metadata_ObjectNumber" in obs
-            else object_number_within(image_id)
-        )
-        # The primary-object set was never recorded on a 1.0 object; "Object" is an honest, generic name.
-        object_type = obs["Metadata_ObjectType"].to_numpy() if "Metadata_ObjectType" in obs else "Object"
+    # Object identity (M2): derive the columns a 1.0 object predates. ensure_object_identity mints the
+    # opaque image id on a copy now (raising clearly when obs carries no source identity, matching
+    # migrate's "correctness over a silent guess" stance) so a rejected migration writes nothing; the
+    # primary-object set was never recorded on a 1.0 object, so it defaults to the generic "Object".
+    identity = ensure_object_identity(as_frame(target.obs).copy()) if resolution == "object" else None
+    if identity is not None and identity[["Metadata_ImageID", "Metadata_ObjectNumber"]].duplicated().any():
+        # A 1.0 object can carry a per-image ObjectNumber while its only source identity is plate/well,
+        # so the coarse image id collapses distinct images and the pair collides; renumber within image.
+        identity["Metadata_ObjectNumber"] = object_number_within(identity["Metadata_ImageID"].to_numpy())
 
     store = target.uns.setdefault("mantispy", {})
     store["schema_version"] = SCHEMA_VERSION
@@ -642,10 +664,10 @@ def migrate(adata: AnnData, copy: bool = False) -> AnnData | None:
     store["grouped_by"] = grouped_by
     if feature_kind is not None:
         target.var["feature_kind"] = feature_kind
-    if resolution == "object":
-        target.obs["Metadata_ImageID"] = image_id
-        target.obs["Metadata_ObjectType"] = object_type
-        target.obs["Metadata_ObjectNumber"] = object_number
+    if identity is not None:
+        for column in OBJECT_IDENTITY:
+            target.obs[column] = identity[column].to_numpy()
+        _rekey_legacy_image_table(store, identity)
 
     get_logger().info("migrated an object from schema %s to %s", seen, SCHEMA_VERSION)
     return target if copy else None

@@ -39,8 +39,7 @@ def _default_well_block(adata: AnnData, *, block: str | Sequence[str] | None = N
         return group_codes(adata, block)[0]
     if not _is_object_resolution(adata):
         return None
-    # The exchangeable unit is the physical well (plate + well), not the object-resolution identity,
-    # which now also carries the per-object image/type/number columns.
+    # The exchangeable unit is the physical well (plate + well), not the per-object identity.
     well = list(REQUIRED_OBS["well"])
     obs = as_frame(adata.obs)
     if not set(well) <= set(adata.obs) or bool(obs[well].isna().to_numpy().any()):

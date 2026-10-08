@@ -99,7 +99,7 @@ def test_local_density_is_computed_within_a_field(clustered):
     assert np.isfinite(density).all() and (density > 0).all()
 
     # A cell alone in its field has no neighbours and gets NaN.
-    clustered.obs["Metadata_ImageNumber"] = np.arange(clustered.n_obs)
+    clustered.obs["Metadata_ImageID"] = [str(i) for i in range(clustered.n_obs)]
     mt.tl.neighbors_local_density(clustered, k=5)
     assert clustered.obs["Metadata_LocalDensity"].isna().all()
 

@@ -34,7 +34,9 @@ def test_image_qc_recovers_the_injected_bad_images(imaged, method):
 def test_image_qc_broadcasts_and_filters(imaged):
     mt.pp.image_qc(imaged)
     bad = imaged.uns["mantispy"]["truth"]["bad_images"]
-    assert not imaged.obs.loc[imaged.obs["Metadata_ImageID"].isin(bad), "qc_image_pass"].any()
+    in_bad = imaged.obs["Metadata_ImageID"].isin(bad)
+    assert len(bad) > 0 and in_bad.any(), "fixture must have cells in the injected bad images for this to mean anything"
+    assert not imaged.obs.loc[in_bad, "qc_image_pass"].any()
 
     n_failing = int((~imaged.obs["qc_image_pass"]).sum())
     assert mt.pp.filter_images(imaged, copy=True).n_obs == imaged.n_obs - n_failing

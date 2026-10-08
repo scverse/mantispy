@@ -101,6 +101,9 @@ def test_related_object_numbers_survive_a_cp_read(tmp_path, make_cellprofiler_di
     adata = mt.io.read_profiles(directory)
     assert "Metadata_NucleiObjectNumber" in adata.obs.columns
     assert adata.obs["Metadata_NucleiObjectNumber"].notna().all()
+    # The builder links each cell to the nucleus carrying the same object number, so the preserved
+    # value equals the parent link rather than being lost or constant.
+    assert (adata.obs["Metadata_NucleiObjectNumber"].to_numpy() == adata.obs["Metadata_ObjectNumber"].to_numpy()).all()
 
 
 def test_image_table_joins_one_to_one_on_image_id(cellprofiler_dir):

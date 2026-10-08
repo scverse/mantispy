@@ -209,7 +209,6 @@ def synthetic_plate(
         image_table.loc[bad_images, slope] += BAD_IMAGE_SHIFT * _IMAGE_QC_METRICS["PowerLogLogSlope"][1]
         degraded = obs["Metadata_ImageNumber"].isin(bad_images).to_numpy()
         X[degraded] += rng.normal(0.0, 2.0, (int(degraded.sum()), n_features))
-    truth["bad_images"] = bad_images
 
     correlated_pairs: list[tuple[str, str]] = []
     if n_correlated_pairs:
@@ -247,8 +246,7 @@ def synthetic_plate(
     # Plate|Well|ImageNumber, the same make_image_id builds for its cells.
     image_table = image_table.reset_index().rename(columns={"ImageNumber": "Metadata_ImageNumber"})
     image_table["Metadata_ImageID"] = make_image_id(image_table)
-    number_to_id = dict(zip(image_table["Metadata_ImageNumber"], image_table["Metadata_ImageID"], strict=True))
-    truth["bad_images"] = [number_to_id[number] for number in bad_images]
+    truth["bad_images"] = image_table.set_index("Metadata_ImageNumber")["Metadata_ImageID"].loc[bad_images].tolist()
     adata.uns["mantispy"]["image_table"] = image_table.set_index("Metadata_ImageID")
     adata.uns["mantispy"]["truth"] = truth
     return adata

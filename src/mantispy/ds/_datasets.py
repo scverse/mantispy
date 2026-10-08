@@ -958,7 +958,7 @@ def _assemble_cp_posh(cache_dir: str | Path | None = None) -> AnnData:
     )
     obs = categorize_metadata(obs)
     # cp-POSH ships per-cell rows with no source image or object number; the finest field identity it
-    # carries is the well, so Metadata_ImageID is Plate|Well and the object number runs within it.
+    # carries is the well.
     ensure_object_identity(obs, "Cells")
     # cp_posh features are CellProfiler measurements whose names do not follow the parser's grammar.
     var = empty_annotation(features)
