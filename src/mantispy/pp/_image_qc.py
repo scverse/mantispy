@@ -88,7 +88,7 @@ def image_qc(
     """Flag low-quality images and broadcast the verdict onto their cells.
 
     Args:
-        adata: Object carrying ``uns["mantispy"]["image_table"]`` and ``obs["Metadata_ImageNumber"]``.
+        adata: Object carrying ``uns["mantispy"]["image_table"]`` and ``obs["Metadata_ImageID"]``.
         metrics: Which MeasureImageQuality metrics to use.
         channel: Restrict to one channel's metrics.
             ``None`` uses every channel present.
@@ -106,7 +106,7 @@ def image_qc(
         Writes ``uns["mantispy"]["image_qc"]`` (the image table plus ``qc_image_score`` and ``qc_image_pass``) and broadcasts ``obs["qc_image_pass"]``.
 
     Raises:
-        KeyError: If the image table is missing, holds none of the requested metrics, or lacks the ``by`` column, or ``obs`` has no ``Metadata_ImageNumber`` to broadcast onto.
+        KeyError: If the image table is missing, holds none of the requested metrics, or lacks the ``by`` column, or ``obs`` has no ``Metadata_ImageID`` to broadcast onto.
         ValueError: If ``method`` is unknown, or some images have no value in ``by``.
     """
     if method not in METHODS:
@@ -159,13 +159,13 @@ def image_qc(
     table["qc_image_score"] = score
     table["qc_image_pass"] = passed
 
-    if "Metadata_ImageNumber" not in adata.obs:
-        raise KeyError("obs has no 'Metadata_ImageNumber' column to broadcast image QC onto")
-    broadcast = adata.obs["Metadata_ImageNumber"].map(table["qc_image_pass"])
+    if "Metadata_ImageID" not in adata.obs:
+        raise KeyError("obs has no 'Metadata_ImageID' column to broadcast image QC onto")
+    broadcast = adata.obs["Metadata_ImageID"].map(table["qc_image_pass"])
     n_missing = int(broadcast.isna().sum())
     if n_missing:
         warnings.warn(
-            f"{n_missing} cells have an ImageNumber not present in the image table; treating them as passing",
+            f"{n_missing} cells have an ImageID not present in the image table; treating them as passing",
             UserWarning,
             stacklevel=3,
         )

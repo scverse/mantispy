@@ -13,6 +13,7 @@ from pathlib import Path
 import pandas as pd
 
 from mantispy._core.logging import get_logger
+from mantispy._core.schema import make_image_id
 
 _KEYS = ("ImageNumber", "ObjectNumber")
 _FILENAME_RE = re.compile(r"^(?:Image_)?FileName_(.+)$")
@@ -88,7 +89,9 @@ def _join_child(merged: pd.DataFrame, child: pd.DataFrame, primary: str, obj: st
     primary_link, child_link = _link_columns(merged, child, primary, obj)
 
     left = pd.DataFrame({"ImageNumber": merged["ImageNumber"], "_link": primary_link.to_numpy()})
-    right = child.assign(_link=child_link.to_numpy()).drop(columns=["ObjectNumber"], errors="ignore")
+    # Keep the child's own object number as Metadata_<obj>ObjectNumber rather than dropping it: nuclei
+    # and cytoplasm need not share the primary object's instance number (spec 5.4).
+    right = child.assign(_link=child_link.to_numpy()).rename(columns={"ObjectNumber": f"Metadata_{obj}ObjectNumber"})
 
     counts = right.groupby(["ImageNumber", "_link"], dropna=False).size()
     wanted = pd.MultiIndex.from_frame(left)
@@ -162,8 +165,7 @@ def read_export(
             if source in table.columns:
                 table[f"Metadata_Center_{axis}"] = table[source].to_numpy()
                 break
-    return (
-        table.rename(columns={key: f"Metadata_{key}" for key in _KEYS}),
-        image,
-        infer_channels(image, list(table.columns)),
-    )
+    table = table.rename(columns={key: f"Metadata_{key}" for key in _KEYS})
+    table["Metadata_ObjectType"] = primary_object
+    table["Metadata_ImageID"] = make_image_id(table)
+    return table, image, infer_channels(image, list(table.columns))

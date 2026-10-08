@@ -9,7 +9,7 @@ import pandas as pd
 from mantispy._core.features import parse_feature_names
 from mantispy._core.frames import categorize_metadata
 from mantispy._core.plate import PLATE_FORMATS, well_col, well_name, well_row
-from mantispy._core.schema import stamp
+from mantispy._core.schema import ensure_object_identity, make_image_id, stamp
 
 #: The Cell Painting channels; no other code assumes these names.
 DEFAULT_CHANNELS = ("DNA", "ER", "RNA", "AGP", "Mito")
@@ -234,6 +234,7 @@ def synthetic_plate(
         X[rng.random(X.shape) < nan_fraction] = np.nan
 
     obs = categorize_metadata(obs)
+    ensure_object_identity(obs, "Cells")
     obs.index = pd.Index([f"cell_{i}" for i in range(len(obs))])
     adata = ad.AnnData(
         X=X.astype(np.float32),
@@ -242,6 +243,12 @@ def synthetic_plate(
     )
     stamp(adata, resolution="object")
     adata.uns["mantispy"]["channels"] = channels
-    adata.uns["mantispy"]["image_table"] = image_table
+    # Key the image table by Metadata_ImageID to match obs and the schema check; the id of an image is
+    # Plate|Well|ImageNumber, the same make_image_id builds for its cells.
+    image_table = image_table.reset_index().rename(columns={"ImageNumber": "Metadata_ImageNumber"})
+    image_table["Metadata_ImageID"] = make_image_id(image_table)
+    number_to_id = dict(zip(image_table["Metadata_ImageNumber"], image_table["Metadata_ImageID"], strict=True))
+    truth["bad_images"] = [number_to_id[number] for number in bad_images]
+    adata.uns["mantispy"]["image_table"] = image_table.set_index("Metadata_ImageID")
     adata.uns["mantispy"]["truth"] = truth
     return adata

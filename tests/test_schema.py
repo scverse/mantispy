@@ -10,6 +10,7 @@ from mantispy._core.schema import (
     RESOLUTIONS,
     SCHEMA_STATUS,
     SCHEMA_VERSION,
+    ensure_object_identity,
     get_resolution,
     migrate,
     stamp,
@@ -20,14 +21,12 @@ from mantispy._core.schema import (
 @pytest.fixture
 def adata():
     names = ["Cells_AreaShape_Area", "Cells_Intensity_MeanIntensity_DNA"]
-    obj = ad.AnnData(
-        X=np.ones((4, 2), dtype=np.float32),
-        obs=pd.DataFrame(
-            {"Metadata_Plate": ["P1"] * 4, "Metadata_Well": ["A01", "A01", "A02", "A02"]},
-            index=[f"c{i}" for i in range(4)],
-        ),
-        var=parse_feature_names(names, channels=["DNA"]),
+    obs = pd.DataFrame(
+        {"Metadata_Plate": ["P1"] * 4, "Metadata_Well": ["A01", "A01", "A02", "A02"]},
+        index=[f"c{i}" for i in range(4)],
     )
+    ensure_object_identity(obs, "Cells")
+    obj = ad.AnnData(X=np.ones((4, 2), dtype=np.float32), obs=obs, var=parse_feature_names(names, channels=["DNA"]))
     stamp(obj, resolution="object")
     return obj
 
@@ -386,11 +385,9 @@ def test_raise_on_error(adata):
 
 
 def test_warns_but_passes_when_nothing_is_a_feature():
-    obj = ad.AnnData(
-        X=np.ones((2, 1), dtype=np.float32),
-        obs=pd.DataFrame({"Metadata_Plate": ["P"] * 2, "Metadata_Well": ["A01", "A02"]}, index=["0", "1"]),
-        var=parse_feature_names(["Metadata_Plate"]),
-    )
+    obs = pd.DataFrame({"Metadata_Plate": ["P"] * 2, "Metadata_Well": ["A01", "A02"]}, index=["0", "1"])
+    ensure_object_identity(obs, "Cells")
+    obj = ad.AnnData(X=np.ones((2, 1), dtype=np.float32), obs=obs, var=parse_feature_names(["Metadata_Plate"]))
     stamp(obj, resolution="object")
     report = validate(obj)
     assert report.ok
@@ -482,6 +479,42 @@ def test_migrate_translates_the_old_resolution_names(old, new):
     obj.uns["mantispy"] = store
     migrate(obj)
     assert obj.uns["mantispy"]["resolution"] == new
+
+
+def test_migrate_derives_object_identity_from_a_1_0_object():
+    """A 1.0 cell object predates ImageID/ObjectType; migrate derives them so it validates at object resolution."""
+    obs = pd.DataFrame({"Metadata_Plate": ["P1"] * 3, "Metadata_Well": ["A01", "A01", "A02"]}, index=["0", "1", "2"])
+    obj = ad.AnnData(
+        X=np.ones((3, 1), dtype=np.float32),
+        obs=obs,
+        var=parse_feature_names(["Cells_AreaShape_Area"]).drop(columns="feature_kind"),
+    )
+    obj.uns["mantispy"] = {"schema_version": "1.0", "resolution": "cell"}
+    migrate(obj)
+    assert {"Metadata_ImageID", "Metadata_ObjectType", "Metadata_ObjectNumber"} <= set(obj.obs.columns)
+    assert not obj.obs[["Metadata_ImageID", "Metadata_ObjectNumber"]].duplicated().any()
+    assert validate(obj).ok, validate(obj).errors
+
+
+def test_migrate_raises_when_an_object_has_no_source_identity():
+    """With no plate/well/site/image/source column there is nothing to mint an opaque image id from."""
+    obj = ad.AnnData(
+        X=np.ones((2, 1), dtype=np.float32),
+        obs=pd.DataFrame(index=["0", "1"]),
+        var=parse_feature_names(["Cells_AreaShape_Area"]).drop(columns="feature_kind"),
+    )
+    obj.uns["mantispy"] = {"schema_version": "1.0", "resolution": "cell"}
+    with pytest.raises(ValueError, match="Metadata_ImageID"):
+        migrate(obj)
+
+
+def test_validate_rejects_a_duplicate_image_object_pair(adata):
+    """At object resolution the (image, object) pair must identify one primary object."""
+    adata.obs["Metadata_ImageID"] = "one-image"
+    adata.obs["Metadata_ObjectNumber"] = [1, 1, 2, 3]
+    report = validate(adata)
+    assert not report.ok
+    assert any("not unique" in error for error in report.errors), report.errors
 
 
 def test_migrate_refuses_to_guess_feature_kind_without_cellprofiler_annotation():

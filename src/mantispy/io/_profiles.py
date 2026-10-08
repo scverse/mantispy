@@ -26,6 +26,7 @@ from mantispy._core.schema import (
     RESOLUTIONS,
     SCHEMA_VERSION,
     SUPPORTED_VERSIONS,
+    ensure_object_identity,
     migrate,
     validate,
 )
@@ -212,6 +213,10 @@ def from_dataframe(
     if "Metadata_Well" in obs:
         obs["Metadata_Well"] = [normalize_well(well) for well in obs["Metadata_Well"].astype(str)]
     obs = categorize_metadata(_adopt_counts(obs))
+    if resolution == "object":
+        # Mint any object identity the frame lacks (a CytoTable parquet carries image/object numbers but
+        # no Metadata_ImageID/ObjectType); a CellProfiler export already set them, so this leaves them.
+        obs = ensure_object_identity(obs)
     obs.index = pd.Index([str(i) for i in range(len(obs))])
 
     adata = ad.AnnData(X=X, obs=obs, var=parsed.loc[feature_names])
@@ -261,15 +266,18 @@ def _join_platemap(obs: pd.DataFrame, platemap: str | Path | pd.DataFrame) -> pd
 
 
 def _image_table(image: pd.DataFrame, obs: pd.DataFrame) -> pd.DataFrame:
-    """Per-image quality measurements, keyed by ImageNumber and carrying plate/well.
+    """Per-image quality measurements, keyed by ``Metadata_ImageID`` and carrying plate/well.
 
     The plate and well columns let :func:`~mantispy.pp.image_qc` threshold per plate instead of pooling every plate together.
+    Keyed by the canonical opaque image id (spec 8), so image QC broadcasts back onto ``obs`` through it; images that produced no object have no id and are dropped.
     """
     quality = [c for c in image.columns if "ImageQuality" in c]
     table = image[["ImageNumber", *quality]].set_index("ImageNumber")
+    by_number = obs.groupby("Metadata_ImageNumber", observed=True)
     if present := [c for c in ("Metadata_Plate", "Metadata_Well", "Metadata_Site") if c in obs.columns]:
-        table = table.join(obs.groupby("Metadata_ImageNumber", observed=True)[present].first(), how="left")
-    return table
+        table = table.join(by_number[present].first(), how="left")
+    table = table.join(by_number["Metadata_ImageID"].first(), how="left")
+    return table.dropna(subset=["Metadata_ImageID"]).set_index("Metadata_ImageID")
 
 
 def read_profiles(

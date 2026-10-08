@@ -78,3 +78,35 @@ def test_several_directories_are_refused(tmp_path, make_cellprofiler_dir):
 def test_an_export_that_cannot_be_read_says_why(cellprofiler_dir, kwargs, error, match):
     with pytest.raises(error, match=match):
         mt.io.read_profiles(cellprofiler_dir, **kwargs)
+
+
+# --- M2 object identity ---------------------------------------------------
+
+
+def test_a_cp_object_is_identifiable_without_parsing_obs_names(cellprofiler_dir):
+    """A primary object is identified by its own columns; the index carries no meaning."""
+    adata = mt.io.read_profiles(cellprofiler_dir)
+    assert {"Metadata_ImageID", "Metadata_ObjectType", "Metadata_ObjectNumber"} <= set(adata.obs.columns)
+    assert set(adata.obs["Metadata_ObjectType"]) == {"Cells"}
+    # The (image, object) pair is unique; scrambling the index does not change what the row is.
+    assert not adata.obs[["Metadata_ImageID", "Metadata_ObjectNumber"]].duplicated().any()
+    scrambled = adata.copy()
+    scrambled.obs_names = [f"x{i}" for i in range(scrambled.n_obs)]
+    assert validate(scrambled).ok, validate(scrambled).errors
+
+
+def test_related_object_numbers_survive_a_cp_read(tmp_path, make_cellprofiler_dir):
+    """Nuclei/cytoplasm instance numbers are kept as Metadata_<obj>ObjectNumber, not dropped (spec 5.4)."""
+    directory = make_cellprofiler_dir(tmp_path / "related", link_on="child")
+    adata = mt.io.read_profiles(directory)
+    assert "Metadata_NucleiObjectNumber" in adata.obs.columns
+    assert adata.obs["Metadata_NucleiObjectNumber"].notna().all()
+
+
+def test_image_table_joins_one_to_one_on_image_id(cellprofiler_dir):
+    """Every object resolves to exactly one image-table row, keyed by the opaque Metadata_ImageID."""
+    adata = mt.io.read_profiles(cellprofiler_dir)
+    table = adata.uns["mantispy"]["image_table"]
+    assert table.index.name == "Metadata_ImageID"
+    assert set(adata.obs["Metadata_ImageID"]) <= set(table.index)
+    assert validate(adata).ok, validate(adata).errors
