@@ -120,8 +120,8 @@ def _fetch_variant(
     """Read the single rehosted ``filename`` variant of dataset ``name``.
 
     ``feature_kind`` declares the kind of a staged object whose features mantispy cannot classify on its
-    own: a staged object predates the ``feature_kind`` annotation, and :func:`~mantispy._core.schema.migrate`
-    refuses to guess it for a non-CellProfiler feature block (a learned embedding), so the caller names it.
+    own: a staged object predates the ``feature_kind`` annotation, and ``migrate`` refuses to guess it for
+    a non-CellProfiler feature block (a learned embedding), so the caller names it.
     """
     import anndata as ad
 

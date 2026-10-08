@@ -489,7 +489,7 @@ def stamp(
         adata: The object to stamp.
         resolution: What one row is: ``"object"``, ``"well"`` or ``"aggregate"``.
             ``obs`` has to carry the columns that resolution requires.
-            ``None`` keeps whatever resolution the object already records; an object that records none must be given one, since guessing could silently mislabel it (this matches :func:`~mantispy._core.schema.stamp` and :func:`~mantispy._core.schema.get_resolution`, which also refuse to assume one).
+            ``None`` keeps whatever resolution the object already records; an object that records none must be given one, since guessing could silently mislabel it (the internal ``schema.stamp`` and ``schema.get_resolution`` also refuse to assume one).
         feature_kind: The representation every feature carries: ``"measurement"``, ``"embedding"`` or ``"derived"``.
             Pass it when the whole matrix is one kind (a matrix of embeddings is ``"embedding"``); it fills every feature.
             Leave it ``None`` only when ``var["feature_kind"]`` is already complete and valid (as a mantispy-read object's is).
