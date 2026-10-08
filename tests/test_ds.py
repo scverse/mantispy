@@ -506,3 +506,34 @@ def test_cp_posh_runs_hit_calling(tmp_path, monkeypatch):
     ranked = hits.set_index("group")
     assert ranked["distance"].idxmax() == "KIF18A"
     assert ranked.loc["KIF18A", "qvalue"] <= ranked["qvalue"].median()
+
+
+def test_fetch_variant_declares_feature_kind_for_a_staged_embedding(tmp_path, monkeypatch):
+    """A staged 1.0 embedding object cannot be migrated unless its feature_kind is declared (jump_lite regression)."""
+    import anndata as ad
+
+    from mantispy._core.features import empty_annotation
+    from mantispy.ds import _datasets
+
+    names = [f"openphenom_dim{i}" for i in range(4)]
+    var = empty_annotation(names).drop(columns="feature_kind")
+    var["is_feature"] = True
+    obj = ad.AnnData(
+        X=np.ones((2, 4), dtype=np.float32),
+        obs=pd.DataFrame({"Metadata_Plate": ["P1", "P1"], "Metadata_Well": ["A01", "A02"]}, index=["0", "1"]),
+        var=var,
+    )
+    obj.uns["mantispy"] = {"schema_version": "1.0", "resolution": "well"}
+    path = tmp_path / "jump_lite_openphenom.h5ad"
+    obj.write_h5ad(path)
+
+    monkeypatch.setattr(_datasets, "_files", lambda name, cache_dir, select=None: [path])
+
+    # Without a declared kind the staged object cannot be migrated (the feature names are not CellProfiler's).
+    with pytest.raises(ValueError, match="feature_kind"):
+        _datasets._fetch_variant("jump_lite", "jump_lite_openphenom.h5ad", None)
+
+    # Declaring it lets the object migrate and validate at the current schema.
+    loaded = _datasets._fetch_variant("jump_lite", "jump_lite_openphenom.h5ad", None, feature_kind="embedding")
+    assert (loaded.var["feature_kind"] == "embedding").all()
+    assert mt.io.validate(loaded).ok, mt.io.validate(loaded).errors

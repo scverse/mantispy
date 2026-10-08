@@ -18,7 +18,7 @@ from scverse_misc.datasets import fetch, parse_registry, register_loader
 from mantispy._core.features import empty_annotation
 from mantispy._core.frames import as_frame, categorize_metadata
 from mantispy._core.logging import get_logger, report_drop
-from mantispy._core.schema import SCHEMA_VERSION, stamp
+from mantispy._core.schema import SCHEMA_VERSION, migrate, stamp
 from mantispy._settings import settings
 from mantispy.io._jump import join_jump_annotation, read_jump
 from mantispy.io._profiles import _UPSTREAM_COUNTS, _adopt_counts, from_dataframe, read, read_profiles, write
@@ -114,10 +114,26 @@ def _require_bools(**flags: object) -> None:
             raise ValueError(f"{flag_name} must be a bool, got {type(flag).__name__}")
 
 
-def _fetch_variant(name: str, filename: str, cache_dir: str | Path | None) -> AnnData:
-    """Read the single rehosted ``filename`` variant of dataset ``name``."""
+def _fetch_variant(
+    name: str, filename: str, cache_dir: str | Path | None, *, feature_kind: str | None = None
+) -> AnnData:
+    """Read the single rehosted ``filename`` variant of dataset ``name``.
+
+    ``feature_kind`` declares the kind of a staged object whose features mantispy cannot classify on its
+    own: a staged object predates the ``feature_kind`` annotation, and :func:`~mantispy._core.schema.migrate`
+    refuses to guess it for a non-CellProfiler feature block (a learned embedding), so the caller names it.
+    """
+    import anndata as ad
+
     (path,) = _files(name, cache_dir, select=lambda file_name: file_name == filename)
-    return read(path)
+    if feature_kind is None:
+        return read(path)
+    # Read past read()'s version gate so the declared kind can be set before migrate runs.
+    adata = ad.read_h5ad(path)
+    if "feature_kind" not in adata.var:
+        adata.var["feature_kind"] = feature_kind
+    migrate(adata)
+    return adata
 
 
 #: The (aggregated, feature_selected) combination each rehosted bbbc021 variant answers to.
@@ -695,7 +711,10 @@ def jump_lite(model: str = "openphenom", annotate: bool = True, cache_dir: str |
         raise ValueError(f"model must be one of {JUMP_LITE_MODELS}, got {model!r}")
     if not annotate:
         return _assemble_jump_lite(model, annotate=False, cache_dir=cache_dir)
-    return _fetch_variant("jump_lite", f"jump_lite_{model}.h5ad", cache_dir)
+    # Every non-cp_measure model is a learned embedding; cp_measure is CellProfiler measurements that
+    # migrate classifies on its own (mirrors _assemble_jump_lite).
+    kind = "embedding" if model != "cp_measure" else None
+    return _fetch_variant("jump_lite", f"jump_lite_{model}.h5ad", cache_dir, feature_kind=kind)
 
 
 def jump_lite_targets(cache_dir: str | Path | None = None) -> pd.DataFrame:
