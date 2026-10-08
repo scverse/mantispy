@@ -177,7 +177,12 @@ def build_export(tmp_path: Path, *, plate: str = PLATE, failed: str | None = Non
         )
         for obj in EXPORT_OBJECTS:
             if not broken:
-                _write_h5(folder / "labels" / field / f"{obj}.h5", _export_labels(2, label_dtype))
+                labels = _export_labels(2, label_dtype)
+                # Spec §5.4: compartments need not share instance numbers. Give non-primary objects
+                # distinct ids so the linkage test fails if a row ever resolves to the wrong compartment.
+                if obj != "Cells":
+                    labels = np.where(labels, labels + 10, 0)
+                _write_h5(folder / "labels" / field / f"{obj}.h5", labels)
             rows.append(
                 {
                     "sample_key": field,
@@ -194,7 +199,8 @@ def build_export(tmp_path: Path, *, plate: str = PLATE, failed: str | None = Non
             )
         # ExportForSpatialData carries the schema-2.0 identity (spec §18): canonical plate and well, the
         # source image number, the primary object type, and the object number within the image.
-        well, site = field.split("_")[0], int(field.split("_")[1])
+        parts = field.split("_")
+        well, site = parts[0], int(parts[1])
         obs += [
             {
                 "Metadata_Plate": plate,
