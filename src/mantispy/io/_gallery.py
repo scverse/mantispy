@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from mantispy._core.logging import get_logger
+from mantispy._core.schema import make_image_id
 from mantispy.io._cellprofiler import _prefix
 from mantispy.io._profiles import from_dataframe, read_profiles
 
@@ -356,8 +357,13 @@ def _cell_table(files: Sequence[Path], masks: Mapping[str, npt.NDArray], channel
     obs = cast("pd.DataFrame", adata.obs)
     keys = obs.pop("Metadata_Key").astype(str).str.rsplit("-", n=2, expand=True)
     plates, wells, sites = (keys[i].astype(str) for i in range(3))
+    obs["Metadata_Plate"] = pd.Categorical(plates)
     obs["Metadata_Well"] = pd.Categorical(wells)
     obs["Metadata_Site"] = sites.astype(int)
+    obs["Metadata_ObjectType"] = "Cells"
+    # Plate/Well/Site are known only now, so re-mint the field id from_dataframe built from the bare
+    # image number: a per-site image number repeats across wells and would collide otherwise.
+    obs["Metadata_ImageID"] = make_image_id(obs)
     obs["region"] = pd.Categorical(plates + "_" + wells + "_s" + sites + "_cells")
     adata.obs_names = (obs["region"].astype(str) + ":" + obs["Metadata_ObjectNumber"].astype(str)).tolist()
 

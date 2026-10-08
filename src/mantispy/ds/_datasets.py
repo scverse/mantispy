@@ -18,7 +18,7 @@ from scverse_misc.datasets import fetch, parse_registry, register_loader
 from mantispy._core.features import empty_annotation
 from mantispy._core.frames import as_frame, categorize_metadata
 from mantispy._core.logging import get_logger, report_drop
-from mantispy._core.schema import SCHEMA_VERSION, migrate, stamp
+from mantispy._core.schema import SCHEMA_VERSION, ensure_object_identity, migrate, stamp
 from mantispy._settings import settings
 from mantispy.io._jump import join_jump_annotation, read_jump
 from mantispy.io._profiles import _UPSTREAM_COUNTS, _adopt_counts, from_dataframe, read, read_profiles, write
@@ -957,6 +957,9 @@ def _assemble_cp_posh(cache_dir: str | Path | None = None) -> AnnData:
         index=pd.Index(df["ID"].astype(str).to_numpy()),
     )
     obs = categorize_metadata(obs)
+    # cp-POSH ships per-cell rows with no source image or object number; the finest field identity it
+    # carries is the well.
+    ensure_object_identity(obs, "Cells")
     # cp_posh features are CellProfiler measurements whose names do not follow the parser's grammar.
     var = empty_annotation(features)
     var["feature_kind"] = "measurement"
@@ -1087,16 +1090,11 @@ def _assemble_cells(entry: DatasetEntry, cache_dir: str | Path | None, *, annota
     channels = [str(channel) for channel in entry.metadata["channels"]]
     paths = _files("jump_cells", cache_dir, select=lambda name: not name.endswith(".h5ad"))
     parts = [_read_site(directory, source, channels) for directory in sorted({path.parent for path in paths})]
-    # Every field of view numbers its own images from one, so each part's numbers are shifted past the ones before it.
-    images, offset = [], 0
-    for part in parts:
-        table = part.uns["mantispy"]["image_table"]
-        numbers = {number: offset + index + 1 for index, number in enumerate(table.index)}
-        part.obs["Metadata_ImageNumber"] = part.obs["Metadata_ImageNumber"].astype(int).map(numbers)
-        images.append(table.rename(index=numbers))
-        offset += len(table)
+    # Metadata_ImageID already identifies each field uniquely (it carries plate/well/site), so the
+    # per-site image tables concatenate as they are; the raw per-site Metadata_ImageNumber is kept but
+    # is no longer a join key.
     adata = ad.concat(parts, join="inner", merge="first", uns_merge="first")
-    adata.uns["mantispy"]["image_table"] = pd.concat(images)
+    adata.uns["mantispy"]["image_table"] = pd.concat([part.uns["mantispy"]["image_table"] for part in parts])
     n_parts, widest = len(parts), max(part.n_vars for part in parts)
     del parts
     report_drop("features measured in only some fields of view", widest - adata.n_vars, widest)

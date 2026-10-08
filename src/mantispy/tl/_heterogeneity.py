@@ -484,7 +484,7 @@ def subpopulation_hits(
 def neighbors_local_density(
     adata: AnnData,
     k: int = 15,
-    by: str = "Metadata_ImageNumber",
+    by: str = "Metadata_ImageID",
     key_added: str = "Metadata_LocalDensity",
     copy: bool = False,
 ) -> AnnData | None:

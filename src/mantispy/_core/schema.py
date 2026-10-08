@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+import pandas as pd
 
 from .features import COLUMNS as VAR_COLUMNS
 from .features import measurement_kind
@@ -46,14 +47,18 @@ RESOLUTIONS = ("object", "well", "aggregate")
 #: Old (schema 1.0) resolution names :func:`migrate` translates to the current ones.
 RESOLUTION_RENAMES: dict[str, str] = {"cell": "object", "perturbation": "aggregate"}
 
+#: The obs columns that identify one primary object, filled by :func:`ensure_object_identity`.
+OBJECT_IDENTITY = ("Metadata_ImageID", "Metadata_ObjectType", "Metadata_ObjectNumber")
+
 #: Allowed values of ``var["feature_kind"]``: a directly measured morphology feature, a
 #: learned-embedding dimension, or a feature a mantispy transformation produced (composition,
 #: signature, trajectory). The name parser only produces ``measurement``.
 FEATURE_KINDS = ("measurement", "embedding", "derived")
 
-#: Identifier columns required in ``obs``, per resolution.
+#: Identifier columns required in ``obs``, per resolution. An object-level row must be identifiable
+#: without parsing ``obs_names``; the pair ``(Metadata_ImageID, Metadata_ObjectNumber)`` is unique.
 REQUIRED_OBS: dict[str, tuple[str, ...]] = {
-    "object": ("Metadata_Plate", "Metadata_Well"),
+    "object": ("Metadata_Plate", "Metadata_Well", "Metadata_ImageID", "Metadata_ObjectType", "Metadata_ObjectNumber"),
     "well": ("Metadata_Plate", "Metadata_Well"),
     # A consensus profile no longer belongs to a plate or a well.
     "aggregate": (),
@@ -64,7 +69,11 @@ RESERVED_OBS: tuple[str, ...] = (
     "Metadata_Batch",
     "Metadata_Source",
     "Metadata_Site",
+    # Canonical opaque field-of-view id (Metadata_ImageID), the source CellProfiler image number it
+    # may derive from, the primary-object set name, and the object instance number within an image.
+    "Metadata_ImageID",
     "Metadata_ImageNumber",
+    "Metadata_ObjectType",
     "Metadata_ObjectNumber",
     "Metadata_Perturbation",
     # What the perturbation is, one of "compound", "orf", "crispr" or "untreated". Control-ness stays in
@@ -241,6 +250,63 @@ def _recover_grouped_by(store: dict, adata: AnnData, resolution: str) -> list[st
     return ["Metadata_Perturbation"] if "Metadata_Perturbation" in adata.obs else []
 
 
+#: Columns that, where present, compose :func:`make_image_id`, most significant first.
+_IMAGE_ID_COLUMNS = ("Metadata_Source", "Metadata_Plate", "Metadata_Well", "Metadata_Site", "Metadata_ImageNumber")
+
+
+def make_image_id(obs: pd.DataFrame) -> np.ndarray:
+    """A deterministic, opaque field-of-view id built from the stable identity columns ``obs`` carries.
+
+    Joins whichever of :data:`_IMAGE_ID_COLUMNS` are present with ``"|"``, most significant first. The
+    id is globally unique only insofar as those columns are: a plate/well/site or plate/image-number
+    combination identifies one field, while plate and well alone (a dataset that lost its per-field
+    identity) identify a whole well. Consumers MUST treat the value as opaque and never parse it.
+    """
+    columns = [column for column in _IMAGE_ID_COLUMNS if column in obs]
+    if not columns:
+        raise ValueError(
+            f"cannot mint Metadata_ImageID: obs carries none of {_IMAGE_ID_COLUMNS}. Add a source "
+            "identity column (e.g. Metadata_Plate) before stamping at object resolution."
+        )
+    block = obs[columns]
+    if block.isna().to_numpy().any():
+        # astype(str) would otherwise stringify a NaN into the id, so refuse clearly rather than build a
+        # "nan"-bearing identifier that silently collides or breaks the join.
+        incomplete = [column for column in columns if block[column].isna().any()]
+        raise ValueError(
+            f"cannot mint Metadata_ImageID: {incomplete} contain missing values; fill them before "
+            "stamping at object resolution."
+        )
+    rows = block.astype(str).to_numpy()
+    return np.array(["|".join(row) for row in rows], dtype=object)
+
+
+def object_number_within(image_id: np.ndarray | pd.Series) -> np.ndarray:
+    """A 1-based object instance number running within each image, for data that lost the source one.
+
+    Only for a source that gives no per-object number; the pair ``(image_id, result)`` is then unique.
+    """
+    series = pd.Series(np.asarray(image_id, dtype=object))
+    return (series.groupby(series, sort=False).cumcount() + 1).to_numpy()
+
+
+def ensure_object_identity(obs: pd.DataFrame, object_type: str = "Object") -> pd.DataFrame:
+    """Fill the object-resolution identity columns ``obs`` lacks, returning ``obs``.
+
+    Mints :func:`make_image_id` where ``Metadata_ImageID`` is absent, defaults ``Metadata_ObjectType``,
+    and synthesises a within-image ``Metadata_ObjectNumber`` only where the source gave none. A column
+    already present is left untouched, so a reader that knows the real values (a CellProfiler export)
+    keeps them; the caller passes ``object_type`` when it knows the primary object set.
+    """
+    if "Metadata_ImageID" not in obs:
+        obs["Metadata_ImageID"] = make_image_id(obs)
+    if "Metadata_ObjectType" not in obs:
+        obs["Metadata_ObjectType"] = object_type
+    if "Metadata_ObjectNumber" not in obs:
+        obs["Metadata_ObjectNumber"] = object_number_within(obs["Metadata_ImageID"].to_numpy())
+    return obs
+
+
 def stamp(
     adata: AnnData,
     resolution: str | None = None,
@@ -377,6 +443,36 @@ def _check_feature_kind(adata: AnnData, report: ValidationReport) -> None:
         report.errors.append(f"var['feature_kind'] must be one of {FEATURE_KINDS} for every feature; found {found}")
 
 
+def _check_object_identity(adata: AnnData, store: dict, report: ValidationReport) -> None:
+    """At object resolution, the (image, object) pair identifies a row and joins to the image table.
+
+    Runs only once the required identity columns are present (a missing one is already reported).
+    """
+    obs = as_frame(adata.obs)
+    if not {"Metadata_ImageID", "Metadata_ObjectNumber"} <= set(obs.columns):
+        return
+    pair = obs[["Metadata_ImageID", "Metadata_ObjectNumber"]]
+    duplicated = int(pair.duplicated().sum())
+    if duplicated:
+        report.errors.append(
+            f"(Metadata_ImageID, Metadata_ObjectNumber) is not unique: {duplicated} duplicate object(s); "
+            "the pair must identify one primary object at object resolution"
+        )
+    table = store.get("image_table")
+    if isinstance(table, pd.DataFrame):
+        # The table is keyed by Metadata_ImageID (its index), but an h5ad round trip can demote the
+        # index to a column, so accept either.
+        known = set(table.index.astype(str))
+        if "Metadata_ImageID" in table.columns:
+            known |= set(table["Metadata_ImageID"].astype(str))
+        unknown = set(obs["Metadata_ImageID"].astype(str)) - known
+        if unknown:
+            report.errors.append(
+                f"{len(unknown)} Metadata_ImageID value(s) in obs have no row in "
+                "uns['mantispy']['image_table']; every object must resolve to exactly one image"
+            )
+
+
 def validate(adata: AnnData, *, raise_on_error: bool = False) -> ValidationReport:
     """Check ``adata`` against the mantispy schema.
 
@@ -434,6 +530,8 @@ def validate(adata: AnnData, *, raise_on_error: bool = False) -> ValidationRepor
         for column in REQUIRED_OBS[resolution]:
             if column not in adata.obs:
                 report.errors.append(f"obs is missing required column {column!r} (resolution {resolution!r})")
+    if resolution == "object":
+        _check_object_identity(adata, store, report)
 
     for column in REQUIRED_VAR:
         if column not in adata.var:
@@ -465,6 +563,23 @@ def validate(adata: AnnData, *, raise_on_error: bool = False) -> ValidationRepor
     if raise_on_error and not report.ok:
         raise ValueError("\n".join(report.errors))
     return report
+
+
+def _rekey_legacy_image_table(store: dict, identity: pd.DataFrame) -> None:
+    """Re-key a 1.0 ``image_table`` from the source image number to ``Metadata_ImageID`` (spec 8).
+
+    A 1.0 export keyed the table by the integer CellProfiler image number; under 2.0 obs joins to it
+    through ``Metadata_ImageID``, so the two would otherwise be disjoint. Only re-keys when obs still
+    carries ``Metadata_ImageNumber`` to map through and every table row maps.
+    """
+    table = store.get("image_table")
+    if not isinstance(table, pd.DataFrame) or table.index.name == "Metadata_ImageID":
+        return
+    if "Metadata_ImageNumber" not in identity:
+        return
+    mapping = identity.groupby("Metadata_ImageNumber", observed=True)["Metadata_ImageID"].first().to_dict()
+    if set(table.index) <= set(mapping):
+        store["image_table"] = table.rename(index=mapping).rename_axis("Metadata_ImageID")
 
 
 def migrate(adata: AnnData, copy: bool = False) -> AnnData | None:
@@ -532,6 +647,16 @@ def migrate(adata: AnnData, copy: bool = False) -> AnnData | None:
             )
         feature_kind = measurement_kind(is_feature)
 
+    # Object identity (M2): derive the columns a 1.0 object predates. ensure_object_identity mints the
+    # opaque image id on a copy now (raising clearly when obs carries no source identity, matching
+    # migrate's "correctness over a silent guess" stance) so a rejected migration writes nothing; the
+    # primary-object set was never recorded on a 1.0 object, so it defaults to the generic "Object".
+    identity = ensure_object_identity(as_frame(target.obs).copy()) if resolution == "object" else None
+    if identity is not None and identity[["Metadata_ImageID", "Metadata_ObjectNumber"]].duplicated().any():
+        # A 1.0 object can carry a per-image ObjectNumber while its only source identity is plate/well,
+        # so the coarse image id collapses distinct images and the pair collides; renumber within image.
+        identity["Metadata_ObjectNumber"] = object_number_within(identity["Metadata_ImageID"].to_numpy())
+
     store = target.uns.setdefault("mantispy", {})
     store["schema_version"] = SCHEMA_VERSION
     store["schema_status"] = SCHEMA_STATUS
@@ -540,6 +665,10 @@ def migrate(adata: AnnData, copy: bool = False) -> AnnData | None:
     store["grouped_by"] = grouped_by
     if feature_kind is not None:
         target.var["feature_kind"] = feature_kind
+    if identity is not None:
+        for column in OBJECT_IDENTITY:
+            target.obs[column] = identity[column].to_numpy()
+        _rekey_legacy_image_table(store, identity)
 
     get_logger().info("migrated an object from schema %s to %s", seen, SCHEMA_VERSION)
     return target if copy else None
