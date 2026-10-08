@@ -9,7 +9,13 @@
     "resolutions": ["object", "well", "aggregate"],
     "feature_kinds": ["measurement", "embedding", "derived"],
     "required_obs": {
-        "object": ["Metadata_Plate", "Metadata_Well", "Metadata_ImageID", "Metadata_ObjectType", "Metadata_ObjectNumber"],
+        "object": [
+            "Metadata_Plate",
+            "Metadata_Well",
+            "Metadata_ImageID",
+            "Metadata_ObjectType",
+            "Metadata_ObjectNumber"
+        ],
         "well": ["Metadata_Plate", "Metadata_Well"],
         "aggregate": []
     },
