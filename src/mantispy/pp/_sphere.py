@@ -10,7 +10,7 @@ from anndata import AnnData
 
 from mantispy._core._numba import group_offsets
 from mantispy._core._reduce import get_matrix, group_codes, representation
-from mantispy._core.masks import reference_mask
+from mantispy._core.masks import CONTROL_CLASSES, reference_mask
 from mantispy._core.mutation import inplace_or_copy
 
 METHODS = ("ZCA", "ZCA-cor", "PCA", "PCA-cor")
@@ -155,7 +155,7 @@ def _select_epsilon(adata: AnnData, X: np.ndarray, method: str, reference: str |
     from mantispy._core.frames import as_frame
     from mantispy.tl._map import REFERENCE_COLUMN, _resolve_mode, _score_map
 
-    reference_column = "Metadata_Control" if reference == "negcon" else reference
+    reference_column = "Metadata_Control_Type" if reference in CONTROL_CLASSES else reference
     missing = []
     if "Metadata_Perturbation" not in adata.obs:
         missing.append("'Metadata_Perturbation' to group replicates by")

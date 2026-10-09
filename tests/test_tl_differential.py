@@ -31,6 +31,7 @@ def test_a_group_confounded_with_its_plate_is_skipped_not_scored(well_profiles):
             "Metadata_Well": [f"A{i:02d}" for i in range(16)],
             "Metadata_Perturbation": np.where(treated, "compound", "DMSO"),
             "Metadata_Control": ~treated,
+            "Metadata_Control_Type": np.where(treated, "treatment", "negcon"),
         },
         index=[str(i) for i in range(16)],
     )
@@ -63,6 +64,7 @@ def test_the_diagnostic_catches_what_the_docstrings_claim(well_profiles):
             "Metadata_Well": [f"A{i % 24 + 1:02d}" for i in range(len(labels))],
             "Metadata_Perturbation": labels,
             "Metadata_Control": [label == "DMSO" for label in labels],
+            "Metadata_Control_Type": ["negcon" if label == "DMSO" else "treatment" for label in labels],
         },
         index=[str(i) for i in range(len(labels))],
     )

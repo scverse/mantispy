@@ -130,6 +130,7 @@ def _null_wells(layout, n_controls):
             "Metadata_Well": w,
             "Metadata_Perturbation": "DMSO" if i < n_controls else "pert",
             "Metadata_Control": i < n_controls,
+            "Metadata_Control_Type": "negcon" if i < n_controls else "treatment",
             "leiden": str(c),
         }
         for i, (w, clusters) in enumerate(layout.items())
@@ -184,6 +185,7 @@ def _clustered_wells(layout: dict[str, dict[int, int]], n_clusters: int):
             "Metadata_Well": well,
             "Metadata_Perturbation": "DMSO" if well.startswith("A") else "pert",
             "Metadata_Control": well.startswith("A"),
+            "Metadata_Control_Type": "negcon" if well.startswith("A") else "treatment",
             "leiden": str(cluster),
         }
         for well, clusters in layout.items()

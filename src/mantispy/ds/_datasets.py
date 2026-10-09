@@ -767,7 +767,7 @@ def jump_crispr(annotate: bool = True, cache_dir: str | Path | None = None, *, a
         aggregated: Return one ``modz`` consensus (Spearman, ``min_replicates=2``) per ``Metadata_Gene`` over the guides instead of the wells. Needs ``annotate=True``.
 
     Returns:
-        Wells by features at well resolution when ``aggregated`` is ``False``, else the gene-level consensus, indexed by plate and well, read with :func:`mantispy.io.read`, with ``Metadata_JCP2022`` and ``Metadata_CellCount`` and, when annotated, ``Metadata_Gene`` and ``Metadata_Perturbation`` (the gene symbol; its guides are the replicates), ``Metadata_Perturbation_Type`` (``"crispr"``), ``Metadata_Control_Type`` (``"negcon"``, ``"poscon"`` or ``"trt"``), ``Metadata_Control`` (the no-guide and non-targeting wells) and ``Metadata_ChromosomeArm``.
+        Wells by features at well resolution when ``aggregated`` is ``False``, else the gene-level consensus, indexed by plate and well, read with :func:`mantispy.io.read`, with ``Metadata_JCP2022`` and ``Metadata_CellCount`` and, when annotated, ``Metadata_Gene`` and ``Metadata_Perturbation`` (the gene symbol; its guides are the replicates), ``Metadata_Perturbation_Type`` (``"crispr"``), ``Metadata_Control_Type`` (``"negcon"``, ``"poscon"`` or ``"treatment"``), ``Metadata_Control`` (any control well) and ``Metadata_ChromosomeArm``.
 
     Raises:
         ValueError: ``aggregated`` is not a bool, or ``aggregated`` is asked for with ``annotate=False``.
@@ -846,7 +846,8 @@ def _assemble_scallops_arv471(cache_dir: str | Path | None = None) -> AnnData:
     frame = df[list(_SCALLOPS_FEATURES)].reset_index(drop=True)
     frame["Metadata_Gene"] = np.where(is_ntc, "nontargeting", gene)
     frame["Metadata_sgRNA"] = guide
-    frame["Metadata_Control_Type"] = df["type"].astype(str).to_numpy()
+    # Spec 10 vocabulary: the non-targeting guides are the negative controls, the rest treatments.
+    frame["Metadata_Control_Type"] = np.where(is_ntc, "negcon", "treatment")
     frame["Metadata_Control"] = is_ntc
     frame["Metadata_Perturbation"] = guide
     frame["Metadata_Plate"] = df["plate"].astype(str).to_numpy()
@@ -893,8 +894,8 @@ def scallops_arv471(cache_dir: str | Path | None = None, *, aggregated: bool = F
 
         ``Metadata_Perturbation_Type``: ``"crispr"``, the kind of screen this is.
 
-        ``Metadata_Control_Type``: the schema's reserved control-type column, carrying the upstream ``type``, one of ``"target"`` (a screened gene), ``"ntc"`` (a non-targeting guide) or ``"neg"`` (a guide against an olfactory-receptor gene, a targeting negative control).
-        The raw classes are kept rather than folded onto the reserved ``negcon``/``poscon``/``trt`` vocabulary, none of which fits the targeting negative cleanly.
+        ``Metadata_Control_Type``: the schema's reserved control-type column (spec 10), ``"negcon"`` for the non-targeting guides and ``"treatment"`` for everything else.
+        The upstream three-way ``type`` (``"target"``, ``"ntc"``, ``"neg"``) does not fit the reserved vocabulary, so the olfactory-receptor targeting negatives (``"neg"``) read as treatments; they are a ``Metadata_Gene`` lookup, not a control class.
 
         ``Metadata_Control``: ``True`` for the non-targeting guides, the reference :func:`~mantispy.tl.hit_calling` and normalization test against.
         The olfactory-receptor negatives are not flagged, so they can be scored as perturbations that should not move.
@@ -953,6 +954,8 @@ def _assemble_cp_posh(cache_dir: str | Path | None = None) -> AnnData:
             "Metadata_Plate": df["plate"].astype(str).to_numpy(),
             "Metadata_Well": well,
             "Metadata_Control": np.isin(gene, _CP_POSH_CONTROLS),
+            # Spec 10 vocabulary: the control guides are negative controls, the rest treatments.
+            "Metadata_Control_Type": np.where(np.isin(gene, _CP_POSH_CONTROLS), "negcon", "treatment"),
         },
         index=pd.Index(df["ID"].astype(str).to_numpy()),
     )

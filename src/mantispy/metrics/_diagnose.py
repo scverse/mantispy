@@ -18,6 +18,17 @@ from mantispy._core.schema import RESOLUTIONS, stamp
 TOLERANCE = 2.0
 
 
+def _mark_reference_controls(obs: pd.DataFrame, labels: np.ndarray) -> None:
+    """Mark the ``__reference__`` rows as negative controls so a downstream ``reference="negcon"`` resolves.
+
+    The hit callers select their reference through ``Metadata_Control_Type`` (spec 10.3), so the scratch
+    objects these nulls build carry it, with the matching ``Metadata_Control`` boolean.
+    """
+    is_reference = labels == "__reference__"
+    obs["Metadata_Control_Type"] = np.where(is_reference, "negcon", "treatment")
+    obs["Metadata_Control"] = is_reference
+
+
 def _verdict(ok: bool, warn: bool = False) -> str:
     return "pass" if ok else ("warn" if warn else "FAIL")
 
@@ -35,7 +46,7 @@ def _empirical_null(controls: AnnData, size: int, n_draws: int, seed: int, block
         labels[picked] = "__pseudo__"
         obs = as_frame(controls.obs).copy()
         obs["Metadata_Perturbation"] = labels
-        obs["Metadata_Control"] = labels == "__reference__"
+        _mark_reference_controls(obs, labels)
         scratch = ad.AnnData(X=values.copy(), obs=obs, var=as_frame(controls.var).copy())
         stamp(scratch, resolution="well")
         with warnings.catch_warnings():
@@ -61,7 +72,7 @@ def _empirical_hit_rate(
         labels = np.where(np.isin(np.arange(controls.n_obs), picked), "__pseudo__", "__reference__")
         obs = as_frame(controls.obs).copy()
         obs["Metadata_Perturbation"] = labels
-        obs["Metadata_Control"] = labels == "__reference__"
+        _mark_reference_controls(obs, labels)
         scratch = ad.AnnData(X=values.copy(), obs=obs, var=as_frame(controls.var).copy())
         stamp(scratch, resolution="well")
         with warnings.catch_warnings():
@@ -117,7 +128,7 @@ def _empirical_cell_hit_rate(
         labels = np.where(np.isin(well_codes, picked), "__pseudo__", "__reference__")
         obs = as_frame(controls.obs).copy()
         obs["Metadata_Perturbation"] = labels
-        obs["Metadata_Control"] = labels == "__reference__"
+        _mark_reference_controls(obs, labels)
         # One block per cell: whole-block resampling then draws single cells, a free cell shuffle.
         obs["__cell__"] = np.arange(controls.n_obs)
         scratch = ad.AnnData(X=values.copy(), obs=obs, var=as_frame(controls.var).copy())

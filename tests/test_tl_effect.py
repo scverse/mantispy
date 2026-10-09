@@ -58,7 +58,11 @@ def test_a_features_pvalue_does_not_depend_on_its_neighbours_in_the_array():
     adata = ad.AnnData(
         X=values.astype(np.float32),
         obs=pd.DataFrame(
-            {"Metadata_Perturbation": labels, "Metadata_Control": [n == "DMSO" for n in labels]},
+            {
+                "Metadata_Perturbation": labels,
+                "Metadata_Control": [n == "DMSO" for n in labels],
+                "Metadata_Control_Type": ["negcon" if n == "DMSO" else "treatment" for n in labels],
+            },
             index=[str(i) for i in range(len(labels))],
         ),
     )

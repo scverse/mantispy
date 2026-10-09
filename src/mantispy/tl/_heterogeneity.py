@@ -150,8 +150,8 @@ def _composition_test(composition: AnnData, counts: np.ndarray, reference: str |
     empty = pd.DataFrame(columns=["group", "statistic", "pvalue", "qvalue"])
     if reference is None:
         return empty, np.nan
-    if reference == "negcon" and "Metadata_Control" not in composition.obs:
-        get_logger().info("cluster_composition: no Metadata_Control, so no composition test")
+    if reference == "negcon" and "Metadata_Control_Type" not in composition.obs:
+        get_logger().info("cluster_composition: no Metadata_Control_Type, so no composition test")
         return empty, np.nan
 
     is_control = reference_mask(composition, reference)

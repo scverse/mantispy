@@ -18,7 +18,7 @@ from .features import COLUMNS as VAR_COLUMNS
 from .features import measurement_kind
 from .frames import as_frame
 from .logging import get_logger
-from .masks import feature_mask
+from .masks import _flag_mask, feature_mask
 from .plate import normalize_well
 
 if TYPE_CHECKING:
@@ -54,6 +54,10 @@ OBJECT_IDENTITY = ("Metadata_ImageID", "Metadata_ObjectType", "Metadata_ObjectNu
 #: learned-embedding dimension, or a feature a mantispy transformation produced (composition,
 #: signature, trajectory). The name parser only produces ``measurement``.
 FEATURE_KINDS = ("measurement", "embedding", "derived")
+
+#: Allowed values of ``obs["Metadata_Control_Type"]`` (spec 10.2). ``negcon``, ``poscon`` and ``empty``
+#: are controls; ``treatment`` is not. ``Metadata_Control`` is the boolean ``type != "treatment"``.
+CONTROL_TYPES = ("negcon", "poscon", "treatment", "empty")
 
 #: Identifier columns required in ``obs``, per resolution. An object-level row must be identifiable
 #: without parsing ``obs_names``; the pair ``(Metadata_ImageID, Metadata_ObjectNumber)`` is unique.
@@ -473,6 +477,48 @@ def _check_object_identity(adata: AnnData, store: dict, report: ValidationReport
             )
 
 
+def _check_controls(adata: AnnData, report: ValidationReport) -> None:
+    """Check the control fields against spec 10: co-presence, vocabulary, and the boolean relationship.
+
+    The control fields are conditional, not part of the minimum schema, so a check runs only once one of
+    them is present. ``Metadata_Control_Type`` MUST accompany ``Metadata_Control`` (and the reverse), its
+    values MUST come from :data:`CONTROL_TYPES`, and ``Metadata_Control`` MUST equal
+    ``Metadata_Control_Type != "treatment"`` row by row.
+    """
+    obs = as_frame(adata.obs)
+    has_flag = "Metadata_Control" in obs
+    has_type = "Metadata_Control_Type" in obs
+    if not (has_flag or has_type):
+        return
+    if has_flag != has_type:
+        missing = "Metadata_Control_Type" if has_flag else "Metadata_Control"
+        present = "Metadata_Control" if has_flag else "Metadata_Control_Type"
+        report.errors.append(
+            f"obs has {present!r} but not {missing!r}; spec 10.2 requires both. "
+            "Run mt.pp.annotate_controls, which writes the pair."
+        )
+        return
+
+    types = obs["Metadata_Control_Type"].astype(str)
+    bad = sorted(set(types.unique()) - set(CONTROL_TYPES))
+    if bad:
+        report.errors.append(f"Metadata_Control_Type must be one of {CONTROL_TYPES}; found {bad}")
+
+    flag = obs["Metadata_Control"]
+    try:
+        is_control = _flag_mask(pd.Series(flag), "obs['Metadata_Control']", "a control row", "")
+    except (ValueError, TypeError) as error:
+        report.errors.append(f"obs['Metadata_Control'] is not a usable boolean flag: {error}")
+        return
+    expected = (types != "treatment").to_numpy()
+    mismatch = int((is_control != expected).sum())
+    if mismatch:
+        report.errors.append(
+            f"Metadata_Control disagrees with Metadata_Control_Type on {mismatch} row(s); "
+            'spec 10.2 fixes Metadata_Control == (Metadata_Control_Type != "treatment")'
+        )
+
+
 def validate(adata: AnnData, *, raise_on_error: bool = False) -> ValidationReport:
     """Check ``adata`` against the mantispy schema.
 
@@ -550,6 +596,8 @@ def validate(adata: AnnData, *, raise_on_error: bool = False) -> ValidationRepor
                 unparsable.append(well)
         if unparsable:
             report.errors.append(f"Metadata_Well has unparsable values: {sorted(unparsable)[:5]}")
+
+    _check_controls(adata, report)
 
     if adata.n_vars and "is_feature" in adata.var and not adata.var["is_feature"].any():
         report.warnings.append("no column in var is marked is_feature")
@@ -669,6 +717,18 @@ def migrate(adata: AnnData, copy: bool = False) -> AnnData | None:
         for column in OBJECT_IDENTITY:
             target.obs[column] = identity[column].to_numpy()
         _rekey_legacy_image_table(store, identity)
+    if "Metadata_Control" in target.obs and "Metadata_Control_Type" not in target.obs:
+        # Under 1.0 Metadata_Control==True meant negcon; spec 10 widens the boolean to any control and
+        # moves the class into Metadata_Control_Type. Fill the type faithfully: the old True rows were
+        # negative controls, everything else a treatment. Read the flag tolerantly (migrate must not abort a
+        # load): an unambiguous true is negcon; a missing value, which a 1.0 platemap could leave, is a
+        # treatment rather than an error, matching Metadata_Control=False.
+        flag = pd.Series(target.obs["Metadata_Control"])
+        is_control = flag.isin([True, 1, "True"]).to_numpy()
+        target.obs["Metadata_Control_Type"] = np.where(is_control, "negcon", "treatment")
+        # Rewrite the flag to the clean boolean the type implies, so a NaN-bearing legacy column comes out
+        # consistent with Metadata_Control_Type (spec 10.2) rather than failing validation after migration.
+        target.obs["Metadata_Control"] = is_control
 
     get_logger().info("migrated an object from schema %s to %s", seen, SCHEMA_VERSION)
     return target if copy else None

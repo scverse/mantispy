@@ -101,15 +101,14 @@ def controls(adata: AnnData, kind: str = "negcon") -> np.ndarray:
 
     Args:
         adata: Object to read.
-        kind: ``"negcon"`` reads ``Metadata_Control``; ``"poscon"`` reads ``Metadata_Control_Type == "poscon"`` and is all-``False`` when that column is absent.
+        kind: ``"negcon"`` reads ``Metadata_Control_Type == "negcon"``; ``"poscon"`` reads ``Metadata_Control_Type == "poscon"`` and is all-``False`` when that column is absent.
 
     Returns:
         A boolean mask over ``obs``, true on the control rows.
 
     Raises:
-        ValueError: `kind` is neither ``"negcon"`` nor ``"poscon"``, or ``Metadata_Control`` has missing values.
-        KeyError: ``"negcon"`` was asked for and ``obs`` has no ``Metadata_Control`` column.
-        TypeError: ``Metadata_Control`` is not boolean, so it would select every row.
+        ValueError: `kind` is neither ``"negcon"`` nor ``"poscon"``.
+        KeyError: ``"negcon"`` was asked for and ``obs`` has no ``Metadata_Control_Type`` column.
     """
     if kind == "negcon":
         return reference_mask(adata, "negcon")

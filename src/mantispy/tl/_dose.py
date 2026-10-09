@@ -249,8 +249,8 @@ def _baseline_and_cutoff(
     Without controls there is no scale to call activity on, so the hit call is left out.
     """
     control = np.empty(0)
-    # reference_mask raises without Metadata_Control, which is not fatal here: only the hit call needs controls.
-    if reference is not None and not (reference == "negcon" and "Metadata_Control" not in adata.obs):
+    # reference_mask raises without Metadata_Control_Type, which is not fatal here: only the hit call needs controls.
+    if reference is not None and not (reference == "negcon" and "Metadata_Control_Type" not in adata.obs):
         values = as_frame(adata.obs)[response].to_numpy(dtype=float)
         control = values[held_out_reference(adata, reference_mask(adata, reference), response)]
         control = control[np.isfinite(control)]

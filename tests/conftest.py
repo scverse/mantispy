@@ -83,6 +83,7 @@ def well_profiles():
                 "Metadata_Well": [f"A{index + 1:02d}" for index in range(values.shape[0])],
                 "Metadata_Perturbation": np.where(treated, "compound", "DMSO"),
                 "Metadata_Control": ~treated,
+                "Metadata_Control_Type": np.where(treated, "treatment", "negcon"),
             },
             index=[str(index) for index in range(values.shape[0])],
         )
@@ -110,6 +111,7 @@ def pure_noise_screen():
             {
                 "Metadata_Perturbation": labels,
                 "Metadata_Control": [label == "DMSO" for label in labels],
+                "Metadata_Control_Type": ["negcon" if label == "DMSO" else "treatment" for label in labels],
                 "Metadata_Plate": "P1",
                 "Metadata_Well": [f"A{i:04d}" for i in range(len(labels))],
             },
@@ -207,6 +209,7 @@ def phenotypes():
     frame["Metadata_Plate"] = np.where(np.arange(total) % 2 == 0, "P1", "P2")
     frame["Metadata_Well"] = [f"{chr(65 + index // 24)}{index % 24 + 1:02d}" for index in range(total)]
     frame["Metadata_Control"] = frame["Metadata_Compound"] == "DMSO"
+    frame["Metadata_Control_Type"] = np.where(frame["Metadata_Control"], "negcon", "treatment")
     frame["Metadata_CellCount"] = 100.0
     for column in range(n_features):
         frame[f"Cells_AreaShape_f{column}"] = values[:, column]

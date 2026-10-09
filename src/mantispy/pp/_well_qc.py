@@ -49,7 +49,7 @@ def well_qc(
     X = get_matrix(adata)[:, selected]
     codes, keys = group_codes(adata, ["Metadata_Plate", "Metadata_Well"])
     is_control = (
-        reference_mask(adata, "negcon") if "Metadata_Control" in adata.obs else np.zeros(adata.n_obs, dtype=bool)
+        reference_mask(adata, "negcon") if "Metadata_Control_Type" in adata.obs else np.zeros(adata.n_obs, dtype=bool)
     )
 
     order, offsets = group_offsets(codes, len(keys))
