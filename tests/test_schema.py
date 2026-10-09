@@ -527,6 +527,27 @@ def test_migrate_derives_control_type_from_a_legacy_control_flag():
     assert validate(obj).ok, validate(obj).errors
 
 
+def test_migrate_tolerates_a_missing_value_in_a_legacy_control_flag():
+    """A 1.0 platemap could leave Metadata_Control unset for some wells; migrate must map NaN to treatment, not abort."""
+    obj = ad.AnnData(
+        X=np.ones((3, 1), dtype=np.float32),
+        obs=pd.DataFrame(
+            {
+                "Metadata_Plate": ["P1", "P1", "P1"],
+                "Metadata_Well": ["A01", "A02", "A03"],
+                # A bool column with a gap round-trips through h5ad as a "True"/"False" categorical with NaN.
+                "Metadata_Control": pd.Categorical(["True", "False", None]),
+            },
+            index=["0", "1", "2"],
+        ),
+        var=parse_feature_names(["Cells_AreaShape_Area"]).drop(columns="feature_kind"),
+    )
+    obj.uns["mantispy"] = {"schema_version": "1.0", "resolution": "well"}
+    migrate(obj)  # must not raise
+    assert list(obj.obs["Metadata_Control_Type"]) == ["negcon", "treatment", "treatment"]
+    assert validate(obj).ok, validate(obj).errors
+
+
 @pytest.mark.parametrize(("old", "new"), [("cell", "object"), ("perturbation", "aggregate")])
 def test_migrate_translates_the_old_resolution_names(old, new):
     obs = pd.DataFrame({"Metadata_Plate": ["P1", "P1"], "Metadata_Well": ["A01", "A02"]}, index=["0", "1"])

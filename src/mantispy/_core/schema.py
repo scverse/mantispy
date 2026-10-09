@@ -720,11 +720,15 @@ def migrate(adata: AnnData, copy: bool = False) -> AnnData | None:
     if "Metadata_Control" in target.obs and "Metadata_Control_Type" not in target.obs:
         # Under 1.0 Metadata_Control==True meant negcon; spec 10 widens the boolean to any control and
         # moves the class into Metadata_Control_Type. Fill the type faithfully: the old True rows were
-        # negative controls, everything else a treatment.
-        is_control = _flag_mask(
-            pd.Series(target.obs["Metadata_Control"]), "obs['Metadata_Control']", "a control row", ""
-        )
+        # negative controls, everything else a treatment. Read the flag tolerantly (migrate must not abort a
+        # load): an unambiguous true is negcon; a missing value, which a 1.0 platemap could leave, is a
+        # treatment rather than an error, matching Metadata_Control=False.
+        flag = pd.Series(target.obs["Metadata_Control"])
+        is_control = flag.isin([True, 1, "True"]).to_numpy()
         target.obs["Metadata_Control_Type"] = np.where(is_control, "negcon", "treatment")
+        # Rewrite the flag to the clean boolean the type implies, so a NaN-bearing legacy column comes out
+        # consistent with Metadata_Control_Type (spec 10.2) rather than failing validation after migration.
+        target.obs["Metadata_Control"] = is_control
 
     get_logger().info("migrated an object from schema %s to %s", seen, SCHEMA_VERSION)
     return target if copy else None

@@ -107,10 +107,7 @@ def empirical_fdr(
     target = ~is_control & finite
     n_control = int(control.sum())
     if not is_control.any():
-        raise ValueError(
-            "no control gene is present in the object; control_genes shares no name with "
-            f"{'obs[' + group + ']' if group else 'the index'}."
-        )
+        raise ValueError(f"no control gene is present in the object; control_genes shares no name with obs[{group!r}].")
     if n_control == 0:
         raise ValueError(f"every control gene has a missing {score!r}, so there is no null to calibrate against")
     if n_control < _FEW_CONTROLS:
