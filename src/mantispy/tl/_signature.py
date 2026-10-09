@@ -10,6 +10,7 @@ from anndata import AnnData
 from mantispy._core.features import annotation
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
+from mantispy._core.provenance import level_change_source, record_history
 from mantispy._core.schema import stamp
 
 DEFAULT_BY = ("feature_group", "channel", "object")
@@ -102,13 +103,27 @@ def feature_signature(
     signature.obs["Metadata_Perturbation"] = signature.obs_names.to_numpy()
     obs = as_frame(adata.obs)
     if "Metadata_Perturbation" in obs.columns:
-        per_group = obs.drop_duplicates("Metadata_Perturbation").set_index("Metadata_Perturbation")
-        for column in per_group.columns:
-            if column.startswith("Metadata_") and column != "Metadata_Perturbation":
-                values = per_group[column].reindex(signature.obs_names)
-                if values.notna().any():
-                    signature.obs[column] = values.to_numpy()
-    stamp(signature, resolution="aggregate", grouped_by=["Metadata_Perturbation"])
+        # Carry every column constant within a perturbation (spec §13.1), not just Metadata_ ones, and
+        # drop a column that varies within a perturbation rather than copy an arbitrary first value.
+        carried = [column for column in obs.columns if column != "Metadata_Perturbation"]
+        grouped = obs[carried].groupby(obs["Metadata_Perturbation"], observed=True)
+        constant = grouped.nunique(dropna=False).le(1).all()
+        firsts = grouped.first()
+        for column in carried:
+            if not constant[column]:
+                get_logger().debug("feature_signature dropped non-constant column %s", column)
+                continue
+            values = firsts[column].reindex(signature.obs_names)
+            if values.notna().any():
+                signature.obs[column] = values.to_numpy()
+    store = adata.uns.get("mantispy", {})
+    stamp(signature, resolution="aggregate", grouped_by=["Metadata_Perturbation"], history=store.get("history"))
+    record_history(
+        signature,
+        "feature_signature",
+        params={"key": key, "by": list(by), "statistic": statistic},
+        source=level_change_source(adata, "aggregate", ["Metadata_Perturbation"]),
+    )
     get_logger().info(
         "feature_signature: %d perturbations by %d families, from %d features",
         signature.n_obs,

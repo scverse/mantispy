@@ -14,8 +14,8 @@ from mantispy._core._numba import MEAN, MEDIAN
 from mantispy._core._reduce import group_codes, reduce_grouped, reduced_var
 from mantispy._core.frames import as_frame, categorize_metadata
 from mantispy._core.logging import get_logger
-from mantispy._core.provenance import record_params
-from mantispy._core.schema import REQUIRED_UNS, get_resolution, resolution_for, stamp
+from mantispy._core.provenance import level_change_source, record_history, record_params
+from mantispy._core.schema import REQUIRED_OBS, REQUIRED_UNS, get_resolution, resolution_for, stamp
 
 FUNCTIONS = {"median": MEDIAN, "mean": MEAN}
 
@@ -35,6 +35,7 @@ def aggregate(
     use_rep: str | None = None,
     count_key: str = "Metadata_CellCount",
     site_key: str = "Metadata_SiteCount",
+    store_membership: bool = False,
 ) -> AnnData:
     """Aggregate ``adata`` to one profile per group.
 
@@ -49,6 +50,7 @@ def aggregate(
             Mutually exclusive with ``layer``.
         count_key: ``obs`` column the cell count is written to, and read from when ``adata`` holds profiles.
         site_key: ``obs`` column the number of fields of view is written to, and read from when ``adata`` holds profiles.
+        store_membership: Record which source rows went into each profile under ``uns["mantispy"]["membership"]``, by their stable identity columns (e.g. ``Metadata_ImageID`` + ``Metadata_ObjectNumber`` for objects) rather than row positions. Off by default because object-level membership can be large.
 
     Returns:
         A new :class:`~anndata.AnnData` with one row per group.
@@ -94,8 +96,10 @@ def aggregate(
 
     var = reduced_var(adata, use_rep, values.shape[1])
     result = ad.AnnData(X=values[keep].astype(np.float32), obs=obs, var=var)
-    stamp(result, resolution=resolution_for(columns), grouped_by=columns)
     store = adata.uns.get("mantispy", {})
+    resolution = resolution_for(columns)
+    # Inherit the source history so the aggregate carries its lineage (spec §14.3).
+    stamp(result, resolution=resolution, grouped_by=columns, history=store.get("history"))
     result.uns["mantispy"].update({key: deepcopy(value) for key, value in store.items() if key in _INHERITED})
     dropped = sorted(set(store) - _INHERITED - set(REQUIRED_UNS) - {"params"})
     if dropped:
@@ -106,19 +110,19 @@ def aggregate(
         "n_obs": int(adata.n_obs),
         "min_cells": int(min_cells),
     }
-    record_params(
-        result,
-        "aggregate",
-        {
-            "by": columns,
-            "func": func,
-            "min_cells": min_cells,
-            "layer": layer,
-            "use_rep": use_rep,
-            "count_key": count_key,
-            "site_key": site_key,
-        },
-    )
+    if store_membership:
+        _record_membership(result, adata, columns, codes, keep)
+    call_params = {
+        "by": columns,
+        "func": func,
+        "min_cells": min_cells,
+        "layer": layer,
+        "use_rep": use_rep,
+        "count_key": count_key,
+        "site_key": site_key,
+    }
+    record_params(result, "aggregate", call_params)
+    record_history(result, "aggregate", params=call_params, source=level_change_source(adata, resolution, columns))
     return result
 
 
@@ -136,7 +140,11 @@ def _site_counts(frame: pd.DataFrame, codes: np.ndarray, n_groups: int) -> np.nd
 def _group_obs(
     adata: AnnData, columns: list[str], keys: pd.Index, codes: np.ndarray, tallies: dict[str, np.ndarray]
 ) -> pd.DataFrame:
-    """Build the aggregated ``obs``: grouping keys, the per-group tallies, constant metadata."""
+    """Build the aggregated ``obs``: grouping keys, the per-group tallies, every column constant within a group.
+
+    The ``Metadata_`` prefix is not a survival filter (spec §13.1): any column constant within every group
+    is carried, whatever its name; a column that varies within a group is dropped rather than copied.
+    """
     if len(columns) == 1:
         obs = pd.DataFrame({columns[0]: np.asarray(keys)})
     else:
@@ -146,11 +154,7 @@ def _group_obs(
         obs[name] = values
 
     frame = as_frame(adata.obs)
-    carried = [
-        column
-        for column in frame.columns
-        if column.startswith("Metadata_") and column not in {*columns, *_TALLIES, *tallies}
-    ]
+    carried = [column for column in frame.columns if column not in {*columns, *_TALLIES, *tallies}]
     if carried:
         grouped = frame[carried].groupby(codes, observed=True)
         constant = grouped.nunique(dropna=False).le(1).all()
@@ -158,5 +162,36 @@ def _group_obs(
             if constant[column]:
                 obs[column] = grouped[column].first().to_numpy()
             else:
-                get_logger().debug("aggregate dropped non-constant metadata column %s", column)
+                get_logger().debug("aggregate dropped non-constant column %s", column)
     return categorize_metadata(obs)
+
+
+def _record_membership(
+    result: AnnData, adata: AnnData, columns: list[str], codes: np.ndarray, keep: np.ndarray
+) -> None:
+    """Store which source rows went into each kept profile, by stable identity (spec §13.4).
+
+    ``members`` is long-form: one row per contributing source object, its identity columns plus the
+    target profile's ``obs`` index. Source rows are referenced by identity, never by position.
+    """
+    source_resolution = get_resolution(adata, default="object")
+    frame = as_frame(adata.obs)
+    identity = [column for column in REQUIRED_OBS.get(source_resolution, ()) if column in frame.columns]
+    if not identity:  # an aggregate source has no required identity columns; fall back to its grouping.
+        # `is not None`, not `or []`: a grouped_by loaded from h5ad is a numpy array, which `or` cannot test.
+        grouped_by = adata.uns.get("mantispy", {}).get("grouped_by")
+        grouped_by = list(grouped_by) if grouped_by is not None else []
+        identity = [column for column in grouped_by if column in frame.columns]
+    # Map each source row to its profile's row index in the kept output, or -1 when its group was dropped.
+    target_row = np.full(len(keep), -1, dtype=np.int64)
+    target_row[keep] = np.arange(int(keep.sum()))
+    rows = target_row[codes]
+    contributing = rows >= 0
+    members = frame.loc[contributing, identity].reset_index(drop=True)
+    members["Metadata_AggregateRow"] = rows[contributing].astype(str)
+    result.uns["mantispy"]["membership"] = {
+        "source_resolution": source_resolution,
+        "identity_columns": identity,
+        "target_column": "Metadata_AggregateRow",
+        "members": members,
+    }

@@ -151,6 +151,7 @@ UNS_KEYS: tuple[str, ...] = (
     "params",
     "aggregated_from",
     "consensus_from",
+    "membership",
     "truth",
 )
 

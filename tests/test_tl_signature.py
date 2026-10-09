@@ -84,6 +84,17 @@ def test_the_heatmap_draws_one_row_per_group(annotated):
     plt.close(ax.figure)
 
 
+def test_a_column_varying_within_a_perturbation_is_not_carried(annotated):
+    """§13.1: feature_signature preserves per-perturbation-constant columns and drops varying ones, rather than copying an arbitrary first value."""
+    adata = annotated()
+    adata.obs["Metadata_Batch"] = "B1"  # constant within every perturbation
+    adata.obs["Metadata_Site"] = [str(i) for i in range(adata.n_obs)]  # varies within a perturbation
+    mt.tl.differential_features(adata, block=None, key_added="d")
+    signature = mt.tl.feature_signature(adata, key="d")
+    assert "Metadata_Batch" in signature.obs and (signature.obs["Metadata_Batch"] == "B1").all()
+    assert "Metadata_Site" not in signature.obs
+
+
 def test_the_heatmap_reads_an_infinity_as_missing():
     """Regression test for #65: one infinity overflowed the clustering distances and raised, and set the colour limits."""
     values = np.random.default_rng(0).normal(size=(6, 5))
