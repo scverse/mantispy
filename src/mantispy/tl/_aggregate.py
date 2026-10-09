@@ -178,9 +178,10 @@ def _record_membership(
     frame = as_frame(adata.obs)
     identity = [column for column in REQUIRED_OBS.get(source_resolution, ()) if column in frame.columns]
     if not identity:  # an aggregate source has no required identity columns; fall back to its grouping.
-        identity = [
-            column for column in (adata.uns.get("mantispy", {}).get("grouped_by") or []) if column in frame.columns
-        ]
+        # `is not None`, not `or []`: a grouped_by loaded from h5ad is a numpy array, which `or` cannot test.
+        grouped_by = adata.uns.get("mantispy", {}).get("grouped_by")
+        grouped_by = list(grouped_by) if grouped_by is not None else []
+        identity = [column for column in grouped_by if column in frame.columns]
     # Map each source row to its profile's row index in the kept output, or -1 when its group was dropped.
     target_row = np.full(len(keep), -1, dtype=np.int64)
     target_row[keep] = np.arange(int(keep.sum()))
