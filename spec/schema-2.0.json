@@ -8,6 +8,7 @@
     "x_dtype": "float32",
     "resolutions": ["object", "well", "aggregate"],
     "feature_kinds": ["measurement", "embedding", "derived"],
+    "control_types": ["negcon", "poscon", "treatment", "empty"],
     "required_obs": {
         "object": [
             "Metadata_Plate",

@@ -248,6 +248,50 @@ def test_parsed_measurements_are_tagged_measurement():
     assert (var["feature_kind"] == "measurement").all()
 
 
+# --- control semantics (spec 10) ------------------------------------------
+
+
+def _with_controls(adata, types):
+    """Attach a Metadata_Control_Type column and the boolean it implies."""
+    adata.obs["Metadata_Control_Type"] = list(types)
+    adata.obs["Metadata_Control"] = adata.obs["Metadata_Control_Type"] != "treatment"
+    return adata
+
+
+def test_a_well_formed_control_pair_passes(adata):
+    _with_controls(adata, ["negcon", "poscon", "empty", "treatment"])
+    assert validate(adata).ok, validate(adata).errors
+
+
+def test_control_flag_without_a_type_is_rejected(adata):
+    adata.obs["Metadata_Control"] = [True, False, True, False]
+    report = validate(adata)
+    assert not report.ok
+    assert any("Metadata_Control_Type" in error for error in report.errors), report.errors
+
+
+def test_a_control_type_without_the_flag_is_rejected(adata):
+    adata.obs["Metadata_Control_Type"] = ["negcon", "treatment", "treatment", "treatment"]
+    report = validate(adata)
+    assert not report.ok
+    assert any("Metadata_Control" in error for error in report.errors), report.errors
+
+
+def test_an_out_of_vocabulary_control_type_is_rejected(adata):
+    _with_controls(adata, ["negcon", "trt", "treatment", "treatment"])
+    report = validate(adata)
+    assert not report.ok
+    assert any("Metadata_Control_Type" in error for error in report.errors), report.errors
+
+
+def test_the_control_flag_must_agree_with_the_type(adata):
+    adata.obs["Metadata_Control_Type"] = ["negcon", "treatment", "treatment", "treatment"]
+    adata.obs["Metadata_Control"] = [False, False, False, False]  # negcon row wrongly flagged non-control
+    report = validate(adata)
+    assert not report.ok
+    assert any("disagrees" in error for error in report.errors), report.errors
+
+
 # --- io.stamp: explicit kind, never guess ---------------------------------
 
 
@@ -426,6 +470,7 @@ def test_published_spec_matches_the_constants():
     assert spec["uns_keys"] == list(s.UNS_KEYS)
     assert spec["required_uns"] == list(s.REQUIRED_UNS)
     assert spec["feature_kinds"] == list(s.FEATURE_KINDS)
+    assert spec["control_types"] == list(s.CONTROL_TYPES)
     assert spec["resolutions"] == list(s.RESOLUTIONS)
     assert spec["optional_var"] == list(s.OPTIONAL_VAR)
     assert spec["uns_results"] == list(s.UNS_RESULTS)
@@ -462,6 +507,23 @@ def test_migrate_fills_the_new_core_fields_on_a_1_0_object():
     assert store["history"] == []
     assert store["grouped_by"] == ["Metadata_Plate", "Metadata_Well"]
     assert (obj.var["feature_kind"] == "measurement").all()
+    assert validate(obj).ok, validate(obj).errors
+
+
+def test_migrate_derives_control_type_from_a_legacy_control_flag():
+    """Under 1.0 Metadata_Control==True meant negcon; migrate moves that into Metadata_Control_Type (spec 10)."""
+    obj = ad.AnnData(
+        X=np.ones((2, 1), dtype=np.float32),
+        obs=pd.DataFrame(
+            {"Metadata_Plate": ["P1", "P1"], "Metadata_Well": ["A01", "A02"], "Metadata_Control": [True, False]},
+            index=["0", "1"],
+        ),
+        var=parse_feature_names(["Cells_AreaShape_Area"]).drop(columns="feature_kind"),
+    )
+    obj.uns["mantispy"] = {"schema_version": "1.0", "resolution": "well"}
+    migrate(obj)
+    assert list(obj.obs["Metadata_Control_Type"]) == ["negcon", "treatment"]
+    assert list(obj.obs["Metadata_Control"].astype(bool)) == [True, False]
     assert validate(obj).ok, validate(obj).errors
 
 

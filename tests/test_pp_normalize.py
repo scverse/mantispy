@@ -29,28 +29,28 @@ def test_reference_rejects_a_non_boolean_column(adata):
 
 
 def test_missing_control_column_points_at_annotate_controls(adata):
-    adata.obs = adata.obs.drop(columns="Metadata_Control")
+    adata.obs = adata.obs.drop(columns="Metadata_Control_Type")
     with pytest.raises(KeyError, match="annotate_controls"):
         mt.pp.normalize(adata, reference="negcon")
 
 
 def test_group_without_reference_rows_names_the_group(adata):
     obs = adata.obs.copy()
-    obs.loc[obs["Metadata_Plate"] == "Plate01", "Metadata_Control"] = False
+    obs.loc[obs["Metadata_Plate"] == "Plate01", "Metadata_Control_Type"] = "treatment"
     adata.obs = obs
     with pytest.raises(ValueError, match="Plate01"):
         mt.pp.normalize(adata, by="Metadata_Plate", reference="negcon")
 
 
 def test_reference_column_with_missing_values_is_refused(adata):
-    """NaN coerces to True, which would select those rows as controls."""
+    """A named boolean reference column with NaN coerces to True, which would select those rows as controls."""
     obs = adata.obs.copy()
-    control = obs["Metadata_Control"].astype(object)
-    control.iloc[:5] = None
-    obs["Metadata_Control"] = control
+    flag = obs["Metadata_Control"].astype(object)
+    flag.iloc[:5] = None
+    obs["held_out"] = flag
     adata.obs = obs
     with pytest.raises(ValueError, match="missing value"):
-        mt.pp.normalize(adata, reference="negcon")
+        mt.pp.normalize(adata, reference="held_out")
 
 
 def test_string_true_false_survives_a_round_trip(adata):

@@ -63,7 +63,9 @@ def test_hit_calling_is_reproducible(scored):
 def test_more_features_than_controls_warns_and_names_the_way_out(scored):
     """rohban reached Mahalanobis distances of 3e17 this way."""
     few = scored[scored.obs["Metadata_Perturbation"] != "DMSO"].copy()
-    few.obs["Metadata_Control"] = np.arange(few.n_obs) < 5
+    is_control = np.arange(few.n_obs) < 5
+    few.obs["Metadata_Control"] = is_control
+    few.obs["Metadata_Control_Type"] = np.where(is_control, "negcon", "treatment")
     with pytest.warns(UserWarning, match="use_rep"):
         mt.tl.hit_calling(few, n_permutations=50)
 
@@ -361,6 +363,7 @@ def test_the_null_is_calibrated_on_pure_noise():
             f"p{g:02d}" for g in range(n_groups) for _ in range(group_size)
         ]
         adata.obs["Metadata_Control"] = adata.obs["Metadata_Perturbation"] == "DMSO"
+        adata.obs["Metadata_Control_Type"] = np.where(adata.obs["Metadata_Control"], "negcon", "treatment")
         mt.tl.hit_calling(adata, groupby="Metadata_Perturbation", n_permutations=500, seed=seed)
         table = adata.uns["mantispy"]["hits"]
         pvalues += list(table.loc[table["group"] != "DMSO", "pvalue"])
@@ -380,6 +383,7 @@ def _plate(group_size: int, n_groups: int = 20, n_controls: int = 24, seed: int 
         f"p{g:02d}" for g in range(n_groups) for _ in range(group_size)
     ]
     adata.obs["Metadata_Control"] = np.arange(n) < n_controls
+    adata.obs["Metadata_Control_Type"] = np.where(np.arange(n) < n_controls, "negcon", "treatment")
     return adata
 
 
@@ -417,6 +421,7 @@ def test_a_robust_covariance_still_calls_a_hit_that_stray_controls_would_hide():
             "Metadata_Well": [f"W{index:03d}" for index in range(len(values))],
             "Metadata_Perturbation": ["DMSO"] * len(controls) + ["pert"] * len(treated),
             "Metadata_Control": [True] * len(controls) + [False] * len(treated),
+            "Metadata_Control_Type": ["negcon"] * len(controls) + ["treatment"] * len(treated),
         },
         index=[str(index) for index in range(len(values))],
     )
@@ -462,6 +467,7 @@ def _cell_adata(values, plate, well, perturbation, control, n_features):
             "Metadata_Well": well,
             "Metadata_Perturbation": perturbation,
             "Metadata_Control": control,
+            "Metadata_Control_Type": np.where(np.asarray(control, dtype=bool), "negcon", "treatment"),
         },
         index=[str(i) for i in range(len(well))],
     )

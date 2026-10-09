@@ -39,7 +39,9 @@ def test_transport_refuses_a_setting_without_its_own_controls(two_batches):
     """The effect is measured against each setting's own reference wells."""
     plates = two_batches.obs["Metadata_Plate"].astype(str)
     orphan = plates == sorted(plates.unique())[0]
-    two_batches.obs.loc[orphan & two_batches.obs["Metadata_Control"].to_numpy(), "Metadata_Control"] = False
+    drop = orphan & two_batches.obs["Metadata_Control"].to_numpy()
+    two_batches.obs.loc[drop, "Metadata_Control"] = False
+    two_batches.obs.loc[drop, "Metadata_Control_Type"] = "treatment"
     mt.tl.transport(two_batches, by="Metadata_Plate")
     matrix = two_batches.uns["mantispy"]["transport_units"]
     assert len(matrix) == 3, "a setting with no reference rows is dropped, not guessed at"

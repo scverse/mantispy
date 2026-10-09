@@ -1,6 +1,6 @@
 """Annotate perturbations and controls.
 
-Several later steps (:func:`~mantispy.pp.sphere`, :func:`~mantispy.tl.grit`) default to ``reference="negcon"``, which reads ``Metadata_Control``; :func:`annotate_controls` writes that column.
+Several later steps (:func:`~mantispy.pp.sphere`, :func:`~mantispy.tl.grit`) default to ``reference="negcon"``, which reads ``Metadata_Control_Type``; :func:`annotate_controls` writes it along with the ``Metadata_Control`` boolean.
 """
 
 from __future__ import annotations
@@ -68,7 +68,9 @@ def annotate_controls(
 
     Returns:
         ``None``, or the modified copy when ``copy=True``.
-        Writes ``obs["Metadata_Control"]`` and, when ``poscon`` is given, ``obs["Metadata_Control_Type"]``.
+        Writes ``obs["Metadata_Control_Type"]`` (``"negcon"``, ``"poscon"`` or ``"treatment"``) and the
+        boolean ``obs["Metadata_Control"]`` it implies (``True`` for any control). Steps defaulting to
+        ``reference="negcon"`` read the type column, so the negcon rows are selected by it alone.
     """
     key = find_perturbation_key(adata, perturbation_key)
     values = adata.obs[key].astype(str)
@@ -81,12 +83,11 @@ def annotate_controls(
             list(negcon),
             key,
         )
-    adata.obs["Metadata_Control"] = is_negcon
-
+    control_type = np.where(is_negcon, "negcon", "treatment")
     if poscon is not None:
-        control_type = np.where(is_negcon, "negcon", "")
         control_type[values.isin([str(v) for v in poscon]).to_numpy()] = "poscon"
-        adata.obs["Metadata_Control_Type"] = control_type
+    adata.obs["Metadata_Control_Type"] = control_type
+    adata.obs["Metadata_Control"] = control_type != "treatment"
     return None
 
 
@@ -106,7 +107,7 @@ def annotate_jump(adata: AnnData, kind: str = "compound", copy: bool = False) ->
         ``None``, or the annotated copy.
         Adds ``Metadata_JCP2022`` (the perturbation identifier), ``Metadata_Perturbation``, ``Metadata_Perturbation_Type`` and ``Metadata_Control``.
         For compounds ``Metadata_Perturbation_Type`` is ``"compound"``, it adds ``Metadata_InChIKey``, and the controls are JUMP's DMSO wells.
-        For CRISPR and ORF ``Metadata_Perturbation`` is the gene symbol, ``Metadata_Perturbation_Type`` is the kind, the controls are the negative-control wells, and it adds ``Metadata_Gene``, ``Metadata_Control_Type`` (``"negcon"``, ``"poscon"`` or ``"trt"``) and ``Metadata_ChromosomeArm``, the arm the gene sits on.
+        For CRISPR and ORF ``Metadata_Perturbation`` is the gene symbol, ``Metadata_Perturbation_Type`` is the kind, ``Metadata_Control`` marks any control well, and it adds ``Metadata_Gene``, ``Metadata_Control_Type`` (``"negcon"``, ``"poscon"`` or ``"treatment"``) and ``Metadata_ChromosomeArm``, the arm the gene sits on.
 
     Notes:
         Downloads about 14 MB of annotation once and caches it.

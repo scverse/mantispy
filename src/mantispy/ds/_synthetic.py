@@ -160,6 +160,7 @@ def synthetic_plate(
                         "Metadata_Col": well_col(well),
                         "Metadata_Perturbation": perturbation,
                         "Metadata_Control": perturbation == "DMSO",
+                        "Metadata_Control_Type": "negcon" if perturbation == "DMSO" else "treatment",
                         "Metadata_Batch": batch,
                         "Metadata_ImageNumber": cell_images,
                         "Metadata_CellCount": count,

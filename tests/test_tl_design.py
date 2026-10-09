@@ -105,6 +105,7 @@ def test_saturation_depth_comes_from_the_replicates_not_the_controls():
             "Metadata_Well": [f"{chr(65 + i // 24)}{i % 24 + 1:02d}" for i in range(len(labels))],
             "Metadata_Perturbation": labels,
             "Metadata_Control": [label == "negcon" for label in labels],
+            "Metadata_Control_Type": ["negcon" if label == "negcon" else "treatment" for label in labels],
         },
         index=[str(i) for i in range(len(labels))],
     )

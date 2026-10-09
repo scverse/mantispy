@@ -354,7 +354,8 @@ def test_scallops_arv471_loads_clean_cell_resolution(tmp_path, monkeypatch):
     assert report.ok, report.errors
     assert adata.obs_names.is_unique
     assert "Condition" not in adata.obs
-    assert set(adata.obs["Metadata_Control_Type"].astype(str)) == {"ntc", "target", "neg"}
+    # Spec 10 vocabulary: NTC guides are negcon, every other guide (targets and the olfactory negatives) a treatment.
+    assert set(adata.obs["Metadata_Control_Type"].astype(str)) == {"negcon", "treatment"}
 
 
 def test_scallops_arv471_maps_controls_and_guides(tmp_path, monkeypatch):

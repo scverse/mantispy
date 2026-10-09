@@ -18,7 +18,8 @@ def genes():
     rng = np.random.default_rng(0)
     scores = np.concatenate([rng.normal(0, 1, 300), rng.normal(0, 1, 150), rng.normal(6, 1, 60)])
     names = [f"ctrl{i}" for i in range(300)] + [f"null{i}" for i in range(150)] + [f"hit{i}" for i in range(60)]
-    obs = pd.DataFrame({"score": scores}, index=names)
+    # The gene identity lives in a Metadata_ column, not the index: group=None resolves it there.
+    obs = pd.DataFrame({"score": scores, "Metadata_Perturbation": names}, index=names)
     adata = AnnData(scores.reshape(-1, 1).astype(float), obs=obs)
     controls = {name for name in names if name.startswith("ctrl")}
     return adata, controls
@@ -144,3 +145,19 @@ def test_a_missing_group_column_is_reported(genes):
     adata, controls = genes
     with pytest.raises(KeyError, match="group"):
         mt.tl.empirical_fdr(adata, control_genes=controls, score="score", group="nope")
+
+
+def test_group_none_reads_the_perturbation_column_not_the_index(genes):
+    """The gene identity comes from Metadata_Perturbation; the row index is never read as the gene."""
+    adata, controls = genes
+    # A row index that disagrees with the perturbation would wrongly flag no controls if the index were read.
+    adata.obs_names = [f"row{i}" for i in range(adata.n_obs)]
+    mt.tl.empirical_fdr(adata, control_genes=controls, score="score")
+    assert adata.obs["empirical_fdr_control"].to_numpy().sum() == 300
+
+
+def test_group_none_without_a_perturbation_column_is_reported(genes):
+    adata, controls = genes
+    del adata.obs["Metadata_Perturbation"]
+    with pytest.raises(KeyError, match="group="):
+        mt.tl.empirical_fdr(adata, control_genes=controls, score="score")

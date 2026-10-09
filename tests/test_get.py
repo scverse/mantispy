@@ -55,6 +55,22 @@ def test_controls(cells):
         mt.get.controls(cells, kind="nonsense")
 
 
+def test_negcon_reads_the_type_not_the_boolean(cells):
+    """Metadata_Control marks any control, so negcon must come from Metadata_Control_Type, not the boolean."""
+    types = cells.obs["Metadata_Control_Type"].astype(str).to_numpy().copy()
+    types[np.flatnonzero(types == "negcon")[:2]] = "poscon"  # make some controls positive
+    cells.obs["Metadata_Control_Type"] = types
+    cells.obs["Metadata_Control"] = types != "treatment"
+
+    negcon = mt.get.controls(cells, kind="negcon")
+    poscon = mt.get.controls(cells, kind="poscon")
+    np.testing.assert_array_equal(negcon, types == "negcon")
+    np.testing.assert_array_equal(poscon, types == "poscon")
+    assert poscon.any() and not (negcon & poscon).any()
+    # the boolean is the union and is strictly wider than negcon here
+    assert cells.obs["Metadata_Control"].to_numpy().sum() > negcon.sum()
+
+
 def test_scanpy_reexports_are_available():
     assert callable(mt.get.obs_df) and callable(mt.get.var_df)
 

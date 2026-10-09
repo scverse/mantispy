@@ -100,8 +100,9 @@ def test_a_crispr_well_is_named_by_its_gene_and_its_controls_by_their_type(fake_
     assert list(obs["Metadata_Perturbation"].astype(str)) == ["no-guide", "non-targeting", "PLK1", "PSMB2"]
     assert list(obs["Metadata_Gene"].astype(str)) == list(obs["Metadata_Perturbation"].astype(str))
     assert set(obs["Metadata_Perturbation_Type"].astype(str)) == {"crispr"}
-    assert list(obs["Metadata_Control_Type"].astype(str)) == ["negcon", "negcon", "poscon", "trt"]
-    assert list(obs["Metadata_Control"].to_numpy()) == [True, True, False, False]
+    assert list(obs["Metadata_Control_Type"].astype(str)) == ["negcon", "negcon", "poscon", "treatment"]
+    # Metadata_Control marks any control now, so the poscon well is True (spec 10).
+    assert list(obs["Metadata_Control"].to_numpy()) == [True, True, True, False]
     assert list(obs["Metadata_ChromosomeArm"].astype(object).fillna("")) == ["", "", "16p", "1p"]
 
 
@@ -133,7 +134,7 @@ def test_an_orf_well_is_named_by_its_gene_like_a_crispr_well(monkeypatch):
     obs = wells.obs
     assert list(obs["Metadata_Perturbation"].astype(str)) == ["NAT1", "PLK1"]
     assert set(obs["Metadata_Perturbation_Type"].astype(str)) == {"orf"}
-    assert list(obs["Metadata_Control_Type"].astype(str)) == ["negcon", "trt"]
+    assert list(obs["Metadata_Control_Type"].astype(str)) == ["negcon", "treatment"]
     assert list(obs["Metadata_ChromosomeArm"].astype(object).fillna("")) == ["", "16p"]
 
 
@@ -156,8 +157,8 @@ def test_corum_reads_one_row_per_complex_and_member(tmp_path, monkeypatch):
 def test_jump_crispr_names_its_genes_and_controls():
     adata = mt.ds.jump_crispr()
     kinds = adata.obs["Metadata_Control_Type"].astype(str).value_counts().to_dict()
-    assert kinds == {"trt": 43138, "negcon": 7478, "poscon": 569}
-    assert adata.obs.loc[adata.obs["Metadata_Control_Type"] == "trt", "Metadata_Perturbation"].nunique() > 7900
+    assert kinds == {"treatment": 43138, "negcon": 7478, "poscon": 569}
+    assert adata.obs.loc[adata.obs["Metadata_Control_Type"] == "treatment", "Metadata_Perturbation"].nunique() > 7900
     assert mt.io.validate(adata).ok, mt.io.validate(adata).errors
 
 

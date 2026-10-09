@@ -386,6 +386,7 @@ def test_grit_is_higher_for_treated_than_controls(profiles):
 
 def test_grit_needs_controls(profiles):
     profiles.obs["Metadata_Control"] = False
+    profiles.obs["Metadata_Control_Type"] = "treatment"
     with pytest.raises(ValueError, match="no reference rows"):
         mt.tl.grit(profiles)
 

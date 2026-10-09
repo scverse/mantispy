@@ -41,11 +41,13 @@ def empirical_fdr(
     This calibrates against control genes that cannot respond, where :func:`~mantispy.tl.hit_calling` calibrates each group against control wells; use this when a set of non-responding genes is the better null.
 
     Args:
-        adata: One row per gene, with the score in ``obs`` and a column (or index) naming the gene.
+        adata: One row per gene, with the score and the gene identity in ``obs``.
         control_genes: The genes that form the null, such as the unexpressed set.
             A bare string is rejected, since it would be read as a set of single characters.
         score: ``obs`` column holding the per-gene score, higher for a stronger phenotype.
-        group: ``obs`` column naming the gene, matched against `control_genes`; the index is used when ``None``.
+        group: ``obs`` column naming the gene, matched against `control_genes`. ``None`` resolves the
+            perturbation column (:func:`~mantispy.pp.find_perturbation_key`), which is the gene symbol for
+            a crispr or orf screen; the row index is never read as the gene identity.
         alpha: The cutoff a gene must clear in ``criterion`` to be called a hit.
         criterion: Which quantity ``is_hit`` reads, ``"p"`` or ``"q"`` (see Notes).
         key_added: Prefix for the outputs.
@@ -59,7 +61,7 @@ def empirical_fdr(
     Raises:
         TypeError: `control_genes` is a string rather than a collection of gene names.
         ValueError: `criterion` is not one of ``CRITERIA``, or no control gene is present in the object, or every control gene has a missing score.
-        KeyError: `score`, or `group`, is not an ``obs`` column.
+        KeyError: `score`, or `group`, is not an ``obs`` column, or `group` is ``None`` and no perturbation column is present to name the gene.
 
     Notes:
         Two quantities come out, answering different questions.
@@ -81,10 +83,22 @@ def empirical_fdr(
     obs = as_frame(adata.obs)
     if score not in obs:
         raise KeyError(f"score={score!r} is not an obs column")
-    if group is not None and group not in obs:
+    if group is None:
+        # The gene identity is the perturbation column, not the row index (schema 2.0 reads no meaning from
+        # obs_names); for a crispr/orf screen that column holds the gene symbol.
+        from mantispy.pp._annotate import PERTURBATION_KEYS, find_perturbation_key
+
+        try:
+            group = find_perturbation_key(adata)
+        except KeyError as error:
+            raise KeyError(
+                f"group=None needs a perturbation column to name the gene, but none of {list(PERTURBATION_KEYS)} "
+                "is in obs; pass group= to say which column identifies the gene"
+            ) from error
+    elif group not in obs:
         raise KeyError(f"group={group!r} is not an obs column")
 
-    names = (obs[group] if group is not None else pd.Series(adata.obs_names, index=obs.index)).astype(str).to_numpy()
+    names = obs[group].astype(str).to_numpy()
     is_control = np.isin(names, np.asarray(list(control_genes), dtype=str))
     values = pd.to_numeric(obs[score], errors="coerce").to_numpy(dtype=float)
     finite = np.isfinite(values)

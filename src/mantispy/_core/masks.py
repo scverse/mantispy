@@ -69,22 +69,38 @@ def feature_mask(adata: AnnData, key: str | None) -> np.ndarray:
     return np.ones(adata.n_vars, dtype=bool)
 
 
+#: The named control classes :func:`reference_mask` selects through ``Metadata_Control_Type`` (spec 10.3),
+#: rather than through the ``Metadata_Control`` boolean, which now marks any control.
+CONTROL_CLASSES = ("negcon", "poscon")
+
+
 def reference_mask(adata: AnnData, reference: str | None) -> np.ndarray:
     """Boolean mask over ``obs``: the rows a transform should be fitted on.
 
-    ``None`` fits on everything, ``"negcon"`` on ``Metadata_Control``, and anything else names a boolean ``obs`` column.
+    ``None`` fits on everything, ``"negcon"`` (or ``"poscon"``) on the rows whose ``Metadata_Control_Type``
+    is that class, and anything else names a boolean ``obs`` column.
+
+    Selecting a named class reads ``Metadata_Control_Type``, not the ``Metadata_Control`` boolean: under
+    schema 2.0 the boolean marks any control, so a run defaulting to ``reference="negcon"`` must not pick up
+    positive or empty controls (spec 10.3).
     """
     if reference is None:
         return np.ones(adata.n_obs, dtype=bool)
 
-    column = "Metadata_Control" if reference == "negcon" else reference
-    if column not in adata.obs:
-        extra = " Run mt.pp.annotate_controls to create it." if column == "Metadata_Control" else ""
-        raise KeyError(f"obs has no column {column!r} to use as reference.{extra}")
+    if reference in CONTROL_CLASSES:
+        if "Metadata_Control_Type" not in adata.obs:
+            raise KeyError(
+                f"obs has no column 'Metadata_Control_Type' to select the {reference!r} reference. "
+                "Run mt.pp.annotate_controls to create it."
+            )
+        return (as_frame(adata.obs)["Metadata_Control_Type"].astype(str) == reference).to_numpy()
+
+    if reference not in adata.obs:
+        raise KeyError(f"obs has no column {reference!r} to use as reference.")
 
     return _flag_mask(
-        pd.Series(adata.obs[column]),
-        f"obs[{column!r}]",
+        pd.Series(adata.obs[reference]),
+        f"obs[{reference!r}]",
         "a control row",
         " Fill them, or check that the platemap covers every well.",
     )

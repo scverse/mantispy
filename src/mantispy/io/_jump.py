@@ -95,8 +95,8 @@ def join_jump_annotation(obs: pd.DataFrame, kind: str = "compound") -> pd.DataFr
 
     Returns:
         A new frame with ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_Perturbation_Type`` and ``Metadata_Control`` joined onto `obs`, missing on the wells the annotation does not cover.
-        For ``"compound"`` the perturbation is the ``Metadata_JCP2022`` compound id, ``Metadata_Perturbation_Type`` is ``"compound"``, it adds ``Metadata_InChIKey``, and ``Metadata_Control`` marks :data:`NEGATIVE_CONTROL`.
-        For ``"crispr"`` and ``"orf"`` ``Metadata_Gene`` and ``Metadata_Perturbation`` are the gene symbol (its reagents are the replicates), ``Metadata_Perturbation_Type`` is the kind, ``Metadata_Control_Type`` is ``"negcon"``, ``"poscon"`` or ``"trt"``, ``Metadata_Control`` marks the negative-control wells, and ``Metadata_ChromosomeArm`` is the arm the gene sits on, such as ``"1p"``, missing for a gene without a mapped locus.
+        For ``"compound"`` the perturbation is the ``Metadata_JCP2022`` compound id, ``Metadata_Perturbation_Type`` is ``"compound"``, it adds ``Metadata_InChIKey``, and ``Metadata_Control_Type`` is ``"negcon"`` for :data:`NEGATIVE_CONTROL` else ``"treatment"``, with ``Metadata_Control`` the boolean it implies.
+        For ``"crispr"`` and ``"orf"`` ``Metadata_Gene`` and ``Metadata_Perturbation`` are the gene symbol (its reagents are the replicates), ``Metadata_Perturbation_Type`` is the kind, ``Metadata_Control_Type`` is ``"negcon"``, ``"poscon"`` or ``"treatment"`` (JUMP's ``"trt"``), ``Metadata_Control`` marks any control row, and ``Metadata_ChromosomeArm`` is the arm the gene sits on, such as ``"1p"``, missing for a gene without a mapped locus.
 
     Raises:
         ValueError: `kind` is not one of :data:`KINDS`.
@@ -105,6 +105,9 @@ def join_jump_annotation(obs: pd.DataFrame, kind: str = "compound") -> pd.DataFr
     if kind not in KINDS:
         raise ValueError(f"kind must be one of {KINDS}, got {kind!r}")
 
+    # The JUMP annotation is authoritative for control status; drop any incoming values so the controls
+    # merge below does not collide with them into Metadata_Control_Type_x / _y.
+    obs = obs.drop(columns=["Metadata_Control", "Metadata_Control_Type"], errors="ignore")
     joined = obs if "Metadata_JCP2022" in obs else _join_wells(obs)
 
     if kind == "compound":
@@ -112,7 +115,9 @@ def join_jump_annotation(obs: pd.DataFrame, kind: str = "compound") -> pd.DataFr
         joined = joined.merge(compounds, on="Metadata_JCP2022", how="left", validate="m:1")
         joined["Metadata_Perturbation"] = joined["Metadata_JCP2022"].astype(str)
         joined["Metadata_Perturbation_Type"] = "compound"
-        joined["Metadata_Control"] = (joined["Metadata_JCP2022"] == NEGATIVE_CONTROL).to_numpy()
+        is_negcon = (joined["Metadata_JCP2022"] == NEGATIVE_CONTROL).to_numpy()
+        joined["Metadata_Control_Type"] = np.where(is_negcon, "negcon", "treatment")
+        joined["Metadata_Control"] = is_negcon
         return joined
 
     genes = jump_metadata(kind)[["Metadata_JCP2022", "Metadata_Symbol"]].rename(
@@ -124,12 +129,13 @@ def join_jump_annotation(obs: pd.DataFrame, kind: str = "compound") -> pd.DataFr
     )
     for table in (genes, controls):
         joined = joined.merge(table, on="Metadata_JCP2022", how="left", validate="m:1")
-    joined["Metadata_Control_Type"] = joined["Metadata_Control_Type"].fillna("trt")
+    # Spec 10.2 fixes the control-type vocabulary; JUMP's non-control pert_type "trt" is the schema's "treatment".
+    joined["Metadata_Control_Type"] = joined["Metadata_Control_Type"].fillna("treatment").replace({"trt": "treatment"})
     # The gene is the replication unit here: JUMP's mAP benchmark scores the genetic arms at the gene level,
     # treating the several reagents per gene as its replicates. The reagent stays in Metadata_JCP2022.
     joined["Metadata_Perturbation"] = joined["Metadata_Gene"].fillna(joined["Metadata_JCP2022"]).astype(str)
     joined["Metadata_Perturbation_Type"] = kind
-    joined["Metadata_Control"] = (joined["Metadata_Control_Type"] == "negcon").to_numpy()
+    joined["Metadata_Control"] = (joined["Metadata_Control_Type"] != "treatment").to_numpy()
     joined["Metadata_ChromosomeArm"] = joined["Metadata_Gene"].map(_chromosome_arms())
     return joined
 

@@ -19,6 +19,7 @@ def test_a_plate_with_one_control_well_raises_rather_than_zeroing_it(wells):
     control[np.flatnonzero(plate == plate[0])[:4]] = True
     control[np.flatnonzero(plate != plate[0])[0]] = True  # a single control well on the other plate
     wells.obs["Metadata_Control"] = control
+    wells.obs["Metadata_Control_Type"] = np.where(control, "negcon", "treatment")
 
     with pytest.raises(ValueError, match="at least 2 reference rows"):
         mt.pp.sphere(wells, method="ZCA", by="Metadata_Plate")
@@ -51,6 +52,7 @@ def _batched(n_batches=3, per_batch=40, n_features=6, effect=3.0, seed=0):
                     "Metadata_Well": [f"A{index + 1:02d}" for index in range(per_batch)],
                     "Metadata_Perturbation": np.where(treated, "compound", "DMSO"),
                     "Metadata_Control": ~treated,
+                    "Metadata_Control_Type": np.where(treated, "treatment", "negcon"),
                 }
             )
         )
@@ -100,6 +102,7 @@ def _plantable(seed=0, n_groups=8, per_group=6, n_control=48):
             "Metadata_Well": [f"A{index + 1:04d}" for index in range(n)],
             "Metadata_Perturbation": labels,
             "Metadata_Control": [label == "DMSO" for label in labels],
+            "Metadata_Control_Type": ["negcon" if label == "DMSO" else "treatment" for label in labels],
         },
         index=[str(index) for index in range(n)],
     )
@@ -240,8 +243,8 @@ def test_auto_without_the_columns_or_reference_it_needs_names_the_gap():
         mt.pp.sphere(missing_label, method="ZCA", epsilon="auto")
 
     missing_reference = adata.copy()
-    del missing_reference.obs["Metadata_Control"]
-    with pytest.raises(ValueError, match="Metadata_Control"):
+    del missing_reference.obs["Metadata_Control_Type"]
+    with pytest.raises(ValueError, match="Metadata_Control_Type"):
         mt.pp.sphere(missing_reference, method="ZCA", epsilon="auto")
 
 
@@ -263,6 +266,7 @@ def test_auto_with_no_treated_wells_raises():
     pytest.importorskip("copairs")
     adata = _plantable()
     adata.obs["Metadata_Control"] = np.ones(adata.n_obs, dtype=bool)
+    adata.obs["Metadata_Control_Type"] = "negcon"
 
     with pytest.raises(ValueError, match="needs replicate pairs to score"):
         mt.pp.sphere(adata, method="ZCA", epsilon="auto")
@@ -316,6 +320,7 @@ def test_tvn_refuses_a_batch_it_cannot_estimate_a_covariance_for():
     control = adata.obs["Metadata_Control"].to_numpy(dtype=bool).copy()
     control[np.flatnonzero(adata.obs["Metadata_Batch"].to_numpy() == "B1")[1:]] = False
     adata.obs["Metadata_Control"] = control
+    adata.obs["Metadata_Control_Type"] = np.where(control, "negcon", "treatment")
 
     with pytest.raises(ValueError, match="at least 2"):
         mt.pp.tvn(adata, use_rep=None)

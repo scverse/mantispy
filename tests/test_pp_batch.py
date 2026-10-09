@@ -63,7 +63,12 @@ def test_b_score_recovers_hits_a_gradient_masks():
     adata = ad.AnnData(
         X=value.reshape(-1, 1).astype(np.float32),
         obs=pd.DataFrame(
-            {"Metadata_Plate": "P1", "Metadata_Well": names, "Metadata_Control": True},
+            {
+                "Metadata_Plate": "P1",
+                "Metadata_Well": names,
+                "Metadata_Control": True,
+                "Metadata_Control_Type": "negcon",
+            },
             index=[str(i) for i in range(len(names))],
         ),
         var=pd.DataFrame(index=["Cells_Intensity_F0"]),
@@ -207,7 +212,7 @@ def _control_plate(n_wells, n_features, gradient, seed, noise=0.0, plate="P1"):
         values = generator.normal(0.0, 1.0, (n_wells, n_features))
 
     obs = pd.DataFrame(
-        {"Metadata_Plate": plate, "Metadata_Well": wells, "Metadata_Control": True},
+        {"Metadata_Plate": plate, "Metadata_Well": wells, "Metadata_Control": True, "Metadata_Control_Type": "negcon"},
         index=[str(index) for index in range(n_wells)],
     )
     adata = ad.AnnData(
@@ -305,7 +310,12 @@ def _plate(x, names, control, var_names):
     adata = ad.AnnData(
         X=np.asarray(x, dtype=np.float32),
         obs=pd.DataFrame(
-            {"Metadata_Plate": "P", "Metadata_Well": names, "Metadata_Control": control},
+            {
+                "Metadata_Plate": "P",
+                "Metadata_Well": names,
+                "Metadata_Control": control,
+                "Metadata_Control_Type": np.where(np.asarray(control, dtype=bool), "negcon", "treatment"),
+            },
             index=[str(i) for i in range(len(names))],
         ),
         var=pd.DataFrame(index=var_names),
@@ -410,6 +420,7 @@ def _treated_and_thinned(seed=0):
             "Metadata_Plate": "P1",
             "Metadata_Well": [f"W{index:03d}" for index in range(200)],
             "Metadata_Control": control,
+            "Metadata_Control_Type": np.where(control, "negcon", "treatment"),
             "Metadata_CellCount": count,
         },
         index=[str(index) for index in range(200)],

@@ -77,6 +77,7 @@ def _dosed_wells(conc, resp, controls=()):
             "Metadata_Compound": ["c"] * n + ["DMSO"] * m,
             "Metadata_Concentration": np.concatenate([np.asarray(conc, dtype=float), np.zeros(m)]),
             "Metadata_Control": [False] * n + [True] * m,
+            "Metadata_Control_Type": ["treatment"] * n + ["negcon"] * m,
             "Cells_AreaShape_a": np.zeros(n + m),
             "Cells_AreaShape_b": np.zeros(n + m),
         }
@@ -113,7 +114,9 @@ def test_the_cutoff_comes_from_the_controls_that_did_not_fit_the_transform():
 def test_dose_features_needs_more_than_one_control_row_to_set_a_scale(phenotypes):
     """One control well gives a baseline but no spread, so every response would be infinitely many MADs."""
     control = phenotypes.obs["Metadata_Control"].to_numpy(dtype=bool)
-    phenotypes.obs["Metadata_Control"] = control & (np.cumsum(control) == 1)
+    keep = control & (np.cumsum(control) == 1)
+    phenotypes.obs["Metadata_Control"] = keep
+    phenotypes.obs["Metadata_Control_Type"] = np.where(keep, "negcon", "treatment")
     with pytest.raises(ValueError, match="at least two control rows"):
         mt.tl.dose_features(phenotypes)
 
@@ -161,6 +164,7 @@ def test_the_amplitude_floor_follows_the_plates_the_concentration_sits_on():
     frame["Metadata_Compound"] = frame["compound"]
     frame["Metadata_Concentration"] = frame["dose"]
     frame["Metadata_Control"] = frame["compound"] == "DMSO"
+    frame["Metadata_Control_Type"] = np.where(frame["Metadata_Control"], "negcon", "treatment")
     frame["Metadata_Well"] = [f"{chr(65 + i // 24)}{i % 24 + 1:02d}" for i in range(len(frame))]
     for feature in range(4):
         frame[f"Cells_AreaShape_f{feature}"] = rng.normal(0.0, 0.1, len(frame)) + frame["offset"]
