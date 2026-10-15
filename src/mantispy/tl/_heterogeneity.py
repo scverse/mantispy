@@ -25,6 +25,7 @@ from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger, report_drop
 from mantispy._core.masks import reference_mask
 from mantispy._core.mutation import inplace_or_copy
+from mantispy._core.provenance import level_change_source, record_history
 from mantispy._core.schema import stamp
 from mantispy.tl._aggregate import _group_obs
 from mantispy.tl._hits import _ks_block_null, ks_statistic
@@ -136,10 +137,17 @@ def cluster_composition(
     )
 
     result = ad.AnnData(X=fractions.astype(np.float32), obs=obs, var=var)
-    stamp(result, resolution="well", grouped_by=columns)
+    store = adata.uns.get("mantispy", {})
+    stamp(result, resolution="well", grouped_by=columns, history=store.get("history"))
     test, dispersion = _composition_test(result, counts, reference)
     result.uns["mantispy"]["composition_test"] = test
     result.uns["mantispy"]["composition_dispersion"] = dispersion
+    record_history(
+        result,
+        "cluster_composition",
+        params={"cluster_key": cluster_key, "by": columns, "reference": reference},
+        source=level_change_source(adata, "well", columns),
+    )
     return result
 
 

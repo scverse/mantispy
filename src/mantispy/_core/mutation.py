@@ -8,7 +8,7 @@ import warnings
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from mantispy._core.provenance import record_params
+from mantispy._core.provenance import record_history, record_params
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -105,7 +105,9 @@ def inplace_or_copy(expects: str | tuple[str, ...] | None = None) -> Callable[[F
 
             written = params.get("key_added")
             name = f"{func.__name__}:{written}" if writes_layer and written else func.__name__
-            record_params(target, name, {**params, **extra})
+            call_params = {**params, **extra}
+            record_params(target, name, call_params)
+            record_history(target, name, params=call_params, output=written or "X")
             return target if copy else None
 
         return wrapper  # type: ignore[return-value]

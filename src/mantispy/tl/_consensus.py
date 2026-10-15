@@ -13,7 +13,7 @@ from anndata import AnnData
 from mantispy._core._numba import MEDIAN
 from mantispy._core._reduce import get_matrix, group_codes, group_offsets, reduce_grouped, reduced_var
 from mantispy._core.logging import report_drop
-from mantispy._core.provenance import record_params
+from mantispy._core.provenance import level_change_source, record_history, record_params
 from mantispy._core.schema import stamp
 from mantispy.tl._aggregate import _group_obs
 from mantispy.tl._similarity import similarity_matrix
@@ -139,19 +139,18 @@ def consensus(
         obs=obs.loc[keep].reset_index(drop=True).set_axis(pd.Index([str(i) for i in range(int(keep.sum()))])),
         var=var,
     )
-    stamp(result, resolution="aggregate", grouped_by=[by])
+    store = adata.uns.get("mantispy", {})
+    stamp(result, resolution="aggregate", grouped_by=[by], history=store.get("history"))
     result.uns["mantispy"]["consensus_weights"] = pd.DataFrame(
         {"group": [str(keys[code]) for code in codes], "weight": weights}
     )
-    record_params(
-        result,
-        "consensus",
-        {
-            "by": by,
-            "method": method,
-            "correlation": correlation,
-            "min_replicates": min_replicates,
-            "use_rep": use_rep,
-        },
-    )
+    call_params = {
+        "by": by,
+        "method": method,
+        "correlation": correlation,
+        "min_replicates": min_replicates,
+        "use_rep": use_rep,
+    }
+    record_params(result, "consensus", call_params)
+    record_history(result, "consensus", params=call_params, source=level_change_source(adata, "aggregate", [by]))
     return result

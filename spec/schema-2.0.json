@@ -101,6 +101,7 @@
         "params",
         "aggregated_from",
         "consensus_from",
+        "membership",
         "truth"
     ],
     "uns_results": [
