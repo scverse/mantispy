@@ -107,6 +107,7 @@ def from_dataframe(
     keep_non_features: bool = False,
     objects: Sequence[str] | None = DEFAULT_OBJECTS,
     resolution: str = "well",
+    grouped_by: Sequence[str] | None = None,
 ) -> ad.AnnData:
     """Build an AnnData from a wide profile table.
 
@@ -126,6 +127,7 @@ def from_dataframe(
             ``None`` keeps every object, including the whole-field ``Image`` measurements.
         resolution: Resolution to record.
             Profile tables are usually well-level.
+        grouped_by: For ``"aggregate"`` resolution, the columns that define one row; required there since there is no default.
 
     Returns:
         An :class:`~anndata.AnnData` of observations by features at the recorded resolution, with the parsed feature annotation in ``var`` and the schema stamp, the resolution and the channel vocabulary it parsed with in ``uns["mantispy"]``.
@@ -221,7 +223,7 @@ def from_dataframe(
     obs.index = pd.Index([str(i) for i in range(len(obs))])
 
     adata = ad.AnnData(X=X, obs=obs, var=parsed.loc[feature_names])
-    _record(adata, resolution=resolution)
+    _record(adata, resolution=resolution, grouped_by=grouped_by)
     # Recorded whether given or inferred, so the parse can be reproduced from the object.
     if vocabulary:
         adata.uns["mantispy"]["channels"] = list(vocabulary)
@@ -295,6 +297,7 @@ def read_profiles(
     primary_object: str = "Cells",
     strict_one_to_one: bool = True,
     resolution: str | None = None,
+    grouped_by: Sequence[str] | None = None,
 ) -> ad.AnnData:
     """Read profiles into an AnnData of observations by features.
 
@@ -330,6 +333,7 @@ def read_profiles(
         strict_one_to_one: For an export directory, raise when another object does not match the primary object exactly once.
             ``False`` keeps the first match.
         resolution: Resolution to record, ``"object"`` for a directory and ``"well"`` for files when omitted.
+        grouped_by: For ``"aggregate"`` resolution, the columns that define one row; required there since there is no default.
 
     Returns:
         An :class:`~anndata.AnnData` at the recorded resolution, with the parsed feature annotation in ``var``, the metadata in ``obs`` with pycytominer's per-well counts copied to ``Metadata_CellCount`` and ``Metadata_SiteCount``, and the schema stamp, the resolution, the channel vocabulary, this call's parameters and, from an export directory, the per-image quality table under ``uns["mantispy"]``.
@@ -394,6 +398,7 @@ def read_profiles(
         keep_non_features=keep_non_features,
         objects=objects,
         resolution=resolution,
+        grouped_by=grouped_by,
     )
     obs = as_frame(adata.obs)
     if platemap is not None:

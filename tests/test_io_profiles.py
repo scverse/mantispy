@@ -33,6 +33,14 @@ def test_pycytominer_counts_are_copied_to_the_names_mantispy_reads(published, ex
     assert set(published) | {"Metadata_Site_Count"} <= set(obs.columns)
 
 
+def test_from_dataframe_records_an_aggregate_grouping():
+    """An aggregate-resolution read carries grouped_by through to the stamp (needed for a per-barcode table)."""
+    frame = _frame().assign(Metadata_Barcode=["b1", "b2", "b3", "b4"]).drop(columns=["Metadata_Plate", "Metadata_Well"])
+    adata = from_dataframe(frame, channels=["DNA"], resolution="aggregate", grouped_by=["Metadata_Barcode"])
+    assert adata.uns["mantispy"]["resolution"] == "aggregate"
+    assert adata.uns["mantispy"]["grouped_by"] == ["Metadata_Barcode"]
+
+
 def test_sentinels_become_nan():
     frame = _frame()
     frame.loc[0, "Cells_AreaShape_Area"] = -999.0
