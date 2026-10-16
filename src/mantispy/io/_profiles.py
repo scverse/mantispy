@@ -166,9 +166,11 @@ def from_dataframe(
             # A feature whose name names no object parses with a missing object; under pandas 3, astype(str)
             # keeps that missing value, so it is named here rather than sorted alongside the strings.
             dropped = parsed["object"][keep & excluded]
-            named = sorted(set(dropped.dropna().astype(str))) + (["<no object>"] if dropped.isna().any() else [])
+            dropped_objects = sorted(set(dropped.dropna().astype(str))) + (
+                ["<no object>"] if dropped.isna().any() else []
+            )
             report_drop(
-                f"feature(s) measured on {named}",
+                f"feature(s) measured on {dropped_objects}",
                 int((keep & excluded).sum()),
                 int(keep.sum()),
                 remedy="pass objects=None to keep every object",
