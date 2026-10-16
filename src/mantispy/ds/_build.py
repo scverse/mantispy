@@ -407,6 +407,7 @@ def _assemble_pki(cache_dir: str | Path | None = None) -> AnnData:
     obs = as_frame(adata.obs)
     control = (obs["Metadata_control_type"].astype(str) == "negcon").to_numpy()
     obs["Metadata_Control"] = control
+    obs["Metadata_Control_Type"] = np.where(control, "negcon", "treatment")
     # Control wells have no compound or dose, so without this each would become its own "nan@nan" perturbation.
     compound = np.where(control, "DMSO", obs["Metadata_broad_sample"].astype(str).to_numpy())
     dose = obs["Metadata_mmoles_per_liter"].to_numpy(dtype=float)
