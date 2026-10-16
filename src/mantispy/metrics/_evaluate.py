@@ -93,7 +93,7 @@ def _rep_map(
 
     # compute_null=False skips the permutation null: only the mean point estimate is read here, not the p-values.
     table, _ = _score_map(meta, features, settings, null_size=0, threshold=0.05, seed=0, warn=False, compute_null=False)
-    return float(table["mean_average_precision"].mean())
+    return float(table["score"].mean())
 
 
 def _benchmark(

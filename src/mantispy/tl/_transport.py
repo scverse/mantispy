@@ -122,14 +122,14 @@ def transport(
         weight: ``"activity"`` weights each comparison by the smaller of the two effect magnitudes, since the correlation of an inactive perturbation is noise.
             ``"equal"`` weights all comparisons the same.
         min_shared: Minimum number of shared perturbations for a pair of units to be compared.
-        threshold: q-value cutoff for ``transports``.
+        threshold: q-value cutoff for ``is_significant`` (whether a group transports).
             The null uses every mismatched pair of perturbations, so there is no null size or seed to set.
         key_added: Name for the outputs.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
         ``None``, or the modified copy.
-        Writes ``uns["mantispy"][key_added]`` with one row per ``group`` and ``level`` and the columns ``n_pairs``, ``agreement``, ``pvalue``, ``qvalue`` and ``transports``.
+        Writes ``uns["mantispy"][key_added]`` with one row per ``group`` and ``level`` and the columns ``n_pairs``, ``agreement``, ``pvalue``, ``qvalue`` and ``is_significant``.
         Writes ``uns["mantispy"][key_added + "_units"]``, the units-by-units agreement matrix drawn by :func:`~mantispy.pl.setting_agreement`, and joins the finest level's agreement back onto the rows as ``obs[key_added + "_agreement"]``.
 
     Raises:
@@ -239,10 +239,10 @@ def transport(
     table = pd.DataFrame(records, columns=["group", "level", "n_pairs", "agreement", "pvalue"])
     if len(table):
         table["qvalue"] = benjamini_hochberg(table["pvalue"].to_numpy())
-        table["transports"] = table["qvalue"] < threshold
+        table["is_significant"] = table["qvalue"] < threshold
     else:
         table["qvalue"] = []
-        table["transports"] = []
+        table["is_significant"] = []
 
     adata.uns.setdefault("mantispy", {})[key_added] = table
     pairs_frame = pd.DataFrame(matrix_rows, columns=["left", "right", "group", "agreement", "weight"])
@@ -253,7 +253,7 @@ def transport(
     labels = obs[groupby].astype(str)
     adata.obs[f"{key_added}_agreement"] = lookup.reindex(labels).to_numpy()
     for level in buckets:
-        called = table[(table["level"] == level) & table["transports"]]
+        called = table[(table["level"] == level) & table["is_significant"]]
         get_logger().info(
             "transport(%s): %d of %d group(s) reproduce", level, len(called), int((table["level"] == level).sum())
         )

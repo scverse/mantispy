@@ -25,6 +25,7 @@ def scored():
     wells.obs["Metadata_Compound"] = wells.obs["Metadata_Perturbation"].astype(str).to_numpy()
     wells.obs["Metadata_MOA"] = wells.obs["Metadata_Perturbation"].astype(str).to_numpy()
     wells.obs["Metadata_Concentration"] = np.tile([0.1, 1.0, 10.0, 100.0], wells.n_obs)[: wells.n_obs]
+    wells.obs["Metadata_ConcentrationUnit"] = "uM"
 
     mt.tl.hit_calling(wells, n_permutations=15)  # plot fixture: the tests draw and check non-mutation, not a p-value
     mt.tl.effect_size(wells)
@@ -118,6 +119,7 @@ def inhibitor_adata():
         {
             "Metadata_Compound": "cpd",
             "Metadata_Concentration": doses,
+            "Metadata_ConcentrationUnit": "uM",
             "Metadata_Plate": "P1",
             "Metadata_Well": [f"A{i + 1:02d}" for i in range(doses.size)],
             "Cells_AreaShape_Area": 1.0,
@@ -135,7 +137,7 @@ def test_the_direction_plot_bands_the_ladder_by_phase(phenotypes):
     _, ax = plt.subplots()
     mt.pl.dose_direction(phenotypes, compound="grows", ax=ax)
     table = phenotypes.uns["mantispy"]["dose_direction"]
-    drawn_compound = table[table["compound"] == "grows"]
+    drawn_compound = table[table["group"] == "grows"]
 
     assert len(ax.patches) == len(drawn_compound)
     colours = {patch.get_facecolor() for patch in ax.patches}

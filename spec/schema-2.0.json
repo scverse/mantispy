@@ -33,6 +33,7 @@
         "Metadata_Perturbation_Type",
         "Metadata_Compound",
         "Metadata_Concentration",
+        "Metadata_ConcentrationUnit",
         "Metadata_ConcentrationRecorded",
         "Metadata_MOA",
         "Metadata_CellLine",
@@ -129,10 +130,20 @@
         "rank_features",
         "rank_sets",
         "composition_test",
+        "composition_dispersion",
         "subpopulation_hits",
         "replicate_saturation",
         "cytotoxicity",
         "pathway_coherence",
-        "enrich_hits"
+        "enrich_hits",
+        "differential",
+        "transport",
+        "ora",
+        "gene_aggregation",
+        "network_enrichment",
+        "dose_features",
+        "dose_direction",
+        "cluster",
+        "sphere_epsilon"
     ]
 }

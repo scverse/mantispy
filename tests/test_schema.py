@@ -478,6 +478,28 @@ def test_published_spec_matches_the_constants():
     assert spec["x_dtype"] == "float32"
 
 
+def test_an_unregistered_result_key_is_flagged(adata):
+    """§15.3: a persistent result key must be registered; a companion of a registered base is fine."""
+    store = adata.uns.setdefault("mantispy", {})
+    store["effect"] = pd.DataFrame({"group": ["a"]})
+    store["effect_groups"] = pd.DataFrame({"group": ["a"]})  # companion of a registered base → ok
+    assert not any("not a registered result key" in warning for warning in validate(adata).warnings)
+
+    store["totally_made_up"] = pd.DataFrame({"x": [1]})
+    warnings = validate(adata).warnings
+    assert any("totally_made_up" in w and "not a registered result key" in w for w in warnings)
+
+
+def test_a_real_result_table_is_registered(well_profiles):
+    """The default key a public result writer uses must be registered, so validate does not warn on it."""
+    import mantispy as mt
+
+    adata = well_profiles(n_features=20)
+    mt.tl.effect_size(adata)  # writes uns["mantispy"]["effect"] + "effect_groups"
+    assert "effect" in adata.uns["mantispy"]
+    assert not any("not a registered result key" in warning for warning in validate(adata).warnings)
+
+
 def test_an_object_from_the_previous_schema_migrates(adata, tmp_path):
     import mantispy as mt
 

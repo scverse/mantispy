@@ -35,6 +35,14 @@ def _drift(shipped: AnnData, rebuilt: AnnData) -> str | None:
     # is still caught.
     if not np.allclose(np.asarray(shipped.X), np.asarray(rebuilt.X), atol=1e-4, rtol=1e-3, equal_nan=True):
         return "value drift"
+    # Schema-defining obs columns the X/name compare misses: a shipped h5ad built before a schema change
+    # (e.g. the 2.0 control pair) would otherwise pass though it no longer matches the current builder.
+    for column in ("Metadata_Control", "Metadata_Control_Type", "Metadata_ConcentrationUnit"):
+        in_shipped, in_rebuilt = column in shipped.obs, column in rebuilt.obs
+        if in_shipped != in_rebuilt:
+            return f"{column} drift (shipped has it: {in_shipped}, rebuilt has it: {in_rebuilt})"
+        if in_shipped and not shipped.obs[column].astype(str).equals(rebuilt.obs[column].astype(str)):
+            return f"{column} value drift"
     return None
 
 

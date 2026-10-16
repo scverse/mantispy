@@ -467,9 +467,11 @@ def read(path: str | Path, backed: Literal["r", "r+"] | None = None, migrate_sch
     adata = ad.read_zarr(path) if path.suffix == ".zarr" else ad.read_h5ad(path, backed=backed)
     stored = adata.uns.get("mantispy", {}).get("schema_version")
     if stored == SCHEMA_VERSION:
+        validate(adata, raise_on_error=True)  # §16.1: full validation at the read boundary.
         return adata
     if migrate_schema and stored in SUPPORTED_VERSIONS:
         migrate(adata)
+        validate(adata, raise_on_error=True)  # §16.1: the migrated object must satisfy the current contract.
         return adata
     raise ValueError(
         f"file was written with schema_version {stored!r}, this version supports {SCHEMA_VERSION!r}"
@@ -545,9 +547,8 @@ def stamp(
         ValueError: ``resolution`` is not one of the three, or ``obs`` lacks a column that resolution requires.
 
     Notes:
-        Only the ``obs`` columns the resolution requires are checked, because that is what the rest of the package dispatches on.
-        :func:`validate` gives the full report, including what it warns about rather than blocks.
-        ``X`` is one of the things it rather than this checks: the package stores features as ``float32``, and a matrix that came out of scikit-learn or :func:`numpy.load` is ``float64``, so an embedding usually wants ``adata.X = adata.X.astype("float32")`` before it is written.
+        Stamping runs the full :func:`validate` contract (spec 16.1), so a stamped object is a valid mantispy object or the stamp is rejected; the check runs on a copy first, so a rejected stamp leaves the caller's object untouched. ``validate`` still returns the warnings it does not block on.
+        That includes ``X``: the package stores features as ``float32``, and a matrix that came out of scikit-learn or :func:`numpy.load` is ``float64``, so an embedding wants ``adata.X = adata.X.astype("float32")`` before it is stamped.
 
         Any of the feature-annotation columns the schema requires that ``var`` does not already have are added empty, and columns already present are left as they are.
         They are not filled by parsing the feature names: the parser finds structure in names that have none (it reads ``openphenom_nahualX_17`` as the ``nahualX`` group of an ``openphenom`` object), and an embedding would then carry feature families named after the model's own tensors.
@@ -601,20 +602,29 @@ def stamp(
     _require_feature_kind(adata, feature_kind)
     controls = _legacy_controls(as_frame(adata.obs)) if legacy else None
 
-    target = adata.copy() if copy else adata
-    for column, values in minted.items():
-        target.obs[column] = values
-    if controls is not None:
-        target.obs["Metadata_Control_Type"], target.obs["Metadata_Control"] = controls
-    if absent := [column for column in REQUIRED_VAR if column not in target.var]:
-        empty = empty_annotation(target.var.index)
-        target.var[absent] = empty[absent]
-    if feature_kind is not None:
-        kinds = as_frame(target.var)["feature_kind"].astype("object")
-        kinds[feature_mask(target, "is_feature")] = feature_kind
-        target.var["feature_kind"] = kinds.to_numpy()
-    _record(target, resolution=resolution, grouped_by=grouped_by)
-    return target if copy else None
+    def _apply(obj: ad.AnnData) -> None:
+        for column, values in minted.items():
+            obj.obs[column] = values
+        if controls is not None:
+            obj.obs["Metadata_Control_Type"], obj.obs["Metadata_Control"] = controls
+        if absent := [column for column in REQUIRED_VAR if column not in obj.var]:
+            empty = empty_annotation(obj.var.index)
+            obj.var[absent] = empty[absent]
+        if feature_kind is not None:
+            kinds = as_frame(obj.var)["feature_kind"].astype("object")
+            kinds[feature_mask(obj, "is_feature")] = feature_kind
+            obj.var["feature_kind"] = kinds.to_numpy()
+        _record(obj, resolution=resolution, grouped_by=grouped_by)
+
+    # §16.1: stamping runs the full contract. Validate a stamped copy first, so a rejected stamp (e.g. a
+    # float64 embedding matrix, or an unparsable well) never leaves the caller's object half-stamped.
+    preview = adata.copy()
+    _apply(preview)
+    validate(preview, raise_on_error=True)
+    if copy:
+        return preview
+    _apply(adata)
+    return None
 
 
 def _require_feature_kind(adata: ad.AnnData, feature_kind: str | None) -> None:

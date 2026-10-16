@@ -139,7 +139,7 @@ def known_relationships(
     Returns:
         A one-row tidy frame with ``metric``, ``representation``, ``key`` and ``value``, so it stacks with the other metrics.
         ``value`` is the recall, between 0 and 1.
-        With ``n_permutations``, also ``null``, the mean recall over the shuffles, and ``p_value``, the share of shuffles recalling at least as much, counted as ``(k + 1) / (n + 1)``.
+        With ``n_permutations``, also ``null``, the mean recall over the shuffles, and ``pvalue``, the share of shuffles recalling at least as much, counted as ``(k + 1) / (n + 1)``.
 
     Raises:
         KeyError: ``obs`` has no column ``label_key``.
@@ -208,4 +208,4 @@ def known_relationships(
         permuted = _pair_keys(net.assign(target=rng.permutation(members)), codes, len(labels))
         shuffled.append(_recall(pool, matrix[permuted // len(labels), permuted % len(labels)], tail))
     null = np.asarray(shuffled)
-    return result.assign(null=float(null.mean()), p_value=float(permutation_pvalue(np.array([recall]), null)[0]))
+    return result.assign(null=float(null.mean()), pvalue=float(permutation_pvalue(np.array([recall]), null)[0]))

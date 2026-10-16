@@ -31,7 +31,7 @@ def test_activity_scores_treatments_against_the_controls(profiles):
     table = profiles.uns["mantispy"]["map"]
 
     assert "DMSO" not in set(table["Metadata_Perturbation"])
-    assert table["mean_average_precision"].median() > 0.9
+    assert table["score"].median() > 0.9
     assert {"map", "map_qvalue"} <= set(profiles.obs.columns)
 
 
@@ -46,7 +46,7 @@ def _inert_p_value(pure_noise_screen, controls_elsewhere: int) -> float:
     wells = ad.concat([here, there], keys=["P1", "P2"], index_unique=":")
     mt.io.stamp(wells, resolution="well", feature_kind="measurement")
     mt.tl.map(wells, mode="activity", null_size=2000)
-    return float(wells.uns["mantispy"]["map"]["p_value"].item())
+    return float(wells.uns["mantispy"]["map"]["pvalue"].item())
 
 
 @requires_copairs
@@ -104,7 +104,7 @@ def test_a_p_value_does_not_depend_on_earlier_calls(pure_noise_screen, tmp_path,
     def p_values(*objects):
         for adata in objects:
             mt.tl.map(adata, mode="replicability", reference=None, null_size=200)
-        return objects[-1].uns["mantispy"]["map"]["p_value"].to_numpy()
+        return objects[-1].uns["mantispy"]["map"]["pvalue"].to_numpy()
 
     monkeypatch.setenv("HOME", str(tmp_path / "fresh"))
     fresh = p_values(alone.copy())
@@ -193,8 +193,8 @@ def test_consistency_does_not_count_a_perturbation_agreeing_with_itself(profiles
         null_size=200,
         seed=0,
     )
-    strict = wells.uns["mantispy"]["map"]["mean_average_precision"].mean()
-    assert strict < loose.uns["mantispy"]["map"]["mean_average_precision"].mean()
+    strict = wells.uns["mantispy"]["map"]["score"].mean()
+    assert strict < loose.uns["mantispy"]["map"]["score"].mean()
 
     signatures = mt.tl.consensus(treated, method="median", min_replicates=1)
     signatures.obs["Metadata_MOA"] = np.where(
@@ -212,8 +212,8 @@ def test_consistency_does_not_count_a_perturbation_agreeing_with_itself(profiles
         seed=0,
     )
     np.testing.assert_allclose(
-        collapsed.uns["mantispy"]["map"]["mean_average_precision"].to_numpy(),
-        reference.uns["mantispy"]["map"]["mean_average_precision"].to_numpy(),
+        collapsed.uns["mantispy"]["map"]["score"].to_numpy(),
+        reference.uns["mantispy"]["map"]["score"].to_numpy(),
     )
 
 
@@ -258,8 +258,8 @@ def test_single_element_lists_match_the_single_label_column(profiles):
     listed = _consensus_with_moa(profiles, as_list)
     mt.tl.map(listed, mode="consistency", annotation_key="Metadata_MOA", null_size=200, seed=0)
 
-    single_scores = single.uns["mantispy"]["map"].set_index("Metadata_MOA")["mean_average_precision"].sort_index()
-    listed_scores = listed.uns["mantispy"]["map"].set_index("Metadata_MOA")["mean_average_precision"].sort_index()
+    single_scores = single.uns["mantispy"]["map"].set_index("Metadata_MOA")["score"].sort_index()
+    listed_scores = listed.uns["mantispy"]["map"].set_index("Metadata_MOA")["score"].sort_index()
     np.testing.assert_allclose(single_scores.to_numpy(), listed_scores.to_numpy())
 
 
@@ -284,8 +284,8 @@ def test_label_sep_splits_a_delimited_string_into_the_same_scores(profiles):
     listed = _consensus_with_moa(profiles, as_list)
     mt.tl.map(listed, mode="consistency", annotation_key="Metadata_MOA", null_size=200, seed=0)
 
-    split_scores = strings.uns["mantispy"]["map"].set_index("Metadata_MOA")["mean_average_precision"].sort_index()
-    list_scores = listed.uns["mantispy"]["map"].set_index("Metadata_MOA")["mean_average_precision"].sort_index()
+    split_scores = strings.uns["mantispy"]["map"].set_index("Metadata_MOA")["score"].sort_index()
+    list_scores = listed.uns["mantispy"]["map"].set_index("Metadata_MOA")["score"].sort_index()
     np.testing.assert_allclose(split_scores.to_numpy(), list_scores.to_numpy())
 
 
@@ -329,9 +329,9 @@ def test_map_result_survives_a_round_trip(profiles, tmp_path):
 @requires_copairs
 def test_map_is_reproducible_and_supports_a_representation(profiles):
     mt.tl.map(profiles, mode="activity", null_size=200, seed=1)
-    first = profiles.uns["mantispy"]["map"]["corrected_p_value"].to_numpy()
+    first = profiles.uns["mantispy"]["map"]["qvalue"].to_numpy()
     mt.tl.map(profiles, mode="activity", null_size=200, seed=1)
-    np.testing.assert_allclose(first, profiles.uns["mantispy"]["map"]["corrected_p_value"].to_numpy())
+    np.testing.assert_allclose(first, profiles.uns["mantispy"]["map"]["qvalue"].to_numpy())
 
     import scanpy as sc
 
@@ -373,7 +373,7 @@ def test_an_infinite_value_is_compared_as_missing(infinity):
 def test_percent_replicating_finds_strong_perturbations(profiles):
     mt.tl.percent_replicating(profiles, null_size=200)
     table = profiles.uns["mantispy"]["percent_replicating"].set_index("group")
-    assert table.drop(index="DMSO")["is_replicating"].mean() > 0.5
+    assert table.drop(index="DMSO")["is_significant"].mean() > 0.5
     assert 0.0 <= profiles.uns["mantispy"]["percent_replicating_summary"]["fraction_replicating"] <= 1.0
 
 
