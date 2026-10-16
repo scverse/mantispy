@@ -18,7 +18,8 @@ mt.pp.image_qc(cells)  # which fields were out of focus
 mt.pp.normalize(cells, by="Metadata_Plate", reference="negcon")  # robust MAD against the negative controls
 wells = mt.tl.aggregate(cells)  # cells -> wells
 
-mt.pp.feature_select(wells)
+mt.pp.feature_select(wells)  # flags features in var["selected"]
+wells = mt.pp.subset_features(wells)  # keeps only those
 mt.tl.hit_calling(wells)  # which perturbations moved
 mt.pl.hits(wells)
 ```
