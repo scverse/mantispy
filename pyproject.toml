@@ -90,13 +90,13 @@ test = [
   "scmorph>=0.1",                        # Chatterjee/XIM parity
 ]
 doc = [
-  "ipython",                     # conf.py enables IPython.sphinxext.ipython_console_highlighting
-  "mantispy[spatial]",           # autodoc imports io._plate
+  "ipython",                       # conf.py enables IPython.sphinxext.ipython_console_highlighting
+  "mantispy[spatial]",             # autodoc imports io._plate
   "myst-nb>=1.1",
   "scanpydoc[theme]>=0.15.3",
   "scverse-misc[sphinx]>=0.1.6",
   "sphinx>=8.1",
-  "sphinx-autodoc-typehints",
+  "sphinx-autodoc-typehints<3.14", # 3.14 stringifies class bases, which breaks scverse-doc's _skip_private_bases
   "sphinx-copybutton",
   "sphinx-design",
   "sphinxcontrib-bibtex>=1",
