@@ -351,6 +351,7 @@ def _assemble_oasis_pilot(cache_dir: str | Path | None = None) -> AnnData:
         get_logger().warning("oasis_pilot: %d of %d wells have no plate-map row", unmatched, len(merged))
     adata.obs["Metadata_Compound"] = merged["Metadata_Compound"].to_numpy()
     adata.obs["Metadata_Concentration"] = merged["Metadata_Concentration"].to_numpy(dtype=float)
+    adata.obs["Metadata_ConcentrationUnit"] = "uM"  # the OASIS platemaps record the dose in micromolar
     adata.obs["Metadata_ConcentrationRecorded"] = merged["Metadata_ConcentrationRecorded"].to_numpy(dtype=float)
     adata.obs["Metadata_CellLine"] = merged["Metadata_CellLine"].to_numpy()
     adata.obs["Metadata_Control"] = merged["Metadata_Compound"].astype(str).str.upper().eq("DMSO").to_numpy()
