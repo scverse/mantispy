@@ -55,6 +55,7 @@ and this project adheres to [Semantic Versioning][].
 
 ### Fixed
 
+- `mantispy.io`: `read_profiles` and `from_dataframe` no longer raise `TypeError: '<' not supported between instances of 'float' and 'str'` under pandas 3 when the default `objects=` filter drops a column whose name names no object, such as brieflow's `cell_area`. The drop report lists such columns as `<no object>`.
 - `mantispy.tl`: `cluster_composition` p-values are now calibrated — the overdispersion is estimated leave-one-out and the scaled statistic is referred to an F distribution, so the pure-null false positive rate no longer exceeds the nominal level (it ran to 0.14 at 8 control wells) (#89)
 - `mantispy`: a sparse matrix on disk can be read whole. anndata's `CSRDataset` and `CSCDataset` have no `__array__`, so every read that did not name rows raised `setting an array element with a sequence`, `pp.calculate_qc_metrics` on a backed sparse object among them
 - `mantispy.io`: an `ExportToSpreadsheet` directory takes its channels from the features it measured, so a run whose images are named `OrigDNA` or `IllumDNA` no longer leaves every feature without a channel

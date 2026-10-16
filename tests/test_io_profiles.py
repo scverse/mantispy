@@ -145,6 +145,33 @@ def test_dropping_a_majority_of_features_warns_but_a_minority_stays_quiet(capsys
         mt.settings.verbosity = previous
 
 
+def test_dropping_features_with_no_object_is_reported(capsys):
+    """A column naming no object (brieflow's ``cell_area``) parses with a missing object.
+
+    Reporting the drop sorted that missing value alongside the object names and raised a TypeError on pandas 3.
+    """
+    previous = mt.settings.verbosity
+    mt.settings.verbosity = 2
+    try:
+        frame = pd.DataFrame(
+            {
+                "Metadata_Plate": ["P1", "P1"],
+                "Metadata_Well": ["A01", "A02"],
+                "Cells_AreaShape_Area": [1.0, 2.0],
+                "cell_DAPI_mean": [3.0, 4.0],
+                "cell_area": [5.0, 6.0],
+            }
+        )
+        assert parse_feature_names(["cell_area"])["object"].isna().all()
+        adata = from_dataframe(frame, channels=["DAPI"])
+        assert adata.var_names.tolist() == ["Cells_AreaShape_Area"]
+        captured = capsys.readouterr().err
+        assert "2 of 3 feature(s)" in captured
+        assert "<no object>" in captured
+    finally:
+        mt.settings.verbosity = previous
+
+
 def _cytotable_part(rows: range) -> pd.DataFrame:
     """A CytoTable-shaped frame: prefixed identifiers, compartment-prefixed features."""
     return pd.DataFrame(
