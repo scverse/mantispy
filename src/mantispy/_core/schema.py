@@ -83,6 +83,8 @@ RESERVED_OBS: tuple[str, ...] = (
     "Metadata_ImageNumber",
     "Metadata_ObjectType",
     "Metadata_ObjectNumber",
+    # The source object number migrate keeps when it had to renumber colliding 1.0 objects.
+    "Metadata_SourceObjectNumber",
     "Metadata_Perturbation",
     # What the perturbation is, one of "compound", "orf", "crispr" or "untreated". Control-ness stays in
     # Metadata_Control / Metadata_Control_Type, which are orthogonal to the kind of perturbation.
@@ -375,6 +377,26 @@ def stamp(
     }
 
 
+def recorded_resolution(adata: AnnData) -> str | None:
+    """The resolution ``adata`` records, in current terms, or ``None`` when it records none.
+
+    An object written by an earlier mantispy and loaded without :func:`migrate` (``anndata.read_h5ad``)
+    still carries the old names, so ``cell`` and ``perturbation`` are translated rather than read as some
+    other resolution. A value that is no resolution at all raises.
+    """
+    store = adata.uns.get("mantispy")
+    value = store.get("resolution") if isinstance(store, dict) else None
+    if value is None:
+        return None
+    value = RESOLUTION_RENAMES.get(str(value), str(value))
+    if value not in RESOLUTIONS:
+        raise ValueError(
+            f"unknown resolution {value!r} in uns['mantispy']; must be one of {RESOLUTIONS}. Read files with "
+            "mt.io.read, which migrates an object from an earlier mantispy."
+        )
+    return value
+
+
 def get_resolution(adata: AnnData, default: str | None = None) -> str:
     """Recorded resolution of ``adata``.
 
@@ -388,7 +410,7 @@ def get_resolution(adata: AnnData, default: str | None = None) -> str:
         ValueError: No resolution is recorded and no ``default`` was given. Schema 2.0 no longer
             assumes ``"object"``; stamp the object with :func:`stamp` (``mt.io.stamp``) first.
     """
-    resolution = adata.uns.get("mantispy", {}).get("resolution")
+    resolution = recorded_resolution(adata)
     if resolution is None:
         if default is not None:
             return default
@@ -545,8 +567,14 @@ def _check_controls(adata: AnnData, report: ValidationReport) -> None:
         )
         return
 
-    types = obs["Metadata_Control_Type"].astype(str)
-    bad = sorted(set(types.unique()) - set(CONTROL_TYPES))
+    # Missing values are counted on their own: under pandas 3 astype(str) keeps them as NaN, which cannot be
+    # sorted alongside the labels.
+    raw = obs["Metadata_Control_Type"]
+    n_missing = int(raw.isna().sum())
+    if n_missing:
+        report.errors.append(f"Metadata_Control_Type has {n_missing} missing value(s); every row needs a control class")
+    types = raw.astype(object).where(raw.notna(), "").astype(str)
+    bad = sorted(set(types[raw.notna()].unique()) - set(CONTROL_TYPES))
     if bad:
         report.errors.append(f"Metadata_Control_Type must be one of {CONTROL_TYPES}; found {bad}")
 
@@ -557,7 +585,7 @@ def _check_controls(adata: AnnData, report: ValidationReport) -> None:
         report.errors.append(f"obs['Metadata_Control'] is not a usable boolean flag: {error}")
         return
     expected = (types != "treatment").to_numpy()
-    mismatch = int((is_control != expected).sum())
+    mismatch = int(((is_control != expected) & raw.notna().to_numpy()).sum())
     if mismatch:
         report.errors.append(
             f"Metadata_Control disagrees with Metadata_Control_Type on {mismatch} row(s); "
@@ -635,8 +663,11 @@ def validate(adata: AnnData, *, raise_on_error: bool = False) -> ValidationRepor
         report.errors.append(f"X must be float32, got {getattr(adata.X, 'dtype', None)}")
 
     if "Metadata_Well" in adata.obs:
+        wells = pd.Series(adata.obs["Metadata_Well"])
+        if wells.isna().any():
+            report.errors.append(f"Metadata_Well has {int(wells.isna().sum())} missing value(s)")
         unparsable = []
-        for well in adata.obs["Metadata_Well"].astype(str).unique():
+        for well in wells.dropna().astype(str).unique():
             try:
                 normalize_well(well)
             except ValueError:
@@ -658,6 +689,105 @@ def validate(adata: AnnData, *, raise_on_error: bool = False) -> ValidationRepor
     if raise_on_error and not report.ok:
         raise ValueError("\n".join(report.errors))
     return report
+
+
+#: How a 1.0 ``Metadata_Control_Type`` label reads under spec 10. 1.0 wrote ``""`` for a treatment
+#: (``annotate_controls(poscon=...)``) and JUMP's ``"trt"``; any other label is a dataset's own and falls back
+#: to the 1.0 boolean, which meant negative control.
+_LEGACY_CONTROL_TYPES: dict[str, str] = {
+    "negcon": "negcon",
+    "poscon": "poscon",
+    "empty": "empty",
+    "treatment": "treatment",
+    "trt": "treatment",
+    "": "treatment",
+}
+_LEGACY_TRUE = frozenset({"true", "1", "1.0", "yes", "y", "t"})
+_LEGACY_FALSE = frozenset({"false", "0", "0.0", "no", "n", "f", ""})
+
+
+def _legacy_control_flag(values: pd.Series) -> np.ndarray:
+    """Read a 1.0 ``Metadata_Control`` boolean, whatever spelling a platemap gave it.
+
+    A missing value reads as ``False``, as a 1.0 platemap that left a well unset meant. A value that is
+    neither a recognisable true nor false raises, since guessing would rewrite the controls irrecoverably.
+    """
+    if pd.api.types.is_bool_dtype(values):
+        return values.to_numpy(dtype=bool)
+    text = values.astype(object).where(values.notna(), "").astype(str).str.strip().str.lower()
+    unknown = sorted(set(text) - _LEGACY_TRUE - _LEGACY_FALSE)
+    if unknown:
+        raise ValueError(
+            f"cannot migrate: Metadata_Control holds {unknown[:5]}, which read as neither true nor false. "
+            "Recode the column to booleans before reading the file."
+        )
+    return text.isin(_LEGACY_TRUE).to_numpy()
+
+
+def _legacy_controls(obs: pd.DataFrame) -> tuple[np.ndarray, np.ndarray] | None:
+    """Translate a 1.0 control annotation to the spec-10 pair ``(Metadata_Control_Type, Metadata_Control)``.
+
+    Under 1.0 ``Metadata_Control`` meant negative control, and ``Metadata_Control_Type``, where a producer
+    wrote one, held either the classes above or a dataset's own labels. Known labels map directly; any other
+    label takes its class from the 1.0 flag. The flag is then rewritten as ``type != "treatment"``, so it
+    marks every control rather than only the negative ones. Returns ``None`` when there is nothing to translate.
+    """
+    has_flag, has_type = "Metadata_Control" in obs, "Metadata_Control_Type" in obs
+    if not (has_flag or has_type):
+        return None
+    flag = _legacy_control_flag(pd.Series(obs["Metadata_Control"])) if has_flag else None
+    if has_type:
+        labels = obs["Metadata_Control_Type"].astype(object).where(obs["Metadata_Control_Type"].notna(), "")
+        labels = labels.astype(str).str.strip()
+        mapped = labels.map(_LEGACY_CONTROL_TYPES)
+        unknown = mapped.isna().to_numpy()
+        if unknown.any():
+            if flag is None:
+                raise ValueError(
+                    f"cannot migrate: Metadata_Control_Type holds {sorted(set(labels[unknown]))[:5]}, which are not "
+                    f"control classes {CONTROL_TYPES}, and there is no Metadata_Control to read them from."
+                )
+            get_logger().info(
+                "Metadata_Control_Type labels %s are not control classes; they take their class from the 1.0 "
+                "Metadata_Control flag (negcon where it was set, treatment otherwise)",
+                sorted(set(labels[unknown]))[:5],
+            )
+            mapped[unknown] = np.where(flag[unknown], "negcon", "treatment")
+        types = mapped.to_numpy(dtype=object)
+    else:
+        assert flag is not None  # one of the two columns is present
+        types = np.where(flag, "negcon", "treatment").astype(object)
+    return types, types != "treatment"
+
+
+def _resolve_colliding_objects(identity: pd.DataFrame) -> None:
+    """Make ``(Metadata_ImageID, Metadata_ObjectNumber)`` unique on a migrating 1.0 object, in place.
+
+    A 1.0 object can carry per-image object numbers while the image id minted from its columns is coarser
+    than the field, so distinct objects collide. The source numbers are kept wherever they can be: where
+    ``region`` (the SpatialData label element) separates the fields, it refines the id and the numbers stay
+    the label instances; where the id already resolves single fields (site or image number), the collision
+    is a genuine duplicate and is refused rather than hidden. Only an id with no field identity at all is
+    renumbered within it, with the source numbers kept in ``Metadata_SourceObjectNumber``.
+    """
+    numbers = identity["Metadata_ObjectNumber"]
+    if "region" in identity and not identity[["region", "Metadata_ObjectNumber"]].duplicated().any():
+        identity["Metadata_ImageID"] = identity["Metadata_ImageID"].astype(str) + "|" + identity["region"].astype(str)
+        if not identity[["Metadata_ImageID", "Metadata_ObjectNumber"]].duplicated().any():
+            return
+    if {"Metadata_Site", "Metadata_ImageNumber"} & set(identity.columns):
+        duplicated = int(identity[["Metadata_ImageID", "Metadata_ObjectNumber"]].duplicated().sum())
+        raise ValueError(
+            f"cannot migrate: {duplicated} object(s) repeat a (Metadata_ImageID, Metadata_ObjectNumber) pair although "
+            "the image id resolves single fields, so they are duplicate rows rather than distinct objects. "
+            "Remove the duplicates before reading the file."
+        )
+    get_logger().warning(
+        "Metadata_ObjectNumber repeats within the image ids this object's columns allow (no site or image number), "
+        "so objects are renumbered within each image; the source numbers are kept in Metadata_SourceObjectNumber"
+    )
+    identity["Metadata_SourceObjectNumber"] = numbers.to_numpy()
+    identity["Metadata_ObjectNumber"] = object_number_within(identity["Metadata_ImageID"].to_numpy())
 
 
 def set_control_columns(obs: pd.DataFrame, is_control: Any) -> pd.DataFrame:
@@ -722,17 +852,28 @@ def _rekey_legacy_image_table(store: dict, identity: pd.DataFrame) -> None:
     """Re-key a 1.0 ``image_table`` from the source image number to ``Metadata_ImageID`` (spec 8).
 
     A 1.0 export keyed the table by the integer CellProfiler image number; under 2.0 obs joins to it
-    through ``Metadata_ImageID``, so the two would otherwise be disjoint. Only re-keys when obs still
-    carries ``Metadata_ImageNumber`` to map through and every table row maps.
+    through ``Metadata_ImageID``, so the two would otherwise be disjoint. Re-keys when obs still carries
+    ``Metadata_ImageNumber`` to map through. A field no object came from (segmentation found nothing) has
+    no object to map through, so its id is minted from the table's own identity columns the way obs mints
+    it, or else kept as its image number; such a row joins to no object either way.
     """
     table = store.get("image_table")
     if not isinstance(table, pd.DataFrame) or table.index.name == "Metadata_ImageID":
         return
     if "Metadata_ImageNumber" not in identity:
         return
-    mapping = identity.groupby("Metadata_ImageNumber", observed=True)["Metadata_ImageID"].first().to_dict()
-    if set(table.index) <= set(mapping):
-        store["image_table"] = table.rename(index=mapping).rename_axis("Metadata_ImageID")
+    numbers = pd.Series(table.index.astype(str), index=table.index)
+    mapping = (
+        identity.assign(_key=identity["Metadata_ImageNumber"].astype(str)).groupby("_key")["Metadata_ImageID"].first()
+    )
+    ids = numbers.map(mapping)
+    unmapped = ids.isna().to_numpy()
+    if unmapped.any():
+        frame = table.assign(Metadata_ImageNumber=table.index.to_numpy())
+        columns = [column for column in _IMAGE_ID_COLUMNS if column in identity]
+        usable = all(column in frame for column in columns) and not frame.loc[unmapped, columns].isna().to_numpy().any()
+        ids[unmapped] = make_image_id(frame.loc[unmapped, columns]) if usable else numbers[unmapped].to_numpy()
+    store["image_table"] = table.set_axis(pd.Index(ids.astype(str).to_numpy(), name="Metadata_ImageID"))
 
 
 def migrate(adata: AnnData, copy: bool = False) -> AnnData | None:
@@ -805,10 +946,9 @@ def migrate(adata: AnnData, copy: bool = False) -> AnnData | None:
     # migrate's "correctness over a silent guess" stance) so a rejected migration writes nothing; the
     # primary-object set was never recorded on a 1.0 object, so it defaults to the generic "Object".
     identity = ensure_object_identity(as_frame(target.obs).copy()) if resolution == "object" else None
+    controls = _legacy_controls(as_frame(target.obs))
     if identity is not None and identity[["Metadata_ImageID", "Metadata_ObjectNumber"]].duplicated().any():
-        # A 1.0 object can carry a per-image ObjectNumber while its only source identity is plate/well,
-        # so the coarse image id collapses distinct images and the pair collides; renumber within image.
-        identity["Metadata_ObjectNumber"] = object_number_within(identity["Metadata_ImageID"].to_numpy())
+        _resolve_colliding_objects(identity)
 
     store = target.uns.setdefault("mantispy", {})
     store["schema_version"] = SCHEMA_VERSION
@@ -819,21 +959,14 @@ def migrate(adata: AnnData, copy: bool = False) -> AnnData | None:
     if feature_kind is not None:
         target.var["feature_kind"] = feature_kind
     if identity is not None:
-        for column in OBJECT_IDENTITY:
-            target.obs[column] = identity[column].to_numpy()
+        for column in (*OBJECT_IDENTITY, "Metadata_SourceObjectNumber"):
+            if column in identity:
+                target.obs[column] = identity[column].to_numpy()
         _rekey_legacy_image_table(store, identity)
-    if "Metadata_Control" in target.obs and "Metadata_Control_Type" not in target.obs:
-        # Under 1.0 Metadata_Control==True meant negcon; spec 10 widens the boolean to any control and
-        # moves the class into Metadata_Control_Type. Fill the type faithfully: the old True rows were
-        # negative controls, everything else a treatment. Read the flag tolerantly (migrate must not abort a
-        # load): an unambiguous true is negcon; a missing value, which a 1.0 platemap could leave, is a
-        # treatment rather than an error, matching Metadata_Control=False.
-        flag = pd.Series(target.obs["Metadata_Control"])
-        is_control = flag.isin([True, 1, "True"]).to_numpy()
-        target.obs["Metadata_Control_Type"] = np.where(is_control, "negcon", "treatment")
-        # Rewrite the flag to the clean boolean the type implies, so a NaN-bearing legacy column comes out
-        # consistent with Metadata_Control_Type (spec 10.2) rather than failing validation after migration.
-        target.obs["Metadata_Control"] = is_control
+    if controls is not None:
+        # Spec 10 widens the boolean to any control and moves the class into Metadata_Control_Type.
+        target.obs["Metadata_Control_Type"] = controls[0]
+        target.obs["Metadata_Control"] = controls[1]
 
     get_logger().info("migrated an object from schema %s to %s", seen, SCHEMA_VERSION)
     return target if copy else None

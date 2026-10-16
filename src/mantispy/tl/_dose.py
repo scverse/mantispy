@@ -15,7 +15,7 @@ from mantispy._core._stats import MAD_TO_SIGMA, benjamini_hochberg
 from mantispy._core.features import annotation
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger, report_drop
-from mantispy._core.masks import held_out_reference, reference_mask
+from mantispy._core.masks import control_annotated, held_out_reference, reference_mask
 from mantispy._core.mutation import inplace_or_copy
 from mantispy._core.provenance import level_change_source, record_history, record_params
 from mantispy._core.schema import require_concentration_unit, stamp
@@ -250,7 +250,7 @@ def _baseline_and_cutoff(
     """
     control = np.empty(0)
     # reference_mask raises without Metadata_Control_Type, which is not fatal here: only the hit call needs controls.
-    if reference is not None and not (reference == "negcon" and "Metadata_Control_Type" not in adata.obs):
+    if reference is not None and not (reference == "negcon" and not control_annotated(adata)):
         values = as_frame(adata.obs)[response].to_numpy(dtype=float)
         control = values[held_out_reference(adata, reference_mask(adata, reference), response)]
         control = control[np.isfinite(control)]
@@ -586,7 +586,7 @@ def dose_features(
         dose_key: ``obs`` column holding the concentration.
             Rows with a zero or missing dose are left out, since the doses are read in log space.
         reference: Rows that set each feature's baseline and spread.
-            ``"negcon"`` reads ``Metadata_Control``.
+            ``"negcon"`` selects the rows whose ``Metadata_Control_Type`` is ``"negcon"``.
         cutoff_mads: Multiples of the controls' MAD a feature has to reach to get a benchmark dose.
             The ToxCast pipeline uses three.
         min_doses: Distinct doses below which a compound is left out of the table.
@@ -824,7 +824,7 @@ def dose_direction(
         dose_key: ``obs`` column holding the concentration.
             Rows with a zero or missing dose are left out.
         reference: Rows that set each feature's baseline and spread.
-            ``"negcon"`` reads ``Metadata_Control``.
+            ``"negcon"`` selects the rows whose ``Metadata_Control_Type`` is ``"negcon"``.
         split_by: ``obs`` column whose levels split the replicates in two for ``split_half_cosine``, normally the plate.
             It also lays out the control groups ``amplitude_null`` is drawn from.
             ``None``, or a column with one level, splits the wells by position instead.

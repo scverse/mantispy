@@ -1036,7 +1036,11 @@ def cp_posh(
         ValueError: ``aggregated`` or ``feature_selected`` is not a bool.
     """
     _require_bools(aggregated=aggregated, feature_selected=feature_selected)
-    return _fetch_variant("cp_posh", _CP_POSH_VARIANTS[aggregated, feature_selected], cache_dir)
+    # The staged files predate feature_kind and their features carry no CellProfiler annotation to infer it
+    # from; they are image measurements, as _assemble_cp_posh declares.
+    return _fetch_variant(
+        "cp_posh", _CP_POSH_VARIANTS[aggregated, feature_selected], cache_dir, feature_kind="measurement"
+    )
 
 
 def corum(cache_dir: str | Path | None = None) -> pd.DataFrame:

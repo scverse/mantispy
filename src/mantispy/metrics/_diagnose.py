@@ -12,7 +12,7 @@ from mantispy._core._reduce import get_matrix, group_codes, group_offsets
 from mantispy._core._stats import _default_well_block, benjamini_hochberg
 from mantispy._core.frames import as_frame
 from mantispy._core.masks import reference_mask
-from mantispy._core.schema import RESOLUTIONS, stamp
+from mantispy._core.schema import RESOLUTIONS, recorded_resolution, stamp
 
 #: How far the observed null rate may exceed the nominal one before it is a failure.
 TOLERANCE = 2.0
@@ -338,7 +338,7 @@ def diagnose_testing(
     """
     from scipy import stats
 
-    resolution = adata.uns.get("mantispy", {}).get("resolution")
+    resolution = recorded_resolution(adata)
     if resolution == "object":
         return _diagnose_cell(adata, groupby, reference, block, n_draws, alpha, seed, n_permutations, method)
     if resolution not in RESOLUTIONS:

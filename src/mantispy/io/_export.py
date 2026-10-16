@@ -49,6 +49,66 @@ def _manifest(adata: ad.AnnData, plate: Path) -> tuple[pd.DataFrame, list[str]]:
     return mapping[ELEMENTS], channels
 
 
+def _link_columns(obs: pd.DataFrame, attrs: Any, plate: Path) -> pd.DataFrame:
+    """Bring the table's link onto the label instances to mantispy's ``region`` + ``Metadata_ObjectNumber``.
+
+    ``ExportForSpatialData`` names its own link in ``uns["spatialdata_attrs"]``: ``region_key`` holds the label
+    element of each row and ``label_id`` its instance, while ``region`` holds the object set (``"Cells"``). That
+    layout is read as written, the object set moving to ``Metadata_ObjectType``; a table already in mantispy's
+    layout passes through. The instance numbers are never invented from row order, since a table whose rows are
+    not in label order, or that dropped an object, would then link rows to the wrong label instances.
+    """
+    attrs = attrs if isinstance(attrs, dict) else {}
+
+    def _pick(declared: Any, candidates: tuple[str, ...]) -> str:
+        # The table's own spatialdata attrs win when they name a column it has; otherwise the known layouts.
+        if declared is not None and str(declared) in obs:
+            return str(declared)
+        return next((name for name in candidates if name in obs), candidates[-1])
+
+    region_key = _pick(attrs.get("region_key"), ("region_key", REGION_KEY))
+    # CellProfiler's ObjectNumber is the label value itself, so a raw table links through it as well.
+    instance_key = _pick(attrs.get("instance_key"), ("label_id", "ObjectNumber", INSTANCE_KEY))
+    if region_key not in obs:
+        msg = (
+            f"the table in {plate} has no obs['{region_key}'] column, so its rows cannot be joined onto the "
+            "label arrays. ExportForSpatialData adds it; a table from ExportToAnnData does not carry it."
+        )
+        raise ValueError(msg)
+    if instance_key not in obs:
+        msg = (
+            f"the table in {plate} has no obs['{instance_key}'] column naming each row's label instance, so its "
+            "rows cannot be linked to the label arrays; numbering them by row order would link the wrong objects."
+        )
+        raise ValueError(msg)
+    obs = obs.copy()
+    if region_key != REGION_KEY:
+        if REGION_KEY in obs and "Metadata_ObjectType" not in obs:
+            obs["Metadata_ObjectType"] = np.asarray(obs[REGION_KEY], dtype=str)
+        obs[REGION_KEY] = np.asarray(obs[region_key], dtype=str)
+    if instance_key != INSTANCE_KEY:
+        instances = pd.to_numeric(obs[instance_key]).to_numpy()
+        if INSTANCE_KEY in obs and not np.array_equal(pd.to_numeric(obs[INSTANCE_KEY]).to_numpy(), instances):
+            msg = (
+                f"the table in {plate} carries both obs['{instance_key}'] and obs['{INSTANCE_KEY}'], and they disagree"
+            )
+            raise ValueError(msg)
+        obs[INSTANCE_KEY] = instances
+    if "Metadata_Plate" not in obs:
+        # The module writes one folder per plate, named by it, so a table without the tag still has its plate.
+        obs["Metadata_Plate"] = plate.name
+    if "Metadata_Well" not in obs:
+        msg = (
+            f"the table in {plate} carries no Metadata_Well, which every object needs under the schema. Extract "
+            "the well into the image metadata (the Metadata or NamesAndTypes module) so ExportForSpatialData writes it."
+        )
+        raise ValueError(msg)
+    if "ImageNumber" in obs and "Metadata_ImageNumber" not in obs:
+        # The field each row came from, so the image id separates fields that share plate, well and site tags.
+        obs["Metadata_ImageNumber"] = obs["ImageNumber"].to_numpy()
+    return obs
+
+
 class _LazyDataset:
     """One HDF5 dataset that opens its file for each read instead of holding it open.
 
@@ -101,13 +161,14 @@ def read_cellprofiler_export(path: Path | str, *, lazy: bool = True) -> SpatialD
 
     Raises:
         FileNotFoundError: No table under ``path/tables``, or the manifest names an array that is not there.
-        ValueError: Several tables under ``path/tables``, or the table carries no element manifest, or it has no ``region`` column to join its rows onto the label arrays, or it does not satisfy the schema at object resolution.
+        ValueError: Several tables under ``path/tables``, or the table carries no element manifest, or it names no label element or no label instance for its rows, or it does not satisfy the schema at object resolution.
     """
     from spatialdata import SpatialData
     from spatialdata.models import Image2DModel, Labels2DModel, TableModel
     from spatialdata.transformations import Identity
 
-    from mantispy._core.schema import validate
+    from mantispy._core.frames import as_frame
+    from mantispy._core.schema import make_image_id, validate
     from mantispy.io._profiles import stamp
 
     plate = Path(path)
@@ -132,12 +193,18 @@ def read_cellprofiler_export(path: Path | str, *, lazy: bool = True) -> SpatialD
 
     tables = {}
     if labels:
-        if REGION_KEY not in adata.obs:
-            msg = (
-                f"the table in {plate} has no obs['{REGION_KEY}'] column, so its rows cannot be joined onto the "
-                "label arrays. ExportForSpatialData adds it; a table from ExportToAnnData does not carry it."
-            )
-            raise ValueError(msg)
+        adata.obs = _link_columns(as_frame(adata.obs), adata.uns.get("spatialdata_attrs"), plate)
+        if "Metadata_ImageID" not in adata.obs:
+            # The id minted from plate, well and site tags is coarser than the field when the export carries no
+            # site or image number; the manifest knows each label element's field, so it refines the id then.
+            obs = as_frame(adata.obs)
+            minted = make_image_id(obs)
+            if pd.DataFrame({"image": minted, "number": obs[INSTANCE_KEY].to_numpy()}).duplicated().any():
+                field_of = dict(
+                    zip(written["region_key_value"].astype(str), written["sample_key"].astype(str), strict=False)
+                )
+                minted = minted + "|" + obs[REGION_KEY].astype(str).map(field_of).fillna("").to_numpy()
+            adata.obs["Metadata_ImageID"] = minted
         named = np.asarray(adata.obs[REGION_KEY], dtype=str)
         regions = sorted(set(named.tolist()) & set(labels))
         table = adata[np.isin(named, regions)].copy()

@@ -165,6 +165,47 @@ def test_the_export_table_satisfies_the_schema_and_links_by_object_number(export
     assert attrs["instance_key"] == "Metadata_ObjectNumber"
 
 
+def test_a_table_in_the_modules_own_layout_links_every_row_to_its_own_instance(export: Path) -> None:
+    """ExportForSpatialData writes region_key (the label element), label_id (the instance) and region (the object set).
+
+    The rows are reversed, so linking by row order would attach every measurement to another object.
+    """
+    path = export / "tables" / f"{PREFIX}.h5ad"
+    adata = ad.read_h5ad(path)
+    obs = cast("pd.DataFrame", adata.obs)
+    truth = {
+        (str(region), int(number)): float(value)
+        for region, number, value in zip(
+            obs["region"], obs["Metadata_ObjectNumber"], np.asarray(adata.X)[:, 0], strict=True
+        )
+    }
+    layout = obs.rename(columns={"region": "region_key", "Metadata_ObjectNumber": "label_id"})
+    layout["region"] = "Cells"
+    adata = ad.AnnData(
+        X=np.asarray(adata.X)[::-1].copy(),
+        obs=layout.iloc[::-1].copy(),
+        var=cast("pd.DataFrame", adata.var),
+        uns=adata.uns,
+    )
+    adata.uns["spatialdata_attrs"] = {
+        "region": sorted(set(layout["region_key"])),
+        "region_key": "region_key",
+        "instance_key": "label_id",
+    }
+    adata.write_h5ad(path)
+
+    cells = mt.io.read_plate(export).tables["cells"]
+    mt.io.validate(cells, raise_on_error=True)
+    read = {
+        (str(region), int(number)): float(value)
+        for region, number, value in zip(
+            cells.obs["region"], cells.obs["Metadata_ObjectNumber"], cells.X[:, 0], strict=True
+        )
+    }
+    assert read == truth
+    assert set(cells.obs["Metadata_ObjectType"]) == {"Cells"}
+
+
 def test_region_and_object_number_address_a_real_label_instance(export: Path) -> None:
     """Every row's region + Metadata_ObjectNumber is an instance value present in that label element."""
     sdata = mt.io.read_plate(export)

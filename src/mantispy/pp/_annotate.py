@@ -68,9 +68,15 @@ def annotate_controls(
 
     Returns:
         ``None``, or the modified copy when ``copy=True``.
-        Writes ``obs["Metadata_Control_Type"]`` (``"negcon"``, ``"poscon"`` or ``"treatment"``) and the
-        boolean ``obs["Metadata_Control"]`` it implies (``True`` for any control). Steps defaulting to
-        ``reference="negcon"`` read the type column, so the negcon rows are selected by it alone.
+        Writes ``obs["Metadata_Control_Type"]`` and the boolean ``obs["Metadata_Control"]`` it implies
+        (``True`` for any control). Steps defaulting to ``reference="negcon"`` read the type column, so the
+        negcon rows are selected by it alone.
+
+    Notes:
+        The classes named here are authoritative: rows matching `negcon` become ``"negcon"`` and earlier
+        ``"negcon"`` rows that no longer match become treatments, and likewise for `poscon` when it is given.
+        Every other class an upstream annotation set, such as ``"poscon"`` or ``"empty"`` wells from a plate
+        map or :func:`annotate_jump`, is kept.
     """
     key = find_perturbation_key(adata, perturbation_key)
     values = adata.obs[key].astype(str)
@@ -83,9 +89,17 @@ def annotate_controls(
             list(negcon),
             key,
         )
-    control_type = np.where(is_negcon, "negcon", "treatment")
+    if "Metadata_Control_Type" in adata.obs:
+        upstream = as_frame(adata.obs)["Metadata_Control_Type"]
+        control_type = upstream.astype(object).where(upstream.notna(), "treatment").astype(str).to_numpy(dtype=object)
+    else:
+        control_type = np.full(adata.n_obs, "treatment", dtype=object)
+    control_type[(control_type == "negcon") & ~is_negcon] = "treatment"
+    control_type[is_negcon] = "negcon"
     if poscon is not None:
-        control_type[values.isin([str(v) for v in poscon]).to_numpy()] = "poscon"
+        is_poscon = values.isin([str(v) for v in poscon]).to_numpy()
+        control_type[(control_type == "poscon") & ~is_poscon] = "treatment"
+        control_type[is_poscon] = "poscon"
     adata.obs["Metadata_Control_Type"] = control_type
     adata.obs["Metadata_Control"] = control_type != "treatment"
     return None

@@ -24,9 +24,11 @@ from mantispy._core.schema import (
     OBJECT_IDENTITY,
     REQUIRED_OBS,
     REQUIRED_VAR,
+    RESOLUTION_RENAMES,
     RESOLUTIONS,
     SCHEMA_VERSION,
     SUPPORTED_VERSIONS,
+    _legacy_controls,
     ensure_object_identity,
     migrate,
     validate,
@@ -127,7 +129,9 @@ def from_dataframe(
             ``None`` keeps every object, including the whole-field ``Image`` measurements.
         resolution: Resolution to record.
             Profile tables are usually well-level.
-        grouped_by: For ``"aggregate"`` resolution, the columns that define one row; required there since there is no default.
+            The 1.0 names ``"cell"`` and ``"perturbation"`` are read as ``"object"`` and ``"aggregate"``.
+        grouped_by: For ``"aggregate"`` resolution, the ``obs`` columns that define one row, such as
+            ``["Metadata_Perturbation"]``; required there, since only the table's author knows its grouping.
 
     Returns:
         An :class:`~anndata.AnnData` of observations by features at the recorded resolution, with the parsed feature annotation in ``var`` and the schema stamp, the resolution and the channel vocabulary it parsed with in ``uns["mantispy"]``.
@@ -137,6 +141,7 @@ def from_dataframe(
         ValueError: `df` has no rows, no column parses as a feature on `objects`, or two metadata prefixes normalize onto the same column name.
         KeyError: A name in `metadata_columns` is not in `df`.
     """
+    resolution = RESOLUTION_RENAMES.get(resolution, resolution)
     if len(df) == 0:
         raise ValueError(
             f"the table has {len(df.columns)} column(s) and no rows. A column holding no values has no "
@@ -339,7 +344,8 @@ def read_profiles(
         strict_one_to_one: For an export directory, raise when another object does not match the primary object exactly once.
             ``False`` keeps the first match.
         resolution: Resolution to record, ``"object"`` for a directory and ``"well"`` for files when omitted.
-        grouped_by: For ``"aggregate"`` resolution, the columns that define one row; required there since there is no default.
+            The 1.0 names ``"cell"`` and ``"perturbation"`` are read as ``"object"`` and ``"aggregate"``.
+        grouped_by: For ``"aggregate"`` resolution, the ``obs`` columns that define one row; required there.
 
     Returns:
         An :class:`~anndata.AnnData` at the recorded resolution, with the parsed feature annotation in ``var``, the metadata in ``obs`` with pycytominer's per-well counts copied to ``Metadata_CellCount`` and ``Metadata_SiteCount``, and the schema stamp, the resolution, the channel vocabulary, this call's parameters and, from an export directory, the per-image quality table under ``uns["mantispy"]``.
@@ -371,7 +377,7 @@ def read_profiles(
                 "share ImageNumbers."
             )
         directory = files[0]
-        resolution = resolution or "object"
+        resolution = RESOLUTION_RENAMES.get(resolution, resolution) if resolution is not None else "object"
         if export_prefix(directory) is not None:
             frame, image, found = read_export(directory, primary_object, objects, strict_one_to_one)
             vocabulary = vocabulary if vocabulary is not None else (found or None)
@@ -385,7 +391,7 @@ def read_profiles(
             get_logger().info("read_profiles: %d parquet part(s) under %s", len(parts), directory)
             frame, lengths, files = _stack(parts, on_column_mismatch)
     else:
-        resolution = resolution or "well"
+        resolution = RESOLUTION_RENAMES.get(resolution, resolution) if resolution is not None else "well"
         frame, lengths, files = _stack(files, on_column_mismatch)
 
     if path_columns:
@@ -483,10 +489,26 @@ def write(adata: ad.AnnData, path: str | Path) -> None:
 
     Raises:
         ValueError: The object does not satisfy the schema, with every failure :func:`~mantispy.io.validate` found in the message.
+
+    Notes:
+        An object from an earlier mantispy is migrated first, so it is never relabelled as current without its
+        content being brought up to date. A write that fails validation leaves ``uns["mantispy"]`` as it was.
     """
     path = Path(path)
+    store = adata.uns.get("mantispy")
+    stored = store.get("schema_version") if isinstance(store, dict) else None
+    if stored is not None and stored != SCHEMA_VERSION and stored in SUPPORTED_VERSIONS:
+        migrate(adata)
+    prior = adata.uns.get("mantispy")
     _record(adata)
-    validate(adata, raise_on_error=True)
+    try:
+        validate(adata, raise_on_error=True)
+    except ValueError:
+        if prior is None:
+            del adata.uns["mantispy"]
+        else:
+            adata.uns["mantispy"] = prior
+        raise
     if path.suffix == ".zarr":
         adata.write_zarr(path)
     else:
@@ -542,8 +564,13 @@ def stamp(
     """
     store = adata.uns.get("mantispy", {})
     store = store if isinstance(store, dict) else {}
+    # An object from an earlier mantispy still speaks its old schema: its resolution names and its control
+    # model (Metadata_Control meant negative control) are translated as migrate would, not relabelled as-is.
+    legacy = store.get("schema_version") in SUPPORTED_VERSIONS and store.get("schema_version") != SCHEMA_VERSION
     if resolution is None:
         resolution = store.get("resolution")
+        if legacy and resolution is not None:
+            resolution = RESOLUTION_RENAMES.get(str(resolution), str(resolution))
     if resolution is None:
         raise ValueError(
             f"no resolution to stamp; pass resolution=... (one of {RESOLUTIONS}). mt.io.stamp does not "
@@ -573,10 +600,13 @@ def stamp(
             "one row, since there is no default and the object records none."
         )
     _require_feature_kind(adata, feature_kind)
+    controls = _legacy_controls(as_frame(adata.obs)) if legacy else None
 
     def _apply(obj: ad.AnnData) -> None:
         for column, values in minted.items():
             obj.obs[column] = values
+        if controls is not None:
+            obj.obs["Metadata_Control_Type"], obj.obs["Metadata_Control"] = controls
         if absent := [column for column in REQUIRED_VAR if column not in obj.var]:
             empty = empty_annotation(obj.var.index)
             obj.var[absent] = empty[absent]
