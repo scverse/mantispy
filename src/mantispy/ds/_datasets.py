@@ -18,7 +18,7 @@ from scverse_misc.datasets import fetch, parse_registry, register_loader
 from mantispy._core.features import empty_annotation
 from mantispy._core.frames import as_frame, categorize_metadata
 from mantispy._core.logging import get_logger, report_drop
-from mantispy._core.schema import SCHEMA_VERSION, ensure_object_identity, migrate, stamp
+from mantispy._core.schema import SCHEMA_VERSION, ensure_object_identity, migrate, set_control_columns, stamp
 from mantispy._settings import settings
 from mantispy.io._jump import join_jump_annotation, read_jump
 from mantispy.io._profiles import _UPSTREAM_COUNTS, _adopt_counts, from_dataframe, read, read_profiles, write
@@ -203,8 +203,7 @@ def _rohban_raw(cache_dir: str | Path | None = None) -> AnnData:
     adata = _augmented("rohban", None, cache_dir)
     obs = as_frame(adata.obs)
     role = obs["Metadata_ASSAY_WELL_ROLE"].astype(str)
-    obs["Metadata_Control"] = (role == "CTRL").to_numpy()
-    obs["Metadata_Control_Type"] = np.where(obs["Metadata_Control"].to_numpy(), "negcon", "treatment")
+    set_control_columns(obs, role == "CTRL")
 
     # The unit the screen varied is the ORF construct (Metadata_broad_sample), ~323 of them: the paper's
     # active set is construct-level, and several constructs can overexpress the same gene. The untreated

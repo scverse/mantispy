@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from mantispy._core.schema import set_control_columns
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
     from pathlib import Path
@@ -154,8 +156,7 @@ def _assemble_bbbc021(cache_dir: str | Path | None = None) -> AnnData:
 
     adata = from_dataframe(merged, resolution="well")
     obs = as_frame(adata.obs)
-    obs["Metadata_Control"] = (obs["Metadata_Compound"] == "DMSO").to_numpy()
-    obs["Metadata_Control_Type"] = np.where(obs["Metadata_Control"].to_numpy(), "negcon", "treatment")
+    set_control_columns(obs, obs["Metadata_Compound"] == "DMSO")
     obs["Metadata_ConcentrationUnit"] = "uM"  # BBBC021 (Caie et al. 2010) doses are micromolar
     obs["Metadata_Perturbation"] = pd.Categorical(
         obs["Metadata_Compound"].astype(str) + "@" + obs["Metadata_Concentration"].astype(str)
@@ -250,8 +251,7 @@ def _assemble_chroma(cache_dir: str | Path | None = None) -> AnnData:
     adata = _profiles("chroma", cache_dir, select=lambda name: not name.endswith(".h5ad"))
     obs = as_frame(adata.obs)
     control = (obs["Metadata_control_type"].astype(str) == "negcon").to_numpy()
-    obs["Metadata_Control"] = control
-    obs["Metadata_Control_Type"] = np.where(control, "negcon", "treatment")
+    set_control_columns(obs, control)
     name = obs["Metadata_Common Name"].astype(str).to_numpy()
     dose = pd.to_numeric(obs["Metadata_mmoles_per_liter"], errors="coerce").to_numpy(dtype=float)
     compound = np.where(control, "DMSO", name)
@@ -354,9 +354,8 @@ def _assemble_oasis_pilot(cache_dir: str | Path | None = None) -> AnnData:
     adata.obs["Metadata_ConcentrationUnit"] = "uM"  # the OASIS platemaps record the dose in micromolar
     adata.obs["Metadata_ConcentrationRecorded"] = merged["Metadata_ConcentrationRecorded"].to_numpy(dtype=float)
     adata.obs["Metadata_CellLine"] = merged["Metadata_CellLine"].to_numpy()
-    adata.obs["Metadata_Control"] = merged["Metadata_Compound"].astype(str).str.upper().eq("DMSO").to_numpy()
-    is_control = np.asarray(adata.obs["Metadata_Control"], dtype=bool)
-    adata.obs["Metadata_Control_Type"] = np.where(is_control, "negcon", "treatment")
+    is_control = merged["Metadata_Compound"].astype(str).str.upper().eq("DMSO").to_numpy()
+    set_control_columns(as_frame(adata.obs), is_control)
     adata.obs["Metadata_Perturbation"] = pd.Categorical(
         np.where(
             is_control,
@@ -406,8 +405,7 @@ def _assemble_pki(cache_dir: str | Path | None = None) -> AnnData:
     adata = _augmented("pki", None, cache_dir)
     obs = as_frame(adata.obs)
     control = (obs["Metadata_control_type"].astype(str) == "negcon").to_numpy()
-    obs["Metadata_Control"] = control
-    obs["Metadata_Control_Type"] = np.where(control, "negcon", "treatment")
+    set_control_columns(obs, control)
     # Control wells have no compound or dose, so without this each would become its own "nan@nan" perturbation.
     compound = np.where(control, "DMSO", obs["Metadata_broad_sample"].astype(str).to_numpy())
     dose = obs["Metadata_mmoles_per_liter"].to_numpy(dtype=float)

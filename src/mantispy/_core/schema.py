@@ -205,15 +205,9 @@ UNS_RESULTS: tuple[str, ...] = (
 
 #: Suffixes of a companion table written beside a result (e.g. ``effect_groups`` beside ``effect``). A key
 #: ending in one of these is registered when its base (the part before the suffix) is a registered result.
-_RESULT_COMPANION_SUFFIXES: tuple[str, ...] = (
-    "_groups",
-    "_summary",
-    "_units",
-    "_prior_df",
-    "_linkage",
-    "_pairwise",
-    "_confusion",
-)
+#: Companions that are registered in their own right (``edistance_pairwise``, ``moa_confusion``) are not
+#: listed here, so each companion has a single registration.
+_RESULT_COMPANION_SUFFIXES: tuple[str, ...] = ("_groups", "_summary", "_units", "_prior_df", "_linkage")
 
 
 @dataclass
@@ -463,12 +457,12 @@ def _check_result_keys(store: dict, report: ValidationReport) -> None:
     caller's custom ``key_added``. It is a warning, not an error, because a custom ``key_added`` is allowed;
     the package's own default keys must all be registered, which a test enforces.
     """
-    known = set(UNS_KEYS) | set(UNS_RESULTS)
+    results = set(UNS_RESULTS)
+    known = set(UNS_KEYS) | results
     for key in store:
         if not isinstance(key, str) or key in known:
             continue
-        base = next((key[: -len(suffix)] for suffix in _RESULT_COMPANION_SUFFIXES if key.endswith(suffix)), None)
-        if base in UNS_RESULTS:
+        if any(key.endswith(suffix) and key.removesuffix(suffix) in results for suffix in _RESULT_COMPANION_SUFFIXES):
             continue
         report.warnings.append(
             f"uns['mantispy'][{key!r}] is not a registered result key; register it in "
@@ -666,6 +660,20 @@ def validate(adata: AnnData, *, raise_on_error: bool = False) -> ValidationRepor
     return report
 
 
+def set_control_columns(obs: pd.DataFrame, is_control: Any) -> pd.DataFrame:
+    """Write the control pair (spec §10) into ``obs`` from one boolean control mask.
+
+    Sets ``Metadata_Control`` to the mask and ``Metadata_Control_Type`` to the ``negcon``/``treatment`` it
+    implies, so the invariant ``Metadata_Control == (Metadata_Control_Type != "treatment")`` holds by
+    construction. For a negcon/treatment layout (no positive controls); a dataset with poscons sets the
+    type column itself. Returns ``obs`` for chaining.
+    """
+    mask = np.asarray(is_control, dtype=bool)
+    obs["Metadata_Control"] = mask
+    obs["Metadata_Control_Type"] = np.where(mask, "negcon", "treatment")
+    return obs
+
+
 def require_concentration_unit(
     obs: pd.DataFrame,
     dose_key: str = "Metadata_Concentration",
@@ -690,7 +698,8 @@ def require_concentration_unit(
     # unit for that row. Check for NaN explicitly before astype(str) — under pandas 3 a NaN survives astype
     # as a float, so a {"nan"} string filter would miss it and sorted() would raise TypeError on a mixed set.
     present = obs.loc[obs[dose_key].notna(), unit_key]
-    blank = present.isna() | present.astype(str).isin(["", "nan"]).to_numpy()
+    text = present.astype(str)
+    blank = present.isna() | text.isin(["", "nan"])
     if blank.all():
         raise ValueError(
             f"{unit_key!r} is empty for every row that has a {dose_key!r}; set an explicit concentration unit."
@@ -700,7 +709,7 @@ def require_concentration_unit(
             f"{unit_key!r} is missing for some rows that have a {dose_key!r}; every dosed row needs an "
             "explicit unit, since mantispy does not assume one."
         )
-    units = sorted(set(present.astype(str)))
+    units = sorted(set(text))
     if len(units) > 1:
         raise ValueError(
             f"{unit_key!r} has more than one unit {units}; a dose-response function requires a single "
