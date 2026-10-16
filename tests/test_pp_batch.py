@@ -227,7 +227,7 @@ def _control_plate(n_wells, n_features, gradient, seed, noise=0.0, plate="P1"):
 def test_detect_plate_position_fires_on_a_smooth_gradient():
     adata = _control_plate(n_wells=96, n_features=12, gradient=True, noise=0.1, seed=0)
     mt.pp.detect_plate_position(adata)
-    row = adata.uns["mantispy"]["plate_position_detection"].set_index("plate").loc["P1"]
+    row = adata.uns["mantispy"]["plate_position_detection"].set_index("group").loc["P1"]
     assert row["cv_r2_median"] > 0
     assert row["frac_features_positive"] > 0.8
     assert row["reason"] == ""
@@ -236,7 +236,7 @@ def test_detect_plate_position_fires_on_a_smooth_gradient():
 def test_detect_plate_position_does_not_fire_on_noise():
     adata = _control_plate(n_wells=96, n_features=12, gradient=False, seed=0)
     mt.pp.detect_plate_position(adata)
-    row = adata.uns["mantispy"]["plate_position_detection"].set_index("plate").loc["P1"]
+    row = adata.uns["mantispy"]["plate_position_detection"].set_index("group").loc["P1"]
     assert row["cv_r2_median"] <= 0
     assert row["frac_features_positive"] < 0.5
     assert row["reason"] == ""
@@ -250,7 +250,7 @@ def test_detect_plate_position_scores_each_plate_independently():
     adata = ad.concat([gradient, noise], index_unique="-")
 
     mt.pp.detect_plate_position(adata)
-    table = adata.uns["mantispy"]["plate_position_detection"].set_index("plate")
+    table = adata.uns["mantispy"]["plate_position_detection"].set_index("group")
 
     assert set(table.index) == {"P1", "P2"}
     assert table.loc["P1", "cv_r2_median"] > 0
@@ -262,7 +262,7 @@ def test_detect_plate_position_scores_each_plate_independently():
 def test_detect_plate_position_records_too_few_controls_without_raising():
     adata = _control_plate(n_wells=12, n_features=12, gradient=True, noise=0.1, seed=0)
     mt.pp.detect_plate_position(adata, min_controls=20)
-    row = adata.uns["mantispy"]["plate_position_detection"].set_index("plate").loc["P1"]
+    row = adata.uns["mantispy"]["plate_position_detection"].set_index("group").loc["P1"]
     assert np.isnan(row["cv_r2_median"])
     assert np.isnan(row["frac_features_positive"])
     assert "control wells" in row["reason"]
@@ -272,7 +272,7 @@ def test_detect_plate_position_records_too_few_controls_without_raising():
 def test_detect_pass_coincides_with_the_correction_flattening_the_grid():
     adata = _control_plate(n_wells=96, n_features=12, gradient=True, noise=0.1, seed=0)
     mt.pp.detect_plate_position(adata)
-    assert adata.uns["mantispy"]["plate_position_detection"].set_index("plate").loc["P1", "cv_r2_median"] > 0
+    assert adata.uns["mantispy"]["plate_position_detection"].set_index("group").loc["P1", "cv_r2_median"] > 0
 
     before = _position_correlation(adata)
     mt.pp.correct_plate_position(adata)
@@ -342,7 +342,7 @@ def test_detect_cv_r2_is_offset_invariant():
     def score(matrix):
         adata = _plate(matrix, names, control, var)
         mt.pp.detect_plate_position(adata, reference="negcon", min_controls=8, n_splits=8)
-        return adata.uns["mantispy"]["plate_position_detection"].set_index("plate").loc["P", "cv_r2_median"]
+        return adata.uns["mantispy"]["plate_position_detection"].set_index("group").loc["P", "cv_r2_median"]
 
     # Adding a large grand level must not change an additive model's cross-validated R^2 (the bug sent it
     # to ~-1e9); the tiny residual that remains is only float32 round-off from storing base + 1e5.
@@ -374,7 +374,7 @@ def test_detect_records_a_reason_when_no_feature_is_scorable():
     adata = _plate(np.ones((len(names), 4)), names, [True] * len(names), [f"Cells_AreaShape_F{j}" for j in range(4)])
 
     mt.pp.detect_plate_position(adata, reference="negcon", min_controls=8)
-    row = adata.uns["mantispy"]["plate_position_detection"].set_index("plate").loc["P"]
+    row = adata.uns["mantispy"]["plate_position_detection"].set_index("group").loc["P"]
     assert np.isnan(row["cv_r2_median"]) and row["reason"] != ""
 
 

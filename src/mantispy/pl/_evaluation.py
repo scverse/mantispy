@@ -41,18 +41,18 @@ def map(adata: AnnData, key: str = "map", label_top: int = 10, ax: Axes | None =
     table = _table(adata, key, "mt.tl.map")
     ax = _axes(ax, (5.5, 4.5))
 
-    significance = -np.log10(np.clip(table["corrected_p_value"].to_numpy(dtype=float), 1e-12, None))
-    ax.scatter(table["mean_average_precision"], significance, s=14)
+    significance = -np.log10(np.clip(table["qvalue"].to_numpy(dtype=float), 1e-12, None))
+    ax.scatter(table["score"], significance, s=14)
 
     # Params are stored under the function name, not the table's `key`.
     threshold = adata.uns.get("mantispy", {}).get("params", {}).get("map", {}).get("threshold", 0.05)
     ax.axhline(-np.log10(threshold), color="grey", ls="--", lw=1, label=f"q = {threshold}")
 
     group_column = table.columns[0]
-    for _, row in table.nlargest(label_top, "mean_average_precision").iterrows():
+    for _, row in table.nlargest(label_top, "score").iterrows():
         ax.annotate(
             str(row[group_column]),
-            (row["mean_average_precision"], -np.log10(max(float(row["corrected_p_value"]), 1e-12))),
+            (row["score"], -np.log10(max(float(row["qvalue"]), 1e-12))),
             fontsize=6,
         )
     ax.set_xlabel("mean average precision")
@@ -62,7 +62,7 @@ def map(adata: AnnData, key: str = "map", label_top: int = 10, ax: Axes | None =
     tidy = pd.DataFrame(
         {
             group_column: table[group_column].astype(str).to_numpy(),
-            "mean average precision": table["mean_average_precision"].to_numpy(dtype=float),
+            "mean average precision": table["score"].to_numpy(dtype=float),
             "-log10 corrected p": significance,
         }
     )
@@ -98,7 +98,7 @@ def replicate_correlation(adata: AnnData, key: str = "percent_replicating", ax: 
     table = _table(adata, key, "mt.tl.percent_replicating")
     ax = _axes(ax, (5, 4.5))
 
-    replicating = table["is_replicating"].to_numpy(dtype=bool)
+    replicating = table["is_significant"].to_numpy(dtype=bool)
     ax.scatter(
         table["null_threshold"][~replicating], table["median_replicate_correlation"][~replicating], s=14, label="no"
     )

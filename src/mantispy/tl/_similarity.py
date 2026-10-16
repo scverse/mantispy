@@ -137,7 +137,7 @@ def percent_replicating(
 
     Returns:
         ``None``, or the modified copy.
-        Writes ``uns["mantispy"][key_added]`` with ``group``, ``n_replicates``, ``median_replicate_correlation``, ``null_threshold`` and ``is_replicating``, leaving out groups with a single replicate.
+        Writes ``uns["mantispy"][key_added]`` with ``group``, ``n_replicates``, ``median_replicate_correlation``, ``null_threshold`` and ``is_significant`` (whether the group replicates above the null), leaving out groups with a single replicate.
         Writes ``uns["mantispy"][key_added + "_summary"]`` with ``fraction_replicating`` and ``n_groups``.
     """
     matrix = similarity_matrix(representation(adata, use_rep), metric)
@@ -161,7 +161,7 @@ def percent_replicating(
                 "n_replicates": int(members.size),
                 "median_replicate_correlation": observed,
                 "null_threshold": null_threshold,
-                "is_replicating": observed > null_threshold,
+                "is_significant": observed > null_threshold,
             }
         )
 
@@ -169,7 +169,7 @@ def percent_replicating(
     store = adata.uns.setdefault("mantispy", {})
     store[key_added] = table
     store[f"{key_added}_summary"] = {
-        "fraction_replicating": float(table["is_replicating"].mean()) if len(table) else float("nan"),
+        "fraction_replicating": float(table["is_significant"].mean()) if len(table) else float("nan"),
         "n_groups": int(len(table)),
     }
     return None

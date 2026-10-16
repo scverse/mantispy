@@ -45,7 +45,7 @@ def test_a_one_sided_p_in_the_unit_interval_feeds_aggregate_guides(adata):
         adata, score="guide_activity", guide="Metadata_sgRNA", gene="Metadata_Gene", control="nontargeting"
     )
     table = adata.uns["mantispy"]["gene_aggregation"]
-    assert bool(table.loc[table["gene"] == "geneA", "is_hit"].iloc[0])
+    assert bool(table.loc[table["group"] == "geneA", "is_hit"].iloc[0])
 
 
 def test_an_absent_reference_is_an_error(adata):

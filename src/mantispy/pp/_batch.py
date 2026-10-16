@@ -303,7 +303,7 @@ def detect_plate_position(
     codes, keys = group_codes(adata, by)
 
     table: dict[str, list] = {
-        "plate": [],
+        "group": [],
         "n_controls": [],
         "cv_r2_median": [],
         "frac_features_positive": [],
@@ -311,7 +311,7 @@ def detect_plate_position(
     }
 
     def record(key: object, n_controls: int, cv_r2_median: float, frac_positive: float, reason: str) -> None:
-        table["plate"].append(str(key))
+        table["group"].append(str(key))
         table["n_controls"].append(int(n_controls))
         table["cv_r2_median"].append(float(cv_r2_median))
         table["frac_features_positive"].append(float(frac_positive))

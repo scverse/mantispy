@@ -155,6 +155,8 @@ def _assemble_bbbc021(cache_dir: str | Path | None = None) -> AnnData:
     adata = from_dataframe(merged, resolution="well")
     obs = as_frame(adata.obs)
     obs["Metadata_Control"] = (obs["Metadata_Compound"] == "DMSO").to_numpy()
+    obs["Metadata_Control_Type"] = np.where(obs["Metadata_Control"].to_numpy(), "negcon", "treatment")
+    obs["Metadata_ConcentrationUnit"] = "uM"  # BBBC021 (Caie et al. 2010) doses are micromolar
     obs["Metadata_Perturbation"] = pd.Categorical(
         obs["Metadata_Compound"].astype(str) + "@" + obs["Metadata_Concentration"].astype(str)
     )
@@ -249,11 +251,13 @@ def _assemble_chroma(cache_dir: str | Path | None = None) -> AnnData:
     obs = as_frame(adata.obs)
     control = (obs["Metadata_control_type"].astype(str) == "negcon").to_numpy()
     obs["Metadata_Control"] = control
+    obs["Metadata_Control_Type"] = np.where(control, "negcon", "treatment")
     name = obs["Metadata_Common Name"].astype(str).to_numpy()
     dose = pd.to_numeric(obs["Metadata_mmoles_per_liter"], errors="coerce").to_numpy(dtype=float)
     compound = np.where(control, "DMSO", name)
     obs["Metadata_Compound"] = pd.Categorical(compound)
     obs["Metadata_Concentration"] = dose
+    obs["Metadata_ConcentrationUnit"] = "mM"  # the platemap's mmoles_per_liter
     obs["Metadata_MOA"] = obs["Metadata_MoA"].astype("category")
     label = np.where(control, "DMSO", np.char.add(np.char.add(compound.astype(str), "@"), dose.astype(str)))
     obs["Metadata_Perturbation"] = pd.Categorical(label)
@@ -351,6 +355,7 @@ def _assemble_oasis_pilot(cache_dir: str | Path | None = None) -> AnnData:
     adata.obs["Metadata_CellLine"] = merged["Metadata_CellLine"].to_numpy()
     adata.obs["Metadata_Control"] = merged["Metadata_Compound"].astype(str).str.upper().eq("DMSO").to_numpy()
     is_control = np.asarray(adata.obs["Metadata_Control"], dtype=bool)
+    adata.obs["Metadata_Control_Type"] = np.where(is_control, "negcon", "treatment")
     adata.obs["Metadata_Perturbation"] = pd.Categorical(
         np.where(
             is_control,
@@ -406,6 +411,7 @@ def _assemble_pki(cache_dir: str | Path | None = None) -> AnnData:
     dose = obs["Metadata_mmoles_per_liter"].to_numpy(dtype=float)
     obs["Metadata_Compound"] = pd.Categorical(compound)
     obs["Metadata_Concentration"] = dose
+    obs["Metadata_ConcentrationUnit"] = "mM"  # the platemap's mmoles_per_liter
     obs["Metadata_MOA"] = obs.pop("Metadata_moa")
     label = np.where(control, "DMSO", np.char.add(np.char.add(compound.astype(str), "@"), dose.astype(str)))
     obs["Metadata_Perturbation"] = pd.Categorical(label)

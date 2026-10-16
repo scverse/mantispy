@@ -52,21 +52,21 @@ def transport(
 
     ax = _axes(ax, (5.5, 0.22 * len(shown) + 1.5))
     positions = np.arange(len(shown))[::-1]
-    colours = ["crimson" if flag else "lightgrey" for flag in shown["transports"]]
+    colours = ["crimson" if flag else "lightgrey" for flag in shown["is_significant"]]
     ax.barh(positions, shown["agreement"].to_numpy(), color=colours, height=0.7)
     ax.set_yticks(positions)
     ax.set_yticklabels(shown["group"].astype(str), fontsize=6)
     ax.axvline(0.0, color="grey", lw=0.8)
     xlabel = f"effect agreement across {chosen.replace('Metadata_', '').lower()}"
     ax.set_xlabel(xlabel)
-    title = f"{int(block['transports'].sum())} of {len(block)} reproduce"
+    title = f"{int(block['is_significant'].sum())} of {len(block)} reproduce"
     ax.set_title(title, fontsize=9)
 
     tidy = pd.DataFrame(
         {
             "group": shown["group"].astype(str).to_numpy(),
             xlabel: shown["agreement"].to_numpy(dtype=float),
-            "reproduces": np.where(shown["transports"].to_numpy(dtype=bool), "yes", "no"),
+            "reproduces": np.where(shown["is_significant"].to_numpy(dtype=bool), "yes", "no"),
         }
     )
     _maybe_interactive("barh", ax=ax, data=tidy, x=xlabel, y="group", color="reproduces", title=title)

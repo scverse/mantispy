@@ -450,9 +450,11 @@ def read(path: str | Path, backed: Literal["r", "r+"] | None = None, migrate_sch
     adata = ad.read_zarr(path) if path.suffix == ".zarr" else ad.read_h5ad(path, backed=backed)
     stored = adata.uns.get("mantispy", {}).get("schema_version")
     if stored == SCHEMA_VERSION:
+        validate(adata, raise_on_error=True)  # §16.1: full validation at the read boundary.
         return adata
     if migrate_schema and stored in SUPPORTED_VERSIONS:
         migrate(adata)
+        validate(adata, raise_on_error=True)  # §16.1: the migrated object must satisfy the current contract.
         return adata
     raise ValueError(
         f"file was written with schema_version {stored!r}, this version supports {SCHEMA_VERSION!r}"
@@ -573,6 +575,7 @@ def stamp(
         kinds[feature_mask(target, "is_feature")] = feature_kind
         target.var["feature_kind"] = kinds.to_numpy()
     _record(target, resolution=resolution, grouped_by=grouped_by)
+    validate(target, raise_on_error=True)  # §16.1: stamping an external object runs the full contract.
     return target if copy else None
 
 

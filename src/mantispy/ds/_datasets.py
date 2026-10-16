@@ -204,6 +204,7 @@ def _rohban_raw(cache_dir: str | Path | None = None) -> AnnData:
     obs = as_frame(adata.obs)
     role = obs["Metadata_ASSAY_WELL_ROLE"].astype(str)
     obs["Metadata_Control"] = (role == "CTRL").to_numpy()
+    obs["Metadata_Control_Type"] = np.where(obs["Metadata_Control"].to_numpy(), "negcon", "treatment")
 
     # The unit the screen varied is the ORF construct (Metadata_broad_sample), ~323 of them: the paper's
     # active set is construct-level, and several constructs can overexpress the same gene. The untreated

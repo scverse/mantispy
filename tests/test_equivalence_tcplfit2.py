@@ -153,6 +153,7 @@ def test_hitcall_matches_tcplfit2(name):
         {
             "Metadata_Compound": [name] * conc.size,
             "Metadata_Concentration": conc,
+            "Metadata_ConcentrationUnit": "uM",
             "hits_row_distance": resp,
         },
         index=[str(i) for i in range(conc.size)],
@@ -161,6 +162,6 @@ def test_hitcall_matches_tcplfit2(name):
 
     # Responses are already baseline-corrected (tcplfit2's bmed=0), so no controls and an explicit cutoff.
     mt.tl.dose_response(adata, reference=None, cutoff=cutoff)
-    table = adata.uns["mantispy"]["dose_response"].set_index("compound")
+    table = adata.uns["mantispy"]["dose_response"].set_index("group")
 
     assert table.loc[name, "hitcall"] == pytest.approx(expected, abs=0.02)

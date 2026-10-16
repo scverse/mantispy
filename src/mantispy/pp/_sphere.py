@@ -227,9 +227,7 @@ def _select_epsilon(adata: AnnData, X: np.ndarray, method: str, reference: str |
             warn=False,
             compute_null=False,
         )
-        score = (
-            activity_table["mean_average_precision"].mean() + replicability_table["mean_average_precision"].mean()
-        ) / 2
+        score = (activity_table["score"].mean() + replicability_table["score"].mean()) / 2
         return float(score) if np.isfinite(score) else -np.inf
 
     # The recipe's fixed grid and seed give a reproducible base; opportunistic sampling then grows it.

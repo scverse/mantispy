@@ -118,10 +118,7 @@ def _combined_map(adata):
 
     activity = mt.tl.map(adata, mode="activity", null_size=100, seed=0, copy=True)
     replicability = mt.tl.map(adata, mode="replicability", null_size=100, seed=0, copy=True)
-    return (
-        activity.uns["mantispy"]["map"]["mean_average_precision"].mean()
-        + replicability.uns["mantispy"]["map"]["mean_average_precision"].mean()
-    ) / 2
+    return (activity.uns["mantispy"]["map"]["score"].mean() + replicability.uns["mantispy"]["map"]["score"].mean()) / 2
 
 
 def test_auto_starts_from_the_recipe_grid_and_is_seed_deterministic():

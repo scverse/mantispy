@@ -51,7 +51,7 @@ def _call(adata, **kw):
 def test_it_recovers_the_hit_genes_and_controls_the_false_discovery_rate(adata):
     table = _call(adata, alpha=0.05, seed=0)
     called = table[table["is_hit"]]
-    is_hit_gene = called["gene"].str.startswith("hit")
+    is_hit_gene = called["group"].str.startswith("hit")
     power = is_hit_gene.sum() / 60
     fdr = (~is_hit_gene).sum() / max(len(called), 1)
     assert power > 0.8
@@ -74,7 +74,7 @@ def test_fisher_fires_on_a_single_strong_guide_where_stouffer_does_not():
     stouffer = _call(AnnData(np.zeros((len(genes), 1), "float32"), obs=obs), method="stouffer")
     fisher = _call(AnnData(np.zeros((len(genes), 1), "float32"), obs=obs), method="fisher")
     assert fisher["is_hit"].sum() > stouffer["is_hit"].sum()
-    assert fisher[fisher["gene"].str.startswith("os")]["is_hit"].mean() > 0.8
+    assert fisher[fisher["group"].str.startswith("os")]["is_hit"].mean() > 0.8
 
 
 def test_control_guides_and_unscored_guides_are_never_hits_and_get_no_pvalue(adata):
@@ -86,8 +86,8 @@ def test_control_guides_and_unscored_guides_are_never_hits_and_get_no_pvalue(ada
     assert obs.loc[obs["Metadata_Gene"] == "hit0", "gene_aggregation_qvalue"].isna().all()
     assert not obs.loc[obs["Metadata_Gene"] == "hit0", "gene_aggregation"].any()
     table = adata.uns["mantispy"]["gene_aggregation"]
-    assert "hit0" not in set(table["gene"])  # no scored guide -> absent from the table
-    assert "nontargeting" not in set(table["gene"])  # controls are the null, not tested
+    assert "hit0" not in set(table["group"])  # no scored guide -> absent from the table
+    assert "nontargeting" not in set(table["group"])  # controls are the null, not tested
 
 
 def test_the_gene_call_is_broadcast_onto_every_guide_row(adata):
@@ -103,7 +103,7 @@ def test_a_singleton_gene_is_scored_against_the_single_guide_null():
     z = np.concatenate([[5.0], rng.normal(0, 1.0, 400)])
     obs = pd.DataFrame({"Metadata_Gene": genes, "Metadata_sgRNA": [f"g{i}" for i in range(401)], "p": stats.norm.sf(z)})
     table = _call(AnnData(np.zeros((401, 1), "float32"), obs=obs))
-    solo = table[table["gene"] == "solo"]
+    solo = table[table["group"] == "solo"]
     assert len(solo) == 1
     assert int(solo["n_guides"].iloc[0]) == 1
     assert bool(solo["is_hit"].iloc[0])  # a lone guide at z=5 beats the single-NTC null
@@ -147,7 +147,7 @@ def test_a_guide_at_p_one_is_kept_not_dropped(adata):
     adata.obs.loc[adata.obs["Metadata_sgRNA"] == "hit0_0", "p"] = 1.0
     adata.obs.loc[adata.obs["Metadata_sgRNA"] == "ntc0", "p"] = 1.0
     table = _call(adata)
-    assert int(table.loc[table["gene"] == "hit0", "n_guides"].iloc[0]) == 4  # all four guides kept
+    assert int(table.loc[table["group"] == "hit0", "n_guides"].iloc[0]) == 4  # all four guides kept
 
 
 def test_a_score_outside_the_unit_interval_is_rejected(adata):
@@ -171,8 +171,8 @@ def test_weighting_a_gene_s_guides_changes_its_statistic():
     weighted_obs["w"] = [10.0, 1.0, 1.0, 1.0] + [1.0] * 400  # up-weight the one strong guide
     weighted = _call(AnnData(np.zeros((404, 1), "float32"), obs=weighted_obs), weight="w")
     assert (
-        weighted.loc[weighted["gene"] == "wg", "statistic"].iloc[0]
-        > equal.loc[equal["gene"] == "wg", "statistic"].iloc[0]
+        weighted.loc[weighted["group"] == "wg", "statistic"].iloc[0]
+        > equal.loc[equal["group"] == "wg", "statistic"].iloc[0]
     )
 
 
@@ -185,8 +185,8 @@ def test_direction_lets_opposing_guides_cancel():
     without = _call(AnnData(np.zeros((404, 1), "float32"), obs=obs.copy()))
     obs["dir"] = [1.0, 1.0, -1.0, -1.0] + [1.0] * 400  # the gene's guides disagree in direction
     with_dir = _call(AnnData(np.zeros((404, 1), "float32"), obs=obs), direction="dir")
-    stat_without = without.loc[without["gene"] == "dg", "statistic"].iloc[0]
-    stat_with = with_dir.loc[with_dir["gene"] == "dg", "statistic"].iloc[0]
+    stat_without = without.loc[without["group"] == "dg", "statistic"].iloc[0]
+    stat_with = with_dir.loc[with_dir["group"] == "dg", "statistic"].iloc[0]
     assert stat_with < stat_without  # cancellation pulls the combined statistic down
     assert abs(stat_with) < 1.0  # opposing guides roughly cancel
 
