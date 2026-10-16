@@ -548,6 +548,58 @@ def test_migrate_tolerates_a_missing_value_in_a_legacy_control_flag():
     assert validate(obj).ok, validate(obj).errors
 
 
+def _legacy_well_object(**columns) -> ad.AnnData:
+    n = len(next(iter(columns.values())))
+    obs = pd.DataFrame(
+        {"Metadata_Plate": ["P1"] * n, "Metadata_Well": [f"A{i + 1:02d}" for i in range(n)], **columns},
+        index=[str(i) for i in range(n)],
+    )
+    obj = ad.AnnData(
+        X=np.ones((n, 1), dtype=np.float32),
+        obs=obs,
+        var=parse_feature_names(["Cells_AreaShape_Area"]).drop(columns="feature_kind"),
+    )
+    obj.uns["mantispy"] = {"schema_version": "1.0", "resolution": "well"}
+    return obj
+
+
+@pytest.mark.parametrize(
+    ("types", "flag", "expected"),
+    [
+        # 1.0 annotate_jump wrote "trt" for treatments and kept poscon out of the negcon-only flag.
+        (["negcon", "poscon", "trt"], [True, False, False], ["negcon", "poscon", "treatment"]),
+        # 1.0 annotate_controls(poscon=...) wrote "" for treatments.
+        (["negcon", "poscon", ""], [True, False, False], ["negcon", "poscon", "treatment"]),
+        # A dataset's own labels (scallops: target / ntc / neg) take their class from the 1.0 flag.
+        (["target", "ntc", "neg"], [False, True, False], ["treatment", "negcon", "treatment"]),
+    ],
+)
+def test_migrate_translates_a_legacy_control_type_column(types, flag, expected):
+    """A 1.0 type column is translated too, and the negcon-only flag becomes 'any control' (spec 10)."""
+    obj = _legacy_well_object(Metadata_Control_Type=types, Metadata_Control=flag)
+    migrate(obj)
+    assert list(obj.obs["Metadata_Control_Type"]) == expected
+    assert list(obj.obs["Metadata_Control"].astype(bool)) == [t != "treatment" for t in expected]
+    assert validate(obj).ok, validate(obj).errors
+
+
+@pytest.mark.parametrize("spelling", [("yes", "no"), ("TRUE", "FALSE"), ("1", "0"), ("true", "false")])
+def test_migrate_reads_any_spelling_of_a_legacy_control_flag(spelling):
+    yes, no = spelling
+    obj = _legacy_well_object(Metadata_Control=[yes, no])
+    migrate(obj)
+    assert list(obj.obs["Metadata_Control_Type"]) == ["negcon", "treatment"]
+
+
+def test_migrate_refuses_an_unreadable_control_flag_and_leaves_the_object_untouched():
+    """A value that is neither true nor false must not silently become a treatment."""
+    obj = _legacy_well_object(Metadata_Control=["DMSO", "no"])
+    with pytest.raises(ValueError, match="neither true nor false"):
+        migrate(obj)
+    assert obj.uns["mantispy"]["schema_version"] == "1.0"
+    assert list(obj.obs["Metadata_Control"]) == ["DMSO", "no"]
+
+
 @pytest.mark.parametrize(("old", "new"), [("cell", "object"), ("perturbation", "aggregate")])
 def test_migrate_translates_the_old_resolution_names(old, new):
     obs = pd.DataFrame({"Metadata_Plate": ["P1", "P1"], "Metadata_Well": ["A01", "A02"]}, index=["0", "1"])
@@ -632,6 +684,68 @@ def test_migrate_renumbers_objects_when_a_coarse_image_id_would_collide():
     migrate(obj)
     assert set(obj.obs["Metadata_ImageID"]) == {"P1|A01"}
     assert not obj.obs[["Metadata_ImageID", "Metadata_ObjectNumber"]].duplicated().any()
+    # The source numbers are not lost.
+    assert list(obj.obs["Metadata_SourceObjectNumber"]) == [1, 2, 1, 2]
+    assert validate(obj).ok, validate(obj).errors
+
+
+def _legacy_object(**columns) -> ad.AnnData:
+    n = len(next(iter(columns.values())))
+    obj = ad.AnnData(
+        X=np.ones((n, 1), dtype=np.float32),
+        obs=pd.DataFrame(columns, index=[str(i) for i in range(n)]),
+        var=parse_feature_names(["Cells_AreaShape_Area"]).drop(columns="feature_kind"),
+    )
+    obj.uns["mantispy"] = {"schema_version": "1.0", "resolution": "cell"}
+    return obj
+
+
+def test_migrate_keeps_label_instance_numbers_when_region_separates_the_fields():
+    """The region + ObjectNumber pair links a row to its SpatialData label instance, so the numbers must survive."""
+    obj = _legacy_object(
+        Metadata_Plate=["P1"] * 4,
+        Metadata_Well=["A01"] * 4,
+        region=["f1", "f1", "f2", "f2"],
+        Metadata_ObjectNumber=[2, 5, 2, 7],
+    )
+    migrate(obj)
+    assert list(obj.obs["Metadata_ObjectNumber"]) == [2, 5, 2, 7]
+    assert "Metadata_SourceObjectNumber" not in obj.obs
+    assert validate(obj).ok, validate(obj).errors
+
+
+def test_migrate_refuses_genuine_duplicate_objects_instead_of_renumbering_them():
+    obj = _legacy_object(
+        Metadata_Plate=["P1"] * 3, Metadata_Well=["A01"] * 3, Metadata_Site=[1, 1, 2], Metadata_ObjectNumber=[1, 1, 1]
+    )
+    with pytest.raises(ValueError, match="duplicate rows"):
+        migrate(obj)
+    assert obj.uns["mantispy"]["schema_version"] == "1.0"
+
+
+def test_migrate_rekeys_an_image_table_with_a_field_that_has_no_objects():
+    """CellProfiler keeps an Image.csv row for a field where segmentation found nothing."""
+    obj = _legacy_object(
+        Metadata_Plate=["P1"] * 4,
+        Metadata_Well=["A01", "A01", "A02", "A02"],
+        Metadata_Site=[1, 1, 1, 1],
+        Metadata_ImageNumber=[1, 1, 2, 2],
+        Metadata_ObjectNumber=[1, 2, 1, 2],
+    )
+    obj.uns["mantispy"]["image_table"] = pd.DataFrame(
+        {
+            "Metadata_Plate": ["P1"] * 3,
+            "Metadata_Well": ["A01", "A02", "A03"],
+            "Metadata_Site": [1, 1, 1],
+            "Focus": [1.0, 2.0, 3.0],
+        },
+        index=pd.Index([1, 2, 3], name="ImageNumber"),
+    )
+    migrate(obj)
+    table = obj.uns["mantispy"]["image_table"]
+    assert table.index.name == "Metadata_ImageID"
+    assert list(table.index) == ["P1|A01|1|1", "P1|A02|1|2", "P1|A03|1|3"]
+    assert set(obj.obs["Metadata_ImageID"]) <= set(table.index)
     assert validate(obj).ok, validate(obj).errors
 
 
@@ -808,3 +922,36 @@ def test_io_stamp_aggregate_requires_grouped_by():
     with pytest.raises(ValueError, match="grouped_by"):
         mt.io.stamp(obj, resolution="aggregate")
     assert "mantispy" not in obj.uns
+
+
+def test_validate_reports_a_missing_control_type_beside_an_unknown_one(adata):
+    """Under pandas 3 a missing value is kept by astype(str); sorting it with the labels used to raise TypeError."""
+    adata.obs["Metadata_Control_Type"] = pd.array(["negcon", None, "trt", "treatment"], dtype="object")
+    adata.obs["Metadata_Control"] = [True, False, False, False]
+    report = validate(adata)
+    assert not report.ok
+    assert any("1 missing value" in error for error in report.errors), report.errors
+    assert any("'trt'" in error for error in report.errors), report.errors
+
+
+def test_validate_reports_a_missing_well(adata):
+    adata.obs["Metadata_Well"] = pd.array(["A01", None, "A03", "A04"], dtype="object")
+    report = validate(adata)
+    assert any("Metadata_Well has 1 missing value" in error for error in report.errors), report.errors
+
+
+@pytest.mark.parametrize(("stored", "expected"), [("cell", "object"), ("perturbation", "aggregate"), ("well", "well")])
+def test_get_resolution_translates_the_1_0_names_of_an_unmigrated_object(adata, stored, expected):
+    """An object loaded with anndata.read_h5ad still says 'cell'; it must not be read as some other resolution."""
+    from mantispy._core.schema import get_resolution
+
+    adata.uns["mantispy"]["resolution"] = stored
+    assert get_resolution(adata) == expected
+
+
+def test_get_resolution_rejects_a_value_that_is_no_resolution(adata):
+    from mantispy._core.schema import get_resolution
+
+    adata.uns["mantispy"]["resolution"] = "plate"
+    with pytest.raises(ValueError, match="unknown resolution"):
+        get_resolution(adata)

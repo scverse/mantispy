@@ -23,7 +23,7 @@ from mantispy._core._stats import (
 from mantispy._core.features import annotation
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger, report_drop
-from mantispy._core.masks import reference_mask
+from mantispy._core.masks import control_annotated, reference_mask
 from mantispy._core.mutation import inplace_or_copy
 from mantispy._core.provenance import level_change_source, record_history
 from mantispy._core.schema import stamp
@@ -158,7 +158,7 @@ def _composition_test(composition: AnnData, counts: np.ndarray, reference: str |
     empty = pd.DataFrame(columns=["group", "statistic", "pvalue", "qvalue"])
     if reference is None:
         return empty, np.nan
-    if reference == "negcon" and "Metadata_Control_Type" not in composition.obs:
+    if reference == "negcon" and not control_annotated(composition):
         get_logger().info("cluster_composition: no Metadata_Control_Type, so no composition test")
         return empty, np.nan
 

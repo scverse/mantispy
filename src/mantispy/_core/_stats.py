@@ -10,7 +10,7 @@ from anndata import AnnData
 from mantispy._core._corr import _blockwise
 from mantispy._core._reduce import group_codes
 from mantispy._core.frames import as_frame
-from mantispy._core.schema import REQUIRED_OBS
+from mantispy._core.schema import REQUIRED_OBS, recorded_resolution
 
 #: Scale factor that makes the median absolute deviation estimate the standard deviation of a normal distribution.
 MAD_TO_SIGMA = 1.4826
@@ -21,7 +21,7 @@ def _is_object_resolution(adata: AnnData) -> bool:
 
     An unstamped object is not: the pseudoreplication safeguards must not assume object-level rows.
     """
-    return adata.uns.get("mantispy", {}).get("resolution") == "object"
+    return recorded_resolution(adata) == "object"
 
 
 def _default_well_block(adata: AnnData, *, block: str | Sequence[str] | None = None) -> np.ndarray | None:

@@ -28,6 +28,7 @@
         "Metadata_ImageNumber",
         "Metadata_ObjectType",
         "Metadata_ObjectNumber",
+        "Metadata_SourceObjectNumber",
         "Metadata_Perturbation",
         "Metadata_Perturbation_Type",
         "Metadata_Compound",

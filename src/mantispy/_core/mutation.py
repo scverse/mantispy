@@ -9,6 +9,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from mantispy._core.provenance import record_history, record_params
+from mantispy._core.schema import recorded_resolution
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -22,7 +23,7 @@ def warn_resolution(adata: AnnData, expected: str | tuple[str, ...]) -> None:
     Resolution is advisory, since a user may run an aggregated-profile tool on single cells on purpose.
     """
     accepted = (expected,) if isinstance(expected, str) else tuple(expected)
-    actual = adata.uns.get("mantispy", {}).get("resolution")
+    actual = recorded_resolution(adata)
     if actual is not None and actual not in accepted:
         wanted = " or ".join(repr(name) for name in accepted)
         warnings.warn(

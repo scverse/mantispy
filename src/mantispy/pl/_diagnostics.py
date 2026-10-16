@@ -124,7 +124,7 @@ def control_drift(
     Fitting on the controls alone shows how the reference moves between plates or batches, which is the drift normalization should remove.
 
     Args:
-        adata: Object whose ``obs["Metadata_Control"]`` marks the wells to draw.
+        adata: Object whose ``obs["Metadata_Control_Type"]`` marks the negative-control wells to draw.
         groupby: ``obs`` column that colors the control wells, normally the plate or the batch.
         n_components: Components fitted on the controls.
             The first two are the ones drawn.
@@ -135,7 +135,7 @@ def control_drift(
         When returned they hold one scatter per group of ``groupby`` in the space of the first two control components.
 
     Raises:
-        KeyError: ``obs`` has no ``Metadata_Control`` column to select the controls with, or no ``groupby`` column.
+        KeyError: ``obs`` has no ``Metadata_Control_Type`` column to select the negative controls with, or no ``groupby`` column.
         ValueError: ``n_components`` is below the two that are drawn, or there are that many control rows or fewer, too few to fit them.
     """
     from sklearn.decomposition import PCA

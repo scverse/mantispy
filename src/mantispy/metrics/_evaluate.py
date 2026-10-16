@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 
-from mantispy._core.masks import reference_mask
+from mantispy._core.masks import control_annotated, reference_mask
 from mantispy.metrics._common import embedding
 
 if TYPE_CHECKING:
@@ -69,7 +69,7 @@ def _map_meta(adata: AnnData, settings: dict[str, list[str]]) -> tuple[pd.DataFr
     needed = sorted({column for group in settings.values() for column in group})
     meta = pd.DataFrame({column: obs[column].reset_index(drop=True).to_numpy() for column in needed})
     treated = None
-    if "Metadata_Control_Type" in adata.obs.columns:
+    if control_annotated(adata):
         # reference_mask reads Metadata_Control_Type for the negcon class (spec 10.3); the controls are
         # dropped from the mAP, so the treated rows are everything that is not a negative control.
         treated = ~reference_mask(adata, "negcon")
@@ -202,7 +202,7 @@ def evaluate_integration(
 
     # Count the treated labels, since the mAP drops the controls; value_counts drops NaN labels too.
     treated_labels = adata.obs[label_key]
-    if "Metadata_Control_Type" in adata.obs.columns:
+    if control_annotated(adata):
         treated_labels = treated_labels[~reference_mask(adata, "negcon")]
     counts = treated_labels.value_counts()
     if counts.empty:

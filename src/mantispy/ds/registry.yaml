@@ -1931,7 +1931,8 @@ datasets:
   pooled_rare:
     type: mantispy
     read:
-      resolution: perturbation
+      resolution: aggregate
+      grouped_by: [Metadata_Foci_Barcode_MatchedTo_GeneCode]
     doc_header: Pooled rare variants, one row per barcode rather than per well.
     accession: cpg0032-pooled-rare
     shape: [290, 4417]

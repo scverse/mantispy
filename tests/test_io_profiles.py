@@ -293,3 +293,62 @@ def test_stamp_mints_object_identity_for_an_external_object():
     assert {"Metadata_ImageID", "Metadata_ObjectType", "Metadata_ObjectNumber"} <= set(obj.obs.columns)
     assert not obj.obs[["Metadata_ImageID", "Metadata_ObjectNumber"]].duplicated().any()
     assert mt.io.validate(obj).ok, mt.io.validate(obj).errors
+
+
+@pytest.mark.parametrize("resolution", ["aggregate", "perturbation"])
+def test_an_aggregate_profile_table_can_be_read_with_its_grouping(resolution):
+    """A consensus table has no plate or well; the reader takes the grouping, and the 1.0 name still reads."""
+    frame = pd.DataFrame(
+        {
+            "Metadata_Perturbation": ["a", "b", "c"],
+            "Cells_AreaShape_Area": [1.0, 2.0, 3.0],
+            "Cells_Intensity_MeanIntensity_DNA": [0.1, 0.2, 0.3],
+        }
+    )
+    adata = from_dataframe(frame, channels=["DNA"], resolution=resolution, grouped_by=["Metadata_Perturbation"])
+    assert adata.uns["mantispy"]["resolution"] == "aggregate"
+    assert list(adata.uns["mantispy"]["grouped_by"]) == ["Metadata_Perturbation"]
+    assert mt.io.validate(adata).ok, mt.io.validate(adata).errors
+
+
+def _a_1_0_well_object():
+    adata = from_dataframe(_frame(), channels=["DNA"]).copy()
+    adata.obs["Metadata_Control"] = [True, False, False, False]
+    adata.obs = adata.obs.drop(columns="Metadata_Control_Type", errors="ignore")
+    adata.uns["mantispy"] = {"schema_version": "1.0", "resolution": "well"}
+    return adata
+
+
+def test_write_migrates_an_older_object_instead_of_relabelling_it(tmp_path):
+    adata = _a_1_0_well_object()
+    mt.io.write(adata, tmp_path / "out.h5ad")
+    back = mt.io.read(tmp_path / "out.h5ad")
+    assert list(back.obs["Metadata_Control_Type"]) == ["negcon", "treatment", "treatment", "treatment"]
+
+
+def test_a_failed_write_never_relabels_an_older_object_without_migrating_it(tmp_path):
+    """A rejected write must not leave a 1.0 object stamped 2.0 with its 1.0 control model, which migrate then skips."""
+    adata = _a_1_0_well_object()
+    adata.X = adata.X.astype("float64")  # fails validation
+    with pytest.raises(ValueError, match="float32"):
+        mt.io.write(adata, tmp_path / "out.h5ad")
+    if adata.uns["mantispy"]["schema_version"] == "2.0":
+        assert list(adata.obs["Metadata_Control_Type"]) == ["negcon", "treatment", "treatment", "treatment"]
+
+
+def test_a_failed_write_leaves_the_schema_stamp_untouched(tmp_path):
+    adata = from_dataframe(_frame(), channels=["DNA"])
+    adata.X = adata.X.astype("float64")  # fails validation
+    before = dict(adata.uns["mantispy"])
+    with pytest.raises(ValueError, match="float32"):
+        mt.io.write(adata, tmp_path / "out.h5ad")
+    assert adata.uns["mantispy"] == before
+
+
+def test_stamp_translates_the_control_model_of_a_1_0_object():
+    """mt.io.stamp is the route migrate recommends for a 1.0 object it refuses, so it must not keep the old flag."""
+    adata = _a_1_0_well_object()
+    del adata.var["feature_kind"]
+    mt.io.stamp(adata, feature_kind="embedding")
+    assert list(adata.obs["Metadata_Control_Type"]) == ["negcon", "treatment", "treatment", "treatment"]
+    assert adata.uns["mantispy"]["resolution"] == "well"

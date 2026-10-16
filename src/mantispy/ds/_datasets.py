@@ -203,7 +203,10 @@ def _rohban_raw(cache_dir: str | Path | None = None) -> AnnData:
     adata = _augmented("rohban", None, cache_dir)
     obs = as_frame(adata.obs)
     role = obs["Metadata_ASSAY_WELL_ROLE"].astype(str)
-    obs["Metadata_Control"] = (role == "CTRL").to_numpy()
+    is_control = (role == "CTRL").to_numpy()
+    # The control ORFs are the negative control (spec 10 keeps the class beside the boolean).
+    obs["Metadata_Control_Type"] = np.where(is_control, "negcon", "treatment")
+    obs["Metadata_Control"] = is_control
 
     # The unit the screen varied is the ORF construct (Metadata_broad_sample), ~323 of them: the paper's
     # active set is construct-level, and several constructs can overexpress the same gene. The untreated
@@ -1036,7 +1039,11 @@ def cp_posh(
         ValueError: ``aggregated`` or ``feature_selected`` is not a bool.
     """
     _require_bools(aggregated=aggregated, feature_selected=feature_selected)
-    return _fetch_variant("cp_posh", _CP_POSH_VARIANTS[aggregated, feature_selected], cache_dir)
+    # The staged files predate feature_kind and their features carry no CellProfiler annotation to infer it
+    # from; they are image measurements, as _assemble_cp_posh declares.
+    return _fetch_variant(
+        "cp_posh", _CP_POSH_VARIANTS[aggregated, feature_selected], cache_dir, feature_kind="measurement"
+    )
 
 
 def corum(cache_dir: str | Path | None = None) -> pd.DataFrame:

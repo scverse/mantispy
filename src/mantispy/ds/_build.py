@@ -27,6 +27,19 @@ if TYPE_CHECKING:
     from anndata import AnnData
 
 
+def _control_pair(types: pd.Series) -> tuple[np.ndarray, np.ndarray]:
+    """The spec-10 ``(Metadata_Control_Type, Metadata_Control)`` pair from an upstream control-type column.
+
+    The classes the schema knows are kept, so a plate map's positive and empty controls stay controls; any other
+    upstream label is a treatment.
+    """
+    from mantispy._core.schema import CONTROL_TYPES
+
+    labels = np.asarray(types, dtype=str)
+    kept = np.where(np.isin(labels, CONTROL_TYPES), labels, "treatment")
+    return kept, kept != "treatment"
+
+
 def _zero_nonfinite(adata: AnnData) -> AnnData:
     """Replace NaN and +-inf in ``X`` with zero, in place, and return the object."""
     from mantispy._core._reduce import get_matrix
@@ -154,7 +167,9 @@ def _assemble_bbbc021(cache_dir: str | Path | None = None) -> AnnData:
 
     adata = from_dataframe(merged, resolution="well")
     obs = as_frame(adata.obs)
-    obs["Metadata_Control"] = (obs["Metadata_Compound"] == "DMSO").to_numpy()
+    is_dmso = (obs["Metadata_Compound"] == "DMSO").to_numpy()
+    obs["Metadata_Control_Type"] = np.where(is_dmso, "negcon", "treatment")
+    obs["Metadata_Control"] = is_dmso
     obs["Metadata_Perturbation"] = pd.Categorical(
         obs["Metadata_Compound"].astype(str) + "@" + obs["Metadata_Concentration"].astype(str)
     )
@@ -248,7 +263,7 @@ def _assemble_chroma(cache_dir: str | Path | None = None) -> AnnData:
     adata = _profiles("chroma", cache_dir, select=lambda name: not name.endswith(".h5ad"))
     obs = as_frame(adata.obs)
     control = (obs["Metadata_control_type"].astype(str) == "negcon").to_numpy()
-    obs["Metadata_Control"] = control
+    obs["Metadata_Control_Type"], obs["Metadata_Control"] = _control_pair(obs["Metadata_control_type"])
     name = obs["Metadata_Common Name"].astype(str).to_numpy()
     dose = pd.to_numeric(obs["Metadata_mmoles_per_liter"], errors="coerce").to_numpy(dtype=float)
     compound = np.where(control, "DMSO", name)
@@ -349,8 +364,9 @@ def _assemble_oasis_pilot(cache_dir: str | Path | None = None) -> AnnData:
     adata.obs["Metadata_Concentration"] = merged["Metadata_Concentration"].to_numpy(dtype=float)
     adata.obs["Metadata_ConcentrationRecorded"] = merged["Metadata_ConcentrationRecorded"].to_numpy(dtype=float)
     adata.obs["Metadata_CellLine"] = merged["Metadata_CellLine"].to_numpy()
-    adata.obs["Metadata_Control"] = merged["Metadata_Compound"].astype(str).str.upper().eq("DMSO").to_numpy()
-    is_control = np.asarray(adata.obs["Metadata_Control"], dtype=bool)
+    is_control = merged["Metadata_Compound"].astype(str).str.upper().eq("DMSO").to_numpy()
+    adata.obs["Metadata_Control_Type"] = np.where(is_control, "negcon", "treatment")
+    adata.obs["Metadata_Control"] = is_control
     adata.obs["Metadata_Perturbation"] = pd.Categorical(
         np.where(
             is_control,
@@ -400,7 +416,7 @@ def _assemble_pki(cache_dir: str | Path | None = None) -> AnnData:
     adata = _augmented("pki", None, cache_dir)
     obs = as_frame(adata.obs)
     control = (obs["Metadata_control_type"].astype(str) == "negcon").to_numpy()
-    obs["Metadata_Control"] = control
+    obs["Metadata_Control_Type"], obs["Metadata_Control"] = _control_pair(obs["Metadata_control_type"])
     # Control wells have no compound or dose, so without this each would become its own "nan@nan" perturbation.
     compound = np.where(control, "DMSO", obs["Metadata_broad_sample"].astype(str).to_numpy())
     dose = obs["Metadata_mmoles_per_liter"].to_numpy(dtype=float)

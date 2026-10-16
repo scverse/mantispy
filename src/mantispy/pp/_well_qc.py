@@ -10,7 +10,7 @@ from anndata import AnnData
 
 from mantispy._core._reduce import get_matrix, group_codes, group_offsets
 from mantispy._core.logging import get_logger
-from mantispy._core.masks import feature_mask, reference_mask
+from mantispy._core.masks import control_annotated, feature_mask, reference_mask
 from mantispy._core.mutation import inplace_or_copy
 
 
@@ -48,9 +48,7 @@ def well_qc(
     selected = feature_mask(adata, key)
     X = get_matrix(adata)[:, selected]
     codes, keys = group_codes(adata, ["Metadata_Plate", "Metadata_Well"])
-    is_control = (
-        reference_mask(adata, "negcon") if "Metadata_Control_Type" in adata.obs else np.zeros(adata.n_obs, dtype=bool)
-    )
+    is_control = reference_mask(adata, "negcon") if control_annotated(adata) else np.zeros(adata.n_obs, dtype=bool)
 
     order, offsets = group_offsets(codes, len(keys))
     records = []

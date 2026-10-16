@@ -401,7 +401,7 @@ def regress_out(
             Numeric columns enter directly; categorical ones are one-hot encoded with the first level dropped.
         by: Fit separately within each group of this column, usually the plate, which :func:`scanpy.pp.regress_out` cannot do.
             ``None`` fits one model globally.
-        reference: Rows to fit on: ``None`` for all, ``"negcon"`` for ``Metadata_Control``, or the name of a boolean ``obs`` column.
+        reference: Rows to fit on: ``None`` for all, ``"negcon"`` for the rows whose ``Metadata_Control_Type`` is ``"negcon"``, or the name of a boolean ``obs`` column.
             With a reference, each feature is re-expressed at the reference rows' mean covariate, and a covariate beyond the range the reference rows span is clipped to it, so no row is corrected by extrapolating the fit.
             Numeric covariates only.
         key_added: Write to ``layers[key_added]`` instead of overwriting ``X``.

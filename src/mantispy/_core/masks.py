@@ -93,7 +93,15 @@ def reference_mask(adata: AnnData, reference: str | None) -> np.ndarray:
                 f"obs has no column 'Metadata_Control_Type' to select the {reference!r} reference. "
                 "Run mt.pp.annotate_controls to create it."
             )
-        return (as_frame(adata.obs)["Metadata_Control_Type"].astype(str) == reference).to_numpy()
+        types = as_frame(adata.obs)["Metadata_Control_Type"]
+        missing = int(types.isna().sum())
+        if missing:
+            # A missing class would otherwise read as "not the reference" and fit on a subset of the controls.
+            raise ValueError(
+                f"obs['Metadata_Control_Type'] has {missing} missing value(s), so the {reference!r} reference "
+                "cannot be selected. Fill them, or check that the platemap covers every well."
+            )
+        return (types.astype(str) == reference).to_numpy()
 
     if reference not in adata.obs:
         raise KeyError(f"obs has no column {reference!r} to use as reference.")
@@ -104,6 +112,25 @@ def reference_mask(adata: AnnData, reference: str | None) -> np.ndarray:
         "a control row",
         " Fill them, or check that the platemap covers every well.",
     )
+
+
+def control_annotated(adata: AnnData) -> bool:
+    """Whether ``adata.obs`` carries the control annotation a named reference class is read from.
+
+    ``False`` when it carries no control annotation at all, so a caller can skip the control-dependent step.
+    A ``Metadata_Control`` boolean without ``Metadata_Control_Type`` raises: under schema 2.0 the boolean marks
+    any control, so the negative controls cannot be told apart, and skipping would silently drop them.
+    """
+    obs = as_frame(adata.obs)
+    if "Metadata_Control_Type" in obs:
+        return True
+    if "Metadata_Control" in obs:
+        raise KeyError(
+            "obs has 'Metadata_Control' but not 'Metadata_Control_Type'; under schema 2.0 the boolean marks any "
+            "control, so the negative controls cannot be told apart (spec 10). Run mt.pp.annotate_controls, "
+            "which writes the pair."
+        )
+    return False
 
 
 def held_out_reference(adata: AnnData, is_control: np.ndarray, distance_key: str) -> np.ndarray:
