@@ -205,7 +205,15 @@ UNS_RESULTS: tuple[str, ...] = (
 
 #: Suffixes of a companion table written beside a result (e.g. ``effect_groups`` beside ``effect``). A key
 #: ending in one of these is registered when its base (the part before the suffix) is a registered result.
-_RESULT_COMPANION_SUFFIXES: tuple[str, ...] = ("_groups", "_summary", "_units", "_prior_df", "_linkage")
+_RESULT_COMPANION_SUFFIXES: tuple[str, ...] = (
+    "_groups",
+    "_summary",
+    "_units",
+    "_prior_df",
+    "_linkage",
+    "_pairwise",
+    "_confusion",
+)
 
 
 @dataclass
@@ -457,7 +465,7 @@ def _check_result_keys(store: dict, report: ValidationReport) -> None:
     """
     known = set(UNS_KEYS) | set(UNS_RESULTS)
     for key in store:
-        if key in known:
+        if not isinstance(key, str) or key in known:
             continue
         base = next((key[: -len(suffix)] for suffix in _RESULT_COMPANION_SUFFIXES if key.endswith(suffix)), None)
         if base in UNS_RESULTS:
@@ -678,12 +686,21 @@ def require_concentration_unit(
             f"obs has {dose_key!r} but no {unit_key!r}; a dose-response function needs an explicit "
             f"concentration unit (e.g. one of {CONCENTRATION_UNITS}). mantispy does not assume a unit."
         )
-    present = obs.loc[obs[dose_key].notna(), unit_key].astype(str)
-    units = sorted(set(present) - {"nan", ""})
-    if not units:
+    # A missing unit on a dosed row is an error, not something to drop: dropping it would silently assume a
+    # unit for that row. Check for NaN explicitly before astype(str) — under pandas 3 a NaN survives astype
+    # as a float, so a {"nan"} string filter would miss it and sorted() would raise TypeError on a mixed set.
+    present = obs.loc[obs[dose_key].notna(), unit_key]
+    blank = present.isna() | present.astype(str).isin(["", "nan"]).to_numpy()
+    if blank.all():
         raise ValueError(
             f"{unit_key!r} is empty for every row that has a {dose_key!r}; set an explicit concentration unit."
         )
+    if blank.any():
+        raise ValueError(
+            f"{unit_key!r} is missing for some rows that have a {dose_key!r}; every dosed row needs an "
+            "explicit unit, since mantispy does not assume one."
+        )
+    units = sorted(set(present.astype(str)))
     if len(units) > 1:
         raise ValueError(
             f"{unit_key!r} has more than one unit {units}; a dose-response function requires a single "

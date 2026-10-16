@@ -25,6 +25,15 @@ def test_dose_response_rejects_mixed_units(dosed):
         mt.tl.dose_response(dosed)
 
 
+def test_dose_response_raises_a_clear_error_on_a_missing_unit_value(dosed):
+    """A NaN unit on a dosed row is a clear ValueError, not a pandas TypeError from sorting floats and strings."""
+    units = np.array(["uM"] * dosed.n_obs, dtype=object)
+    units[0] = None  # one dosed row with no unit
+    dosed.obs["Metadata_ConcentrationUnit"] = units
+    with pytest.raises(ValueError):  # not TypeError
+        mt.tl.dose_response(dosed)
+
+
 @pytest.fixture
 def dosed():
     """A plate where one compound has a real dose response and another has none."""

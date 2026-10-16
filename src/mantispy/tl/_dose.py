@@ -324,7 +324,7 @@ def dose_response(
 
     Returns:
         ``None``, or the modified copy.
-        Writes ``uns["mantispy"][key_added]`` with ``compound``, ``n_doses``, ``spearman``, ``pvalue``, ``qvalue``, ``ec50``, ``hill_slope``, ``bottom``, ``top``, ``r_squared``, ``fit_ok``, ``hitcall`` and ``hitcall_model``.
+        Writes ``uns["mantispy"][key_added]`` with ``group`` (the compound), ``n_doses``, ``spearman``, ``pvalue``, ``qvalue``, ``ec50``, ``hill_slope``, ``bottom``, ``top``, ``r_squared``, ``fit_ok``, ``hitcall`` and ``hitcall_model``.
         ``bottom`` and ``top`` are the fitted asymptotes, so for a decreasing response, such as an inhibitor's, ``bottom`` is greater than ``top``.
 
     Raises:
@@ -595,7 +595,7 @@ def dose_features(
 
     Returns:
         ``None``, or the modified copy.
-        Writes ``uns["mantispy"][key_added]``, one row per compound and feature, with ``compound``, ``feature``, ``n_doses``, ``bmd``, ``max_z``, ``direction``, ``spearman``, ``pvalue`` and ``qvalue``.
+        Writes ``uns["mantispy"][key_added]``, one row per compound and feature, with ``group`` (the compound), ``feature``, ``n_doses``, ``bmd``, ``max_z``, ``direction``, ``spearman``, ``pvalue`` and ``qvalue``.
         ``bmd`` is NaN for a feature that never reaches the cutoff, which is the table's activity call.
         ``max_z`` is the largest response any concentration reached, in MADs of the controls, and ``direction`` is its sign.
         ``qvalue`` corrects the Spearman p-values within each compound, which is the experiment.
@@ -843,7 +843,7 @@ def dose_direction(
 
     Returns:
         ``None``, or the modified copy.
-        Writes ``uns["mantispy"][key_added]``, one row per compound and concentration, with ``compound``, ``dose``, ``n_wells``, ``amplitude``, ``amplitude_null``, ``step_amplitude``, ``split_half_cosine``, ``cosine_to_top``, ``viability`` and ``phase``.
+        Writes ``uns["mantispy"][key_added]``, one row per compound and concentration, with ``group`` (the compound), ``dose``, ``n_wells``, ``amplitude``, ``amplitude_null``, ``step_amplitude``, ``split_half_cosine``, ``cosine_to_top``, ``viability`` and ``phase``.
         The phase is broadcast to ``obs[key_added + "_phase"]`` so the window can be subset like any other annotation.
         ``amplitude`` is the root-mean-square response over the features, in MADs of the controls, and ``amplitude_null`` is what control wells spread over the same plates in the same numbers reach, so the two are read against each other.
         ``step_amplitude`` is the same measure applied to the change from the concentration below, which is what tells a response that is still moving from one that has arrived.

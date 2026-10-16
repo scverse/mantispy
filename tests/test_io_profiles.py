@@ -231,6 +231,18 @@ def test_stamp_refuses_what_the_resolution_needs_and_obs_lacks():
     assert "mantispy" not in adata.uns
 
 
+def test_stamp_is_atomic_when_full_validation_fails():
+    """A float64 matrix fails the schema; stamp must raise and leave the object unstamped, not half-written."""
+    adata = ad.AnnData(
+        np.ones((2, 3), dtype=np.float64),  # float64, which the 2.0 contract rejects
+        obs=pd.DataFrame({"Metadata_Plate": ["P1", "P1"], "Metadata_Well": ["A01", "A02"]}, index=["0", "1"]),
+    )
+    with pytest.raises(ValueError, match="float32"):
+        mt.io.stamp(adata, resolution="well", feature_kind="measurement")
+    assert "mantispy" not in adata.uns  # descriptors were not written
+    assert "feature_kind" not in adata.var  # var was not touched
+
+
 def test_stamp_leaves_an_annotation_that_is_already_there_alone():
     """Only the absent columns are supplied.
 
