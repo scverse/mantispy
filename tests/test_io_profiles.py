@@ -33,6 +33,14 @@ def test_pycytominer_counts_are_copied_to_the_names_mantispy_reads(published, ex
     assert set(published) | {"Metadata_Site_Count"} <= set(obs.columns)
 
 
+def test_from_dataframe_records_an_aggregate_grouping():
+    """An aggregate-resolution read carries grouped_by through to the stamp (needed for a per-barcode table)."""
+    frame = _frame().assign(Metadata_Barcode=["b1", "b2", "b3", "b4"]).drop(columns=["Metadata_Plate", "Metadata_Well"])
+    adata = from_dataframe(frame, channels=["DNA"], resolution="aggregate", grouped_by=["Metadata_Barcode"])
+    assert adata.uns["mantispy"]["resolution"] == "aggregate"
+    assert adata.uns["mantispy"]["grouped_by"] == ["Metadata_Barcode"]
+
+
 def test_sentinels_become_nan():
     frame = _frame()
     frame.loc[0, "Cells_AreaShape_Area"] = -999.0
@@ -256,6 +264,18 @@ def test_stamp_refuses_what_the_resolution_needs_and_obs_lacks():
     with pytest.raises(ValueError, match="resolution must be one of"):
         mt.io.stamp(adata, resolution="plate")
     assert "mantispy" not in adata.uns
+
+
+def test_stamp_is_atomic_when_full_validation_fails():
+    """A float64 matrix fails the schema; stamp must raise and leave the object unstamped, not half-written."""
+    adata = ad.AnnData(
+        np.ones((2, 3), dtype=np.float64),  # float64, which the 2.0 contract rejects
+        obs=pd.DataFrame({"Metadata_Plate": ["P1", "P1"], "Metadata_Well": ["A01", "A02"]}, index=["0", "1"]),
+    )
+    with pytest.raises(ValueError, match="float32"):
+        mt.io.stamp(adata, resolution="well", feature_kind="measurement")
+    assert "mantispy" not in adata.uns  # descriptors were not written
+    assert "feature_kind" not in adata.var  # var was not touched
 
 
 def test_stamp_leaves_an_annotation_that_is_already_there_alone():

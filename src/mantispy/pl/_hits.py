@@ -303,7 +303,7 @@ def dose_response(
     from mantispy.tl._dose import four_parameter_logistic
 
     table = _table(adata, key, "mt.tl.dose_response")
-    row = _rows_for(table, "compound", compound, key)
+    row = _rows_for(table, "group", compound, key)
 
     if response is None:
         response = _recorded_response(adata, "dose_response", "hits_row_distance")
@@ -373,7 +373,7 @@ def dose_direction(
         KeyError: There is no such table, or it holds no such compound.
     """
     table = _table(adata, key, "mt.tl.dose_direction")
-    block = _rows_for(table, "compound", compound, key).sort_values("dose")
+    block = _rows_for(table, "group", compound, key).sort_values("dose")
 
     ax = _axes(ax, (5.2, 3.6))
     doses = block["dose"].to_numpy(dtype=float)

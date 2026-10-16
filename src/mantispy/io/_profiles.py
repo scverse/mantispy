@@ -107,6 +107,7 @@ def from_dataframe(
     keep_non_features: bool = False,
     objects: Sequence[str] | None = DEFAULT_OBJECTS,
     resolution: str = "well",
+    grouped_by: Sequence[str] | None = None,
 ) -> ad.AnnData:
     """Build an AnnData from a wide profile table.
 
@@ -126,6 +127,7 @@ def from_dataframe(
             ``None`` keeps every object, including the whole-field ``Image`` measurements.
         resolution: Resolution to record.
             Profile tables are usually well-level.
+        grouped_by: For ``"aggregate"`` resolution, the columns that define one row; required there since there is no default.
 
     Returns:
         An :class:`~anndata.AnnData` of observations by features at the recorded resolution, with the parsed feature annotation in ``var`` and the schema stamp, the resolution and the channel vocabulary it parsed with in ``uns["mantispy"]``.
@@ -227,7 +229,7 @@ def from_dataframe(
     obs.index = pd.Index([str(i) for i in range(len(obs))])
 
     adata = ad.AnnData(X=X, obs=obs, var=parsed.loc[feature_names])
-    _record(adata, resolution=resolution)
+    _record(adata, resolution=resolution, grouped_by=grouped_by)
     # Recorded whether given or inferred, so the parse can be reproduced from the object.
     if vocabulary:
         adata.uns["mantispy"]["channels"] = list(vocabulary)
@@ -301,6 +303,7 @@ def read_profiles(
     primary_object: str = "Cells",
     strict_one_to_one: bool = True,
     resolution: str | None = None,
+    grouped_by: Sequence[str] | None = None,
 ) -> ad.AnnData:
     """Read profiles into an AnnData of observations by features.
 
@@ -336,6 +339,7 @@ def read_profiles(
         strict_one_to_one: For an export directory, raise when another object does not match the primary object exactly once.
             ``False`` keeps the first match.
         resolution: Resolution to record, ``"object"`` for a directory and ``"well"`` for files when omitted.
+        grouped_by: For ``"aggregate"`` resolution, the columns that define one row; required there since there is no default.
 
     Returns:
         An :class:`~anndata.AnnData` at the recorded resolution, with the parsed feature annotation in ``var``, the metadata in ``obs`` with pycytominer's per-well counts copied to ``Metadata_CellCount`` and ``Metadata_SiteCount``, and the schema stamp, the resolution, the channel vocabulary, this call's parameters and, from an export directory, the per-image quality table under ``uns["mantispy"]``.
@@ -400,6 +404,7 @@ def read_profiles(
         keep_non_features=keep_non_features,
         objects=objects,
         resolution=resolution,
+        grouped_by=grouped_by,
     )
     obs = as_frame(adata.obs)
     if platemap is not None:
@@ -456,9 +461,11 @@ def read(path: str | Path, backed: Literal["r", "r+"] | None = None, migrate_sch
     adata = ad.read_zarr(path) if path.suffix == ".zarr" else ad.read_h5ad(path, backed=backed)
     stored = adata.uns.get("mantispy", {}).get("schema_version")
     if stored == SCHEMA_VERSION:
+        validate(adata, raise_on_error=True)  # §16.1: full validation at the read boundary.
         return adata
     if migrate_schema and stored in SUPPORTED_VERSIONS:
         migrate(adata)
+        validate(adata, raise_on_error=True)  # §16.1: the migrated object must satisfy the current contract.
         return adata
     raise ValueError(
         f"file was written with schema_version {stored!r}, this version supports {SCHEMA_VERSION!r}"
@@ -518,9 +525,8 @@ def stamp(
         ValueError: ``resolution`` is not one of the three, or ``obs`` lacks a column that resolution requires.
 
     Notes:
-        Only the ``obs`` columns the resolution requires are checked, because that is what the rest of the package dispatches on.
-        :func:`validate` gives the full report, including what it warns about rather than blocks.
-        ``X`` is one of the things it rather than this checks: the package stores features as ``float32``, and a matrix that came out of scikit-learn or :func:`numpy.load` is ``float64``, so an embedding usually wants ``adata.X = adata.X.astype("float32")`` before it is written.
+        Stamping runs the full :func:`validate` contract (spec 16.1), so a stamped object is a valid mantispy object or the stamp is rejected; the check runs on a copy first, so a rejected stamp leaves the caller's object untouched. ``validate`` still returns the warnings it does not block on.
+        That includes ``X``: the package stores features as ``float32``, and a matrix that came out of scikit-learn or :func:`numpy.load` is ``float64``, so an embedding wants ``adata.X = adata.X.astype("float32")`` before it is stamped.
 
         Any of the feature-annotation columns the schema requires that ``var`` does not already have are added empty, and columns already present are left as they are.
         They are not filled by parsing the feature names: the parser finds structure in names that have none (it reads ``openphenom_nahualX_17`` as the ``nahualX`` group of an ``openphenom`` object), and an embedding would then carry feature families named after the model's own tensors.
@@ -568,18 +574,27 @@ def stamp(
         )
     _require_feature_kind(adata, feature_kind)
 
-    target = adata.copy() if copy else adata
-    for column, values in minted.items():
-        target.obs[column] = values
-    if absent := [column for column in REQUIRED_VAR if column not in target.var]:
-        empty = empty_annotation(target.var.index)
-        target.var[absent] = empty[absent]
-    if feature_kind is not None:
-        kinds = as_frame(target.var)["feature_kind"].astype("object")
-        kinds[feature_mask(target, "is_feature")] = feature_kind
-        target.var["feature_kind"] = kinds.to_numpy()
-    _record(target, resolution=resolution, grouped_by=grouped_by)
-    return target if copy else None
+    def _apply(obj: ad.AnnData) -> None:
+        for column, values in minted.items():
+            obj.obs[column] = values
+        if absent := [column for column in REQUIRED_VAR if column not in obj.var]:
+            empty = empty_annotation(obj.var.index)
+            obj.var[absent] = empty[absent]
+        if feature_kind is not None:
+            kinds = as_frame(obj.var)["feature_kind"].astype("object")
+            kinds[feature_mask(obj, "is_feature")] = feature_kind
+            obj.var["feature_kind"] = kinds.to_numpy()
+        _record(obj, resolution=resolution, grouped_by=grouped_by)
+
+    # §16.1: stamping runs the full contract. Validate a stamped copy first, so a rejected stamp (e.g. a
+    # float64 embedding matrix, or an unparsable well) never leaves the caller's object half-stamped.
+    preview = adata.copy()
+    _apply(preview)
+    validate(preview, raise_on_error=True)
+    if copy:
+        return preview
+    _apply(adata)
+    return None
 
 
 def _require_feature_kind(adata: ad.AnnData, feature_kind: str | None) -> None:

@@ -59,6 +59,10 @@ FEATURE_KINDS = ("measurement", "embedding", "derived")
 #: are controls; ``treatment`` is not. ``Metadata_Control`` is the boolean ``type != "treatment"``.
 CONTROL_TYPES = ("negcon", "poscon", "treatment", "empty")
 
+#: Concentration units mantispy recognises for dose-response work (spec 11.2). The list is a recommendation,
+#: not a closed vocabulary: any single, explicit unit is accepted; what is forbidden is assuming one.
+CONCENTRATION_UNITS = ("M", "mM", "uM", "nM", "pM")
+
 #: Identifier columns required in ``obs``, per resolution. An object-level row must be identifiable
 #: without parsing ``obs_names``; the pair ``(Metadata_ImageID, Metadata_ObjectNumber)`` is unique.
 REQUIRED_OBS: dict[str, tuple[str, ...]] = {
@@ -85,6 +89,8 @@ RESERVED_OBS: tuple[str, ...] = (
     "Metadata_Perturbation_Type",
     "Metadata_Compound",
     "Metadata_Concentration",
+    # The explicit unit of Metadata_Concentration (M, mM, uM, nM, pM); required whenever a concentration is stored.
+    "Metadata_ConcentrationUnit",
     # The dose as the plate map wrote it, where Metadata_Concentration holds the one the well was meant to get.
     "Metadata_ConcentrationRecorded",
     "Metadata_MOA",
@@ -180,12 +186,28 @@ UNS_RESULTS: tuple[str, ...] = (
     "rank_features",
     "rank_sets",
     "composition_test",
+    "composition_dispersion",
     "subpopulation_hits",
     "replicate_saturation",
     "cytotoxicity",
     "pathway_coherence",
     "enrich_hits",
+    "differential",
+    "transport",
+    "ora",
+    "gene_aggregation",
+    "network_enrichment",
+    "dose_features",
+    "dose_direction",
+    "cluster",
+    "sphere_epsilon",
 )
+
+#: Suffixes of a companion table written beside a result (e.g. ``effect_groups`` beside ``effect``). A key
+#: ending in one of these is registered when its base (the part before the suffix) is a registered result.
+#: Companions that are registered in their own right (``edistance_pairwise``, ``moa_confusion``) are not
+#: listed here, so each companion has a single registration.
+_RESULT_COMPANION_SUFFIXES: tuple[str, ...] = ("_groups", "_summary", "_units", "_prior_df", "_linkage")
 
 
 @dataclass
@@ -425,6 +447,29 @@ def _check_history(store: dict, report: ValidationReport) -> None:
         report.errors.append(f"history must be a list, got {type(store['history']).__name__}")
 
 
+def _check_result_keys(store: dict, report: ValidationReport) -> None:
+    """Warn on a persistent result key under ``uns['mantispy']`` that is not registered (spec §15.3).
+
+    A key is fine when it is a core descriptor (:data:`UNS_KEYS`), a registered result
+    (:data:`UNS_RESULTS`), or a companion of a registered result (a registered base plus a
+    :data:`_RESULT_COMPANION_SUFFIXES` suffix, such as ``effect_groups``). Anything else is a result the
+    package does not know about: usually a new table whose key was never added to :data:`UNS_RESULTS`, or a
+    caller's custom ``key_added``. It is a warning, not an error, because a custom ``key_added`` is allowed;
+    the package's own default keys must all be registered, which a test enforces.
+    """
+    results = set(UNS_RESULTS)
+    known = set(UNS_KEYS) | results
+    for key in store:
+        if not isinstance(key, str) or key in known:
+            continue
+        if any(key.endswith(suffix) and key.removesuffix(suffix) in results for suffix in _RESULT_COMPANION_SUFFIXES):
+            continue
+        report.warnings.append(
+            f"uns['mantispy'][{key!r}] is not a registered result key; register it in "
+            "mantispy._core.schema.UNS_RESULTS (and spec/schema-2.0.json) if it is a package result"
+        )
+
+
 def _check_feature_kind(adata: AnnData, report: ValidationReport) -> None:
     """Check every feature row carries a ``feature_kind`` from :data:`FEATURE_KINDS`.
 
@@ -572,6 +617,7 @@ def validate(adata: AnnData, *, raise_on_error: bool = False) -> ValidationRepor
 
     _check_grouped_by(adata, store, resolution, report)
     _check_history(store, report)
+    _check_result_keys(store, report)
 
     if resolution in REQUIRED_OBS:
         for column in REQUIRED_OBS[resolution]:
@@ -612,6 +658,64 @@ def validate(adata: AnnData, *, raise_on_error: bool = False) -> ValidationRepor
     if raise_on_error and not report.ok:
         raise ValueError("\n".join(report.errors))
     return report
+
+
+def set_control_columns(obs: pd.DataFrame, is_control: Any) -> pd.DataFrame:
+    """Write the control pair (spec §10) into ``obs`` from one boolean control mask.
+
+    Sets ``Metadata_Control`` to the mask and ``Metadata_Control_Type`` to the ``negcon``/``treatment`` it
+    implies, so the invariant ``Metadata_Control == (Metadata_Control_Type != "treatment")`` holds by
+    construction. For a negcon/treatment layout (no positive controls); a dataset with poscons sets the
+    type column itself. Returns ``obs`` for chaining.
+    """
+    mask = np.asarray(is_control, dtype=bool)
+    obs["Metadata_Control"] = mask
+    obs["Metadata_Control_Type"] = np.where(mask, "negcon", "treatment")
+    return obs
+
+
+def require_concentration_unit(
+    obs: pd.DataFrame,
+    dose_key: str = "Metadata_Concentration",
+    unit_key: str = "Metadata_ConcentrationUnit",
+) -> str | None:
+    """Raise unless a stored concentration carries a single, explicit unit (spec §11.2).
+
+    A dose-response function calls this before reading ``dose_key``: mantispy MUST NOT assume a unit, so a
+    concentration with no unit, or with more than one unit across the rows, is an error the caller must
+    fix. Returns the unit (for reporting) when one consistent unit is present, or ``None`` when there is no
+    concentration column to check. The unit is not restricted to :data:`CONCENTRATION_UNITS`; any single
+    explicit value is accepted.
+    """
+    if dose_key not in obs.columns:
+        return None
+    if unit_key not in obs.columns:
+        raise ValueError(
+            f"obs has {dose_key!r} but no {unit_key!r}; a dose-response function needs an explicit "
+            f"concentration unit (e.g. one of {CONCENTRATION_UNITS}). mantispy does not assume a unit."
+        )
+    # A missing unit on a dosed row is an error, not something to drop: dropping it would silently assume a
+    # unit for that row. Check for NaN explicitly before astype(str) — under pandas 3 a NaN survives astype
+    # as a float, so a {"nan"} string filter would miss it and sorted() would raise TypeError on a mixed set.
+    present = obs.loc[obs[dose_key].notna(), unit_key]
+    text = present.astype(str)
+    blank = present.isna() | text.isin(["", "nan"])
+    if blank.all():
+        raise ValueError(
+            f"{unit_key!r} is empty for every row that has a {dose_key!r}; set an explicit concentration unit."
+        )
+    if blank.any():
+        raise ValueError(
+            f"{unit_key!r} is missing for some rows that have a {dose_key!r}; every dosed row needs an "
+            "explicit unit, since mantispy does not assume one."
+        )
+    units = sorted(set(text))
+    if len(units) > 1:
+        raise ValueError(
+            f"{unit_key!r} has more than one unit {units}; a dose-response function requires a single "
+            "consistent unit. Convert the concentrations to one unit first."
+        )
+    return units[0]
 
 
 def _rekey_legacy_image_table(store: dict, identity: pd.DataFrame) -> None:

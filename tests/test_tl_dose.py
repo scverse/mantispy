@@ -9,6 +9,31 @@ from mantispy.io._profiles import from_dataframe
 from mantispy.tl._dose import four_parameter_logistic
 
 
+def test_dose_response_requires_a_concentration_unit(dosed):
+    """§11.2: a concentration with no unit is an error; mantispy never assumes one."""
+    del dosed.obs["Metadata_ConcentrationUnit"]
+    with pytest.raises(ValueError, match="Metadata_ConcentrationUnit"):
+        mt.tl.dose_response(dosed)
+
+
+def test_dose_response_rejects_mixed_units(dosed):
+    """§11.2: a dose-response function requires one consistent unit and raises on a mix."""
+    units = np.array(["uM"] * dosed.n_obs, dtype=object)
+    units[: dosed.n_obs // 2] = "nM"
+    dosed.obs["Metadata_ConcentrationUnit"] = units
+    with pytest.raises(ValueError, match="more than one unit"):
+        mt.tl.dose_response(dosed)
+
+
+def test_dose_response_raises_a_clear_error_on_a_missing_unit_value(dosed):
+    """A NaN unit on a dosed row is a clear ValueError, not a pandas TypeError from sorting floats and strings."""
+    units = np.array(["uM"] * dosed.n_obs, dtype=object)
+    units[0] = None  # one dosed row with no unit
+    dosed.obs["Metadata_ConcentrationUnit"] = units
+    with pytest.raises(ValueError):  # not TypeError
+        mt.tl.dose_response(dosed)
+
+
 @pytest.fixture
 def dosed():
     """A plate where one compound has a real dose response and another has none."""
@@ -20,6 +45,7 @@ def dosed():
 
     adata.obs["Metadata_Compound"] = compound
     adata.obs["Metadata_Concentration"] = dose
+    adata.obs["Metadata_ConcentrationUnit"] = "uM"
     response = rng.normal(0, 0.05, n)
     active = compound == "active"
     # Sigmoid, not linear in log10(dose): without a plateau the logistic has no EC50 and fit_ok would refuse it.
@@ -62,7 +88,7 @@ def test_pure_noise_does_not_reach_the_hit_call_threshold():
     for _ in range(40):
         adata = _dosed_wells(doses, rng.normal(0, 1.0, len(doses)), controls=rng.normal(0, 1.0, 12))
         mt.tl.dose_response(adata, min_doses=4)
-        table = adata.uns["mantispy"]["dose_response"].set_index("compound")
+        table = adata.uns["mantispy"]["dose_response"].set_index("group")
         if "c" in table.index and float(table.loc["c", "hitcall"]) >= 0.9:
             called += 1
     assert called <= 2, f"{called}/40 noise-only compounds called active at hitcall >= 0.9"
@@ -76,6 +102,7 @@ def _dosed_wells(conc, resp, controls=()):
             "Metadata_Well": [f"{chr(65 + index // 24)}{index % 24 + 1:02d}" for index in range(n + m)],
             "Metadata_Compound": ["c"] * n + ["DMSO"] * m,
             "Metadata_Concentration": np.concatenate([np.asarray(conc, dtype=float), np.zeros(m)]),
+            "Metadata_ConcentrationUnit": "uM",
             "Metadata_Control": [False] * n + [True] * m,
             "Metadata_Control_Type": ["treatment"] * n + ["negcon"] * m,
             "Cells_AreaShape_a": np.zeros(n + m),
@@ -102,11 +129,11 @@ def test_the_cutoff_comes_from_the_controls_that_did_not_fit_the_transform():
     adata.obs["hits_reference_held_out"] = np.arange(adata.n_obs) >= adata.n_obs - len(held_out)
 
     mt.tl.dose_response(adata, min_doses=4)
-    honest = float(adata.uns["mantispy"]["dose_response"].set_index("compound").loc["c", "hitcall"])
+    honest = float(adata.uns["mantispy"]["dose_response"].set_index("group").loc["c", "hitcall"])
 
     del adata.obs["hits_reference_held_out"]
     mt.tl.dose_response(adata, min_doses=4)
-    pooled = float(adata.uns["mantispy"]["dose_response"].set_index("compound").loc["c", "hitcall"])
+    pooled = float(adata.uns["mantispy"]["dose_response"].set_index("group").loc["c", "hitcall"])
 
     assert honest < 0.5 < pooled, "the narrow half of the controls must not set the bar the curve clears"
 
@@ -140,8 +167,8 @@ def test_a_compound_with_one_concentration_is_left_out_of_the_direction_table(ph
     phenotypes.obs.loc[single, "Metadata_Concentration"] = 1.0
     mt.tl.dose_direction(phenotypes)
     table = phenotypes.uns["mantispy"]["dose_direction"]
-    assert "quiet" not in set(table["compound"])
-    assert {"grows", "turns"} <= set(table["compound"])
+    assert "quiet" not in set(table["group"])
+    assert {"grows", "turns"} <= set(table["group"])
 
 
 def test_the_amplitude_floor_follows_the_plates_the_concentration_sits_on():
@@ -163,6 +190,7 @@ def test_the_amplitude_floor_follows_the_plates_the_concentration_sits_on():
     frame["Metadata_Plate"] = frame["plate"]
     frame["Metadata_Compound"] = frame["compound"]
     frame["Metadata_Concentration"] = frame["dose"]
+    frame["Metadata_ConcentrationUnit"] = "uM"
     frame["Metadata_Control"] = frame["compound"] == "DMSO"
     frame["Metadata_Control_Type"] = np.where(frame["Metadata_Control"], "negcon", "treatment")
     frame["Metadata_Well"] = [f"{chr(65 + i // 24)}{i % 24 + 1:02d}" for i in range(len(frame))]
@@ -171,7 +199,7 @@ def test_the_amplitude_floor_follows_the_plates_the_concentration_sits_on():
     adata = from_dataframe(frame.drop(columns=["plate", "compound", "dose", "offset"]), resolution="well")
 
     mt.tl.dose_direction(adata)
-    table = adata.uns["mantispy"]["dose_direction"].set_index("compound")
+    table = adata.uns["mantispy"]["dose_direction"].set_index("group")
     assert table.loc["spread", "amplitude_null"].max() < table.loc["stacked", "amplitude_null"].min()
 
 

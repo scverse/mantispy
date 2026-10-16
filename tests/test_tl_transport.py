@@ -75,7 +75,7 @@ def test_both_plots_draw_what_the_table_holds(two_batches):
         assert [label.get_text() for label in ax.get_yticklabels()] == list(block["group"].astype(str))
         widths = [patch.get_width() for patch in ax.patches]
         np.testing.assert_allclose(widths, block["agreement"].to_numpy(), rtol=1e-6)
-        assert ax.get_title() == f"{int(block['transports'].sum())} of {len(block)} reproduce"
+        assert ax.get_title() == f"{int(block['is_significant'].sum())} of {len(block)} reproduce"
 
     matrix = two_batches.uns["mantispy"]["transport_units"]
     _, ax = plt.subplots()

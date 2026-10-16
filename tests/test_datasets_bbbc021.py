@@ -85,8 +85,8 @@ def test_the_recipe_reproduces_the_moa_benchmark(bbbc021):
         null_size=1000,
     )
     table = consensus.uns["mantispy"]["map"]
-    assert table["below_corrected_p"].sum() >= 4
-    best = table.nlargest(2, "mean_average_precision")["Metadata_MOA"].tolist()
+    assert table["is_significant"].sum() >= 4
+    best = table.nlargest(2, "score")["Metadata_MOA"].tolist()
     assert "Kinase inhibitors" in best
 
 

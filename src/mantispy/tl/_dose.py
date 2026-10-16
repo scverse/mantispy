@@ -18,12 +18,12 @@ from mantispy._core.logging import get_logger, report_drop
 from mantispy._core.masks import held_out_reference, reference_mask
 from mantispy._core.mutation import inplace_or_copy
 from mantispy._core.provenance import level_change_source, record_history, record_params
-from mantispy._core.schema import stamp
+from mantispy._core.schema import require_concentration_unit, stamp
 from mantispy.tl._design import viability
 
 #: Column order of the output table, so an empty result still carries its columns.
 _COLUMNS = (
-    "compound",
+    "group",
     "n_doses",
     "spearman",
     "pvalue",
@@ -324,7 +324,7 @@ def dose_response(
 
     Returns:
         ``None``, or the modified copy.
-        Writes ``uns["mantispy"][key_added]`` with ``compound``, ``n_doses``, ``spearman``, ``pvalue``, ``qvalue``, ``ec50``, ``hill_slope``, ``bottom``, ``top``, ``r_squared``, ``fit_ok``, ``hitcall`` and ``hitcall_model``.
+        Writes ``uns["mantispy"][key_added]`` with ``group`` (the compound), ``n_doses``, ``spearman``, ``pvalue``, ``qvalue``, ``ec50``, ``hill_slope``, ``bottom``, ``top``, ``r_squared``, ``fit_ok``, ``hitcall`` and ``hitcall_model``.
         ``bottom`` and ``top`` are the fitted asymptotes, so for a decreasing response, such as an inhibitor's, ``bottom`` is greater than ``top``.
 
     Raises:
@@ -345,6 +345,7 @@ def dose_response(
 
     obs = as_frame(adata.obs)
     _require_columns(obs, compound_key, dose_key)
+    require_concentration_unit(obs, dose_key)
     if response not in obs:
         raise KeyError(
             f"obs has no column {response!r} to use as the response; run mt.tl.hit_calling first, which "
@@ -381,7 +382,7 @@ def dose_response(
 
         records.append(
             {
-                "compound": str(compound),
+                "group": str(compound),
                 "n_doses": int(n_doses),
                 "spearman": float(correlation),
                 "pvalue": float(pvalue),
@@ -404,7 +405,7 @@ def dose_response(
 
 
 _FEATURE_COLUMNS = (
-    "compound",
+    "group",
     "feature",
     "n_doses",
     "bmd",
@@ -415,7 +416,7 @@ _FEATURE_COLUMNS = (
 )
 
 _DIRECTION_COLUMNS = (
-    "compound",
+    "group",
     "dose",
     "n_wells",
     "amplitude",
@@ -594,7 +595,7 @@ def dose_features(
 
     Returns:
         ``None``, or the modified copy.
-        Writes ``uns["mantispy"][key_added]``, one row per compound and feature, with ``compound``, ``feature``, ``n_doses``, ``bmd``, ``max_z``, ``direction``, ``spearman``, ``pvalue`` and ``qvalue``.
+        Writes ``uns["mantispy"][key_added]``, one row per compound and feature, with ``group`` (the compound), ``feature``, ``n_doses``, ``bmd``, ``max_z``, ``direction``, ``spearman``, ``pvalue`` and ``qvalue``.
         ``bmd`` is NaN for a feature that never reaches the cutoff, which is the table's activity call.
         ``max_z`` is the largest response any concentration reached, in MADs of the controls, and ``direction`` is its sign.
         ``qvalue`` corrects the Spearman p-values within each compound, which is the experiment.
@@ -614,6 +615,7 @@ def dose_features(
     """
     obs = as_frame(adata.obs)
     _require_columns(obs, compound_key, dose_key)
+    require_concentration_unit(obs, dose_key)
     scale = _control_scale(adata, reference)
     names = scale.features(adata)
 
@@ -629,7 +631,7 @@ def dose_features(
         peak = z[np.argmax(np.abs(np.nan_to_num(z, nan=0.0)), axis=0), np.arange(z.shape[1])]
         frame = pd.DataFrame(
             {
-                "compound": str(compound),
+                "group": str(compound),
                 "feature": names,
                 "n_doses": n_doses,
                 "bmd": _benchmark_dose(order, z, cutoff_mads),
@@ -841,7 +843,7 @@ def dose_direction(
 
     Returns:
         ``None``, or the modified copy.
-        Writes ``uns["mantispy"][key_added]``, one row per compound and concentration, with ``compound``, ``dose``, ``n_wells``, ``amplitude``, ``amplitude_null``, ``step_amplitude``, ``split_half_cosine``, ``cosine_to_top``, ``viability`` and ``phase``.
+        Writes ``uns["mantispy"][key_added]``, one row per compound and concentration, with ``group`` (the compound), ``dose``, ``n_wells``, ``amplitude``, ``amplitude_null``, ``step_amplitude``, ``split_half_cosine``, ``cosine_to_top``, ``viability`` and ``phase``.
         The phase is broadcast to ``obs[key_added + "_phase"]`` so the window can be subset like any other annotation.
         ``amplitude`` is the root-mean-square response over the features, in MADs of the controls, and ``amplitude_null`` is what control wells spread over the same plates in the same numbers reach, so the two are read against each other.
         ``step_amplitude`` is the same measure applied to the change from the concentration below, which is what tells a response that is still moving from one that has arrived.
@@ -862,6 +864,7 @@ def dose_direction(
     """
     obs = as_frame(adata.obs)
     _require_columns(obs, compound_key, dose_key, *([split_by] if split_by is not None else []))
+    require_concentration_unit(obs, dose_key)
     scale = _control_scale(adata, reference)
     all_levels = obs[split_by].to_numpy() if split_by is not None else np.zeros(adata.n_obs)
     # Raw, not scaled: the floor is read in a scale fitted on the controls a draw may not use.
@@ -893,7 +896,7 @@ def dose_direction(
             here = well_viability[at]
             ladder.append(
                 {
-                    "compound": str(compound),
+                    "group": str(compound),
                     "dose": float(dose),
                     "n_wells": int(at.sum()),
                     "amplitude": amplitude,
@@ -917,7 +920,7 @@ def dose_direction(
     adata.obs[f"{key_added}_phase"] = pd.Categorical(phases, categories=list(DOSE_PHASES), ordered=False)
     get_logger().info(
         "dose_direction: %d compound(s) over %d concentration(s); %s",
-        table["compound"].nunique(),
+        table["group"].nunique(),
         len(table),
         table["phase"].value_counts().to_dict(),
     )
@@ -977,6 +980,7 @@ def dose_trajectory(
         raise ValueError(f"n_positions must be at least two, got {n_positions}")
     obs = as_frame(adata.obs)
     _require_columns(obs, compound_key, dose_key)
+    require_concentration_unit(obs, dose_key)
     scale = _control_scale(adata, reference)
 
     in_window = np.ones(adata.n_obs, dtype=bool)

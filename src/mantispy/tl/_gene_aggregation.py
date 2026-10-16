@@ -73,7 +73,7 @@ def aggregate_guides(
 
     Returns:
         ``None``, or the modified copy.
-        Writes ``uns["mantispy"][key_added]`` with one row per gene: ``gene``, ``n_guides``, ``statistic``, ``pvalue``, ``qvalue`` and ``is_hit``, sorted by ``pvalue``.
+        Writes ``uns["mantispy"][key_added]`` with one row per gene: ``group`` (the gene), ``n_guides``, ``statistic``, ``pvalue``, ``qvalue`` and ``is_hit``, sorted by ``pvalue``.
         Joins ``obs[key_added + "_pvalue"]``, ``obs[key_added + "_qvalue"]`` and ``obs[key_added]`` onto the guide rows, broadcast from each guide's gene.
         Non-targeting guides, guides with a missing score, and genes left with no scored guide get a missing ``pvalue`` and ``qvalue`` and are never hits.
 
@@ -216,7 +216,7 @@ def aggregate_guides(
     table = (
         pd.DataFrame(
             {
-                "gene": names,
+                "group": names,
                 "n_guides": k_arr,
                 "statistic": stat,
                 "pvalue": pvalue,
@@ -229,7 +229,7 @@ def aggregate_guides(
     )
     adata.uns.setdefault("mantispy", {})[key_added] = table
 
-    by_gene = table.set_index("gene")
+    by_gene = table.set_index("group")
     adata.obs[f"{key_added}_pvalue"] = by_gene["pvalue"].reindex(genes).to_numpy()
     adata.obs[f"{key_added}_qvalue"] = by_gene["qvalue"].reindex(genes).to_numpy()
     hit = by_gene["is_hit"].reindex(genes).to_numpy()

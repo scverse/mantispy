@@ -31,7 +31,7 @@ def feature_signature(
         key: Which table to collapse.
         by: ``var`` columns whose combination names a family.
             The default is the feature group, the channel it was measured in, and the compartment it was measured on.
-        statistic: Column of the table to average within each family, such as ``"t"`` or ``"difference"`` (the raw contrast).
+        statistic: Column of the table to average within each family, such as ``"t"`` or ``"effect"`` (the raw contrast).
 
     Returns:
         A new :class:`~anndata.AnnData` of perturbations by families, with each family's ``by`` columns and ``n_features`` in ``var``, beside the schema's remaining annotation columns, left empty because a family is not a measurement they describe.

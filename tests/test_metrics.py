@@ -345,7 +345,7 @@ def test_known_relationships_measures_chance_for_a_perturbation_in_many_sets():
 
     assert result["value"] > 0.3
     assert result["null"] > 0.3
-    assert result["p_value"] > 0.05
+    assert result["pvalue"] > 0.05
 
 
 def test_known_relationships_refuses_input_it_cannot_score():

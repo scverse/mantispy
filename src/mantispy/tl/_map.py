@@ -103,9 +103,10 @@ def _score_map(
 ) -> tuple[pd.DataFrame, list[str]]:
     """The copairs scoring shared by :func:`map` and :func:`~mantispy.metrics.evaluate_integration`.
 
-    Returns the per-group ``mean_average_precision`` table (without its ragged ``indices`` column) and the
-    group columns, writing nothing into any object. With ``compute_null=False`` it skips the permutation null
-    and returns just the per-group mean of ``average_precision``, the point estimate the null does not affect,
+    Returns the per-group table (its ``score`` column is the mean average precision; without the ragged
+    ``indices`` column) and the group columns, writing nothing into any object. With ``compute_null=False``
+    it skips the permutation null and returns just the per-group mean of ``average_precision``, the point
+    estimate the null does not affect,
     which ``evaluate_integration`` uses so scoring a representation does not pay for discarded permutations.
 
     With ``multilabel_col`` set, a positive pair shares at least one of that column's labels, and copairs splits a
@@ -149,7 +150,8 @@ def _score_map(
     if not compute_null:
         scored = precision[precision["n_pos_pairs"] > 0]
         table = scored.groupby(group_columns, as_index=False)["average_precision"].mean()
-        return table.rename(columns={"average_precision": "mean_average_precision"}), group_columns
+        # Canonical schema names (§15.1): the per-group mean average precision is the method score.
+        return table.rename(columns={"average_precision": "score"}), group_columns
 
     if warn:
         groups = len(precision.loc[precision["n_pos_pairs"] > 0, group_columns].drop_duplicates())
@@ -174,6 +176,16 @@ def _score_map(
             progress_bar=False,
             cache_dir=cache,
         ).drop(columns=list(_UNWRITABLE), errors="ignore")
+    # Canonical schema names (§15.1): copairs' score/p-value/decision columns → score/pvalue/qvalue/is_significant.
+    # below_p (the raw-p decision) stays as a tool-specific column beside the canonical is_significant.
+    table = table.rename(
+        columns={
+            "mean_average_precision": "score",
+            "p_value": "pvalue",
+            "corrected_p_value": "qvalue",
+            "below_corrected_p": "is_significant",
+        }
+    )
     return table, group_columns
 
 
@@ -364,6 +376,6 @@ def map(
 
     lookup = table.set_index(group_columns)
     index = pd.MultiIndex.from_frame(obs[group_columns]) if len(group_columns) > 1 else pd.Index(obs[group_columns[0]])
-    adata.obs[key_added] = lookup["mean_average_precision"].reindex(index).to_numpy()
-    adata.obs[f"{key_added}_qvalue"] = lookup["corrected_p_value"].reindex(index).to_numpy()
+    adata.obs[key_added] = lookup["score"].reindex(index).to_numpy()
+    adata.obs[f"{key_added}_qvalue"] = lookup["qvalue"].reindex(index).to_numpy()
     return None

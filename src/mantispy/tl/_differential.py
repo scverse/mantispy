@@ -124,7 +124,7 @@ def differential_features(
 
     Returns:
         ``None``, or the modified copy.
-        Writes ``uns["mantispy"][key_added]``, a tidy frame of ``group``, ``feature``, ``difference`` (the fitted contrast, in the units of ``X``), ``t``, ``pvalue`` and ``qvalue`` (Benjamini-Hochberg over the whole table), and ``uns["mantispy"][key_added + "_prior_df"]``, the prior degrees of freedom of the empirical Bayes step per group.
+        Writes ``uns["mantispy"][key_added]``, a tidy frame of ``group``, ``feature``, ``effect`` (the fitted contrast, in the units of ``X``), ``t``, ``pvalue`` and ``qvalue`` (Benjamini-Hochberg over the whole table), and ``uns["mantispy"][key_added + "_prior_df"]``, the prior degrees of freedom of the empirical Bayes step per group.
         Large values mean the variances were homogeneous and strongly shrunk.
 
     Raises:
@@ -224,7 +224,7 @@ def differential_features(
                 {
                     "group": str(key),
                     "feature": features,
-                    "difference": difference,
+                    "effect": difference,
                     "t": statistic,
                     "pvalue": pvalue,
                 }
