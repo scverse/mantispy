@@ -136,6 +136,30 @@ def _fetch_variant(
     return adata
 
 
+def aconcagua(cache_dir: str | Path | None = None) -> AnnData:
+    """Aconcagua, a genome-scale optical pooled CRISPR screen of essential genes in HeLa cells.
+
+    One row per guide per well: the median profile of a guide's cells in a well, after a per plate-and-well robust normalization against the well's non-targeting controls, over a subset of the screen built for the optical-pooled-screens case study.
+    The cells were segmented and measured with brieflow's ``cp_emulator`` in four channels (DNA, alpha-tubulin, gamma-H2AX and F-actin); the brieflow feature names are mapped to mantispy's CellProfiler-style grammar.
+    The subset keeps all 250 non-targeting guides, four annotated positive controls (H2AX, ECT2, TUBB, CFL1), 50 strong and 50 weak known hits, and 396 random library genes, across eight plates and 46 wells.
+
+    Mitotic cells are pooled at their natural share rather than capped, so a profile mixes interphase and mitotic cells as the screen saw them, and each row records its ``Metadata_MitoticFraction``.
+    The file is staged on ``scverse-exampledata``, so the loader fetches a single h5ad rather than rebuilding it from the raw per-cell table.
+
+    Args:
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
+
+    Returns:
+        Guide-by-well profiles read with :func:`mantispy.io.read`, carrying ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Guide``, ``Metadata_Gene``, ``Metadata_Perturbation`` (the gene, or ``"nontargeting"``), ``Metadata_Perturbation_Type`` (``"crispr"``), ``Metadata_Control`` and ``Metadata_Control_Type`` (``negcon``/``poscon``/``treatment``), ``Metadata_Tier`` (``control``/``strong``/``weak``/``random``), ``Metadata_CellCount`` and ``Metadata_MitoticFraction``.
+
+    References:
+        :cite:t:`Di_Bernardo_2026`, this screen; :cite:p:`Funk_2022`, the screen it extends.
+        The per-cell measurements are from brieflow; the subset is available through the CZ Biohub OPS Explorer.
+    """
+    return _fetch_variant("aconcagua", "aconcagua_guide_well.h5ad", cache_dir)
+
+
 #: The (aggregated, feature_selected) combination each rehosted bbbc021 variant answers to.
 _BBBC021_VARIANTS = {
     (False, False): "bbbc021.h5ad",  # 632 x 467, well level, all features

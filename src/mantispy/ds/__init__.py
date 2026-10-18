@@ -3,6 +3,7 @@
 from mantispy.ds._blobs import blobs
 from mantispy.ds._datasets import (
     JUMP_LITE_MODELS,
+    aconcagua,
     bbbc021,
     chroma,
     corum,
@@ -26,6 +27,7 @@ from mantispy.ds._synthetic import DEFAULT_CHANNELS, synthetic_plate
 
 __all__ = [
     "DEFAULT_CHANNELS",
+    "aconcagua",
     "bbbc021",
     "blobs",
     "chroma",
