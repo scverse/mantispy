@@ -1,6 +1,17 @@
 base_url: https://cellpainting-gallery.s3.amazonaws.com
 
 datasets:
+  aconcagua:
+    type: mantispy
+    doc_header: Aconcagua optical pooled CRISPR screen in HeLa, 84,125 guide-by-well profiles of 1,483 features.
+    shape: [84125, 1483]
+    # Built by the optical-pooled-screens case study from the public OPS Explorer per-cell table
+    # (s3://ops-explorer-public/aconcagua), not from a Cell Painting Gallery accession, so it is staged
+    # straight to scverse-exampledata with no raw source here.
+    files:
+    - name: aconcagua_guide_well.h5ad
+      url: https://exampledata.scverse.org/mantispy/aconcagua/aconcagua_guide_well.h5ad
+      sha256: 783898d220cfa0dfcd6bd7f821d11ec8de88b9306603b316bd04cf28bb4bbdaf
   bbbc021:
     type: mantispy
     doc_header: BBBC021, 632 wells of 38 compounds and DMSO annotated with a mechanism of action.
