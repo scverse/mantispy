@@ -411,3 +411,8 @@ def test_a_quadratic_similarity_is_refused_with_the_fix_named():
     too_many = int(np.sqrt(SIMILARITY_BYTES / 8)) + 1
     with pytest.raises(ValueError, match="mt.tl.consensus"):
         similarity_matrix(np.empty((too_many, 2), dtype=np.float32))
+
+
+def test_grit_accepts_reference_none_to_use_every_row(profiles):
+    mt.tl.grit(profiles, reference=None, key_added="grit_all")
+    assert profiles.obs["grit_all"].notna().any()
