@@ -2,25 +2,33 @@
 
 [![Tests][badge-tests]][tests]
 [![Documentation][badge-docs]][documentation]
+[![PyPI][badge-pypi]][pypi]
+[![License][badge-license]][license]
 
+[badge-pypi]: https://img.shields.io/pypi/v/mantispy?include_prereleases
+[badge-license]: https://img.shields.io/badge/license-BSD--3-blue
 [badge-tests]: https://img.shields.io/github/actions/workflow/status/scverse/mantispy/test.yaml?branch=main
 [badge-docs]: https://app.readthedocs.org/projects/mantispy/badge/
 
 mantispy brings Cell Painting and other image-based profiling data into the scverse ecosystem, from reading what a
 pipeline wrote through quality control, normalization and batch correction to evaluating what survived.
+It is for biologists and computational scientists who analyze Cell Painting or similar image-based screens in Python.
+mantispy is in alpha: the API may still change.
 
 ```python
 import mantispy as mt
+import scanpy as sc
 
 cells = mt.io.read_profiles("analysis/", platemap="platemap.csv")  # an ExportToSpreadsheet directory, or profile files
-mt.pp.annotate_controls(cells)
+mt.pp.annotate_controls(cells)  # assumes the negative control is labeled "DMSO"; see negcon= for other names
 mt.pp.image_qc(cells)  # which fields were out of focus
 mt.pp.normalize(cells, by="Metadata_Plate", reference="negcon")  # robust MAD against the negative controls
 wells = mt.tl.aggregate(cells)  # cells -> wells
 
 mt.pp.feature_select(wells)  # flags features in var["selected"]
 wells = mt.pp.subset_features(wells)  # keeps only those
-mt.tl.hit_calling(wells)  # which perturbations moved
+sc.pp.pca(wells, n_comps=20)  # hit calling reads distances on a PCA, as the covariance of all features is singular
+mt.tl.hit_calling(wells, use_rep="X_pca")  # which perturbations moved
 mt.pl.hits(wells)
 ```
 
@@ -36,10 +44,7 @@ downloads a public screen.
 Set `mt.settings.verbosity = 2` when you first run your own screen. Several steps drop
 features or wells, and they log it at that level.
 
-## Getting started
-
-Please refer to the [documentation][],
-in particular, the [API documentation][].
+Please refer to the [documentation][], in particular the [API documentation][].
 
 ## Installation
 
@@ -50,21 +55,11 @@ We recommend managing dependencies in project-specific virtual environments to a
 This is most convenient using package managers such as [uv][].
 Choose from the options below to install mantispy:
 
-<!--
-1. Add the latest release of `mantispy` from [PyPI][] to your `uv` project:
+1. Install the latest release from [PyPI][]. The current release is an alpha pre-release, so pip needs `--pre`:
 
    ```bash
-   uv add mantispy
+   pip install --pre mantispy  # (or `uv add --prerelease allow mantispy`)
    ```
-
-1. Install the latest release into a [standard virtual environment][venv]:
-
-   ```bash
-   (after activating your venv)
-   pip install mantispy
-   ```
-
--->
 
 1. Install the latest development version:
 
@@ -87,6 +82,10 @@ See the [changelog][].
 For questions and help requests, you can reach out in the [scverse discourse][].
 If you found a bug, please use the [issue tracker][].
 
+## License
+
+mantispy is released under the BSD 3-Clause license.
+
 ## Citation
 
 > A preprint describing mantispy is in preparation. Until then, cite the
@@ -100,7 +99,7 @@ If you found a bug, please use the [issue tracker][].
 [changelog]: https://mantispy.readthedocs.io/page/changelog.html
 [api documentation]: https://mantispy.readthedocs.io/page/api.html
 [pypi]: https://pypi.org/project/mantispy
-[venv]: https://docs.python.org/3/tutorial/venv.html
+[license]: https://github.com/scverse/mantispy/blob/main/LICENSE
 [mantispy]: https://github.com/scverse/mantispy
-[tutorial-1]: https://mantispy.readthedocs.io/en/latest/tutorials/data/cellprofiler.html
-[tutorial-5]: https://mantispy.readthedocs.io/en/latest/tutorials/compounds/hits.html
+[tutorial-1]: https://mantispy.readthedocs.io/page/tutorials/data/cellprofiler.html
+[tutorial-5]: https://mantispy.readthedocs.io/page/tutorials/compounds/hits.html
