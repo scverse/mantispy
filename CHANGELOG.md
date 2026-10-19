@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning][].
 
 ## [Unreleased]
 
+## [0.1.0a1] - 2026-10-19
+
+First alpha pre-release of the Python core. Install it with `pip install --pre mantispy`.
+
 ### Added
 - `mantispy.ds`: `aconcagua`, a subset of the Aconcagua genome-scale optical pooled CRISPR screen in HeLa, as guide-by-well profiles of brieflow features mapped to mantispy's naming. It backs the optical-pooled-screens case study. The staged h5ad is rehosted on `scverse-exampledata`.
 - `mantispy.tl`: `aggregate_guides` combines a gene's guides into one hit call, for a pooled CRISPR screen with many guides per gene. It takes a one-sided per-guide p-value, combines the guides of each gene by Stouffer's z (default, rewards a consistent effect) or Fisher (`method="fisher"`, fires on a single strong guide), and calibrates against random same-size groups of non-targeting-control guides drawn without replacement, so the null matches the gene's guide count. It writes a per-gene p-value, a Benjamini-Hochberg q-value and the hit call to `uns` and broadcasts them onto the guide rows; non-targeting guides and genes with no scored guide are never hits.
