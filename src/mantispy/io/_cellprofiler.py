@@ -71,6 +71,8 @@ def _link_columns(
     """Locate the parent/child link, which may be on either table.
 
     CellProfiler writes ``Cells_Parent_Nuclei`` on the primary table when cells were identified from nuclei, and ``Cytoplasm_Parent_Cells`` on the child table for a tertiary object.
+    JUMP writes neither for ``Cells`` and ``Nuclei``: only ``Cytoplasm`` has a parent of each.
+    The objects already joined onto `primary_frame` are searched for a ``<child>_Parent_<obj>`` column then, which links `obj` to the primary object through that shared child.
     Using the wrong column would silently pair unrelated objects that share an object number.
     """
     on_child = f"{obj}_Parent_{primary}"
@@ -79,6 +81,13 @@ def _link_columns(
         return primary_frame["ObjectNumber"], child_frame[on_child]
     if on_primary in primary_frame.columns:
         return primary_frame[on_primary], child_frame["ObjectNumber"]
+    via = [c for c in primary_frame.columns if c.endswith(f"_Parent_{obj}")]
+    if len(via) == 1:
+        return primary_frame[via[0]], child_frame["ObjectNumber"]
+    if len(via) > 1:
+        raise ValueError(
+            f"cannot link {obj!r} to {primary!r}: {via} all point to {obj!r}. Pass objects= to leave one out."
+        )
     raise ValueError(
         f"cannot link {obj!r} to {primary!r}: neither {on_child!r} nor {on_primary!r} is present. "
         f"Pass objects= to read only the tables that are related, or set a different primary_object."
