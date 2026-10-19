@@ -138,11 +138,10 @@ def transport(
 
     Notes:
         The null pairs a perturbation at one unit with a different perturbation at another, so a screen in which all effects look alike does not count as reproducing.
-        This matters on screens with few mechanisms.
-        The mismatched null centers at +0.26 on BBBC021 and at +0.03 on JUMP.
+        This matters on screens with few mechanisms, where the mismatched null sits well above zero.
 
         The null is computed in full rather than sampled.
-        Standardizing the effect vectors turns all group-against-group correlations into one matrix product, so 301 groups over 48 unit pairs give 90,300 null values in about a second.
+        Standardizing the effect vectors turns all group-against-group correlations into one matrix product, so the full null is cheap to compute.
         A sampled null would floor the p-values at ``1/(n + 1)``, too coarse for Benjamini-Hochberg over every ``(group, level)`` row, and the number of groups called would depend on the number of draws.
 
         This is an observational measure.

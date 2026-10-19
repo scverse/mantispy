@@ -129,11 +129,10 @@ def feature_select_chatterjee(
 
         A feature is scored on the rows where it was measured, so one that is missing in a whole group is scored against the groups that do have it rather than against the pattern of what is missing.
 
-        xi reaches one only for a noiseless function of the group, so real values are much lower.
-        Over pki's 899 selected features and 38 treatments the largest was 0.32, and the default threshold of 0.1 kept about half of them.
+        xi reaches one only for a noiseless function of the group, so real values are much lower and the default threshold of ``0.1`` is permissive.
         Check the distribution in ``var["chatterjee_xi"]`` before relying on a fixed cutoff.
 
-        With shuffled group labels on the same data, the largest xi is 0.039 at ``m=1`` and 0.027 at ``m=5``, while the largest real value barely changes (0.322 and 0.321).
+        With shuffled group labels xi collapses toward zero while the real values barely change, so the score reflects dependence on the group rather than noise.
         ``m=1`` is the default because the threshold was calibrated there.
         scmorph uses ``m=5``, and on input free of ties the two implementations agree to 1e-9.
         scmorph breaks ties in ``y`` at random, so on tied input the two differ.

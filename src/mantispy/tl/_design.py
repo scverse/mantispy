@@ -252,9 +252,7 @@ def cytotoxicity(
         That costs distances, neighbourhoods and batch correction rather than this flag, and :doc:`/case_studies/learned_embeddings` measures both.
 
         The flag is a diagnostic and does not correct the distances.
-        How much cytotoxicity confounds a screen varies.
-        Over the pki dose series, the rank correlation between phenotype distance and cell loss is +0.79 (p < 1e-8) and the four strongest hits have viabilities of 0.27 to 0.68.
-        Over rohban2017's ORF overexpression the same correlation is +0.00 (p = 0.95).
+        How much cytotoxicity confounds a screen varies: strong on a cytotoxic dose series, where phenotype distance tracks cell loss, and absent on an overexpression screen.
         Measure it on your own screen.
 
         The cell count is a baseline in its own right.

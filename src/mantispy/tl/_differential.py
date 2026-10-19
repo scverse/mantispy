@@ -111,12 +111,11 @@ def differential_features(
             ``"rest"`` tests it against every other perturbation and leaves the reference out, which gives what distinguishes it from the others.
             This is the marker-gene contrast, and it removes the component all active perturbations share.
 
-            On BBBC021, mechanism retrieval from the resulting signatures is 0.631 for ``"rest"`` and 0.505 for ``"reference"``.
-            ``"rest"`` reproduces less well across plates because its comparison set depends on the rest of the screen.
-            On the pki dose series, where the rest for a compound includes its own other doses, split-half agreement falls from 0.566 to 0.448.
+            ``"rest"`` gives sharper mechanism retrieval, but reproduces less well across plates because its comparison set depends on the rest of the screen.
+            On a dose series, where the rest for a compound includes its own other doses, split-half agreement falls further.
             Use ``"rest"`` to tell perturbations apart and ``"reference"`` for results to compare between screens.
         block: Column whose levels enter the model as fixed effects, normally the plate.
-            Without it, plate variance stays in the residual and costs power; on a four-plate layout, blocking raised power from 0.68 to 0.94.
+            Without it, plate variance stays in the residual and costs power; blocking recovers it.
             ``None`` fits the contrast alone.
         min_replicates: Groups with fewer wells than this are left unscored.
         key_added: Name for the output table.

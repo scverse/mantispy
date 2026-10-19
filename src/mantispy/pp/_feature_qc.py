@@ -84,11 +84,9 @@ def feature_reproducibility(
         ValueError: If ``by`` has a single group, so that no variance can lie between groups.
 
     Notes:
-        Filtering on ICC raised replicate-retrieval mAP on all three packaged screens: bbbc021 from 0.121 to 0.141 (ICC > 0.2) and 0.162 (> 0.4), rohban2017 from 0.097 to 0.143 and 0.136, and pki from 0.178 to 0.192 and 0.200.
-        The best cutoff differs by dataset, so 0.2 is a conservative default; choose one from the distribution in ``var[key_added]``.
+        Filtering on ICC improves replicate retrieval, but the best cutoff differs by dataset, so ``0.2`` is a conservative default; choose one from the distribution in ``var[key_added]``.
 
         ICC filtering can hurt other tasks.
-        On BBBC021, not-same-compound MOA retrieval fell from 0.777 over all features to 0.767 at ICC > 0.2 and 0.757 at 0.4.
         ICC measures reproducibility within a treatment, which is a different property from agreement between compounds that share a mechanism.
     """
     codes, keys = group_codes(adata, by)
