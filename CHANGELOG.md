@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning][].
 - `mt.tl.gene_sets` is renamed `mt.tl.gene_set_network`, so it no longer shares a name with `mt.ds.gene_sets`, which reads a gene-set resource and keeps its name.
 - The grouping-columns parameter of `pp.downsample`, `pp.feature_reproducibility` and `pp.feature_select_chatterjee` is renamed from `groupby` to `by`, as in the rest of `mt.pp`. The `downsample` entry in `uns["mantispy"]["params"]` is keyed `by` accordingly.
 
+### Fixed
+
+- `mt.io.read_profiles` links objects related only through a shared child table (JUMP's `Cytoplasm`) and raises a clear error when two children make the link ambiguous (#61).
+
 ## [0.1.0a1] - 2026-10-19
 
 First alpha pre-release of the Python core. Install it with `pip install --pre mantispy`.

@@ -277,7 +277,7 @@ def rohban(
 
     ``cpg0017-rohban-pathways``: U2OS cells, one ORF construct overexpressed per well, roughly ten replicate wells per construct over five plates.
 
-    The base and its variants are pre-built by ``scripts/build_staged_datasets.py`` from the five raw plate tables and rehosted on ``scverse-exampledata`` , so the loader fetches a single h5ad rather than reassembling the base on every call. The two flags select the variant, which the variants build from per-plate ``mad_robustize`` normalization against the untreated wells:
+    The base and its variants are pre-built by ``scripts/build_staged_datasets.py`` from the five raw plate tables and rehosted on ``scverse-exampledata``, so the loader fetches a single h5ad rather than reassembling the base on every call. The two flags select the variant, which the variants build from per-plate ``mad_robustize`` normalization against the untreated wells:
 
     - both ``False``: the raw wells with every feature, 1,918 wells by 3,616 features.
     - ``feature_selected=True``: the well-level block after pycytominer-default feature selection, 1,918 wells by 751 features.
