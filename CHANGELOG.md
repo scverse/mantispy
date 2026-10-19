@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning][].
 
 ## [Unreleased]
 
+### Changed
+
+- `pp.normalize`, `pp.correct_plate_position` and `pp.regress_out` now default to `reference="negcon"`, matching `pp.sphere`, `pp.tvn` and `mt.tl`. Pass `reference=None` to fit on every row as before.
+
 ## [0.1.0a1] - 2026-10-19
 
 First alpha pre-release of the Python core. Install it with `pip install --pre mantispy`.

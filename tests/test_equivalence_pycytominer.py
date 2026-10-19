@@ -58,7 +58,7 @@ def test_normalize_equivalence(cells, method, with_nan):
     features = _features(cells)
     expected = _pycytominer_normalize(frame, features, method)
 
-    mt.pp.normalize(cells, method=method, by="Metadata_Plate")
+    mt.pp.normalize(cells, method=method, by="Metadata_Plate", reference=None)
     np.testing.assert_allclose(cells.X, expected[features].to_numpy(dtype=np.float32), **TOLERANCE)
 
 
@@ -121,7 +121,7 @@ def test_normalize_then_aggregate_pipeline_equivalence(cells):
         .reset_index(drop=True)
     )
 
-    mt.pp.normalize(cells, method="mad_robustize", by="Metadata_Plate")
+    mt.pp.normalize(cells, method="mad_robustize", by="Metadata_Plate", reference=None)
     wells = mt.tl.aggregate(cells, func="median", min_cells=0)
     actual = mt.get.to_dataframe(wells).sort_values(["Metadata_Plate", "Metadata_Well"]).reset_index(drop=True)
     np.testing.assert_allclose(

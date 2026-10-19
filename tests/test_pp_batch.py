@@ -24,7 +24,7 @@ def test_median_polish_removes_row_and_column_gradients(gradient_cells):
     before = _position_correlation(wells)
     assert before[0] > 0.5 and before[1] > 0.3
 
-    mt.pp.correct_plate_position(wells, method="median_polish")
+    mt.pp.correct_plate_position(wells, method="median_polish", reference=None)
     after = _position_correlation(wells)
     assert after[0] < 0.15 and after[1] < 0.15
 
@@ -34,7 +34,7 @@ def test_b_score_removes_gradient_and_standardizes(gradient_cells):
     before = _position_correlation(wells)
     assert before[0] > 0.5
 
-    mt.pp.correct_plate_position(wells)  # default method="b_score"
+    mt.pp.correct_plate_position(wells, reference=None)  # default method="b_score"
     after = _position_correlation(wells)
     assert after[0] < 0.15 and after[1] < 0.15
     # the B-score is a robust z-score, so each feature's per-plate MAD is about one.
@@ -103,7 +103,7 @@ def test_regress_out_removes_cell_count_dependence():
     counts = wells.obs["Metadata_CellCount"].to_numpy(dtype=float)
 
     assert abs(np.corrcoef(counts, wells.X[:, position])[0, 1]) > 0.3
-    mt.pp.regress_out(wells, keys=("Metadata_CellCount",), by=None)
+    mt.pp.regress_out(wells, keys=("Metadata_CellCount",), by=None, reference=None)
     assert abs(np.corrcoef(counts, wells.X[:, position])[0, 1]) < 0.05
 
 
@@ -116,7 +116,7 @@ def test_regress_out_handles_categorical_keys_and_missing_columns(gradient_cells
         return float(np.std([values[plate == p].mean(0) for p in sorted(set(plate))], axis=0).mean())
 
     before = between_plate_spread(wells)
-    mt.pp.regress_out(wells, keys=("Metadata_Plate",), by=None)
+    mt.pp.regress_out(wells, keys=("Metadata_Plate",), by=None, reference=None)
     assert between_plate_spread(wells) < 0.01 * before
     assert np.isfinite(wells.X).all()
 
@@ -173,7 +173,7 @@ def test_one_infinity_does_not_spread_across_features(gradient_cells):
     gapped.X[0, 2] = np.nan
 
     for each in (adata, gapped):
-        mt.pp.regress_out(each, keys=("Metadata_CellCount",), key_added="regressed")
+        mt.pp.regress_out(each, keys=("Metadata_CellCount",), key_added="regressed", reference=None)
     corrected, expected = adata.layers["regressed"], gapped.layers["regressed"]
 
     assert np.isinf(corrected[0, 2]), "the infinity stays where it was"
@@ -402,7 +402,7 @@ def test_regress_out_says_when_a_plate_never_reaches_the_pooled_density():
     """On pki two plates hold a third of the others' cells; fitted per plate and re-expressed at the pooled mean, the result correlated with the cell count more than the input had."""
     adata = _two_plates(count_means=(600.0, 1800.0), slope=0.002)
     with pytest.warns(UserWarning, match="extrapolating"):
-        mt.pp.regress_out(adata, keys=["Metadata_Count"], by="Metadata_Plate")
+        mt.pp.regress_out(adata, keys=["Metadata_Count"], by="Metadata_Plate", reference=None)
 
 
 def _treated_and_thinned(seed=0):
@@ -434,7 +434,7 @@ def test_regress_out_on_the_controls_removes_density_and_keeps_the_phenotype():
     adata, control = _treated_and_thinned()
     before = np.asarray(adata.X).copy()
     on_controls = mt.pp.regress_out(adata, reference="negcon", copy=True)
-    on_everything = mt.pp.regress_out(adata, copy=True)
+    on_everything = mt.pp.regress_out(adata, copy=True, reference=None)
 
     fixed = np.asarray(on_controls.X)
     count = adata.obs["Metadata_CellCount"].to_numpy()
@@ -492,7 +492,7 @@ def test_regress_out_refuses_a_covariate_with_a_missing_label():
     """A NaN category encodes all-zero, which is the level drop_first removed, so a row whose label is missing is fitted as the reference level: row 0 came out at 13.85 instead of 5.06, and the 23 correctly labelled rows moved with it (per-operator means 6.42/6.42/6.42 became 5.17/6.42/7.39)."""
     adata, _ = _operator_wells(missing_label=True)
     with pytest.raises(ValueError, match="Metadata_Operator"):
-        mt.pp.regress_out(adata, keys=["Metadata_Operator"], by=None)
+        mt.pp.regress_out(adata, keys=["Metadata_Operator"], by=None, reference=None)
 
 
 @pytest.mark.parametrize("value", [np.nan, np.inf])
@@ -512,7 +512,7 @@ def test_regress_out_says_so_when_a_missing_covariate_value_disables_it(value):
 
     before = np.asarray(adata.X).copy()
     with pytest.warns(UserWarning, match="Metadata_CellCount"):
-        mt.pp.regress_out(adata, keys=["Metadata_CellCount"], by=None)
+        mt.pp.regress_out(adata, keys=["Metadata_CellCount"], by=None, reference=None)
     assert np.array_equal(np.asarray(adata.X), before)
 
 
@@ -611,3 +611,32 @@ def test_correct_chromosome_arm_rejects_a_bare_string():
     adata = _crispr_arm_plate({"1q": [1.0]}, ["q0"], ["1q"], {"q0": 0.0}, {}, n_features=1)
     with pytest.raises(TypeError):
         mt.pp.correct_chromosome_arm(adata, unexpressed="q0")
+
+
+def test_regress_out_fits_on_the_controls_by_default():
+    adata, _ = _treated_and_thinned()
+    default = mt.pp.regress_out(adata, copy=True)
+    on_controls = mt.pp.regress_out(adata, reference="negcon", copy=True)
+    on_everything = mt.pp.regress_out(adata, reference=None, copy=True)
+    np.testing.assert_array_equal(np.asarray(default.X), np.asarray(on_controls.X))
+    assert not np.allclose(np.asarray(default.X), np.asarray(on_everything.X))
+
+
+def test_correct_plate_position_fits_on_the_controls_by_default():
+    from mantispy._core.plate import PLATE_FORMATS, well_name
+
+    n_rows, n_cols = PLATE_FORMATS[96]
+    names = [well_name(r, c) for r in range(n_rows) for c in range(n_cols)]
+    control = np.array([i % 2 == 0 for i in range(len(names))])
+    x = np.random.default_rng(0).normal(0.0, 1.0, (len(names), 2))
+    x[~control] += (
+        3.0  # treated wells differ from the controls, so a fit on every well differs from one on the controls
+    )
+    features = ["Cells_AreaShape_F0", "Cells_AreaShape_F1"]
+    results = {}
+    for label, kwargs in {"default": {}, "negcon": {"reference": "negcon"}, "all": {"reference": None}}.items():
+        adata = _plate(x.copy(), names, control.tolist(), features)
+        mt.pp.correct_plate_position(adata, method="median_polish", **kwargs)
+        results[label] = np.asarray(adata.X)
+    np.testing.assert_array_equal(results["default"], results["negcon"])
+    assert not np.allclose(results["default"], results["all"])

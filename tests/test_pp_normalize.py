@@ -81,3 +81,12 @@ def test_a_feature_unmeasured_among_one_groups_controls_keeps_its_measured_value
 
     assert np.isfinite(np.asarray(adata.X)[measured, 1]).all()
     assert adata.var["degenerate_scale"].to_numpy()[1], "and the feature is still flagged"
+
+
+def test_default_reference_is_the_negative_controls(adata):
+    """pp.normalize fits on the controls by default, like pp.sphere and the tl functions; reference=None fits on every row."""
+    default = mt.pp.normalize(adata, by="Metadata_Plate", copy=True)
+    on_controls = mt.pp.normalize(adata, by="Metadata_Plate", reference="negcon", copy=True)
+    on_everything = mt.pp.normalize(adata, by="Metadata_Plate", reference=None, copy=True)
+    np.testing.assert_array_equal(default.X, on_controls.X)
+    assert not np.allclose(default.X, on_everything.X)
