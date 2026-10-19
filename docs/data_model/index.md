@@ -36,11 +36,14 @@ They are different annotations inside one model.
 
 ```python
 # drug screen, well-level
-resolution = "well";        grouped_by = ["Metadata_Plate", "Metadata_Well"]
+resolution = "well"
+grouped_by = ["Metadata_Plate", "Metadata_Well"]
 # pooled CRISPR cells
-resolution = "object";      grouped_by = []
+resolution = "object"
+grouped_by = []
 # gene-level profiles
-resolution = "aggregate";   grouped_by = ["Metadata_Gene"]
+resolution = "aggregate"
+grouped_by = ["Metadata_Gene"]
 # a learned embedding (any resolution)
 feature_kind = "embedding"
 ```
