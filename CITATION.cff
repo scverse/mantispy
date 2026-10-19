@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "A preprint is in preparation. Until then, please cite this repository."
+title: "mantispy"
+type: software
+authors:
+  - family-names: Treis
+    given-names: Tim
+  - family-names: Heumos
+    given-names: Lukas
+repository-code: "https://github.com/scverse/mantispy"
+license: BSD-3-Clause
