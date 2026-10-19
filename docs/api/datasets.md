@@ -46,6 +46,7 @@
     :toctree: generated
 
     ds.corum
+    ds.depmap_expression
     ds.gene_sets
     ds.interactions
     ds.jump_lite_targets
