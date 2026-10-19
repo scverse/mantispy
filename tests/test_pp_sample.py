@@ -25,7 +25,7 @@ def test_downsample_is_reproducible_and_leaves_the_source_alone(plate):
 
 
 def test_stratifying_keeps_the_rare_group_represented(plate):
-    small = mt.pp.downsample(plate, n_per_group=12, groupby=("Metadata_Plate",), stratify="Metadata_Perturbation")
+    small = mt.pp.downsample(plate, n_per_group=12, by=("Metadata_Plate",), stratify="Metadata_Perturbation")
     shares = small.obs["Metadata_Perturbation"].value_counts(normalize=True)
     assert shares.max() - shares.min() < 0.25
     assert small.n_obs <= 12 * plate.obs["Metadata_Plate"].nunique()

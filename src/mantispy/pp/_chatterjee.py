@@ -93,7 +93,7 @@ def chatterjee_xi(x: np.ndarray, y: np.ndarray, m: int = 1, seed: int = 0, min_f
 @inplace_or_copy()
 def feature_select_chatterjee(
     adata: AnnData,
-    groupby: str = "Metadata_Perturbation",
+    by: str = "Metadata_Perturbation",
     threshold: float = 0.1,
     m: int = 1,
     seed: int = 0,
@@ -105,7 +105,7 @@ def feature_select_chatterjee(
 
     Args:
         adata: Object to select features on.
-        groupby: ``obs`` column the features are tested against.
+        by: ``obs`` column the features are tested against.
         threshold: Keep features scoring above this.
             xi is near zero under independence and approaches one when the feature is a deterministic function of the group, so the threshold is comparable across datasets in a way a correlation cutoff is not.
         m: Right nearest neighbors :cite:p:`Lin_2022`.
@@ -121,7 +121,7 @@ def feature_select_chatterjee(
         Writes ``var[key_added]`` and the statistic itself to ``var["chatterjee_xi"]``, which is NaN for a feature that is constant or too sparsely measured to score.
 
     Raises:
-        ValueError: If ``groupby`` has a single group, so that no feature can depend on it.
+        ValueError: If ``by`` has a single group, so that no feature can depend on it.
 
     Notes:
         Run it after :func:`~mantispy.pp.feature_select`, which drops redundant or unmeasurable features; this keeps the features that carry information about the perturbation.
@@ -138,9 +138,9 @@ def feature_select_chatterjee(
         scmorph uses ``m=5``, and on input free of ties the two implementations agree to 1e-9.
         scmorph breaks ties in ``y`` at random, so on tied input the two differ.
     """
-    codes, keys = group_codes(adata, groupby)
+    codes, keys = group_codes(adata, by)
     if len(keys) < 2:
-        raise ValueError(f"{groupby!r} has one group, so no feature can depend on it")
+        raise ValueError(f"{by!r} has one group, so no feature can depend on it")
 
     scores = chatterjee_xi(codes.astype(float), get_matrix(adata), m=m, seed=seed, min_finite=min_finite)
     adata.var["chatterjee_xi"] = scores

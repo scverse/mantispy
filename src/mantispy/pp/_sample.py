@@ -14,7 +14,7 @@ from mantispy._core.provenance import record_params
 def downsample(
     adata: AnnData,
     n_per_group: int = 500,
-    groupby: Sequence[str] | str | None = ("Metadata_Plate", "Metadata_Well"),
+    by: Sequence[str] | str | None = ("Metadata_Plate", "Metadata_Well"),
     stratify: str | None = None,
     seed: int = 0,
 ) -> AnnData:
@@ -25,7 +25,7 @@ def downsample(
             Never modified.
         n_per_group: Cap per group.
             Groups smaller than this are kept whole, so groups are capped but not balanced.
-        groupby: Columns defining a group.
+        by: Columns defining a group.
             The default caps each well, so every well is represented instead of the densest wells filling the sample.
         stratify: Keep this column's proportions inside each group, so a rare perturbation is not lost to the sampling.
         seed: Seed for reproducibility.
@@ -39,7 +39,7 @@ def downsample(
     if n_per_group < 1:
         raise ValueError(f"n_per_group must be at least 1, got {n_per_group}")
 
-    codes, keys = group_codes(adata, groupby)
+    codes, keys = group_codes(adata, by)
     generator = np.random.default_rng(seed)
     labels = as_frame(adata.obs)[stratify].astype(str).to_numpy() if stratify else None
     chosen: list[np.ndarray] = []
@@ -72,6 +72,6 @@ def downsample(
     record_params(
         result,
         "downsample",
-        {"n_per_group": n_per_group, "groupby": groupby, "stratify": stratify, "seed": seed},
+        {"n_per_group": n_per_group, "by": by, "stratify": stratify, "seed": seed},
     )
     return result
