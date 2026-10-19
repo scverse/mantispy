@@ -47,6 +47,14 @@ pip install 'mantispy[harmony]'
 pip install 'mantispy[map]'
 ```
 
+### Integration metrics
+
+{func}`~mantispy.metrics.evaluate_integration` delegates to scib-metrics:
+
+```console
+pip install 'mantispy[integration]'
+```
+
 ### Interactive plots
 
 With plotly installed, plots in a Jupyter notebook also draw an interactive version:
