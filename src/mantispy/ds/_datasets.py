@@ -1091,6 +1091,27 @@ def corum(cache_dir: str | Path | None = None) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["source", "target"]).drop_duplicates().reset_index(drop=True)
 
 
+def depmap_expression(cache_dir: str | Path | None = None) -> Path:
+    """Path to the DepMap expression matrix, fetched from DepMap's public release on first use.
+
+    The file is ``OmicsExpressionProteinCodingGenesTPMLogp1.csv`` from DepMap Public 24Q2: one row per model, gene columns named ``"SYMBOL (ENTREZ)"``, holding log2(TPM+1).
+    It is the reference :func:`~mantispy.io.unexpressed_genes` and :func:`~mantispy.pp.correct_chromosome_arm` read the genes a cell line does not express from.
+    The download is checked against a pinned checksum.
+
+    Args:
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
+
+    Returns:
+        The path of the cached CSV file.
+
+    Notes:
+        DepMap data is distributed by the Broad Institute under CC BY 4.0; it is fetched from DepMap's own figshare release, not re-hosted.
+    """
+    (path,) = _files("depmap_expression", cache_dir)
+    return path
+
+
 def _read_site(directory: Path, source: str, channels: Sequence[str]) -> AnnData:
     """One analysis directory as cells, checked against the ``<plate>-<well>-<site>`` name it is filed under.
 

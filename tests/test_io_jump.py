@@ -152,6 +152,21 @@ def test_corum_reads_one_row_per_complex_and_member(tmp_path, monkeypatch):
     }
 
 
+def test_depmap_expression_returns_the_pinned_file(tmp_path, monkeypatch):
+    from mantispy.ds import _datasets
+
+    path = tmp_path / "OmicsExpressionProteinCodingGenesTPMLogp1.csv"
+    seen = []
+    monkeypatch.setattr(_datasets, "_files", lambda name, cache_dir=None, select=None: seen.append(name) or [path])
+
+    assert mt.ds.depmap_expression() == path
+    assert seen == ["depmap_expression"]
+    entry = _datasets._DATASETS["depmap_expression"]
+    assert entry.files[0].name == path.name
+    assert entry.files[0].url.startswith("https://ndownloader.figshare.com/")
+    assert len(entry.files[0].sha256) == 64
+
+
 @pytest.mark.network
 @pytest.mark.slow
 def test_jump_crispr_names_its_genes_and_controls():

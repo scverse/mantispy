@@ -4721,6 +4721,14 @@ datasets:
       url: https://raw.githubusercontent.com/recursionpharma/EFAAR_benchmarking/2935f21f84898fc26e2a9a40bdaee685c8e63fb6/efaar_benchmarking/benchmark_annotations/CORUM_clusters.tsv
       sha256: caab1d3db6fa694c001f41e2973492d248ea3936a1249be3bf497648071f5c99
 
+  depmap_expression:
+    type: mantispy
+    doc_header: DepMap 24Q2 Public expression, log2(TPM+1) of protein-coding genes per model, from DepMap's own figshare release.
+    files:
+    - name: OmicsExpressionProteinCodingGenesTPMLogp1.csv
+      url: https://ndownloader.figshare.com/files/46490878
+      sha256: 39eff342bbbbe0a40208545e93a69cc85a945899592f9d683f87e3b2bb121670
+
   _jump_cell_counts:
     type: mantispy
     doc_header: Per-well cell counts of the JUMP CRISPR plates, as jump-profiling-recipe regresses them out.
