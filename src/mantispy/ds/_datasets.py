@@ -277,7 +277,7 @@ def rohban(
 
     ``cpg0017-rohban-pathways``: U2OS cells, one ORF construct overexpressed per well, roughly ten replicate wells per construct over five plates.
 
-    The base and its variants are pre-built by ``scripts/build_staged_datasets.py`` from the five raw plate tables and rehosted on ``scverse-exampledata`` (each under 7 MB), so the loader fetches a single h5ad rather than reassembling the base on every call. The two flags select the variant, which the variants build from per-plate ``mad_robustize`` normalization against the untreated wells:
+    The base and its variants are pre-built by ``scripts/build_staged_datasets.py`` from the five raw plate tables and rehosted on ``scverse-exampledata`` , so the loader fetches a single h5ad rather than reassembling the base on every call. The two flags select the variant, which the variants build from per-plate ``mad_robustize`` normalization against the untreated wells:
 
     - both ``False``: the raw wells with every feature, 1,918 wells by 3,616 features.
     - ``feature_selected=True``: the well-level block after pycytominer-default feature selection, 1,918 wells by 751 features.
@@ -425,7 +425,7 @@ def jump_target2(
         plates: Plate barcodes to load.
             The default takes one plate from each source; ``None`` loads every plate, a large download.
         annotate: Join the JUMP annotation, which supplies ``Metadata_Perturbation`` and ``Metadata_Control``.
-            Downloads another 14 MB.
+            Downloads an additional file.
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
 
@@ -1221,7 +1221,7 @@ def jump_cells(
 
     The same plate's well-level profiles are :func:`jump_target2`, so a profile aggregated from these cells can be compared with the one the consortium published.
 
-    The annotated cells, their feature-selected block and their well-level aggregate are pre-built by ``scripts/build_staged_datasets.py`` from the 480 raw CellProfiler tables and rehosted on ``scverse-exampledata``, so the loader fetches a single h5ad rather than reassembling the object on every call. Passing ``annotate=False`` still assembles the raw, un-annotated cells locally, downloading about 1.5 GB of CellProfiler output and caching the assembled object.
+    The annotated cells, their feature-selected block and their well-level aggregate are pre-built by ``scripts/build_staged_datasets.py`` from the 480 raw CellProfiler tables and rehosted on ``scverse-exampledata``, so the loader fetches a single h5ad rather than reassembling the object on every call. Passing ``annotate=False`` still assembles the raw, un-annotated cells locally, downloading the full CellProfiler output and caching the assembled object.
 
     Args:
         annotate: Fetch the annotated cells, which carry ``Metadata_Perturbation`` and ``Metadata_Control``.

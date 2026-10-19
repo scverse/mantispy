@@ -141,7 +141,7 @@ def differential_features(
         The mask is computed per group, over the rows that group is fitted on, so a bad well only costs the groups compared against it.
 
         This test is meant for low-replicate screens.
-        Across five configurations, the Mann-Whitney test in :func:`~mantispy.tl.effect_size` could not call a feature at three or fewer wells per treatment and was adequate from ten wells up, where this function is a rescaling of Cohen's d (Spearman 1.00).
+        Across five configurations, the Mann-Whitney test in :func:`~mantispy.tl.effect_size` could not call a feature at three or fewer wells per treatment and was adequate from ten wells up, where this function is a rescaling of Cohen's d.
         BBBC021 has three wells per treatment and the full JUMP TARGET-2 has 132.
 
         Calibration depends on the replicate count and the feature distribution, which vary by an order of magnitude between screens.

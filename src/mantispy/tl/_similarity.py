@@ -31,7 +31,7 @@ def similarity_matrix(values: np.ndarray, metric: str = "cosine") -> np.ndarray:
 
     Raises:
         ValueError: ``metric`` is not one of ``METRICS``, or the float64 matrix would exceed :data:`SIMILARITY_BYTES`.
-            Memory is quadratic in the number of profiles (50,640 JUMP wells need 30 GB), so aggregate to consensus profiles first.
+            Memory is quadratic in the number of profiles (a full JUMP screen of wells needs tens of gigabytes), so aggregate to consensus profiles first.
     """
     if metric not in METRICS:
         raise ValueError(f"metric must be one of {METRICS}, got {metric!r}")
