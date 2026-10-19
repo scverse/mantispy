@@ -3,6 +3,12 @@
 mantispy brings Cell Painting and other image-based profiling data into the scverse ecosystem, from reading what a pipeline wrote through quality control, normalization and batch correction to evaluating what survived.
 Everything operates on an `AnnData`, so scanpy's PCA, neighbors, UMAP and Leiden work on the same object, and {func}`~mantispy.io.read_plate` reads the images behind the profiles as `SpatialData`.
 
+mantispy follows three canonical workflows, and each has its own tutorials:
+
+- {doc}`Compound screens <tutorials/compound_screens>`: call hits, group them by mechanism of action, test enrichment and fit dose responses.
+- {doc}`Genetic screens <tutorials/genetic_screens>`: aggregate guides to genes and read a CRISPR screen as clusters and gene sets.
+- {doc}`Learned embeddings <tutorials/data/embeddings>`: bring in features from a trained model and treat them like measured ones.
+
 ::::{grid} 1 2 2 3
 :gutter: 3
 
@@ -102,6 +108,7 @@ case_studies/index
 
 about/background
 about/cite
+about/known_limitations
 GitHub <https://github.com/scverse/mantispy>
 Discourse <https://discourse.scverse.org/>
 ```
