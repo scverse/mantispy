@@ -230,7 +230,10 @@ def wasserstein_features(
     X = get_matrix(adata)
     control = X[reference_mask(adata, reference)]
     if control.shape[0] == 0:
-        raise ValueError(f"no reference rows selected by reference={reference!r}")
+        raise ValueError(
+            f"no reference rows selected by reference={reference!r}. Check that obs['Metadata_Control_Type'] has "
+            "'negcon' rows (mt.pp.annotate_controls), or pass reference=None to use all rows."
+        )
 
     codes, keys = group_codes(adata, groupby)
     ranked, counts, _ = sorted_control(control)

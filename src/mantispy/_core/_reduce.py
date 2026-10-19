@@ -168,7 +168,7 @@ def group_codes(adata: AnnData, by: str | Sequence[str] | None) -> tuple[np.ndar
     columns = [by] if isinstance(by, str) else list(by)
     missing = [column for column in columns if column not in adata.obs]
     if missing:
-        raise KeyError(f"obs is missing grouping column(s): {missing}")
+        raise KeyError(f"obs is missing grouping column(s): {missing}. obs has: {list(adata.obs.columns)}")
 
     frame = as_frame(adata.obs)[columns]
     if frame.isna().to_numpy().any():

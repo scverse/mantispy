@@ -209,7 +209,10 @@ def grit(
     """
     is_control = reference_mask(adata, reference)
     if not is_control.any():
-        raise ValueError(f"no reference rows selected by reference={reference!r}")
+        raise ValueError(
+            f"no reference rows selected by reference={reference!r}. Check that obs['Metadata_Control_Type'] has "
+            "'negcon' rows (mt.pp.annotate_controls)."
+        )
 
     matrix = similarity_matrix(representation(adata, use_rep), metric).astype(np.float64)
     codes, keys = group_codes(adata, groupby)

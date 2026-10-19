@@ -296,7 +296,9 @@ def map(
             "neg_diffby": list(neg_diffby),
         }
     else:
-        raise ValueError("pass pos_sameby= or mode=")
+        raise ValueError(
+            "mt.tl.map needs mode='replicability', 'activity' or 'consistency', or explicit pos_sameby= and neg_sameby="
+        )
 
     needed = {column for group in settings.values() for column in group} - {REFERENCE_COLUMN}
     missing = sorted(needed - set(adata.obs.columns))
