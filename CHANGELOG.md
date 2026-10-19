@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning][].
 ### Changed
 
 - `pp.normalize`, `pp.correct_plate_position` and `pp.regress_out` now default to `reference="negcon"`, matching `pp.sphere`, `pp.tvn` and `mt.tl`. Pass `reference=None` to fit on every row as before.
+- `mt.tl.gene_sets` is renamed `mt.tl.gene_set_network`, so it no longer shares a name with `mt.ds.gene_sets`, which reads a gene-set resource and keeps its name.
 
 ## [0.1.0a1] - 2026-10-19
 

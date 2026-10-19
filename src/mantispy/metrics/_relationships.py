@@ -14,7 +14,7 @@ from mantispy.metrics._common import tidy
 if TYPE_CHECKING:
     from anndata import AnnData
 
-#: What :func:`~mantispy.tl.gene_sets` returns and what :func:`~mantispy.tl.pathway_coherence` reads.
+#: What :func:`~mantispy.tl.gene_set_network` returns and what :func:`~mantispy.tl.pathway_coherence` reads.
 SET_COLUMNS = ("source", "target")
 
 #: A set of n members contributes n(n-1)/2 pairs, so one very large set can dominate the recall as well as the memory.
@@ -120,7 +120,7 @@ def known_relationships(
 
     Args:
         adata: One profile per perturbation, normally the output of :func:`~mantispy.tl.consensus`.
-        net: The annotation, with a ``source`` column naming a set and a ``target`` column naming one of its members, as :func:`~mantispy.tl.gene_sets` returns it: two perturbations are related when they share a set, which also expresses a mechanism of action shared by several compounds.
+        net: The annotation, with a ``source`` column naming a set and a ``target`` column naming one of its members, as :func:`~mantispy.tl.gene_set_network` returns it: two perturbations are related when they share a set, which also expresses a mechanism of action shared by several compounds.
             A pair is counted once whichever way round it appears, and nothing is paired with itself.
             The reference gene sets (CORUM, hu.MAP, Reactome, SIGNOR, StringDB) are distributed as one pair per row, which becomes this shape with ``pairs.assign(source=pairs.index.astype(str)).melt(id_vars="source", value_name="target")[["source", "target"]]``.
         label_key: ``obs`` column holding the perturbation label, normally a gene symbol.

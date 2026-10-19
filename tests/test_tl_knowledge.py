@@ -47,17 +47,17 @@ def test_enrich_hits_says_what_to_run_first(screen, net):
         mt.tl.enrich_hits(screen, net)
 
 
-def test_gene_sets_reads_a_gmt_file(tmp_path):
+def test_gene_set_network_reads_a_gmt_file(tmp_path):
     gmt = tmp_path / "sets.gmt"
     gmt.write_text("setA\tdescription\tG0\tG1\tG2\nsetB\tdescription\tG5\tG6\n")
-    net = mt.tl.gene_sets(source=str(gmt))
+    net = mt.tl.gene_set_network(source=str(gmt))
     assert list(net.columns) == ["source", "target", "weight"]
     assert set(net["source"]) == {"setA", "setB"}
 
 
-def test_gene_sets_rejects_an_unknown_source():
+def test_gene_set_network_rejects_an_unknown_source():
     with pytest.raises(ValueError, match="source must be one of"):
-        mt.tl.gene_sets(source="nonsense")
+        mt.tl.gene_set_network(source="nonsense")
 
 
 def test_the_coherence_plot_draws_and_refuses_an_empty_table(screen, net):
@@ -148,3 +148,10 @@ def test_enrich_hits_refuses_a_screen_with_no_hits():
 
     with pytest.raises(ValueError, match="threshold"):
         mt.tl.enrich_hits(adata, net=net, gene_key="Metadata_Gene", threshold=0.05)
+
+
+def test_tl_and_ds_no_longer_share_the_gene_sets_name():
+    """mt.ds.gene_sets reads a resource, mt.tl.gene_set_network builds a network from decoupler; the two have different signatures."""
+    assert not hasattr(mt.tl, "gene_sets")
+    assert callable(mt.tl.gene_set_network)
+    assert callable(mt.ds.gene_sets)

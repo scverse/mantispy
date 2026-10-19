@@ -19,7 +19,7 @@ from mantispy.tl._similarity import similarity_matrix
 SOURCES = ("hallmark", "progeny", "collectri", "dorothea")
 
 
-def gene_sets(source: str = "hallmark", organism: str = "human") -> pd.DataFrame:
+def gene_set_network(source: str = "hallmark", organism: str = "human") -> pd.DataFrame:
     """Fetch a gene-set network, or read one from a GMT file.
 
     Args:
@@ -49,7 +49,7 @@ def gene_sets(source: str = "hallmark", organism: str = "human") -> pd.DataFrame
     net = net.rename(columns={column: column.lower() for column in net.columns})
     if "weight" not in net:
         net["weight"] = 1.0
-    get_logger().info("gene_sets(%s): %d sets over %d edges", source, net["source"].nunique(), len(net))
+    get_logger().info("gene_set_network(%s): %d sets over %d edges", source, net["source"].nunique(), len(net))
     return net[["source", "target", "weight"]]
 
 
@@ -73,7 +73,7 @@ def pathway_coherence(
 
     Args:
         adata: One profile per gene, normally the output of :func:`~mantispy.tl.consensus`.
-        net: A gene-set network from :func:`gene_sets`, or any frame with ``source`` and ``target``.
+        net: A gene-set network from :func:`gene_set_network`, or any frame with ``source`` and ``target``.
         gene_key: ``obs`` column holding the gene symbol.
         metric: Similarity between profiles, ``"cosine"`` or ``"pearson"``.
         use_rep: Measure in ``obsm[use_rep]`` instead of ``X``.
@@ -154,7 +154,7 @@ def enrich_hits(
 
     Args:
         adata: One profile per gene, already scored by :func:`~mantispy.tl.hit_calling`.
-        net: A gene-set network from :func:`gene_sets`.
+        net: A gene-set network from :func:`gene_set_network`.
         gene_key: ``obs`` column holding the gene symbol.
         hit_key: ``obs`` column holding the q-value that defines a hit.
         threshold: q-value below which a gene counts as a hit.

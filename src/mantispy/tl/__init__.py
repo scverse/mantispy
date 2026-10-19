@@ -19,7 +19,7 @@ from mantispy.tl._heterogeneity import (
     subpopulation_hits,
 )
 from mantispy.tl._hits import hit_calling
-from mantispy.tl._knowledge import enrich_hits, gene_sets, pathway_coherence
+from mantispy.tl._knowledge import enrich_hits, gene_set_network, pathway_coherence
 from mantispy.tl._map import map
 from mantispy.tl._moa import moa_enrichment, nn_moa_classify
 from mantispy.tl._network import network_enrichment
@@ -48,7 +48,7 @@ __all__ = [
     "enrich_hits",
     "feature_sets",
     "feature_signature",
-    "gene_sets",
+    "gene_set_network",
     "grit",
     "guide_activity",
     "hit_calling",
