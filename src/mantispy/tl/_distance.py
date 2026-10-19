@@ -109,7 +109,7 @@ def edistance(
         n_permutations: Number of label permutations in the null.
         threshold: q-value below which a group is marked ``is_hit``.
         max_reference: Maximum number of rows sampled from the reference and, separately, from each group.
-            The pooled distance matrix is quadratic in their sum; 2000 of each takes 128 MB.
+            The pooled distance matrix is quadratic in their sum, so large values need a lot of memory.
         seed: Seed for the subsampling and the permutations.
         key_added: Name for the outputs.
         copy: Return a modified copy instead of mutating in place.

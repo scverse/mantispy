@@ -203,9 +203,8 @@ def hit_calling(
         Drawing from every row would put real hits into the null, and a screen with many hits would look like one with none.
 
         Calibration degrades with few controls.
-        On pure-noise screens of 12 groups of 12 rows with 10 features (the ``pure_noise_screen`` test fixture), the false positive rate at a nominal 0.05 was 0.10 with 48 controls, 0.077 with 192 and 0.052 with 384.
-        Across four configurations from 20 to 80 features and 48 to 200 controls, ten seeds each, it was 2.1% overall.
-        Neither figure is a bound for another screen, and both were measured with ``method="mahalanobis"``.
+        On pure-noise screens the false positive rate at a nominal 0.05 is inflated with few controls and approaches the nominal rate as controls are added.
+        This is not a bound for another screen, and it was checked with ``method="mahalanobis"``.
         Under ``method="ks"`` with a block the null draws whole wells for the pseudo-treated side and recomputes the KS statistic, the same well-level unit ``block`` fixes for the median; without a block each group's distances are compared with those of the null half by ``scipy.stats.ks_2samp``.
 
         At cell resolution the calibration above assumes a null unit that matches the design.

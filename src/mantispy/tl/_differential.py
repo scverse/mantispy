@@ -133,7 +133,7 @@ def differential_features(
 
     Notes:
         With ``block`` set, a group is skipped with a warning when none of its plates also holds rows it is compared against, since its treatment and its plate are then confounded.
-        On a confounded null, the unblocked test reports 70% power with a 23% false positive rate because it detects the plate.
+        On a confounded null, the unblocked test reports high power and an inflated false positive rate because it detects the plate.
         None of the four screens packaged with mantispy has such a group.
 
         A feature with a non-finite value in one of the wells a comparison uses is left out of that fit.

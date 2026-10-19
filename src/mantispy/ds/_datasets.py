@@ -423,7 +423,7 @@ def jump_target2(
 
     Args:
         plates: Plate barcodes to load.
-            The default takes one plate from each source; ``None`` loads all 141, 9.4 GB.
+            The default takes one plate from each source; ``None`` loads every plate, a large download.
         annotate: Join the JUMP annotation, which supplies ``Metadata_Perturbation`` and ``Metadata_Control``.
             Downloads another 14 MB.
         cache_dir: Where to keep the download.
@@ -1167,7 +1167,7 @@ def jump_export(cache_dir: str | Path | None = None) -> Path:
     """One real ``ExportToSpreadsheet`` directory, as CellProfiler wrote it.
 
     A single field of view of a DMSO well of ``BR00121438``: ``Image.csv`` plus the ``Cells``, ``Cytoplasm`` and ``Nuclei`` tables, unmodified, for reading with :func:`mantispy.io.read_profiles`.
-    About 18 MB, and part of the download :func:`jump_cells` makes, so asking for both costs nothing extra.
+    Part of the download :func:`jump_cells` makes, so asking for both costs nothing extra.
 
     The images this was measured from are in :func:`jump_plate`, and the well-level profiles of the same plate are in :func:`jump_target2`.
 
@@ -1227,7 +1227,7 @@ def jump_cells(
         annotate: Fetch the annotated cells, which carry ``Metadata_Perturbation`` and ``Metadata_Control``.
             ``False`` assembles the raw cells locally, without the annotation join.
             Needed for `selected` and `aggregated`.
-        selected: Return only the features ``var["selected"]`` marks, as :func:`mantispy.pp.subset_features` would (87 MB instead of 308 MB).
+        selected: Return only the features ``var["selected"]`` marks, as :func:`mantispy.pp.subset_features` would, which is a much smaller download.
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
         aggregated: Return one median profile per well (``Metadata_Plate``, ``Metadata_Well``) instead of the cells, with ``Metadata_CellCount`` and ``Metadata_SiteCount``, so it lines up with the well-level :func:`jump_target2`.
@@ -1265,7 +1265,7 @@ def jump_plate(cache_dir: str | Path | None = None, **kwargs: Any) -> SpatialDat
     """The images and segmentations behind one well of ``BR00121438``.
 
     Two fields of view of well ``O09``, a compound that changed the cells without killing them: the eight channel images of each field, the CellProfiler outlines they were segmented with, and the plate's ``load_data.csv``.
-    About 44 MB, and needs the spatial extra.
+    Needs the spatial extra.
 
     The cells measured from these fields are in :func:`jump_cells`, and the well-level profiles of the same plate in :func:`jump_target2`.
 

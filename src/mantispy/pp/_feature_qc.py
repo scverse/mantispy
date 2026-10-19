@@ -134,7 +134,7 @@ def feature_batch_sensitivity(
 
     Notes:
         Uses Kruskal-Wallis instead of ANOVA, because morphology features are not normally distributed and a few extreme wells should not decide the result.
-        Expect a large fraction to come back sensitive, since per-plate centering does not remove plate structure: over BBBC021's treated wells, 338 of 344 features still depend on the plate at q < 0.05 after per-plate normalization, and rohban2017 and pki are similar.
+        Expect a large fraction to come back sensitive, since per-plate centering does not remove plate structure: most features still depend on the plate after per-plate normalization.
 
         Compare the sensitive fraction before and after a correction.
     """
