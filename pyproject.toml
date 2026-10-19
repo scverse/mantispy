@@ -19,7 +19,7 @@ keywords = [
 ]
 license = { file = "LICENSE" }
 maintainers = [
-  { name = "Tim Treis", email = "tim.treis@outlook.de" },
+  { name = "Tim Treis", email = "tim.treis@scverse.org" },
   { name = "Lukas Heumos", email = "lukas.heumos@scverse.org" },
 ]
 authors = [
