@@ -69,6 +69,14 @@ references
 ```
 
 ```{toctree}
+:caption: Data model
+:hidden: true
+:maxdepth: 1
+
+data_model/index
+```
+
+```{toctree}
 :caption: Tutorials
 :hidden: true
 :maxdepth: 2

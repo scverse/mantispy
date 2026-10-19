@@ -3,9 +3,18 @@
 You need Python 3.12 or newer.
 If you don't have Python installed, we recommend [uv](https://github.com/astral-sh/uv).
 
+## Alpha release
+
+mantispy 0.1.0a1 is an alpha pre-release.
+pip skips pre-releases by default, so a plain `pip install mantispy` does not select it.
+Pass `--pre` to install it:
+
+```console
+pip install --pre mantispy
+```
+
 ## Development version
 
-mantispy is not on PyPI yet.
 Install the latest development version from GitHub:
 
 ```console
