@@ -150,8 +150,9 @@ def effect_size(
         pvalues: Compute a Mann-Whitney p-value for each effect.
             At single-cell resolution nearly every feature is significant, so turn them off when ranking by effect.
         exact: How to compute the p-value's null for a group's untied features.
-            ``"auto"`` uses the exact null when both the group and the reference have eight or fewer measured rows and
-            the fast normal approximation otherwise, matching scipy.
+            ``"auto"`` uses the exact null when the smaller of the group and the reference has eight or fewer measured
+            rows and the fast normal approximation otherwise, which is the sample size at which scipy's own
+            ``method="auto"`` switches.
             ``False`` always uses the normal approximation, which is the fast path and the sensible choice for a screen
             with many small groups, where the exact null dominates the runtime for no change a reader would see.
             ``True`` always uses the exact null. Tied features take the normal approximation whatever this is set to,
@@ -206,7 +207,7 @@ def effect_size(
             continue
         # "auto" takes the exact null only for small samples, the size at which scipy's method="auto" would.
         smallest = int((~np.isnan(treated)).sum(axis=0).min())
-        use_exact = exact is True or (exact == "auto" and smallest <= 8 and control_smallest <= 8)
+        use_exact = exact is True or (exact == "auto" and min(smallest, control_smallest) <= 8)
         if use_exact:
             significance[:, index] = _mwu_exact_untied(treated, control, ranked)
         else:
