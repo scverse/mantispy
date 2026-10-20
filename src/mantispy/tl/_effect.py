@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from anndata import AnnData
 
-from mantispy._core._numba import _wasserstein_against
+from mantispy._core._numba import _mwu_exact_sf, _mwu_moments, _wasserstein_against
 from mantispy._core._reduce import get_matrix, group_codes, group_offsets
 from mantispy._core._stats import MAD_TO_SIGMA, benjamini_hochberg, mannwhitney_pvalues, sorted_control
 from mantispy._core.logging import get_logger
@@ -16,29 +16,31 @@ from mantispy._core.mutation import inplace_or_copy
 METHODS = ("cohens_d", "robust_z")
 
 
-def _mwu_small_samples(treated: np.ndarray, control: np.ndarray) -> np.ndarray:
-    """Scipy's Mann-Whitney U, choosing the exact or asymptotic method per feature.
+def _mwu_exact_untied(treated: np.ndarray, ranked: tuple[np.ndarray, np.ndarray, np.ndarray]) -> np.ndarray:
+    """Two-sided Mann-Whitney p-values: exact on untied features, the normal approximation on tied ones.
 
-    ``scipy.stats.mannwhitneyu`` chooses once per call.
-    It uses the exact null only when the smaller sample has eight or fewer observations and no column has ties, so one tied feature sends every other feature to the normal approximation.
+    Matches ``scipy.stats.mannwhitneyu(method="exact")`` on untied features and ``method="asymptotic")`` on tied ones,
+    but builds the exact null once per distinct ``(n_treated, n_control)`` pair instead of once per feature, which is
+    what scipy does and what makes it slow: the untied null depends only on the two sample sizes, so thousands of
+    features share a handful of nulls. A feature is untied when its pooled sample has no repeated value.
     """
-    from scipy.stats import mannwhitneyu
+    pvalue = mannwhitney_pvalues(treated, ranked)
+    values, counts, control_ties = ranked
+    block = np.ascontiguousarray(np.asarray(treated, dtype=np.float64).T)
+    statistic, tie_term, n_treated = _mwu_moments(block, values, counts, control_ties)
 
-    finite = np.vstack([treated, control])
-    ordered = np.sort(finite, axis=0)
-    # A difference involving NaN is never zero, so missing values do not count as ties.
-    with np.errstate(invalid="ignore"):
-        tied = np.any(np.diff(ordered, axis=0) == 0, axis=0)
-
-    pvalue = np.full(treated.shape[1], np.nan)
-    methods: tuple[tuple[np.ndarray, Literal["exact", "asymptotic"]], ...] = ((~tied, "exact"), (tied, "asymptotic"))
-    for mask, method in methods:
-        if not mask.any():
-            continue
-        with np.errstate(invalid="ignore"):
-            pvalue[mask] = mannwhitneyu(
-                treated[:, mask], control[:, mask], axis=0, nan_policy="omit", method=method
-            ).pvalue
+    untied = (tie_term == 0) & (n_treated > 0) & (counts > 0)
+    if not untied.any():
+        return pvalue
+    n1, n2 = n_treated[untied], counts[untied]
+    u_max = np.maximum(statistic[untied], n1 * n2 - statistic[untied]).astype(np.int64)
+    out = pvalue[untied].copy()
+    for pair in np.unique(np.stack([n1, n2], axis=1), axis=0):
+        a, b = int(pair[0]), int(pair[1])
+        same = (n1 == a) & (n2 == b)
+        sf = _mwu_exact_sf(a, b)
+        out[same] = np.clip(2.0 * sf[u_max[same]], 0.0, 1.0)
+    pvalue[np.flatnonzero(untied)] = out
     return pvalue
 
 
@@ -117,6 +119,7 @@ def effect_size(
     reference: str | None = "negcon",
     method: str = "cohens_d",
     pvalues: bool = True,
+    exact: bool | Literal["auto"] = "auto",
     min_obs: int = 2,
     key_added: str = "effect",
     copy: bool = False,
@@ -132,6 +135,13 @@ def effect_size(
             ``"robust_z"`` is the difference in medians in units of control MAD, which a few extreme cells cannot move.
         pvalues: Compute a Mann-Whitney p-value for each effect.
             At single-cell resolution nearly every feature is significant, so turn them off when ranking by effect.
+        exact: How to compute the p-value's null for a group's untied features.
+            ``"auto"`` uses the exact null when both the group and the reference have eight or fewer measured rows and
+            the fast normal approximation otherwise, matching scipy.
+            ``False`` always uses the normal approximation, which is the fast path and the sensible choice for a screen
+            with many small groups, where the exact null dominates the runtime for no change a reader would see.
+            ``True`` always uses the exact null. Tied features take the normal approximation whatever this is set to,
+            because the exact null is only defined without ties.
         min_obs: Groups with fewer rows than this are left unscored as ``NaN``.
         key_added: Name for the outputs.
         copy: Return a modified copy instead of mutating in place.
@@ -141,15 +151,18 @@ def effect_size(
         Writes ``varm[key_added]``, a ``(n_vars, n_groups)`` float32 array with columns in the order of ``uns["mantispy"][key_added + "_groups"]``, and ``uns["mantispy"][key_added]``, a tidy frame with ``group``, ``feature``, ``effect``, ``pvalue`` (Mann-Whitney U, two-sided, ``NaN`` when ``pvalues=False``) and ``qvalue`` (Benjamini-Hochberg over the whole table, since it is one family of tests).
 
     Raises:
-        ValueError: ``method`` is not one of ``METHODS``, or ``reference`` selects fewer than two rows.
+        ValueError: ``method`` is not one of ``METHODS``, ``exact`` is not ``True``, ``False`` or ``"auto"``, or ``reference`` selects fewer than two rows.
 
     Notes:
         The p-value tests whether the distributions differ, and its significance grows with the number of rows.
         The effect size measures by how much, and does not grow with the number of rows.
         At single-cell resolution nearly everything is significant, so rank by effect and use the q-value only to filter.
+        The exact null depends only on the two sample sizes, so it is built once per pair of sizes and reused across every feature that shares them.
     """
     if method not in METHODS:
         raise ValueError(f"method must be one of {METHODS}, got {method!r}")
+    if exact not in (True, False, "auto"):
+        raise ValueError(f"exact must be True, False or 'auto', got {exact!r}")
 
     X = get_matrix(adata)
     control = X[reference_mask(adata, reference)]
@@ -175,14 +188,15 @@ def effect_size(
             skipped.append(str(key))
             continue
         effects[:, index] = estimate(treated, control)
-        if not pvalues:
+        if not pvalues or ranked is None:
             continue
-        # scipy's method="auto" uses the exact distribution when the smaller sample has eight or fewer observations.
+        # "auto" takes the exact null only for small samples, the size at which scipy's method="auto" would.
         smallest = int((~np.isnan(treated)).sum(axis=0).min())
-        if ranked is not None and smallest > 8 and control_smallest > 8:
-            significance[:, index] = mannwhitney_pvalues(treated, ranked)
+        use_exact = exact is True or (exact == "auto" and smallest <= 8 and control_smallest <= 8)
+        if use_exact:
+            significance[:, index] = _mwu_exact_untied(treated, ranked)
         else:
-            significance[:, index] = _mwu_small_samples(treated, control)
+            significance[:, index] = mannwhitney_pvalues(treated, ranked)
 
     if skipped:
         get_logger().info("effect_size left %d group(s) unscored for having < %d rows", len(skipped), min_obs)

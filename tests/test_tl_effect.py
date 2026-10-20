@@ -84,6 +84,79 @@ def test_a_features_pvalue_does_not_depend_on_its_neighbours_in_the_array():
     assert got.iloc[1] * 10 < got.iloc[0]
 
 
+def _untied_screen(n_treated, n_control, n_features=4, seed=0):
+    """A well-level screen whose treated values all sit above the controls, so no pooled sample has a tie."""
+    import anndata as ad
+    import pandas as pd
+
+    from mantispy._core.schema import stamp
+
+    rng = np.random.default_rng(seed)
+    control = rng.standard_normal((n_control, n_features))
+    treated = rng.standard_normal((n_treated, n_features)) + 50.0
+    values = np.vstack([treated, control]).astype(np.float64)
+    labels = ["pert"] * n_treated + ["DMSO"] * n_control
+    adata = ad.AnnData(
+        X=values,
+        obs=pd.DataFrame(
+            {
+                "Metadata_Perturbation": labels,
+                "Metadata_Control": [n == "DMSO" for n in labels],
+                "Metadata_Control_Type": ["negcon" if n == "DMSO" else "treatment" for n in labels],
+            },
+            index=[str(i) for i in range(len(labels))],
+        ),
+    )
+    adata.var_names = [f"Cells_AreaShape_F{i}" for i in range(n_features)]
+    stamp(adata, resolution="well")
+    return adata, values, n_treated
+
+
+def test_exact_false_uses_the_normal_approximation_even_on_small_samples():
+    """exact=False sends even a small, untied group to the fast normal approximation, not the exact null."""
+    from scipy.stats import mannwhitneyu
+
+    adata, values, n_t = _untied_screen(n_treated=4, n_control=40, seed=1)
+    mt.tl.effect_size(adata, exact=False, key_added="e")
+    got = adata.uns["mantispy"]["e"].query("group == 'pert'").set_index("feature")["pvalue"]
+    for i, name in enumerate(adata.var_names):
+        expected = float(mannwhitneyu(values[:n_t, i], values[n_t:, i], method="asymptotic").pvalue)
+        assert got[name] == pytest.approx(expected, rel=1e-9), name
+
+
+def test_exact_true_uses_the_exact_null_even_on_large_samples():
+    """exact=True takes the exact null where auto would have used the approximation (both samples past eight)."""
+    from scipy.stats import mannwhitneyu
+
+    adata, values, n_t = _untied_screen(n_treated=12, n_control=30, seed=2)
+    mt.tl.effect_size(adata, exact=True, key_added="e")
+    exact = adata.uns["mantispy"]["e"].query("group == 'pert'").set_index("feature")["pvalue"]
+    for i, name in enumerate(adata.var_names):
+        expected = float(mannwhitneyu(values[:n_t, i], values[n_t:, i], method="exact").pvalue)
+        assert exact[name] == pytest.approx(expected, rel=1e-9), name
+
+    mt.tl.effect_size(adata, exact=False, key_added="a")
+    asymptotic = adata.uns["mantispy"]["a"].query("group == 'pert'").set_index("feature")["pvalue"]
+    assert not np.allclose(exact.to_numpy(), asymptotic.to_numpy())
+
+
+def test_the_auto_default_matches_scipy_exact_on_a_small_untied_group():
+    """The default must still match scipy's own exact p-value for a small untied group."""
+    from scipy.stats import mannwhitneyu
+
+    adata, values, n_t = _untied_screen(n_treated=5, n_control=6, seed=3)
+    mt.tl.effect_size(adata, key_added="e")
+    got = adata.uns["mantispy"]["e"].query("group == 'pert'").set_index("feature")["pvalue"]
+    for i, name in enumerate(adata.var_names):
+        expected = float(mannwhitneyu(values[:n_t, i], values[n_t:, i], method="exact").pvalue)
+        assert got[name] == pytest.approx(expected, rel=1e-9), name
+
+
+def test_exact_rejects_an_unknown_value(perturbed):
+    with pytest.raises(ValueError, match="exact must be"):
+        mt.tl.effect_size(perturbed, exact="sometimes")
+
+
 def test_an_infinity_is_dropped_like_a_missing_value_rather_than_returned_as_a_distance(perturbed):
     """wasserstein_features splits usable columns on isfinite and ragged ones on isnan, so an inf column fell between the two and came back inf."""
     rng = np.random.default_rng(0)
