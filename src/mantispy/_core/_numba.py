@@ -277,6 +277,46 @@ def _mwu_moments(
     return statistic, tie_term, counts
 
 
+@njit(cache=True, nogil=True)
+def _mwu_exact_sf(n1: int, n2: int) -> np.ndarray:
+    """Survival function ``P(U >= k)`` for ``k`` in ``0 .. n1 * n2`` of the exact untied Mann-Whitney null.
+
+    The untied null depends only on the two sample sizes, so one call serves every feature that shares them.
+    The arrangement counts are the Gaussian binomial coefficients ``[n1 + n2, n1]_q``, built by multiplying the
+    coefficient polynomial by ``(1 - q^(m + i))`` and dividing by ``(1 - q^i)`` for ``i`` up to the smaller size.
+    The polynomial is rescaled to sum to one each step, which leaves the ratios exact and keeps the coefficients from
+    overflowing when the samples are large.
+    """
+    size = n1 * n2 + 1
+    freq = np.zeros(size)
+    freq[0] = 1.0
+    smaller = n1 if n1 <= n2 else n2
+    larger = n2 if n1 <= n2 else n1
+    for i in range(1, smaller + 1):
+        shift = larger + i
+        nxt = freq.copy()
+        for u in range(size - 1, shift - 1, -1):  # multiply by (1 - q^shift)
+            nxt[u] = freq[u] - freq[u - shift]
+        for u in range(i, size):  # divide by (1 - q^i): a prefix sum with step i
+            nxt[u] += nxt[u - i]
+        total = 0.0
+        for u in range(size):
+            total += nxt[u]
+        if total > 0.0:
+            for u in range(size):
+                nxt[u] /= total
+        freq = nxt
+    grand = 0.0
+    for u in range(size):
+        grand += freq[u]
+    sf = np.empty(size)
+    acc = 0.0
+    for u in range(size - 1, -1, -1):
+        acc += freq[u] / grand
+        sf[u] = acc
+    return sf
+
+
 @njit(parallel=True, cache=True, nogil=True)
 def _polish_planes(planes: np.ndarray, max_iter: int, tol: float) -> tuple[np.ndarray, np.ndarray]:
     """Tukey median polish of every ``(rows, columns)`` plane of ``planes``.
