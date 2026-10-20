@@ -249,12 +249,14 @@ def write_cellprofiler_dir(
     link_on: str = "child",
     one_to_one: bool = True,
     prefix: str = "",
+    extra_object_columns: int = 0,
 ) -> Path:
     """One directory as the ExportToSpreadsheet CellProfiler module writes it.
 
     Columns inside an object table do not carry the object's name, and every file carries `prefix`, the way a run configured with ``MyExpt_`` writes ``MyExpt_Image.csv``.
     `link_on` says where the parent/child link lives: ``"child"`` writes ``Parent_Cells`` on Nuclei, ``"primary"`` writes ``Parent_Nuclei`` on Cells, and CellProfiler emits both depending on the pipeline.
     ``one_to_one=False`` gives one cell a second nucleus.
+    `extra_object_columns` adds that many object-dtype columns to each object table, so the frame carries more than a hundred pandas blocks and reproduces the fragmentation warning a single-column insert would raise.
     """
     rng = np.random.default_rng(0)
     directory.mkdir(parents=True, exist_ok=True)
@@ -292,6 +294,11 @@ def write_cellprofiler_dir(
     nuclei["AreaShape_Area"] = rng.normal(200, 20, n)
     for channel in channels:
         nuclei[f"Intensity_MeanIntensity_{channel}"] = rng.normal(0.4, 0.05, n)
+
+    for index in range(extra_object_columns):
+        # Object-dtype columns, each its own pandas block, so the table crosses the fragmentation threshold.
+        cells[f"AreaShape_Note{index}"] = [f"c{index}_{value}" for value in object_no]
+        nuclei[f"AreaShape_Note{index}"] = [f"n{index}_{value}" for value in object_no]
 
     if link_on == "child":
         nuclei["Parent_Cells"] = object_no

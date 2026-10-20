@@ -100,7 +100,11 @@ def _join_child(merged: pd.DataFrame, child: pd.DataFrame, primary: str, obj: st
     left = pd.DataFrame({"ImageNumber": merged["ImageNumber"], "_link": primary_link.to_numpy()})
     # Keep the child's own object number as Metadata_<obj>ObjectNumber rather than dropping it: nuclei
     # and cytoplasm need not share the primary object's instance number (spec 5.4).
-    right = child.assign(_link=child_link.to_numpy()).rename(columns={"ObjectNumber": f"Metadata_{obj}ObjectNumber"})
+    # Add _link via concat, not .assign: a single insert onto a wide, many-block child table trips
+    # pandas' fragmentation warning, while concat consolidates the blocks first.
+    right = pd.concat([child, pd.DataFrame({"_link": child_link.to_numpy()}, index=child.index)], axis=1).rename(
+        columns={"ObjectNumber": f"Metadata_{obj}ObjectNumber"}
+    )
 
     counts = right.groupby(["ImageNumber", "_link"], dropna=False).size()
     wanted = pd.MultiIndex.from_frame(left)
