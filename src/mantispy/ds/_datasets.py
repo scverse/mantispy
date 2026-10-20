@@ -277,7 +277,7 @@ def rohban(
 
     ``cpg0017-rohban-pathways``: U2OS cells, one ORF construct overexpressed per well, roughly ten replicate wells per construct over five plates.
 
-    The base and its variants are pre-built by ``scripts/build_staged_datasets.py`` from the five raw plate tables and rehosted on ``scverse-exampledata`` (each under 7 MB), so the loader fetches a single h5ad rather than reassembling the base on every call. The two flags select the variant, which the variants build from per-plate ``mad_robustize`` normalization against the untreated wells:
+    The base and its variants are pre-built by ``scripts/build_staged_datasets.py`` from the five raw plate tables and rehosted on ``scverse-exampledata``, so the loader fetches a single h5ad rather than reassembling the base on every call. The two flags select the variant, which the variants build from per-plate ``mad_robustize`` normalization against the untreated wells:
 
     - both ``False``: the raw wells with every feature, 1,918 wells by 3,616 features.
     - ``feature_selected=True``: the well-level block after pycytominer-default feature selection, 1,918 wells by 751 features.
@@ -423,9 +423,9 @@ def jump_target2(
 
     Args:
         plates: Plate barcodes to load.
-            The default takes one plate from each source; ``None`` loads all 141, 9.4 GB.
+            The default takes one plate from each source; ``None`` loads every plate, a large download.
         annotate: Join the JUMP annotation, which supplies ``Metadata_Perturbation`` and ``Metadata_Control``.
-            Downloads another 14 MB.
+            Downloads an additional file.
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
 
@@ -1091,6 +1091,27 @@ def corum(cache_dir: str | Path | None = None) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["source", "target"]).drop_duplicates().reset_index(drop=True)
 
 
+def depmap_expression(cache_dir: str | Path | None = None) -> Path:
+    """Path to the DepMap expression matrix, fetched from DepMap's public release on first use.
+
+    The file is ``OmicsExpressionProteinCodingGenesTPMLogp1.csv`` from DepMap Public 24Q2: one row per model, gene columns named ``"SYMBOL (ENTREZ)"``, holding log2(TPM+1).
+    It is the reference :func:`~mantispy.io.unexpressed_genes` and :func:`~mantispy.pp.correct_chromosome_arm` read the genes a cell line does not express from.
+    The download is checked against a pinned checksum.
+
+    Args:
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
+
+    Returns:
+        The path of the cached CSV file.
+
+    Notes:
+        DepMap data is distributed by the Broad Institute under CC BY 4.0; it is fetched from DepMap's own figshare release, not re-hosted.
+    """
+    (path,) = _files("depmap_expression", cache_dir)
+    return path
+
+
 def _read_site(directory: Path, source: str, channels: Sequence[str]) -> AnnData:
     """One analysis directory as cells, checked against the ``<plate>-<well>-<site>`` name it is filed under.
 
@@ -1167,7 +1188,7 @@ def jump_export(cache_dir: str | Path | None = None) -> Path:
     """One real ``ExportToSpreadsheet`` directory, as CellProfiler wrote it.
 
     A single field of view of a DMSO well of ``BR00121438``: ``Image.csv`` plus the ``Cells``, ``Cytoplasm`` and ``Nuclei`` tables, unmodified, for reading with :func:`mantispy.io.read_profiles`.
-    About 18 MB, and part of the download :func:`jump_cells` makes, so asking for both costs nothing extra.
+    Part of the download :func:`jump_cells` makes, so asking for both costs nothing extra.
 
     The images this was measured from are in :func:`jump_plate`, and the well-level profiles of the same plate are in :func:`jump_target2`.
 
@@ -1221,13 +1242,13 @@ def jump_cells(
 
     The same plate's well-level profiles are :func:`jump_target2`, so a profile aggregated from these cells can be compared with the one the consortium published.
 
-    The annotated cells, their feature-selected block and their well-level aggregate are pre-built by ``scripts/build_staged_datasets.py`` from the 480 raw CellProfiler tables and rehosted on ``scverse-exampledata``, so the loader fetches a single h5ad rather than reassembling the object on every call. Passing ``annotate=False`` still assembles the raw, un-annotated cells locally, downloading about 1.5 GB of CellProfiler output and caching the assembled object.
+    The annotated cells, their feature-selected block and their well-level aggregate are pre-built by ``scripts/build_staged_datasets.py`` from the 480 raw CellProfiler tables and rehosted on ``scverse-exampledata``, so the loader fetches a single h5ad rather than reassembling the object on every call. Passing ``annotate=False`` still assembles the raw, un-annotated cells locally, downloading the full CellProfiler output and caching the assembled object.
 
     Args:
         annotate: Fetch the annotated cells, which carry ``Metadata_Perturbation`` and ``Metadata_Control``.
             ``False`` assembles the raw cells locally, without the annotation join.
             Needed for `selected` and `aggregated`.
-        selected: Return only the features ``var["selected"]`` marks, as :func:`mantispy.pp.subset_features` would (87 MB instead of 308 MB).
+        selected: Return only the features ``var["selected"]`` marks, as :func:`mantispy.pp.subset_features` would, which is a much smaller download.
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
         aggregated: Return one median profile per well (``Metadata_Plate``, ``Metadata_Well``) instead of the cells, with ``Metadata_CellCount`` and ``Metadata_SiteCount``, so it lines up with the well-level :func:`jump_target2`.
@@ -1265,7 +1286,7 @@ def jump_plate(cache_dir: str | Path | None = None, **kwargs: Any) -> SpatialDat
     """The images and segmentations behind one well of ``BR00121438``.
 
     Two fields of view of well ``O09``, a compound that changed the cells without killing them: the eight channel images of each field, the CellProfiler outlines they were segmented with, and the plate's ``load_data.csv``.
-    About 44 MB, and needs the spatial extra.
+    Needs the spatial extra.
 
     The cells measured from these fields are in :func:`jump_cells`, and the well-level profiles of the same plate in :func:`jump_target2`.
 

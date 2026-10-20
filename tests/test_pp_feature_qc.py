@@ -28,6 +28,20 @@ def test_reproducible_features_score_higher_than_noise(replicated):
     assert icc.between(-1, 1).all()
 
 
+def test_reproducibility_groups_by_the_by_column(replicated):
+    """`by` names the replicate grouping; a single-group column is undefined."""
+    replicated.obs["Metadata_OneGroup"] = "all"
+    with pytest.raises(ValueError, match="'Metadata_OneGroup' has one group"):
+        mt.pp.feature_reproducibility(replicated, by="Metadata_OneGroup")
+
+
+def test_chatterjee_groups_by_the_by_column(replicated):
+    """`by` names the column features are tested against; one group is undefined."""
+    replicated.obs["Metadata_OneGroup"] = "all"
+    with pytest.raises(ValueError, match="'Metadata_OneGroup' has one group"):
+        mt.pp.feature_select_chatterjee(replicated, by="Metadata_OneGroup")
+
+
 def test_batch_sensitivity_finds_an_injected_batch_effect(replicated):
     values = replicated.X.copy()
     batch = (replicated.obs["Metadata_Plate"] == "Plate01").to_numpy()

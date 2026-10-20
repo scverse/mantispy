@@ -384,7 +384,7 @@ def subpopulation_hits(
         One half places the centroid and the other supplies the distances tested against, so the null is out of sample.
         Controls measured against a centroid they defined themselves sit closer to it than any other group can.
         That bias grows with features per control, which is the shape of real Cell Painting data.
-        On pure noise with 36 controls and 120 features, a null drawn from the rows that placed the centroid called 0.40 of pseudo-treatments at raw ``p < 0.05``, and the split called 0.03.
+        On pure noise with few controls and many features, a null drawn from the rows that placed the centroid calls far more pseudo-treatments than the nominal rate at raw ``p < 0.05``, and the split stays near it.
 
         The controls carry a perturbation label of their own, so one row of the table is the reference group against itself.
         That row is computed from the held-out half alone, split once more, at random, so that the cells tested and the cells they are tested against are different cells.

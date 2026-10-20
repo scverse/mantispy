@@ -55,14 +55,15 @@ def outliers(
             Ignored when ``score_cutoff`` is given.
         score_cutoff: Threshold the score absolutely instead of by quantile.
             With ``method="mad"`` the score is a robust z-score, so ``score_cutoff=5`` gives the usual rule.
-        key: Restrict to features flagged by this boolean ``var`` column, usually ``"selected"``.
+        key: Input: the name of a boolean ``var`` column; only the features it flags are scored, usually ``"selected"``.
             Falls back to every feature when the column is absent.
+            Not the output name, which is ``key_added``.
         by: Threshold within each group of this ``obs`` column, e.g. per plate, rather than globally.
         seed: Seed for ``isolation_forest``.
         ecod_aggregation: How ``"ecod"`` combines features.
             ``"pyod"`` sums each feature's larger tail, or both tails where its skewness is zero or undefined, as pyod and scmorph do, so no score depends on which way round a feature is measured.
             ``"paper"`` is Algorithm 1 of :cite:t:`Li_2023`, the largest of the left-tail, right-tail and skew-directed sums.
-        key_added: Prefix for the outputs: ``obs[key_added]`` and ``obs[key_added + "_score"]``.
+        key_added: Output: the prefix for the results, written to ``obs[key_added]`` and ``obs[key_added + "_score"]``.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:

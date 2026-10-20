@@ -4671,6 +4671,18 @@ datasets:
     - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-2/outlines/O09_s2--nuclei_outlines.png
       s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-2/outlines/O09_s2--nuclei_outlines.png
       sha256: 4b198d57340949e27fd1a3d78093296fceb927653e51fb39f1d383ccb12d4f93
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-1/Cells.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-1/Cells.csv
+      sha256: 9382f75a300c8ecabc30db3397196f86e0e3bd86eb68178e104bed56e2d81445
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-1/Nuclei.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-1/Nuclei.csv
+      sha256: fd5816e5cbbc142cde96ac748e752c7e2e30e55b56b44d8c8f68b135380b48ef
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-2/Cells.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-2/Cells.csv
+      sha256: abb334975bf3e974b98a350166b55a8d47e2a9d7a96ada124ade4b2b2494a727
+    - name: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-2/Nuclei.csv
+      s3_key: cpg0016-jump/source_4/workspace/analysis/2021_04_26_Batch1/BR00121438/analysis/BR00121438-O09-2/Nuclei.csv
+      sha256: 7a13c8fa5436fa1948862125ea0af9c43fcda380522730b2d6f8a55d0a201340
     - name: cpg0016-jump/source_4/workspace/load_data_csv/2021_04_26_Batch1/BR00121438/load_data.csv
       s3_key: cpg0016-jump/source_4/workspace/load_data_csv/2021_04_26_Batch1/BR00121438/load_data.csv
       sha256: 8b34b9aa061982b210395b1da907c922e58cddddea3c59069b739970ffa4a709
@@ -4708,6 +4720,14 @@ datasets:
     - name: CORUM_clusters.tsv
       url: https://raw.githubusercontent.com/recursionpharma/EFAAR_benchmarking/2935f21f84898fc26e2a9a40bdaee685c8e63fb6/efaar_benchmarking/benchmark_annotations/CORUM_clusters.tsv
       sha256: caab1d3db6fa694c001f41e2973492d248ea3936a1249be3bf497648071f5c99
+
+  depmap_expression:
+    type: mantispy
+    doc_header: DepMap 24Q2 Public expression, log2(TPM+1) of protein-coding genes per model, from DepMap's own figshare release.
+    files:
+    - name: OmicsExpressionProteinCodingGenesTPMLogp1.csv
+      url: https://ndownloader.figshare.com/files/46490878
+      sha256: 39eff342bbbbe0a40208545e93a69cc85a945899592f9d683f87e3b2bb121670
 
   _jump_cell_counts:
     type: mantispy

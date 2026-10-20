@@ -10,11 +10,22 @@ and this project adheres to [Semantic Versioning][].
 
 ## [Unreleased]
 
+### Changed
+
+- `pp.normalize`, `pp.correct_plate_position` and `pp.regress_out` now default to `reference="negcon"`, matching `pp.sphere`, `pp.tvn` and `mt.tl`. Pass `reference=None` to fit on every row as before.
+- `mt.tl.gene_sets` is renamed `mt.tl.gene_set_network`, so it no longer shares a name with `mt.ds.gene_sets`, which reads a gene-set resource and keeps its name.
+- The grouping-columns parameter of `pp.downsample`, `pp.feature_reproducibility` and `pp.feature_select_chatterjee` is renamed from `groupby` to `by`, as in the rest of `mt.pp`. The `downsample` entry in `uns["mantispy"]["params"]` is keyed `by` accordingly.
+
+### Fixed
+
+- `mt.io.read_profiles` links objects related only through a shared child table (JUMP's `Cytoplasm`) and raises a clear error when two children make the link ambiguous (#61).
+
 ## [0.1.0a1] - 2026-10-19
 
 First alpha pre-release of the Python core. Install it with `pip install --pre mantispy`.
 
 ### Added
+- `mantispy.ds`: `depmap_expression` fetches DepMap's `OmicsExpressionProteinCodingGenesTPMLogp1.csv` (DepMap Public 24Q2, CC BY 4.0) from DepMap's own figshare release, checked against a pinned checksum, for `unexpressed_genes` and `correct_chromosome_arm`.
 - `mantispy.ds`: `aconcagua`, a subset of the Aconcagua genome-scale optical pooled CRISPR screen in HeLa, as guide-by-well profiles of brieflow features mapped to mantispy's naming. It backs the optical-pooled-screens case study. The staged h5ad is rehosted on `scverse-exampledata`.
 - `mantispy.tl`: `aggregate_guides` combines a gene's guides into one hit call, for a pooled CRISPR screen with many guides per gene. It takes a one-sided per-guide p-value, combines the guides of each gene by Stouffer's z (default, rewards a consistent effect) or Fisher (`method="fisher"`, fires on a single strong guide), and calibrates against random same-size groups of non-targeting-control guides drawn without replacement, so the null matches the gene's guide count. It writes a per-gene p-value, a Benjamini-Hochberg q-value and the hit call to `uns` and broadcasts them onto the guide rows; non-targeting guides and genes with no scored guide are never hits.
 - `mantispy.tl`: `guide_activity` scores each guide of a pooled screen for phenotypic activity against a reference control class, as the one-sided per-guide p-value `aggregate_guides` reads. It standardizes each feature by the reference guides' median and MAD and takes the size of the standardized profile, so a guide's p-value is small when it moves away from the reference centre. The reference and the `aggregate_guides` null must be two different control classes, so the calibration is not circular.

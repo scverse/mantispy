@@ -31,7 +31,7 @@ def similarity_matrix(values: np.ndarray, metric: str = "cosine") -> np.ndarray:
 
     Raises:
         ValueError: ``metric`` is not one of ``METRICS``, or the float64 matrix would exceed :data:`SIMILARITY_BYTES`.
-            Memory is quadratic in the number of profiles (50,640 JUMP wells need 30 GB), so aggregate to consensus profiles first.
+            Memory is quadratic in the number of profiles (a full JUMP screen of wells needs tens of gigabytes), so aggregate to consensus profiles first.
     """
     if metric not in METRICS:
         raise ValueError(f"metric must be one of {METRICS}, got {metric!r}")
@@ -179,7 +179,7 @@ def percent_replicating(
 def grit(
     adata: AnnData,
     groupby: str = "Metadata_Perturbation",
-    reference: str = "negcon",
+    reference: str | None = "negcon",
     metric: str = "pearson",
     use_rep: str | None = None,
     key_added: str = "grit",
@@ -193,7 +193,7 @@ def grit(
     Args:
         adata: Well-level profiles with several replicates per group.
         groupby: Column whose groups are the replicate sets.
-        reference: Which rows are the controls each similarity is z-scored against.
+        reference: Which rows are the controls each similarity is z-scored against: ``None`` for all rows, ``"negcon"``, or the name of a boolean ``obs`` column.
         metric: Similarity between profiles, one of ``METRICS``.
         use_rep: Score ``obsm[use_rep]`` instead of ``X``.
         key_added: Name for the outputs.
@@ -209,7 +209,10 @@ def grit(
     """
     is_control = reference_mask(adata, reference)
     if not is_control.any():
-        raise ValueError(f"no reference rows selected by reference={reference!r}")
+        raise ValueError(
+            f"no reference rows selected by reference={reference!r}. Check that obs['Metadata_Control_Type'] has "
+            "'negcon' rows (mt.pp.annotate_controls), or pass reference=None to use all rows."
+        )
 
     matrix = similarity_matrix(representation(adata, use_rep), metric).astype(np.float64)
     codes, keys = group_codes(adata, groupby)

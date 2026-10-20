@@ -82,7 +82,7 @@ def normalize(
     adata: AnnData,
     method: str = "mad_robustize",
     by: str | list[str] | None = "Metadata_Plate",
-    reference: str | None = None,
+    reference: str | None = "negcon",
     epsilon: float = 1e-18,
     keep_raw: bool = False,
     layer: str | None = None,
@@ -96,7 +96,7 @@ def normalize(
         method: ``"mad_robustize"`` computes ``(x - median) / (1.4826 * MAD + epsilon)``, ``"standardize"`` computes ``(x - mean) / sd``, and ``"robustize"`` computes ``(x - median) / IQR``.
         by: Column(s) defining the groups statistics are computed within, usually the plate.
             ``None`` fits one set of statistics globally.
-        reference: Rows to fit on: ``None`` for all, ``"negcon"`` for the rows whose ``Metadata_Control_Type`` is ``"negcon"``, or the name of a boolean ``obs`` column.
+        reference: Rows to fit on: ``"negcon"`` (the default) for the rows whose ``Metadata_Control_Type`` is ``"negcon"``, ``None`` for all rows, or the name of a boolean ``obs`` column.
         epsilon: Added to the MAD, matching pycytominer's ``mad_robustize_epsilon``.
             Unused by the other methods.
         keep_raw: Store the pre-normalization matrix in ``layers["raw"]``.
@@ -117,7 +117,10 @@ def normalize(
 
     mask = reference_mask(adata, reference)
     if not mask.any():
-        raise ValueError(f"no reference rows selected by reference={reference!r}")
+        raise ValueError(
+            f"no reference rows selected by reference={reference!r}. Check that obs['Metadata_Control_Type'] has "
+            "'negcon' rows (mt.pp.annotate_controls), or pass reference=None to use all rows."
+        )
 
     codes, keys = group_codes(adata, by)
     present = np.bincount(codes[mask], minlength=len(keys))

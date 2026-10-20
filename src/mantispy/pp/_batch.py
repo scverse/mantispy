@@ -38,7 +38,7 @@ def correct_plate_position(
     adata: AnnData,
     method: str = "b_score",
     by: str = "Metadata_Plate",
-    reference: str | None = None,
+    reference: str | None = "negcon",
     plates: Sequence[object] | None = None,
     max_iter: int = 10,
     tol: float = 1e-4,
@@ -56,7 +56,7 @@ def correct_plate_position(
             The B-score is the screening standard for calling hits against a positional gradient; it also re-scales each plate, so it doubles as a normalization and should not be followed by a second per-plate scaling.
         by: Column identifying the plate.
         reference: Fit the row and column effects on these rows only.
-            ``"negcon"`` is the usual choice, so that treatments laid out in particular columns are not absorbed into a column effect.
+            ``"negcon"`` (the default) keeps treatments laid out in particular columns from being absorbed into a column effect.
             ``None`` fits on every well.
         plates: Correct only these ``by`` values and leave every other plate untouched.
             ``None`` corrects every plate. Pair it with :func:`detect_plate_position` to correct only the plates whose artifact is learnable.
@@ -82,6 +82,11 @@ def correct_plate_position(
         raise ValueError(f"method must be one of {METHODS}, got {method!r}")
 
     X = get_matrix(adata)
+    if "Metadata_Well" not in adata.obs:
+        raise KeyError(
+            "plate-position functions need obs['Metadata_Well'] (for example 'A01'); "
+            "add the column or read the platemap with mt.io.read_profiles(platemap=...)"
+        )
     wells = adata.obs["Metadata_Well"].to_numpy()
     rows = np.array([well_row(well) for well in wells])
     columns = np.array([well_col(well) for well in wells])
@@ -296,6 +301,11 @@ def detect_plate_position(
         where correcting rarely helps, is often the better choice. Whether correcting helps is a question
         for the downstream metric, not for this score.
     """
+    if "Metadata_Well" not in adata.obs:
+        raise KeyError(
+            "plate-position functions need obs['Metadata_Well'] (for example 'A01'); "
+            "add the column or read the platemap with mt.io.read_profiles(platemap=...)"
+        )
     wells = adata.obs["Metadata_Well"].to_numpy()
     all_rows = np.array([well_row(well) for well in wells])
     all_columns = np.array([well_col(well) for well in wells])
@@ -389,7 +399,7 @@ def regress_out(
     adata: AnnData,
     keys: Sequence[str] = ("Metadata_CellCount",),
     by: str | None = "Metadata_Plate",
-    reference: str | None = None,
+    reference: str | None = "negcon",
     key_added: str | None = None,
     copy: bool = False,
 ) -> AnnData | None:
@@ -401,7 +411,7 @@ def regress_out(
             Numeric columns enter directly; categorical ones are one-hot encoded with the first level dropped.
         by: Fit separately within each group of this column, usually the plate, which :func:`scanpy.pp.regress_out` cannot do.
             ``None`` fits one model globally.
-        reference: Rows to fit on: ``None`` for all, ``"negcon"`` for the rows whose ``Metadata_Control_Type`` is ``"negcon"``, or the name of a boolean ``obs`` column.
+        reference: Rows to fit on: ``"negcon"`` (the default) for the rows whose ``Metadata_Control_Type`` is ``"negcon"``, ``None`` for all rows, or the name of a boolean ``obs`` column.
             With a reference, each feature is re-expressed at the reference rows' mean covariate, and a covariate beyond the range the reference rows span is clipped to it, so no row is corrected by extrapolating the fit.
             Numeric covariates only.
         key_added: Write to ``layers[key_added]`` instead of overwriting ``X``.
@@ -447,7 +457,10 @@ def regress_out(
     fitted_on = reference_mask(adata, reference)
     if reference is not None:
         if not fitted_on.any():
-            raise ValueError(f"no reference rows selected by reference={reference!r}")
+            raise ValueError(
+                f"no reference rows selected by reference={reference!r}. Check that obs['Metadata_Control_Type'] has "
+                "'negcon' rows (mt.pp.annotate_controls), or pass reference=None to use all rows."
+            )
         if not is_numeric[1:].all():
             raise ValueError(
                 "reference= fits numeric covariates only; a categorical level absent from the reference rows has no slope to apply"
@@ -634,10 +647,10 @@ def harmony(
         Requires ``harmonypy``: ``pip install 'mantispy[harmony]'``.
 
         harmonypy can report convergence and return the embedding unchanged; this wrapper warns when it does.
-        What decides this is separability rather than size: it corrected the embedding of 50 640 JUMP TARGET2 wells across ten imaging sites, and returns the input untouched when the batches occupy disjoint regions of the embedding, because every soft cluster then holds a single batch.
+        What decides this is separability rather than size: it corrects the embedding of JUMP TARGET2 wells across imaging sites, and returns the input untouched when the batches occupy disjoint regions of the embedding, because every soft cluster then holds a single batch.
 
         Check the result with more than one metric.
-        On those JUMP wells Harmony moved the site centroids 36% closer together (mean separation 300 to 192, with unchanged overall spread) but lowered iLISI from 2.01 to 1.02, so the sites moved together globally while neighborhoods stayed site-pure.
+        On those JUMP wells Harmony moved the site centroids closer together but lowered iLISI, so the sites moved together globally while neighborhoods stayed site-pure.
         Batch metrics often disagree like this, which is why :func:`~mantispy.metrics.evaluate_integration` reports the whole scib-metrics panel rather than one number.
     """
     try:

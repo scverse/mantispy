@@ -58,7 +58,7 @@ def intraclass_correlation(X: np.ndarray, codes: np.ndarray, n_groups: int) -> n
 @inplace_or_copy(expects=("well", "aggregate"))
 def feature_reproducibility(
     adata: AnnData,
-    groupby: str = "Metadata_Perturbation",
+    by: str = "Metadata_Perturbation",
     min_icc: float = 0.2,
     key_added: str = "icc",
     copy: bool = False,
@@ -70,7 +70,7 @@ def feature_reproducibility(
 
     Args:
         adata: Profiles with several replicates per group, at well or perturbation resolution.
-        groupby: ``obs`` column whose groups are the replicate sets.
+        by: ``obs`` column whose groups are the replicate sets.
         min_icc: Threshold for the boolean column.
             See the Notes on choosing it.
         key_added: ``var[key_added]`` holds the ICC; ``var[key_added + "_selected"]`` the flag.
@@ -81,19 +81,17 @@ def feature_reproducibility(
         Writes the ICC to ``var[key_added]`` and the flag to ``var[key_added + "_selected"]``.
 
     Raises:
-        ValueError: If ``groupby`` has a single group, so that no variance can lie between groups.
+        ValueError: If ``by`` has a single group, so that no variance can lie between groups.
 
     Notes:
-        Filtering on ICC raised replicate-retrieval mAP on all three packaged screens: bbbc021 from 0.121 to 0.141 (ICC > 0.2) and 0.162 (> 0.4), rohban2017 from 0.097 to 0.143 and 0.136, and pki from 0.178 to 0.192 and 0.200.
-        The best cutoff differs by dataset, so 0.2 is a conservative default; choose one from the distribution in ``var[key_added]``.
+        Filtering on ICC improves replicate retrieval, but the best cutoff differs by dataset, so ``0.2`` is a conservative default; choose one from the distribution in ``var[key_added]``.
 
         ICC filtering can hurt other tasks.
-        On BBBC021, not-same-compound MOA retrieval fell from 0.777 over all features to 0.767 at ICC > 0.2 and 0.757 at 0.4.
         ICC measures reproducibility within a treatment, which is a different property from agreement between compounds that share a mechanism.
     """
-    codes, keys = group_codes(adata, groupby)
+    codes, keys = group_codes(adata, by)
     if len(keys) < 2:
-        raise ValueError(f"{groupby!r} has one group, so no variance can lie between groups")
+        raise ValueError(f"{by!r} has one group, so no variance can lie between groups")
 
     icc = intraclass_correlation(get_matrix(adata).astype(np.float64), codes, len(keys))
     adata.var[key_added] = icc
@@ -134,7 +132,7 @@ def feature_batch_sensitivity(
 
     Notes:
         Uses Kruskal-Wallis instead of ANOVA, because morphology features are not normally distributed and a few extreme wells should not decide the result.
-        Expect a large fraction to come back sensitive, since per-plate centering does not remove plate structure: over BBBC021's treated wells, 338 of 344 features still depend on the plate at q < 0.05 after per-plate normalization, and rohban2017 and pki are similar.
+        Expect a large fraction to come back sensitive, since per-plate centering does not remove plate structure: most features still depend on the plate after per-plate normalization.
 
         Compare the sensitive fraction before and after a correction.
     """

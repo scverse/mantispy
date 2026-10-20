@@ -45,3 +45,13 @@ def test_ecod_does_not_depend_on_which_way_round_a_feature_is_measured(adata):
     mt.pp.outliers(adata)
     mt.pp.outliers(flipped)
     np.testing.assert_allclose(flipped.obs["qc_outlier_score"], adata.obs["qc_outlier_score"], rtol=1e-12)
+
+
+def test_key_picks_the_features_scored_and_key_added_names_the_output(adata):
+    """`key` is the input var flag; an extreme value in a feature it leaves out cannot be flagged."""
+    adata.X[0, 0] = 1e6
+    adata.var["usable"] = [name != adata.var_names[0] for name in adata.var_names]
+    mt.pp.outliers(adata, method="mad", score_cutoff=50.0, key="usable", key_added="flagged_usable")
+    mt.pp.outliers(adata, method="mad", score_cutoff=50.0, key=None, key_added="flagged_all")
+    assert not adata.obs["flagged_usable"].iloc[0]
+    assert adata.obs["flagged_all"].iloc[0]

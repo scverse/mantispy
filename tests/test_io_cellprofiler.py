@@ -17,6 +17,53 @@ def test_parent_link_is_found_on_either_table(tmp_path, make_cellprofiler_dir, l
     assert np.isfinite(adata[:, "Nuclei_AreaShape_Area"].X).all()
 
 
+def test_objects_linked_only_through_a_shared_child_are_joined(tmp_path, make_cellprofiler_dir):
+    """JUMP gives Cytoplasm a Parent_Cells and a Parent_Nuclei and Cells no parent, so Cells and Nuclei are related only through it (#61)."""
+    directory = make_cellprofiler_dir(tmp_path / "jump", link_on="child")
+    cells = pd.read_csv(directory / "Cells.csv")
+    nuclei = pd.read_csv(directory / "Nuclei.csv")
+    n = cells["ObjectNumber"].max()
+    # The nucleus of cell k is number n + 1 - k, so pairing by object number would be wrong.
+    nuclei["ObjectNumber"] = n + 1 - nuclei["ObjectNumber"]
+    nuclei.drop(columns=["Parent_Cells"]).to_csv(directory / "Nuclei.csv", index=False)
+    pd.DataFrame(
+        {
+            "ImageNumber": cells["ImageNumber"],
+            "ObjectNumber": cells["ObjectNumber"],
+            "Parent_Cells": cells["ObjectNumber"],
+            "Parent_Nuclei": n + 1 - cells["ObjectNumber"],
+            "AreaShape_Area": 100.0,
+        }
+    ).to_csv(directory / "Cytoplasm.csv", index=False)
+
+    adata = mt.io.read_profiles(directory)
+
+    expected = nuclei.set_index(["ImageNumber", "ObjectNumber"])["AreaShape_Area"]
+    keys = list(zip(cells["ImageNumber"], n + 1 - cells["ObjectNumber"], strict=True))
+    np.testing.assert_allclose(adata[:, "Nuclei_AreaShape_Area"].X.ravel(), expected.loc[keys].to_numpy())
+
+
+def test_two_children_pointing_at_the_same_object_are_refused(tmp_path, make_cellprofiler_dir):
+    """With two shared children carrying Parent_Nuclei, picking one would be a guess (#61)."""
+    directory = make_cellprofiler_dir(tmp_path / "ambiguous", link_on="child")
+    cells = pd.read_csv(directory / "Cells.csv")
+    nuclei = pd.read_csv(directory / "Nuclei.csv")
+    nuclei.drop(columns=["Parent_Cells"]).to_csv(directory / "Nuclei.csv", index=False)
+    for name in ("Cytoplasm", "Extra"):
+        pd.DataFrame(
+            {
+                "ImageNumber": cells["ImageNumber"],
+                "ObjectNumber": cells["ObjectNumber"],
+                "Parent_Cells": cells["ObjectNumber"],
+                "Parent_Nuclei": cells["ObjectNumber"],
+                "AreaShape_Area": 100.0,
+            }
+        ).to_csv(directory / f"{name}.csv", index=False)
+
+    with pytest.raises(ValueError, match=r"Cytoplasm_Parent_Nuclei.*Extra_Parent_Nuclei.*all point to"):
+        mt.io.read_profiles(directory, objects=None)
+
+
 def test_missing_link_raises_rather_than_pairing_by_object_number(tmp_path, make_cellprofiler_dir):
     """Merging on ObjectNumber alone would pair unrelated objects with no error."""
     directory = make_cellprofiler_dir(tmp_path / "nolink", link_on="child")

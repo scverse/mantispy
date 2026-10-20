@@ -70,7 +70,7 @@ def read_jump(paths: str | Path | Sequence[str | Path], annotate: bool = True, *
     Args:
         paths: One or more ``{plate}.parquet`` files in the Cell Painting Gallery layout.
         annotate: Join the well and compound tables, which map the three metadata columns to a perturbation.
-            Downloads about 14 MB once and caches it.
+            Downloads once and caches it.
         kwargs: Passed to :func:`~mantispy.io.read_profiles`.
             ``on_column_mismatch="intersect"`` is useful when plates come from different sources.
 

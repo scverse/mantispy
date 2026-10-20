@@ -79,7 +79,7 @@ def corr_matrix(
         method: ``"pearson"`` or ``"spearman"``.
             Spearman ranks the columns first and then runs the same code path.
         chunk_size: Rows per chunk in the moment accumulation.
-            ``None`` picks a row count from the number of features so that one chunk stays around 256 MB.
+            ``None`` picks a row count from the number of features so that one chunk stays within a fixed memory budget.
         work_dtype: dtype the block products run in; float64 (default) matches pandas exactly, float32 is faster and used by the windowed pass.
 
     Returns:
@@ -87,7 +87,7 @@ def corr_matrix(
         Constant features correlate with nothing and come back as ``NaN``.
 
     Notes:
-        The result is ``8 * n_vars ** 2`` bytes, 3.2 GB at 20 000 features.
+        The result is ``8 * n_vars ** 2`` bytes, which is gigabytes at thousands of features.
         To find the pairs correlated above a threshold, :func:`correlated_pairs` does not hold the full matrix.
     """
     raw = np.asarray(X)

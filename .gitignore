@@ -25,3 +25,4 @@ __pycache__/
 
 # planning docs kept out of the repo
 mantispy_release_plan.md
+/tasks/

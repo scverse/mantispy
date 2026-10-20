@@ -1,6 +1,7 @@
 # General
 
-Universal steps that apply to any screen: loading data, quality control, normalization, feature analysis, and the pitfalls to watch for.
+The three canonical workflows are {doc}`compound screens <compound_screens>`, {doc}`genetic screens <genetic_screens>` and {doc}`learned embeddings <data/embeddings>`.
+This section holds the steps they share: loading data, quality control, normalization, feature analysis, and the pitfalls to watch for.
 
 ```{toctree}
 :maxdepth: 1

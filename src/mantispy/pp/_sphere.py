@@ -309,7 +309,10 @@ def sphere(
         adata.uns.get("mantispy", {}).pop("sphere_epsilon", None)
 
     if not mask.any():
-        raise ValueError(f"no reference rows selected by reference={reference!r}")
+        raise ValueError(
+            f"no reference rows selected by reference={reference!r}. Check that obs['Metadata_Control_Type'] has "
+            "'negcon' rows (mt.pp.annotate_controls), or pass reference=None to use all rows."
+        )
 
     codes, keys = group_codes(adata, by)
     out = np.empty_like(X)
@@ -453,7 +456,10 @@ def tvn(
     values = representation(adata, use_rep)
     controls = reference_mask(adata, reference)
     if not controls.any():
-        raise ValueError(f"no reference rows selected by reference={reference!r}")
+        raise ValueError(
+            f"no reference rows selected by reference={reference!r}. Check that obs['Metadata_Control_Type'] has "
+            "'negcon' rows (mt.pp.annotate_controls), or pass reference=None to use all rows."
+        )
 
     values = _centre_scale(values, controls)
     values = PCA().fit(values[controls]).transform(values)

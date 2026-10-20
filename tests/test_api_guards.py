@@ -94,3 +94,18 @@ def test_every_cited_key_is_in_the_bibliography():
     }
     assert cited, "no citations found"
     assert cited <= known, sorted(cited - known)
+
+
+def test_docstrings_carry_no_measured_sizes():
+    """Measurements belong in conversation, not in API documentation."""
+    import inspect
+
+    measured = re.compile(r"\d[\d,.]*\s?(MB|GB)\b|Spearman \d")
+    from mantispy._core._corr import corr_matrix
+    from mantispy.tl._differential import differential_features
+    from mantispy.tl._similarity import similarity_matrix
+
+    functions = [corr_matrix, differential_features, similarity_matrix]
+    functions += [obj for name, obj in vars(mt.ds).items() if inspect.isfunction(obj) and not name.startswith("_")]
+    offenders = [f.__qualname__ for f in functions if measured.search(inspect.getdoc(f) or "")]
+    assert not offenders

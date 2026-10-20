@@ -476,6 +476,11 @@ def read(path: str | Path, backed: Literal["r", "r+"] | None = None, migrate_sch
     raise ValueError(
         f"file was written with schema_version {stored!r}, this version supports {SCHEMA_VERSION!r}"
         + (". Read it with mt.io.read(path, migrate_schema=True)" if stored in SUPPORTED_VERSIONS else "")
+        + (
+            ". The file carries no mantispy schema; read it with anndata.read_h5ad and call mt.io.stamp(adata, resolution=...)"
+            if stored is None
+            else ""
+        )
     )
 
 

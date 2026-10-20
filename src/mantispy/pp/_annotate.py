@@ -124,7 +124,7 @@ def annotate_jump(adata: AnnData, kind: str = "compound", copy: bool = False) ->
         For CRISPR and ORF ``Metadata_Perturbation`` is the gene symbol, ``Metadata_Perturbation_Type`` is the kind, ``Metadata_Control`` marks any control well, and it adds ``Metadata_Gene``, ``Metadata_Control_Type`` (``"negcon"``, ``"poscon"`` or ``"treatment"``) and ``Metadata_ChromosomeArm``, the arm the gene sits on.
 
     Notes:
-        Downloads about 14 MB of annotation once and caches it.
+        Downloads the annotation once and caches it.
         Wells the annotation does not cover are kept and logged, since an unannotated well is still a measurement.
     """
     from mantispy.io._jump import join_jump_annotation
