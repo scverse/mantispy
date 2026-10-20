@@ -16,18 +16,32 @@ from mantispy._core.mutation import inplace_or_copy
 METHODS = ("cohens_d", "robust_z")
 
 
-def _mwu_exact_untied(treated: np.ndarray, ranked: tuple[np.ndarray, np.ndarray, np.ndarray]) -> np.ndarray:
+def _mwu_exact_untied(
+    treated: np.ndarray, control: np.ndarray, ranked: tuple[np.ndarray, np.ndarray, np.ndarray]
+) -> np.ndarray:
     """Two-sided Mann-Whitney p-values: exact on untied features, the normal approximation on tied ones.
 
     Matches ``scipy.stats.mannwhitneyu(method="exact")`` on untied features and ``method="asymptotic")`` on tied ones,
     but builds the exact null once per distinct ``(n_treated, n_control)`` pair instead of once per feature, which is
     what scipy does and what makes it slow: the untied null depends only on the two sample sizes, so thousands of
     features share a handful of nulls. A feature is untied when its pooled sample has no repeated value.
+
+    Tied features go to scipy's own asymptotic method rather than the in-house one, whose tie-corrected variance
+    differs from scipy's at the eighth significant figure; they are rare, so the per-feature call costs nothing.
     """
     pvalue = mannwhitney_pvalues(treated, ranked)
     values, counts, control_ties = ranked
     block = np.ascontiguousarray(np.asarray(treated, dtype=np.float64).T)
     statistic, tie_term, n_treated = _mwu_moments(block, values, counts, control_ties)
+
+    tied = (tie_term > 0) & (n_treated > 0) & (counts > 0)
+    if tied.any():
+        from scipy.stats import mannwhitneyu
+
+        with np.errstate(invalid="ignore"):
+            pvalue[tied] = mannwhitneyu(
+                treated[:, tied], control[:, tied], axis=0, nan_policy="omit", method="asymptotic"
+            ).pvalue
 
     untied = (tie_term == 0) & (n_treated > 0) & (counts > 0)
     if not untied.any():
@@ -194,7 +208,7 @@ def effect_size(
         smallest = int((~np.isnan(treated)).sum(axis=0).min())
         use_exact = exact is True or (exact == "auto" and smallest <= 8 and control_smallest <= 8)
         if use_exact:
-            significance[:, index] = _mwu_exact_untied(treated, ranked)
+            significance[:, index] = _mwu_exact_untied(treated, control, ranked)
         else:
             significance[:, index] = mannwhitney_pvalues(treated, ranked)
 
