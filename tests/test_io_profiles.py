@@ -56,7 +56,7 @@ def test_well_grid_is_filled_on_stamp():
         obs=pd.DataFrame({"Metadata_Plate": ["P1", "P1"], "Metadata_Well": ["A01", "B02"]}, index=["0", "1"]),
     )
     adata.var_names = ["Cells_AreaShape_Area", "Cells_AreaShape_Perimeter"]
-    mt.io.stamp(adata, resolution="well")
+    mt.io.stamp(adata, resolution="well", feature_kind="measurement")
     assert adata.obs["Metadata_Row"].to_numpy().tolist() == [0, 1]
     assert adata.obs["Metadata_Col"].to_numpy().tolist() == [0, 1]
 
