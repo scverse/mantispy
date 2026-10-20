@@ -96,6 +96,24 @@ def to_dataframe(
     return pd.concat([obs[meta_columns], values], axis=1)
 
 
+def resolution(adata: AnnData, default: str | None = None) -> str:
+    """Resolution recorded on ``adata``: ``"object"``, ``"well"`` or ``"aggregate"``.
+
+    Args:
+        adata: Object to read.
+        default: Returned when the object records no resolution, instead of raising. Pass it to tolerate an unstamped object; leave it ``None`` to require a recorded resolution.
+
+    Returns:
+        The recorded resolution.
+
+    Raises:
+        ValueError: No resolution is recorded and no `default` was given; stamp the object with :func:`mantispy.io.stamp` first.
+    """
+    from mantispy._core.schema import get_resolution
+
+    return get_resolution(adata, default=default)
+
+
 def controls(adata: AnnData, kind: str = "negcon") -> np.ndarray:
     """Boolean mask of control rows.
 
