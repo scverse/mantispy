@@ -84,23 +84,19 @@ def build_rohban_base(cache_dir: str | Path | None = None) -> dict[str, AnnData]
 def build_rohban_variants(cache_dir: str | Path | None = None) -> dict[str, AnnData]:
     """Returns {'rohban_selected.h5ad': ad, 'rohban_gene.h5ad': ad, 'rohban_gene_selected.h5ad': ad}."""
     from mantispy.ds._datasets import _rohban_raw
-    from mantispy.pp._normalize import normalize
-    from mantispy.pp._select import feature_select, subset_features
 
-    adata = _rohban_raw(cache_dir=cache_dir)
-    adata.obs["is_untreated"] = (adata.obs["Metadata_Perturbation_Type"].astype(str) == "untreated").to_numpy()
-    normalize(adata, method="mad_robustize", by="Metadata_Plate", reference="is_untreated")
-    _zero_nonfinite(adata)
-
-    # Well-level feature-selected block, pycytominer's default operations.
-    feature_select(adata)
-    selected = _zero_nonfinite(subset_features(adata))
+    # Built off the raw base like every other dataset: normalization is a step the notebooks show, not one
+    # baked into the staged variants.
+    base = _stable(_rohban_raw(cache_dir=cache_dir))
+    selected = _feature_selected_block(base)
 
     # Gene-level consensus over the screened wells: untreated and transfection controls dropped.
-    screened = (~adata.obs["is_untreated"].to_numpy()) & (~adata.obs["Metadata_Control"].to_numpy())
+    screened = (base.obs["Metadata_Perturbation_Type"].astype(str) != "untreated").to_numpy() & (
+        ~base.obs["Metadata_Control"].to_numpy()
+    )
     return {
-        "rohban_selected.h5ad": _stable(selected),
-        "rohban_gene.h5ad": _stable(_modz(adata[screened], "Metadata_Gene")),
+        "rohban_selected.h5ad": selected,
+        "rohban_gene.h5ad": _stable(_modz(base[screened], "Metadata_Gene")),
         "rohban_gene_selected.h5ad": _stable(_modz(selected[screened], "Metadata_Gene")),
     }
 
