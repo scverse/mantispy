@@ -1955,10 +1955,10 @@ datasets:
     # stays on cellpainting-gallery). Regenerate with scripts/build_staged_datasets.py.
     - name: pooled_rare.h5ad
       url: https://exampledata.scverse.org/mantispy/pooled_rare/pooled_rare.h5ad
-      sha256: d0d8f97bb0da048cd89ece4d310d6083c0d304642f9910f920678bd22aab1946
+      sha256: 97df765498e370ed3d52de2adc0143ea086e2dfb824984d1248e9138be8566a0
     - name: pooled_rare_selected.h5ad
       url: https://exampledata.scverse.org/mantispy/pooled_rare/pooled_rare_selected.h5ad
-      sha256: 58d9e7a59da81b43b84fb41f73c09692e8abbe6e0bc6148a4dbb73b3d804a339
+      sha256: acf4082b65a9010f72f7a38d35f5fbbf8bbd88993f43be6eb1a75057fb61ac1d
 
   rohban:
     type: mantispy
@@ -1985,16 +1985,16 @@ datasets:
     # tables above stay on cellpainting-gallery). Regenerate with scripts/build_staged_datasets.py.
     - name: rohban.h5ad
       url: https://exampledata.scverse.org/mantispy/rohban/rohban.h5ad
-      sha256: 3eac0f387fd81855b3a86df47ae7f4a9adbce97b917719655139416eee2d71d5
+      sha256: e635bddc250382a3a4e1ea6d3c48ac16f6d3812841a5a6190e6eed7f5dd038d3
     - name: rohban_selected.h5ad
       url: https://exampledata.scverse.org/mantispy/rohban/rohban_selected.h5ad
-      sha256: 72c5b04a97ecd757c35fcb4bee97d97e982e59bfee3b15db92a75974ca5dd78c
+      sha256: 3057b835b7ae6d60d6ef0ea0109559d29e4e521da378816d5b8ae476a9c0bacf
     - name: rohban_gene.h5ad
       url: https://exampledata.scverse.org/mantispy/rohban/rohban_gene.h5ad
-      sha256: e4d2b1c5b25d089d0ebd1a1a26bba16bad5f869b1b290235f4bb15b973b4effa
+      sha256: 10fc1ef1d57103c5af0341e9f227de0bce68dd5ab6e4df42ca2a1c840866ee0a
     - name: rohban_gene_selected.h5ad
       url: https://exampledata.scverse.org/mantispy/rohban/rohban_gene_selected.h5ad
-      sha256: 625119a05e53cad930443038058deda34250a01095c1303264d7e26ce40fe578
+      sha256: 19e31e0db178459b279ce8fce4d8749072309dd682dfe2f24407d7160a859bbd
 
   neuropainting:
     type: mantispy
@@ -2026,7 +2026,7 @@ datasets:
     # above stay on cellpainting-gallery). Regenerate with scripts/build_staged_datasets.py.
     - name: neuropainting.h5ad
       url: https://exampledata.scverse.org/mantispy/neuropainting/neuropainting.h5ad
-      sha256: dedafffc266a3eb3c52d76ad439c4e1b9265e6fd28df977ffb5ed7ca38ff92f7
+      sha256: 7be5d1804bc2bad77d191be46b101a6dc8a2b737c0487c2f5acf41d4ab1fc2d9
 
   chroma:
     type: mantispy
@@ -2067,7 +2067,7 @@ datasets:
     # above stay on cellpainting-gallery). Regenerate with scripts/build_staged_datasets.py.
     - name: chroma.h5ad
       url: https://exampledata.scverse.org/mantispy/chroma/chroma.h5ad
-      sha256: 57c4a6f524d4230193293e9a31e4a52d12e248bc292f4f9ec964b70f90ebcdcb
+      sha256: e9c84d44eec2ddaa0df68e935f7500b6974cdf1bab52b8bc0ffcaacb8313ff45
 
   oasis_pilot:
     type: mantispy
@@ -2155,10 +2155,10 @@ datasets:
     # plate-map tables above stay on cellpainting-gallery). Regenerate with scripts/build_staged_datasets.py.
     - name: oasis_pilot.h5ad
       url: https://exampledata.scverse.org/mantispy/oasis_pilot/oasis_pilot.h5ad
-      sha256: 102885428ed0f34eb1effa89ba830f86a7df39592a8e877a7f0eabdfdc6da5af
+      sha256: 85c68adb862b588ff3fdfcbbe8d6b2f621abc6810f7f82f43f5907d0694dae68
     - name: oasis_pilot_agg.h5ad
       url: https://exampledata.scverse.org/mantispy/oasis_pilot/oasis_pilot_agg.h5ad
-      sha256: 43050d1cbc81e67f0979a8be77a2b566818e43a0600707b9745e1c725c118516
+      sha256: b9fc326a1c92c7684b5a0810eedd90185babfa1068b34da3380384220e2f3ef5
 
   pki:
     type: mantispy
@@ -2263,22 +2263,22 @@ datasets:
     # annotate=False path still reads those raw parquets. Regenerate with scripts/build_staged_datasets.py.
     - name: jump_lite_openphenom.h5ad
       url: https://exampledata.scverse.org/mantispy/jump_lite/jump_lite_openphenom.h5ad
-      sha256: be095b5fe34008b2d4600b04370324b4249ad26bf3136dd9318b6cd2003c938a
+      sha256: dedc68b7d624155374bf7793033203513aad9d7ebb65dc9f59bbd5e4a188a55f
     - name: jump_lite_dinov2.h5ad
       url: https://exampledata.scverse.org/mantispy/jump_lite/jump_lite_dinov2.h5ad
-      sha256: 13064c6e0886fa90c34408cdf93bc18e9af5d0ced90905e3ec6933d8365da106
+      sha256: e5fcd8a94878524eade66ef920eb126f7df2302d904a2911390ae0034b82f657
     - name: jump_lite_dinov2_random.h5ad
       url: https://exampledata.scverse.org/mantispy/jump_lite/jump_lite_dinov2_random.h5ad
-      sha256: 867b33f4869fc785d34fc78f25efc490fb66f9f2c5e2c6f7cbcfb2de9af59ecf
+      sha256: 540d055041d8f7c6ce5177ed95d0bcc1332ad803c6b9b727ba0867d3800ef94f
     - name: jump_lite_subcell.h5ad
       url: https://exampledata.scverse.org/mantispy/jump_lite/jump_lite_subcell.h5ad
-      sha256: ff771a65ef665dec600f2683d04bf5dfe5b39a92abf2826fea547d4dfffc7acc
+      sha256: c6d63700fb65f0bd3117e96e61afc7ecbcbd164254e17d8b433ebb09eabf5cd1
     - name: jump_lite_morphem.h5ad
       url: https://exampledata.scverse.org/mantispy/jump_lite/jump_lite_morphem.h5ad
-      sha256: 7b4957136c965d2fdda94369bd5be64c6b4a51327cb892b07b84440ce69be60d
+      sha256: 859d21fcbc00b14c43fb505dbad4b951a0f38161ff1aaf1e00629d4d50b98c4d
     - name: jump_lite_cp_measure.h5ad
       url: https://exampledata.scverse.org/mantispy/jump_lite/jump_lite_cp_measure.h5ad
-      sha256: cc38f7856a79fc88523675807d33c254c9ee036893e9768f929337696ecdd97b
+      sha256: a39043a7b78dae35122a1f780c8ba06df5c1208665bd5c6bb1578cc5f9cc60d2
 
   jump_target2:
     type: mantispy
