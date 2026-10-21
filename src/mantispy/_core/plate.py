@@ -8,6 +8,10 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 #: Standard plate formats, mapped to ``(n_rows, n_columns)``.
 PLATE_FORMATS: dict[int, tuple[int, int]] = {96: (8, 12), 384: (16, 24), 1536: (32, 48)}
@@ -65,6 +69,25 @@ def row_label(row: int) -> int | str:
 def well_name(row: int, column: int) -> str:
     """Canonical well name for a 0-based ``(row, column)`` pair."""
     return f"{row_label(row)}{column + 1:02d}"
+
+
+def fill_well_grid(obs: pd.DataFrame) -> None:
+    """Fill ``Metadata_Row`` and ``Metadata_Col`` (0-based) from ``Metadata_Well``, in place.
+
+    A no-op when ``obs`` has no well column, when the coordinates are already present, or when a well does
+    not parse: not every object is well-based, so an unparsable well is skipped rather than raised on.
+    """
+    if "Metadata_Well" not in obs.columns:
+        return
+    wells = obs["Metadata_Well"].astype(str)
+    try:
+        grid = {well: (well_row(well), well_col(well)) for well in wells.unique()}
+    except ValueError:
+        return
+    if "Metadata_Row" not in obs.columns:
+        obs["Metadata_Row"] = wells.map(lambda well: grid[well][0]).to_numpy(dtype=int)
+    if "Metadata_Col" not in obs.columns:
+        obs["Metadata_Col"] = wells.map(lambda well: grid[well][1]).to_numpy(dtype=int)
 
 
 def detect_plate_format(wells: Iterable[str]) -> int:

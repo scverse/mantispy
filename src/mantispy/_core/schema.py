@@ -375,6 +375,10 @@ def stamp(
         "grouped_by": list(grouped_by),
         "history": list(history) if history is not None else list(store.get("history", [])),
     }
+    # Every stamped object carries its well geometry: fill Metadata_Row/Col from the well when it has one.
+    from mantispy._core.plate import fill_well_grid
+
+    fill_well_grid(adata.obs)
 
 
 def recorded_resolution(adata: AnnData) -> str | None:

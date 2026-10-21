@@ -17,7 +17,7 @@ from mantispy._core.features import _infer_channels, empty_annotation, parse_fea
 from mantispy._core.frames import as_frame, categorize_metadata
 from mantispy._core.logging import get_logger, report_drop
 from mantispy._core.masks import feature_mask
-from mantispy._core.plate import normalize_well, well_col, well_row
+from mantispy._core.plate import fill_well_grid, normalize_well
 from mantispy._core.provenance import record_params
 from mantispy._core.schema import (
     FEATURE_KINDS,
@@ -226,7 +226,7 @@ def from_dataframe(
         )
     if "Metadata_Well" in obs:
         obs["Metadata_Well"] = [normalize_well(well) for well in obs["Metadata_Well"].astype(str)]
-    _add_well_grid(obs)
+    fill_well_grid(obs)
     obs = categorize_metadata(_adopt_counts(obs))
     if resolution == "object":
         # Mint any object identity the frame lacks (a CytoTable parquet carries image/object numbers but
@@ -246,25 +246,6 @@ def _ancestor_name(path: Path, depth: int) -> str:
     """The name `depth` directories up: 1 is the directory holding a file, or a directory that was given itself."""
     base = path if path.is_dir() else path.parent
     return base.name if depth == 1 else base.parents[depth - 2].name
-
-
-def _add_well_grid(obs: pd.DataFrame) -> None:
-    """Fill ``Metadata_Row`` and ``Metadata_Col`` (0-based) from ``Metadata_Well``, in place.
-
-    A no-op when ``obs`` has no well column, when the coordinates are already present, or when a well does
-    not parse: not every object is well-based, so an unparsable well is skipped rather than raised on.
-    """
-    if "Metadata_Well" not in obs.columns:
-        return
-    wells = obs["Metadata_Well"].astype(str)
-    try:
-        grid = {well: (well_row(well), well_col(well)) for well in wells.unique()}
-    except ValueError:
-        return
-    if "Metadata_Row" not in obs.columns:
-        obs["Metadata_Row"] = wells.map(lambda well: grid[well][0]).to_numpy(dtype=int)
-    if "Metadata_Col" not in obs.columns:
-        obs["Metadata_Col"] = wells.map(lambda well: grid[well][1]).to_numpy(dtype=int)
 
 
 def _join_platemap(obs: pd.DataFrame, platemap: str | Path | pd.DataFrame) -> pd.DataFrame:
@@ -630,7 +611,7 @@ def stamp(
     def _apply(obj: ad.AnnData) -> None:
         for column, values in minted.items():
             obj.obs[column] = values
-        _add_well_grid(obj.obs)
+        fill_well_grid(obj.obs)
         if controls is not None:
             obj.obs["Metadata_Control_Type"], obj.obs["Metadata_Control"] = controls
         if absent := [column for column in REQUIRED_VAR if column not in obj.var]:

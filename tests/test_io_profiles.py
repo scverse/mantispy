@@ -61,6 +61,19 @@ def test_well_grid_is_filled_on_stamp():
     assert adata.obs["Metadata_Col"].to_numpy().tolist() == [0, 1]
 
 
+def test_well_grid_is_filled_by_the_low_level_stamp():
+    """A dataset builder that calls _core.schema.stamp directly (e.g. cp_posh) must still get the grid."""
+    from mantispy._core.schema import stamp as core_stamp
+
+    adata = ad.AnnData(
+        np.ones((2, 2), dtype="float32"),
+        obs=pd.DataFrame({"Metadata_Plate": ["P1", "P1"], "Metadata_Well": ["B03", "C05"]}, index=["0", "1"]),
+    )
+    core_stamp(adata, resolution="object")
+    assert adata.obs["Metadata_Row"].to_numpy().tolist() == [1, 2]
+    assert adata.obs["Metadata_Col"].to_numpy().tolist() == [2, 4]
+
+
 def test_well_grid_skipped_without_a_well_column():
     """Not every object is well-based, so an object with no Metadata_Well stamps without the columns and without error."""
     frame = _frame().assign(Metadata_Gene=["g1", "g2", "g3", "g4"]).drop(columns=["Metadata_Plate", "Metadata_Well"])
