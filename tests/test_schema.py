@@ -511,6 +511,18 @@ def test_validate_rejects_list_valued_obs(adata):
     assert any("'tags'" in error for error in report.errors)
 
 
+def test_validate_rejects_list_after_a_scalar_in_object_obs(adata):
+    adata.obs["mixed"] = pd.Series(["ok", [1, 2], "ok", "ok"], index=adata.obs_names, dtype=object)
+    report = validate(adata)
+    assert not report.ok
+    assert any("'mixed'" in error for error in report.errors)
+
+
+def test_validate_allows_scalar_object_obs(adata):
+    adata.obs["label"] = pd.Series(["a", "b", None, "d"], index=adata.obs_names, dtype=object)
+    assert validate(adata).ok
+
+
 def test_validate_allows_categorical_and_datetime_obs(adata):
     adata.obs["group"] = pd.Categorical(["a", "b", "a", "b"])
     adata.obs["when"] = pd.to_datetime(["2024-01-01"] * 4)

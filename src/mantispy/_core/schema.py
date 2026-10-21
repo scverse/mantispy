@@ -521,12 +521,13 @@ def _check_obs_writable(adata: AnnData, report: ValidationReport) -> None:
     obs = as_frame(adata.obs)
     for column in obs.columns:
         series = obs[column]
-        if series.dtype != object:
+        if series.dtype != object:  # ponytail: only object dtype can hold containers; every value is checked
             continue
-        first = series.dropna().iloc[0] if series.notna().any() else None
-        if isinstance(first, list | tuple | set | dict | np.ndarray):
+        containers = series.dropna().map(lambda value: isinstance(value, list | tuple | set | dict | np.ndarray))
+        if containers.any():
+            kind = type(series.dropna()[containers].iloc[0]).__name__
             report.errors.append(
-                f"obs column {column!r} holds {type(first).__name__} cells, which cannot be written to h5ad; "
+                f"obs column {column!r} holds {kind} cells, which cannot be written to h5ad; "
                 "convert it to a scalar column"
             )
 
