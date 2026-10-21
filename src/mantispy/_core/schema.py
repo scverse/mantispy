@@ -147,7 +147,6 @@ UNS_KEYS: tuple[str, ...] = (
     "dataset",
     "image_table",
     "params",
-    "aggregated_from",
     "consensus_from",
     "membership",
     "truth",
@@ -262,11 +261,10 @@ def _recover_grouped_by(store: dict, adata: AnnData, resolution: str) -> list[st
         return default_grouped_by(resolution)
     params = store.get("params")
     consensus = params.get("consensus") if isinstance(params, dict) else None
-    for source in (store.get("aggregated_from"), consensus):
-        if isinstance(source, dict):
-            columns = _as_columns(source.get("by"))
-            if columns:
-                return columns
+    if isinstance(consensus, dict):
+        columns = _as_columns(consensus.get("by"))
+        if columns:
+            return columns
     return ["Metadata_Perturbation"] if "Metadata_Perturbation" in adata.obs else []
 
 

@@ -681,7 +681,7 @@ def test_migrate_translates_the_old_resolution_names(old, new):
     )
     store = {"schema_version": "1.0", "resolution": old}
     if old == "perturbation":
-        store["aggregated_from"] = {"by": ["Metadata_Plate"]}
+        store["params"] = {"consensus": {"by": ["Metadata_Plate"]}}
     obj.uns["mantispy"] = store
     migrate(obj)
     assert obj.uns["mantispy"]["resolution"] == new
@@ -851,7 +851,7 @@ def test_migrate_recovers_aggregate_grouping_from_provenance():
     obj.uns["mantispy"] = {
         "schema_version": "1.0",
         "resolution": "perturbation",
-        "aggregated_from": {"by": ["Metadata_Gene"]},
+        "params": {"consensus": {"by": ["Metadata_Gene"]}},
     }
     migrate(obj)
     assert obj.uns["mantispy"]["resolution"] == "aggregate"
@@ -896,7 +896,7 @@ def test_an_object_with_no_features_does_not_validate():
 
 
 def test_migrate_recovers_grouping_from_array_valued_provenance():
-    """aggregated_from['by'] comes back from h5ad as a numpy array; recovery must not use `arr or ...`."""
+    """consensus['by'] comes back from h5ad as a numpy array; recovery must not use `arr or ...`."""
     obs = pd.DataFrame({"Metadata_Gene": ["a", "b"], "Metadata_Compound": ["x", "y"]}, index=["0", "1"])
     obj = ad.AnnData(
         X=np.ones((2, 1), dtype=np.float32),
@@ -906,7 +906,7 @@ def test_migrate_recovers_grouping_from_array_valued_provenance():
     obj.uns["mantispy"] = {
         "schema_version": "1.0",
         "resolution": "aggregate",
-        "aggregated_from": {"by": np.array(["Metadata_Gene", "Metadata_Compound"], dtype=object)},
+        "params": {"consensus": {"by": np.array(["Metadata_Gene", "Metadata_Compound"], dtype=object)}},
     }
     migrate(obj)
     assert obj.uns["mantispy"]["grouped_by"] == ["Metadata_Gene", "Metadata_Compound"]

@@ -103,12 +103,6 @@ def aggregate(
     dropped = sorted(set(store) - _INHERITED - set(REQUIRED_UNS) - {"params"})
     if dropped:
         get_logger().debug("aggregate dropped %s, which describe the input rows", dropped)
-    result.uns["mantispy"]["aggregated_from"] = {
-        "by": columns,
-        "func": func,
-        "n_obs": int(adata.n_obs),
-        "min_cells": int(min_cells),
-    }
     if store_membership:
         _record_membership(result, adata, columns, codes, keep)
     call_params = {

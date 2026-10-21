@@ -113,3 +113,8 @@ def test_consensus_without_a_record_keeps_the_default_column(adata):
     wells.uns["mantispy"].pop("perturbation", None)
     out = mt.tl.consensus(wells, method="median")
     assert set(out.obs["Metadata_Perturbation"]) == set(wells.obs["Metadata_Perturbation"])
+
+
+def test_aggregate_writes_no_aggregated_from(adata):
+    result = mt.tl.aggregate(adata, by=("Metadata_Plate", "Metadata_Well"))
+    assert "aggregated_from" not in result.uns["mantispy"]

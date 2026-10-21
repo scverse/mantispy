@@ -97,7 +97,6 @@
         "dataset",
         "image_table",
         "params",
-        "aggregated_from",
         "consensus_from",
         "membership",
         "truth",
