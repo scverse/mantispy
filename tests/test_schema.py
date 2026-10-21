@@ -490,6 +490,26 @@ def test_an_unregistered_result_key_is_flagged(adata):
     assert any("totally_made_up" in w and "not a registered result key" in w for w in warnings)
 
 
+def test_validate_rejects_list_valued_obs(adata):
+    adata.obs["tags"] = pd.Series([["a"], ["b"], ["c"], ["d"]], index=adata.obs_names, dtype=object)
+    report = validate(adata)
+    assert not report.ok
+    assert any("'tags'" in error for error in report.errors)
+
+
+def test_validate_allows_categorical_and_datetime_obs(adata):
+    adata.obs["group"] = pd.Categorical(["a", "b", "a", "b"])
+    adata.obs["when"] = pd.to_datetime(["2024-01-01"] * 4)
+    assert validate(adata).ok
+
+
+def test_result_key_warning_hides_internal_module_path(adata):
+    adata.uns["mantispy"]["totally_made_up"] = pd.DataFrame({"x": [1]})
+    warnings = validate(adata).warnings
+    assert any("totally_made_up" in w for w in warnings)
+    assert not any("mantispy._core.schema" in w for w in warnings)
+
+
 def test_a_real_result_table_is_registered(well_profiles):
     """The default key a public result writer uses must be registered, so validate does not warn on it."""
     import mantispy as mt

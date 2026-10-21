@@ -491,9 +491,27 @@ def _check_result_keys(store: dict, report: ValidationReport) -> None:
         if any(key.endswith(suffix) and key.removesuffix(suffix) in results for suffix in _RESULT_COMPANION_SUFFIXES):
             continue
         report.warnings.append(
-            f"uns['mantispy'][{key!r}] is not a registered result key; register it in "
-            "mantispy._core.schema.UNS_RESULTS (and spec/schema-2.0.json) if it is a package result"
+            f"uns['mantispy'][{key!r}] is not a registered result key (not a recognized mantispy result); "
+            "ignore this if it is your own custom key_added"
         )
+
+
+def _check_obs_writable(adata: AnnData, report: ValidationReport) -> None:
+    """Error on an object-dtype obs column holding list, tuple, set, dict or array cells.
+
+    Such a column cannot be written to h5ad, so catching it here fails early instead of at write time.
+    """
+    obs = as_frame(adata.obs)
+    for column in obs.columns:
+        series = obs[column]
+        if series.dtype != object:
+            continue
+        first = series.dropna().iloc[0] if series.notna().any() else None
+        if isinstance(first, list | tuple | set | dict | np.ndarray):
+            report.errors.append(
+                f"obs column {column!r} holds {type(first).__name__} cells, which cannot be written to h5ad; "
+                "convert it to a scalar column"
+            )
 
 
 def _check_feature_kind(adata: AnnData, report: ValidationReport) -> None:
@@ -650,6 +668,7 @@ def validate(adata: AnnData, *, raise_on_error: bool = False) -> ValidationRepor
     _check_grouped_by(adata, store, resolution, report)
     _check_history(store, report)
     _check_result_keys(store, report)
+    _check_obs_writable(adata, report)
 
     if resolution in REQUIRED_OBS:
         for column in REQUIRED_OBS[resolution]:
