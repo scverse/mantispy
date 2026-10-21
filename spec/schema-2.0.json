@@ -87,14 +87,12 @@
     "required_uns": [
         "schema_version",
         "resolution",
-        "grouped_by",
-        "history"
+        "grouped_by"
     ],
     "uns_keys": [
         "schema_version",
         "resolution",
         "grouped_by",
-        "history",
         "channels",
         "dataset",
         "image_table",

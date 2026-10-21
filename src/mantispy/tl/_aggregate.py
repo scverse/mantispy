@@ -14,7 +14,7 @@ from mantispy._core._numba import MEAN, MEDIAN
 from mantispy._core._reduce import group_codes, reduce_grouped, reduced_var
 from mantispy._core.frames import as_frame, categorize_metadata
 from mantispy._core.logging import get_logger
-from mantispy._core.provenance import level_change_source, record_history, record_params
+from mantispy._core.provenance import record_params
 from mantispy._core.schema import REQUIRED_OBS, REQUIRED_UNS, get_resolution, resolution_for, stamp
 
 FUNCTIONS = {"median": MEDIAN, "mean": MEAN}
@@ -98,8 +98,7 @@ def aggregate(
     result = ad.AnnData(X=values[keep].astype(np.float32), obs=obs, var=var)
     store = adata.uns.get("mantispy", {})
     resolution = resolution_for(columns)
-    # Inherit the source history so the aggregate carries its lineage (spec §14.3).
-    stamp(result, resolution=resolution, grouped_by=columns, history=store.get("history"))
+    stamp(result, resolution=resolution, grouped_by=columns)
     result.uns["mantispy"].update({key: deepcopy(value) for key, value in store.items() if key in _INHERITED})
     dropped = sorted(set(store) - _INHERITED - set(REQUIRED_UNS) - {"params"})
     if dropped:
@@ -122,7 +121,6 @@ def aggregate(
         "site_key": site_key,
     }
     record_params(result, "aggregate", call_params)
-    record_history(result, "aggregate", params=call_params, source=level_change_source(adata, resolution, columns))
     return result
 
 

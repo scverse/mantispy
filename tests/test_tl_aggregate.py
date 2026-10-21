@@ -92,37 +92,6 @@ def test_membership_on_a_reloaded_aggregate_source(adata, tmp_path):
     assert identity == ["Metadata_Plate", "Metadata_Perturbation"]  # the reloaded grouping, not a crash
 
 
-def test_history_round_trips_and_appends_after_a_reload(adata, tmp_path):
-    """§14: history survives h5ad and a loaded object (ndarray history) can still be appended to."""
-    import anndata as ad
-
-    from mantispy._core.provenance import read_history
-
-    wells = mt.tl.aggregate(adata, min_cells=0)
-    path = tmp_path / "wells.h5ad"
-    wells.write_h5ad(path)
-    reloaded = ad.read_h5ad(path)
-    assert [record["operation"] for record in read_history(reloaded)] == ["stamp", "aggregate"]
-    # appending after a reload (history is an ndarray) must not raise and must extend the log
-    plates = mt.tl.aggregate(reloaded, by=("Metadata_Plate",), min_cells=0)
-    assert [record["operation"] for record in read_history(plates)] == ["stamp", "aggregate", "aggregate"]
-
-
-def test_aggregate_inherits_and_extends_history(adata):
-    """§14.3: an aggregate carries the source history and appends its own level-changing record."""
-    from mantispy._core.provenance import read_history
-
-    mt.pp.normalize(adata)  # one in-place op → one history record on the source
-    wells = mt.tl.aggregate(adata, min_cells=0)
-    history = read_history(wells)
-    operations = [record["operation"] for record in history]
-    assert "normalize" in operations  # inherited from the source
-    assert operations[-1] == "aggregate"
-    assert history[-1]["source"]["to_resolution"] == "well"
-    # the source object keeps its own, shorter history
-    assert "aggregate" not in [record["operation"] for record in read_history(adata)]
-
-
 def _grouped_elsewhere(adata):
     """Well profiles whose perturbation identity lives in a non-default column with fewer groups."""
     wells = mt.tl.aggregate(adata, min_cells=0)

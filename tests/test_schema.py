@@ -1,5 +1,3 @@
-import json
-
 import anndata as ad
 import numpy as np
 import pandas as pd
@@ -62,8 +60,16 @@ def test_schema_version_is_2_0_experimental(adata):
     assert adata.uns["mantispy"]["schema_version"] == "2.0"
 
 
-def test_stamp_seeds_history(adata):
-    assert [json.loads(r)["operation"] for r in adata.uns["mantispy"]["history"]] == ["stamp"]
+def test_stamp_seeds_no_history(adata):
+    assert "history" not in adata.uns["mantispy"]
+
+
+def test_mutating_tool_records_params_not_history(adata):
+    import mantispy as mt
+
+    mt.pp.normalize(adata, reference=None)
+    assert "normalize" in adata.uns["mantispy"]["params"]
+    assert "history" not in adata.uns["mantispy"]
 
 
 def test_core_namespace_has_every_required_key(adata):
@@ -368,7 +374,7 @@ def test_public_stamping_creates_a_valid_2_0_object():
     assert report.ok, report.errors
     assert obj.uns["mantispy"]["schema_version"] == "2.0"
     assert obj.uns["mantispy"]["grouped_by"] == ["Metadata_Plate", "Metadata_Well"]
-    assert [json.loads(r)["operation"] for r in obj.uns["mantispy"]["history"]] == ["stamp"]
+    assert "history" not in obj.uns["mantispy"]
 
 
 # --- display-only fallback must not weaken validation ---------------------
@@ -559,7 +565,7 @@ def test_an_object_from_the_previous_schema_migrates(adata, tmp_path):
 
 
 def test_migrate_fills_the_new_core_fields_on_a_1_0_object():
-    """A genuine 1.0 object lacks grouped_by, history, status and feature_kind; migrate supplies them."""
+    """A genuine 1.0 object lacks grouped_by, status and feature_kind; migrate supplies them."""
     obj = ad.AnnData(
         X=np.ones((2, 1), dtype=np.float32),
         obs=pd.DataFrame({"Metadata_Plate": ["P1", "P1"], "Metadata_Well": ["A01", "A02"]}, index=["0", "1"]),
@@ -569,7 +575,7 @@ def test_migrate_fills_the_new_core_fields_on_a_1_0_object():
     migrate(obj)
     store = obj.uns["mantispy"]
     assert store["schema_version"] == SCHEMA_VERSION
-    assert store["history"] == []
+    assert "history" not in store
     assert store["grouped_by"] == ["Metadata_Plate", "Metadata_Well"]
     assert (obj.var["feature_kind"] == "measurement").all()
     assert validate(obj).ok, validate(obj).errors

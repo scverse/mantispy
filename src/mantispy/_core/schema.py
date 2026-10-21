@@ -1,6 +1,6 @@
 """The mantispy AnnData contract.
 
-An object is described by three things: the ``Metadata_`` columns in ``obs`` that identify where a profile came from, the parsed annotation columns in ``var`` that say what each feature measures, and a ``uns["mantispy"]`` dict holding the core descriptors (schema version and status, the resolution, the grouping that defines one observation, and the provenance history).
+An object is described by three things: the ``Metadata_`` columns in ``obs`` that identify where a profile came from, the parsed annotation columns in ``var`` that say what each feature measures, and a ``uns["mantispy"]`` dict holding the core descriptors (the schema version, the resolution and the grouping that defines one observation).
 
 Under schema 2.0 the resolution is explicit, not advisory: a mantispy object MUST carry ``uns["mantispy"]["resolution"]`` and ``uns["mantispy"]["grouped_by"]``, and functions that need them fail clearly when they are absent rather than guessing.
 """
@@ -138,7 +138,6 @@ REQUIRED_UNS: tuple[str, ...] = (
     "schema_version",
     "resolution",
     "grouped_by",
-    "history",
 )
 
 #: Keys describing the object itself: the required descriptors plus the optional ones.
@@ -392,15 +391,13 @@ def stamp(
     resolution: str | None = None,
     *,
     grouped_by: Iterable[str] | None = None,
-    history: list | None = None,
     perturbation: Mapping[str, str] | None = None,
 ) -> None:
-    """Stamp ``adata`` as a schema-2.0 object: the five :data:`REQUIRED_UNS` descriptors.
+    """Stamp ``adata`` as a schema-2.0 object: the :data:`REQUIRED_UNS` descriptors.
 
     ``resolution`` defaults to the one already recorded (so re-stamping keeps it) and raises if none is.
     ``grouped_by`` defaults per :func:`default_grouped_by` (``aggregate`` has none and must be
-    given), but a stale grouping is dropped when the resolution changes. ``history`` keeps an existing
-    list or starts empty. ``perturbation`` names the ``obs`` columns holding perturbation identity
+    given), but a stale grouping is dropped when the resolution changes. ``perturbation`` names the ``obs`` columns holding perturbation identity
     (``column``) and control type (``control_column``); unset, an object that records none gets the
     defaults when ``obs`` has ``Metadata_Perturbation``. Nothing is written until every value resolves, so a rejected stamp leaves the
     object untouched.
@@ -419,13 +416,6 @@ def stamp(
         kept = store.get("grouped_by") if resolution == prior else None
         grouped_by = kept if kept is not None else default_grouped_by(resolution)
 
-    entries = list(history) if history is not None else list(store.get("history", []))
-    if not entries:
-        # Seed once, on the first stamp; later re-stamps (tools re-stamp constantly) leave the log alone.
-        from mantispy._core.provenance import history_record
-
-        entries.append(history_record("stamp", params={"resolution": resolution, "grouped_by": list(grouped_by)}))
-
     recorded = _perturbation_record(adata, store, perturbation)
 
     # A fresh dict assigned back, not an in-place update: on a view uns is the dict's own, so mutating it
@@ -435,7 +425,6 @@ def stamp(
         "schema_version": SCHEMA_VERSION,
         "resolution": resolution,
         "grouped_by": list(grouped_by),
-        "history": entries,
         **({"perturbation": recorded} if recorded is not None else {}),
     }
     # Every stamped object carries its well geometry: fill Metadata_Row/Col from the well when it has one.
@@ -526,14 +515,6 @@ def _check_grouped_by(adata: AnnData, store: dict, resolution: str | None, repor
     missing = [column for column in grouped_by if column not in adata.obs]
     if missing:
         report.errors.append(f"grouped_by references column(s) missing from obs: {missing}")
-
-
-def _check_history(store: dict, report: ValidationReport) -> None:
-    """Check ``uns['mantispy']['history']`` is present and a list."""
-    if "history" not in store:
-        report.errors.append("uns['mantispy']['history'] is missing")
-    elif not isinstance(store["history"], list | np.ndarray):
-        report.errors.append(f"history must be a list, got {type(store['history']).__name__}")
 
 
 def _check_result_keys(store: dict, report: ValidationReport) -> None:
@@ -780,7 +761,6 @@ def validate(adata: AnnData, *, raise_on_error: bool = False) -> ValidationRepor
         report.errors.append(f"unknown resolution {resolution!r}; must be one of {RESOLUTIONS}")
 
     _check_grouped_by(adata, store, resolution, report)
-    _check_history(store, report)
     _check_result_keys(store, report)
     _check_embedding_provenance(store, report)
     _check_perturbation_record(adata, store, report)
@@ -1092,7 +1072,6 @@ def migrate(adata: AnnData, copy: bool = False) -> AnnData | None:
 
     store = target.uns.setdefault("mantispy", {})
     store["schema_version"] = SCHEMA_VERSION
-    store.setdefault("history", [])
     store["resolution"] = resolution
     store["grouped_by"] = grouped_by
     if feature_kind is not None:
