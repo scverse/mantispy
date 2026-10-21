@@ -611,7 +611,7 @@ def stamp(
     def _apply(obj: ad.AnnData) -> None:
         for column, values in minted.items():
             obj.obs[column] = values
-        fill_well_grid(obj.obs)
+        fill_well_grid(as_frame(obj.obs))
         if controls is not None:
             obj.obs["Metadata_Control_Type"], obj.obs["Metadata_Control"] = controls
         if absent := [column for column in REQUIRED_VAR if column not in obj.var]:
