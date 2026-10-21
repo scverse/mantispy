@@ -606,6 +606,18 @@ def test_correct_chromosome_arm_needs_a_reference():
         mt.pp.correct_chromosome_arm(adata)
 
 
+def test_arm_correction_warns_and_noops_below_threshold():
+    genes = [f"q{i}" for i in range(22)]
+    adata = _crispr_arm_plate({"1q": [3.0, 3.0]}, genes, ["1q"] * 22, dict.fromkeys(genes, 1.0), {}, n_features=2)
+    adata.X = adata.X.astype(np.float64)
+    before = adata.X.copy()
+    with pytest.warns(UserWarning, match="min_genes"):
+        out = mt.pp.correct_chromosome_arm(adata, unexpressed=set(genes), min_genes=10**6, copy=True)
+    assert out.X.dtype == before.dtype
+    np.testing.assert_array_equal(np.asarray(out.X), before)
+    assert out.uns["mantispy"]["chromosome_arm"] == {}
+
+
 def test_correct_chromosome_arm_rejects_a_bare_string():
     """A bare string as `unexpressed` would silently match its characters; isin raises instead."""
     adata = _crispr_arm_plate({"1q": [1.0]}, ["q0"], ["1q"], {"q0": 0.0}, {}, n_features=1)

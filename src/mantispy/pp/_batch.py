@@ -226,6 +226,15 @@ def correct_chromosome_arm(
         corrected[str(key)] = int(n_genes)
 
     get_logger().info("chromosome-arm correction: corrected %d arm(s)", len(corrected))
+    if not corrected:
+        warnings.warn(
+            f"no chromosome arm has more than min_genes={min_genes} unexpressed genes, so nothing was corrected "
+            "and the data is unchanged",
+            UserWarning,
+            stacklevel=2,
+        )
+        adata.uns.setdefault("mantispy", {})["chromosome_arm"] = corrected
+        return None
     if key_added is None:
         adata.X = out
     else:
