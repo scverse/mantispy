@@ -5,6 +5,8 @@ The design of :func:`read_profiles` follows ``scverse/cell-painting-io`` (MIT).
 
 from __future__ import annotations
 
+import os
+import shutil
 from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
 from typing import Literal
@@ -515,10 +517,27 @@ def write(adata: ad.AnnData, path: str | Path) -> None:
         else:
             adata.uns["mantispy"] = prior
         raise
-    if path.suffix == ".zarr":
-        adata.write_zarr(path)
-    else:
-        adata.write_h5ad(path)
+    # Write beside the destination, then swap in, so a failure never leaves a partial file at ``path``.
+    zarr = path.suffix == ".zarr"
+    tmp = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    try:
+        if zarr:
+            adata.write_zarr(tmp)
+            if path.is_dir():
+                backup = path.with_name(f".{path.name}.old-{os.getpid()}")
+                os.replace(path, backup)
+                os.replace(tmp, path)
+                shutil.rmtree(backup)
+            else:
+                os.replace(tmp, path)
+        else:
+            adata.write_h5ad(tmp)
+            os.replace(tmp, path)
+    finally:
+        if tmp.is_dir():
+            shutil.rmtree(tmp, ignore_errors=True)
+        else:
+            tmp.unlink(missing_ok=True)
 
 
 def stamp(

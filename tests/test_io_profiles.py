@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import anndata as ad
 import numpy as np
 import pandas as pd
@@ -404,6 +406,43 @@ def test_a_failed_write_leaves_the_schema_stamp_untouched(tmp_path):
     with pytest.raises(ValueError, match="float32"):
         mt.io.write(adata, tmp_path / "out.h5ad")
     assert adata.uns["mantispy"] == before
+
+
+def _raise_midwrite(self, path, *a, **k):
+    """Leave a partial output at ``path`` and fail, as an interrupted anndata/h5py write would."""
+    path = Path(path)
+    if path.suffix == ".zarr" or ".zarr" in path.name:
+        path.mkdir()
+    else:
+        path.write_bytes(b"partial")
+    raise RuntimeError("boom")
+
+
+def test_write_h5ad_atomic_on_failure(tmp_path, cells, monkeypatch):
+    monkeypatch.setattr(ad.AnnData, "write_h5ad", _raise_midwrite)
+    path = tmp_path / "out.h5ad"
+    with pytest.raises(RuntimeError, match="boom"):
+        mt.io.write(cells, path)
+    assert list(tmp_path.iterdir()) == []
+    path.write_bytes(b"original")
+    with pytest.raises(RuntimeError, match="boom"):
+        mt.io.write(cells, path)
+    assert path.read_bytes() == b"original"
+    assert [p.name for p in tmp_path.iterdir()] == ["out.h5ad"]
+
+
+def test_write_zarr_atomic_on_failure(tmp_path, cells, monkeypatch):
+    monkeypatch.setattr(ad.AnnData, "write_zarr", _raise_midwrite)
+    path = tmp_path / "out.zarr"
+    with pytest.raises(RuntimeError, match="boom"):
+        mt.io.write(cells, path)
+    assert list(tmp_path.iterdir()) == []
+    path.mkdir()
+    (path / "marker").write_bytes(b"original")
+    with pytest.raises(RuntimeError, match="boom"):
+        mt.io.write(cells, path)
+    assert (path / "marker").read_bytes() == b"original"
+    assert [p.name for p in tmp_path.iterdir()] == ["out.zarr"]
 
 
 def test_stamp_translates_the_control_model_of_a_1_0_object():
