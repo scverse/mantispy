@@ -632,6 +632,32 @@ def _check_controls(adata: AnnData, report: ValidationReport) -> None:
         )
 
 
+#: A delimiter-joined perturbation label: ``;`` or ``|`` between word characters, or a comma between two
+#: letter runs (so ``1,2-dichloroethane`` does not match).
+_COMPOSITE_LABEL = r"\w[;|]\w|[A-Za-z]{2},\s?[A-Za-z]{2}"
+
+
+def _check_composite_perturbation(adata: AnnData, report: ValidationReport) -> None:
+    """Warn when ``Metadata_Perturbation`` holds delimiter-joined labels such as ``"MKX;GENE2"``.
+
+    This is a heuristic flag for a silent mislabel, not a representation: a joined label is treated as one
+    perturbation by every grouping and test.
+    """
+    # Full composite-perturbation handling awaits the finding-1.1 (multi-membership) schema decision.
+    obs = as_frame(adata.obs)
+    if "Metadata_Perturbation" not in obs:
+        return
+    labels = obs["Metadata_Perturbation"].dropna().astype(str)
+    if labels.empty:
+        return
+    composite = labels.str.contains(_COMPOSITE_LABEL, regex=True)
+    if composite.mean() >= 0.05:
+        report.warnings.append(
+            f"Metadata_Perturbation has {int(composite.sum())} composite value(s) joined by a delimiter "
+            f"(e.g. {labels[composite].iloc[0]!r}); each is treated as one perturbation, not several"
+        )
+
+
 def validate(adata: AnnData, *, raise_on_error: bool = False) -> ValidationReport:
     """Check ``adata`` against the mantispy schema.
 
@@ -717,6 +743,7 @@ def validate(adata: AnnData, *, raise_on_error: bool = False) -> ValidationRepor
             report.errors.append(f"Metadata_Well has unparsable values: {sorted(unparsable)[:5]}")
 
     _check_controls(adata, report)
+    _check_composite_perturbation(adata, report)
 
     if adata.n_vars and "is_feature" in adata.var and not adata.var["is_feature"].any():
         report.warnings.append("no column in var is marked is_feature")

@@ -297,6 +297,18 @@ def test_the_control_flag_must_agree_with_the_type(adata):
 # --- io.stamp: explicit kind, never guess ---------------------------------
 
 
+def test_validate_warns_on_composite_perturbation(adata):
+    adata.obs["Metadata_Perturbation"] = ["MKX;GENE2", "AAA", "BBB", "C|D"]
+    report = validate(adata)
+    assert any("Metadata_Perturbation" in w and "composite" in w.lower() for w in report.warnings)
+
+
+def test_validate_no_warn_single_label_perturbation(adata):
+    adata.obs["Metadata_Perturbation"] = ["AAA"] * adata.n_obs
+    report = validate(adata)
+    assert not any("composite" in w.lower() for w in report.warnings)
+
+
 def _embedding_matrix():
     return ad.AnnData(
         X=np.ones((2, 3), dtype=np.float32),
