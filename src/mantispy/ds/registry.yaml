@@ -1988,13 +1988,13 @@ datasets:
       sha256: e635bddc250382a3a4e1ea6d3c48ac16f6d3812841a5a6190e6eed7f5dd038d3
     - name: rohban_selected.h5ad
       url: https://exampledata.scverse.org/mantispy/rohban/rohban_selected.h5ad
-      sha256: 3057b835b7ae6d60d6ef0ea0109559d29e4e521da378816d5b8ae476a9c0bacf
+      sha256: 7f035ff6782e5cec46068c4acd7a19d2dee1fe329dddca141558f955ffdd8c2b
     - name: rohban_gene.h5ad
       url: https://exampledata.scverse.org/mantispy/rohban/rohban_gene.h5ad
-      sha256: 10fc1ef1d57103c5af0341e9f227de0bce68dd5ab6e4df42ca2a1c840866ee0a
+      sha256: 3ccf4bc451b07ce2f95329c397666fdd4a72c72c2a3a13788f0723f666490ad1
     - name: rohban_gene_selected.h5ad
       url: https://exampledata.scverse.org/mantispy/rohban/rohban_gene_selected.h5ad
-      sha256: 19e31e0db178459b279ce8fce4d8749072309dd682dfe2f24407d7160a859bbd
+      sha256: 1210a773ff99c4c1588e78e8abb7a7b5c2dcad9a8fd89e6d6b2097c3eadcfc4e
 
   neuropainting:
     type: mantispy
