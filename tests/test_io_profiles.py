@@ -536,6 +536,19 @@ def test_stamp_perturbation_override_and_validation():
     assert "perturbation" not in adata.uns["mantispy"]
 
 
+def test_stamp_rejects_a_missing_control_column():
+    adata = _embedding_adata()
+    adata.obs["gene"] = ["a", "b"]
+    with pytest.raises(ValueError, match="control_column"):
+        mt.io.stamp(
+            adata,
+            resolution="well",
+            feature_kind="embedding",
+            perturbation={"column": "gene", "control_column": "typo"},
+        )
+    assert "perturbation" not in adata.uns["mantispy"]
+
+
 def test_perturbation_record_round_trips(tmp_path):
     adata = _embedding_adata()
     adata.obs["gene"] = ["a", "b"]

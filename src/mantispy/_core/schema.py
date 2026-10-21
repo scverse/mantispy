@@ -359,6 +359,9 @@ def _perturbation_record(adata: AnnData, store: dict, perturbation: Mapping[str,
         }
         if record["column"] not in adata.obs:
             raise ValueError(f"perturbation column {record['column']!r} is not a column of obs")
+        control = perturbation.get("control_column")
+        if control is not None and control not in adata.obs:
+            raise ValueError(f"perturbation control_column {control!r} is not a column of obs")
         return record
     if "perturbation" not in store and PERTURBATION_COLUMN in adata.obs:
         return {"column": PERTURBATION_COLUMN, "control_column": CONTROL_COLUMN}
@@ -589,6 +592,10 @@ def _check_perturbation_record(adata: AnnData, store: dict, report: ValidationRe
         report.warnings.append("the recorded perturbation should be a mapping with a string 'column'")
     elif record["column"] not in adata.obs:
         report.warnings.append(f"the recorded perturbation column {record['column']!r} is not a column of obs")
+    elif isinstance(record.get("control_column"), str) and record["control_column"] not in adata.obs:
+        report.warnings.append(
+            f"the recorded perturbation control_column {record['control_column']!r} is not a column of obs"
+        )
 
 
 def _check_obs_writable(adata: AnnData, report: ValidationReport) -> None:
