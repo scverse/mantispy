@@ -161,6 +161,7 @@ UNS_KEYS: tuple[str, ...] = (
     "consensus_from",
     "membership",
     "truth",
+    "embedding",
 )
 
 #: Result tables mantispy writes under ``uns["mantispy"]`` and reads back.
@@ -496,6 +497,15 @@ def _check_result_keys(store: dict, report: ValidationReport) -> None:
         )
 
 
+def _check_embedding_provenance(store: dict, report: ValidationReport) -> None:
+    """Warn when the optional ``uns['mantispy']['embedding']`` record has no string ``model``."""
+    if "embedding" not in store:
+        return
+    record = store["embedding"]
+    if not isinstance(record, dict) or not isinstance(record.get("model"), str):
+        report.warnings.append("uns['mantispy']['embedding'] should be a mapping with a string 'model'")
+
+
 def _check_obs_writable(adata: AnnData, report: ValidationReport) -> None:
     """Error on an object-dtype obs column holding list, tuple, set, dict or array cells.
 
@@ -668,6 +678,7 @@ def validate(adata: AnnData, *, raise_on_error: bool = False) -> ValidationRepor
     _check_grouped_by(adata, store, resolution, report)
     _check_history(store, report)
     _check_result_keys(store, report)
+    _check_embedding_provenance(store, report)
     _check_obs_writable(adata, report)
 
     if resolution in REQUIRED_OBS:

@@ -546,6 +546,7 @@ def stamp(
     *,
     feature_kind: str | None = None,
     grouped_by: Sequence[str] | None = None,
+    provenance: Mapping[str, str] | None = None,
     copy: bool = False,
 ) -> ad.AnnData | None:
     """Mark an :class:`~anndata.AnnData` built elsewhere as a mantispy object.
@@ -562,6 +563,8 @@ def stamp(
             Pass it when the whole matrix is one kind (a matrix of embeddings is ``"embedding"``); it fills every feature.
             Leave it ``None`` only when ``var["feature_kind"]`` is already complete and valid (as a mantispy-read object's is).
         grouped_by: For ``"aggregate"`` resolution, the columns that define one row; required there since there is no default.
+        provenance: Optional record of where an embedding came from, stored as ``uns["mantispy"]["embedding"]``.
+            Expected keys are ``model`` (required when given), ``version`` and ``pooling``.
         copy: Return a stamped copy instead of stamping in place.
 
     Returns:
@@ -641,6 +644,8 @@ def stamp(
             kinds[feature_mask(obj, "is_feature")] = feature_kind
             obj.var["feature_kind"] = kinds.to_numpy()
         _record(obj, resolution=resolution, grouped_by=grouped_by)
+        if provenance is not None:
+            obj.uns["mantispy"] = {**obj.uns["mantispy"], "embedding": dict(provenance)}
 
     # §16.1: stamping runs the full contract. Validate a stamped copy first, so a rejected stamp (e.g. a
     # float64 embedding matrix, or an unparsable well) never leaves the caller's object half-stamped.
