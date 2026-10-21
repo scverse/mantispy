@@ -41,6 +41,47 @@ def test_from_dataframe_records_an_aggregate_grouping():
     assert adata.uns["mantispy"]["grouped_by"] == ["Metadata_Barcode"]
 
 
+def test_well_grid_is_filled_on_read():
+    """A read fills 0-based Metadata_Row/Col so downstream code need not recompute well geometry."""
+    obs = from_dataframe(_frame(well=("A01", "A02", "B01", "H12")), channels=["DNA"]).obs
+    assert obs["Metadata_Row"].to_numpy().tolist() == [0, 0, 1, 7]
+    assert obs["Metadata_Col"].to_numpy().tolist() == [0, 1, 0, 11]
+    assert obs["Metadata_Row"].dtype.kind == "i"
+    assert obs["Metadata_Col"].dtype.kind == "i"
+
+
+def test_well_grid_is_filled_on_stamp():
+    adata = ad.AnnData(
+        np.ones((2, 2), dtype="float32"),
+        obs=pd.DataFrame({"Metadata_Plate": ["P1", "P1"], "Metadata_Well": ["A01", "B02"]}, index=["0", "1"]),
+    )
+    adata.var_names = ["Cells_AreaShape_Area", "Cells_AreaShape_Perimeter"]
+    mt.io.stamp(adata, resolution="well", feature_kind="measurement")
+    assert adata.obs["Metadata_Row"].to_numpy().tolist() == [0, 1]
+    assert adata.obs["Metadata_Col"].to_numpy().tolist() == [0, 1]
+
+
+def test_well_grid_is_filled_by_the_low_level_stamp():
+    """A dataset builder that calls _core.schema.stamp directly (e.g. cp_posh) must still get the grid."""
+    from mantispy._core.schema import stamp as core_stamp
+
+    adata = ad.AnnData(
+        np.ones((2, 2), dtype="float32"),
+        obs=pd.DataFrame({"Metadata_Plate": ["P1", "P1"], "Metadata_Well": ["B03", "C05"]}, index=["0", "1"]),
+    )
+    core_stamp(adata, resolution="object")
+    assert adata.obs["Metadata_Row"].to_numpy().tolist() == [1, 2]
+    assert adata.obs["Metadata_Col"].to_numpy().tolist() == [2, 4]
+
+
+def test_well_grid_skipped_without_a_well_column():
+    """Not every object is well-based, so an object with no Metadata_Well stamps without the columns and without error."""
+    frame = _frame().assign(Metadata_Gene=["g1", "g2", "g3", "g4"]).drop(columns=["Metadata_Plate", "Metadata_Well"])
+    obs = from_dataframe(frame, channels=["DNA"], resolution="aggregate", grouped_by=["Metadata_Gene"]).obs
+    assert "Metadata_Row" not in obs.columns
+    assert "Metadata_Col" not in obs.columns
+
+
 def test_sentinels_become_nan():
     frame = _frame()
     frame.loc[0, "Cells_AreaShape_Area"] = -999.0

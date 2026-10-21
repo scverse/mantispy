@@ -16,7 +16,7 @@ from mantispy.pp._normalize import normalize
 from mantispy.pp._outliers import outliers
 from mantispy.pp._qc import calculate_qc_metrics, filter_cells, filter_features
 from mantispy.pp._sample import downsample
-from mantispy.pp._select import decorr_threshold_sweep, feature_select, subset_features
+from mantispy.pp._select import decorr_threshold_sweep, feature_blocklist, feature_select, subset_features
 from mantispy.pp._sphere import sphere, tvn
 from mantispy.pp._transform import rank_int
 from mantispy.pp._well_qc import well_qc
@@ -31,6 +31,7 @@ __all__ = [
     "detect_plate_position",
     "downsample",
     "feature_batch_sensitivity",
+    "feature_blocklist",
     "feature_reproducibility",
     "feature_select",
     "feature_select_chatterjee",

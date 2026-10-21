@@ -16,7 +16,7 @@ from anndata import AnnData
 from mantispy._core._corr import _blockwise, correlated_pairs, rank_revealing_subset
 from mantispy._core._reduce import get_matrix, group_codes, group_offsets
 from mantispy._core._stats import nanvar
-from mantispy._core.features import blocklist_hits
+from mantispy._core.features import blocklist_hits, load_blocklist
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy._core.mutation import inplace_or_copy
@@ -40,6 +40,23 @@ DEFAULT_OPERATIONS = (
     "drop_na_columns",
     "blocklist",
 )
+
+
+def feature_blocklist(name: str = "default") -> list[str]:
+    """Feature names a blocklist drops.
+
+    :func:`feature_select` applies the blocklist for you (pass ``blocklist=...``); this is for inspecting the list itself.
+
+    Args:
+        name: Which blocklist to load; ``"default"`` is the bundled pycytominer list.
+
+    Returns:
+        The blocked feature names.
+
+    Raises:
+        ValueError: `name` names a blocklist that does not exist.
+    """
+    return load_blocklist(name)
 
 
 def _op_drop_degenerate(adata: AnnData) -> np.ndarray:

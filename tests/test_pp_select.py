@@ -266,3 +266,11 @@ def test_features_normalize_could_not_scale_are_dropped_before_the_rest_are_judg
 
     assert adata.var["selected"].tolist() == [True, True, True, False]
     assert adata.uns["mantispy"]["feature_select"]["drop_degenerate"] == 1
+
+
+def test_feature_blocklist_exposes_the_bundled_list():
+    names = mt.pp.feature_blocklist()
+    assert isinstance(names, list)
+    assert names and all(isinstance(name, str) for name in names)
+    with pytest.raises(ValueError, match="unknown blocklist"):
+        mt.pp.feature_blocklist("nope")

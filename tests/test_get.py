@@ -71,6 +71,20 @@ def test_negcon_reads_the_type_not_the_boolean(cells):
     assert cells.obs["Metadata_Control"].to_numpy().sum() > negcon.sum()
 
 
+def test_resolution_reports_the_recorded_level(cells, well_profiles):
+    assert mt.get.resolution(cells) == "object"
+    assert mt.get.resolution(well_profiles()) == "well"
+
+
+def test_resolution_default_tolerates_an_unstamped_object():
+    import anndata as ad
+
+    adata = ad.AnnData(np.ones((2, 2), dtype="float32"))
+    assert mt.get.resolution(adata, default="aggregate") == "aggregate"
+    with pytest.raises(ValueError, match="no uns"):
+        mt.get.resolution(adata)
+
+
 def test_scanpy_reexports_are_available():
     assert callable(mt.get.obs_df) and callable(mt.get.var_df)
 

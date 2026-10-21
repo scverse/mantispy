@@ -1,5 +1,7 @@
 """Reading a CellProfiler ExportToSpreadsheet directory through read_profiles."""
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -78,6 +80,15 @@ def test_non_one_to_one_raises_and_can_be_waived(tmp_path, make_cellprofiler_dir
     with pytest.raises(ValueError, match="not one-to-one"):
         mt.io.read_profiles(directory)
     assert mt.io.read_profiles(directory, strict_one_to_one=False).n_obs == 24
+
+
+def test_a_wide_export_reads_without_a_fragmentation_warning(tmp_path, make_cellprofiler_dir):
+    """Joining a wide object table once trips pandas' fragmentation warning; the readers add columns via concat so it does not (reading a real CellProfiler export was noisy)."""
+    directory = make_cellprofiler_dir(tmp_path / "wide", extra_object_columns=150)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", pd.errors.PerformanceWarning)
+        adata = mt.io.read_profiles(directory)
+    assert "Nuclei_AreaShape_Area" in adata.var_names
 
 
 def test_platemap_is_joined_by_well(cellprofiler_dir, platemap_path):

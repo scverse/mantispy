@@ -17,7 +17,7 @@ from mantispy._core.features import _infer_channels, empty_annotation, parse_fea
 from mantispy._core.frames import as_frame, categorize_metadata
 from mantispy._core.logging import get_logger, report_drop
 from mantispy._core.masks import feature_mask
-from mantispy._core.plate import normalize_well
+from mantispy._core.plate import fill_well_grid, normalize_well
 from mantispy._core.provenance import record_params
 from mantispy._core.schema import (
     FEATURE_KINDS,
@@ -226,6 +226,7 @@ def from_dataframe(
         )
     if "Metadata_Well" in obs:
         obs["Metadata_Well"] = [normalize_well(well) for well in obs["Metadata_Well"].astype(str)]
+    fill_well_grid(obs)
     obs = categorize_metadata(_adopt_counts(obs))
     if resolution == "object":
         # Mint any object identity the frame lacks (a CytoTable parquet carries image/object numbers but
@@ -610,6 +611,7 @@ def stamp(
     def _apply(obj: ad.AnnData) -> None:
         for column, values in minted.items():
             obj.obs[column] = values
+        fill_well_grid(as_frame(obj.obs))
         if controls is not None:
             obj.obs["Metadata_Control_Type"], obj.obs["Metadata_Control"] = controls
         if absent := [column for column in REQUIRED_VAR if column not in obj.var]:

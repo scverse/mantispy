@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from mantispy.get._accessors import controls, features, to_dataframe
+from mantispy.get._accessors import controls, features, resolution, to_dataframe
 
 if TYPE_CHECKING:
     from scanpy.get import obs_df, var_df
 
 _SCANPY_NAMES = ("obs_df", "var_df")
 
-__all__ = ["controls", "features", "obs_df", "to_dataframe", "var_df"]
+__all__ = ["controls", "features", "obs_df", "resolution", "to_dataframe", "var_df"]
 
 
 def __getattr__(name: str) -> Any:

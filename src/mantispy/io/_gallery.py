@@ -348,10 +348,13 @@ def _cell_table(files: Sequence[Path], masks: Mapping[str, npt.NDArray], channel
     from spatialdata.models import TableModel
 
     # The analysis tables name their columns without the object, as ExportToSpreadsheet writes them.
-    frame = pd.concat(
-        [_prefix(pd.read_csv(file), "Cells").assign(Metadata_Key=file.parent.name) for file in files],
-        ignore_index=True,
-    ).rename(columns={"ImageNumber": "Metadata_ImageNumber", "ObjectNumber": "Metadata_ObjectNumber"})
+    # Add Metadata_Key after the concat rather than per file: a single .assign onto a wide, many-block
+    # frame trips pandas' fragmentation warning, while concat consolidates the blocks first.
+    frames = [_prefix(pd.read_csv(file), "Cells") for file in files]
+    frame = pd.concat(frames, ignore_index=True).rename(
+        columns={"ImageNumber": "Metadata_ImageNumber", "ObjectNumber": "Metadata_ObjectNumber"}
+    )
+    frame["Metadata_Key"] = np.repeat([file.parent.name for file in files], [len(part) for part in frames])
     # Guessing channels from the column names would invent entries like 'tubeness' and 'Overflow'.
     adata = from_dataframe(frame, resolution="object", channels=channels)
     obs = cast("pd.DataFrame", adata.obs)
