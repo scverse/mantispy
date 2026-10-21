@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numbers
+import warnings
 from typing import Literal
 
 import numpy as np
@@ -12,6 +13,24 @@ from mantispy._core.logging import get_logger
 from mantispy._core.mutation import inplace_or_copy
 
 METHODS = ("hierarchical", "leiden")
+
+_DOMINANT_SHARE = 0.8
+
+
+def _warn_if_degenerate(labels: np.ndarray) -> None:
+    """Warn when one cluster holds more than 80% of the rows."""
+    counts = pd.Series(labels).value_counts()
+    n_obs = int(counts.sum())
+    if n_obs == 0:
+        return
+    share = counts.iloc[0] / n_obs
+    if share > _DOMINANT_SHARE:
+        warnings.warn(
+            f"one cluster holds {share:.0%} of rows; clustering may be degenerate. "
+            "Consider a different method or resolution.",
+            UserWarning,
+            stacklevel=3,
+        )
 
 
 def _auto_cut(linkage_matrix: np.ndarray, distances: np.ndarray, max_clusters: int) -> tuple[np.ndarray, float, float]:
@@ -181,6 +200,7 @@ def cluster(
         sc.pp.neighbors(adata, use_rep=use_rep)
         sc.tl.leiden(adata, resolution=resolution, key_added=key_added, flavor="igraph", n_iterations=2, directed=False)
         get_logger().info("cluster(leiden): %d cluster(s)", adata.obs[key_added].nunique())
+        _warn_if_degenerate(adata.obs[key_added].to_numpy())
         return None
 
     from scipy.cluster.hierarchy import fcluster
@@ -224,4 +244,5 @@ def cluster(
         "labels": [str(name) for name in adata.obs_names],
     }
     get_logger().info("cluster(hierarchical): %d cluster(s) over %d profile(s)", chosen, adata.n_obs)
+    _warn_if_degenerate(labels)
     return None

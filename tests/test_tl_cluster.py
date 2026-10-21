@@ -198,3 +198,25 @@ def test_copy_leaves_the_input_alone(planted):
     result = mt.tl.cluster(planted, use_rep=None, copy=True)
     assert "cluster" in result.obs
     assert "cluster" not in planted.obs
+
+
+def test_cluster_warns_on_degenerate_grouping():
+    rng = np.random.default_rng(0)
+    values = rng.normal(scale=0.1, size=(24, 30))
+    values[0] += 50.0  # one far outlier; the other 23 rows form a single blob
+    adata = ad.AnnData(
+        X=values.astype(np.float32),
+        obs=pd.DataFrame(index=[str(i) for i in range(24)]),
+        var=pd.DataFrame(index=[f"f{i}" for i in range(30)]),
+    )
+    adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "aggregate"}
+    with pytest.warns(UserWarning, match=r"one cluster holds \d+% of rows"):
+        mt.tl.cluster(adata, use_rep=None, n_clusters=2)
+
+
+def test_cluster_is_silent_on_balanced_groups(planted):
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        mt.tl.cluster(planted, use_rep=None)
