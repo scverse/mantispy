@@ -416,3 +416,15 @@ def test_a_quadratic_similarity_is_refused_with_the_fix_named():
 def test_grit_accepts_reference_none_to_use_every_row(profiles):
     mt.tl.grit(profiles, reference=None, key_added="grit_all")
     assert profiles.obs["grit_all"].notna().any()
+
+
+@requires_copairs
+def test_map_activity_groups_by_label_when_perturbation_column_is_absent(profiles):
+    """The perturbation column is a defaulted argument, not a hard-coded name."""
+    profiles.obs["Metadata_Gene"] = profiles.obs.pop("Metadata_Perturbation")
+    mt.tl.map(profiles, label="Metadata_Gene", mode="activity", null_size=200)
+    table = profiles.uns["mantispy"]["map"]
+
+    assert "Metadata_Gene" in table.columns
+    assert "DMSO" not in set(table["Metadata_Gene"])
+    assert table["score"].median() > 0.9

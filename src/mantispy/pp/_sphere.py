@@ -140,7 +140,9 @@ def _extend_epsilon(scored: dict[float, float], evaluate: Callable[[float], floa
             break
 
 
-def _select_epsilon(adata: AnnData, X: np.ndarray, method: str, reference: str | None) -> tuple[float, np.ndarray]:
+def _select_epsilon(
+    adata: AnnData, X: np.ndarray, method: str, reference: str | None, label: str, batch: str
+) -> tuple[float, np.ndarray]:
     """Pick ``epsilon`` for ``epsilon="auto"``, returning it and the control mask it scored against.
 
     The jump-profiling-recipe's fixed grid gives a reproducible base; each candidate is fitted on the reference and scored by the mean of its activity and replicability mAP. The search then samples past both ends of the grid and between points when the best sits there, so the chosen value can fall outside the recipe's range. The finite argmax, the full set of candidates and their scores are written to ``uns["mantispy"]["sphere_epsilon"]``.
@@ -157,10 +159,10 @@ def _select_epsilon(adata: AnnData, X: np.ndarray, method: str, reference: str |
 
     reference_column = "Metadata_Control_Type" if reference in CONTROL_CLASSES else reference
     missing = []
-    if "Metadata_Perturbation" not in adata.obs:
-        missing.append("'Metadata_Perturbation' to group replicates by")
-    if "Metadata_Plate" not in adata.obs:
-        missing.append("'Metadata_Plate' to draw the negatives from")
+    if label not in adata.obs:
+        missing.append(f"{label!r} to group replicates by")
+    if batch not in adata.obs:
+        missing.append(f"{batch!r} to draw the negatives from")
     if reference is None:
         missing.append("a negcon reference, but reference=None selects every row as the reference")
     elif reference_column not in adata.obs:
@@ -181,8 +183,8 @@ def _select_epsilon(adata: AnnData, X: np.ndarray, method: str, reference: str |
 
     obs = as_frame(adata.obs)
     base_meta = obs[[column for column in obs.columns if column.startswith("Metadata_")]].reset_index(drop=True)
-    activity = _resolve_mode("activity", label="Metadata_Perturbation", batch="Metadata_Plate")
-    replicability = _resolve_mode("replicability", label="Metadata_Perturbation", batch="Metadata_Plate")
+    activity = _resolve_mode("activity", label=label, batch=batch)
+    replicability = _resolve_mode("replicability", label=label, batch=batch)
     treated = ~is_control
 
     control_positions = np.flatnonzero(is_control)
@@ -190,7 +192,7 @@ def _select_epsilon(adata: AnnData, X: np.ndarray, method: str, reference: str |
     activity_meta[REFERENCE_COLUMN] = np.where(is_control, np.arange(adata.n_obs), -1)
     treated_meta = base_meta[treated].reset_index(drop=True)
     # Guarded before _decompose so a no-replicate screen does not pay a throwaway SVD.
-    if treated_meta.empty or treated_meta["Metadata_Perturbation"].value_counts().max() < 2:
+    if treated_meta.empty or treated_meta[label].value_counts().max() < 2:
         raise ValueError(
             "sphere(epsilon='auto') needs replicate pairs to score, but no perturbation has two "
             "or more wells. Pass a float epsilon."
@@ -257,6 +259,8 @@ def sphere(
     epsilon: float | str = 1e-6,
     by: str | None = None,
     key_added: str | None = None,
+    label: str = "Metadata_Perturbation",
+    batch: str = "Metadata_Plate",
     copy: bool = False,
 ) -> AnnData | None:
     """Whiten profiles with a transform fitted on the reference rows.
@@ -270,10 +274,12 @@ def sphere(
         reference: Rows to fit on: ``"negcon"`` for the controls, ``None`` for everything, or the name of a boolean ``obs`` column.
         epsilon: Regularization added to the singular values, or ``"auto"`` to pick it from the data.
             ``"auto"`` scores each candidate by the mean of its activity and replicability mAP on the transformed profiles and keeps the argmax, starting from the jump-profiling-recipe grid and then sampling past both ends and between points when the best sits there, so the chosen value can fall outside the recipe's range.
-            It needs copairs, ``Metadata_Perturbation``, ``Metadata_Plate`` and a negcon reference; the search is global, so ``by`` only changes how the chosen value is applied.
+            It needs copairs, the ``label`` and ``batch`` columns and a negcon reference; the search is global, so ``by`` only changes how the chosen value is applied.
             Every candidate, its score and the chosen value are written to ``uns["mantispy"]["sphere_epsilon"]``.
         by: Fit and apply separately within each group of this column, e.g. per batch.
         key_added: Write to ``layers[key_added]`` instead of overwriting ``X``.
+        label: The ``obs`` column naming the perturbation, which ``epsilon="auto"`` groups replicates by.
+        batch: The ``obs`` column naming the plate or batch, which ``epsilon="auto"`` draws negatives from.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
@@ -299,7 +305,7 @@ def sphere(
 
     auto = epsilon == "auto"
     if auto:
-        epsilon, mask = _select_epsilon(adata, X, method, reference)
+        epsilon, mask = _select_epsilon(adata, X, method, reference, label, batch)
     elif isinstance(epsilon, bool) or not isinstance(epsilon, int | float):
         # bool is an int subclass, so reject it before the float path turns `singular + True` into a transform.
         raise ValueError(f"epsilon must be a float or 'auto', got {epsilon!r}")

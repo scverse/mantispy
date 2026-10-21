@@ -23,6 +23,7 @@ def feature_signature(
     key: str = "differential",
     by: Sequence[str] = DEFAULT_BY,
     statistic: str = "t",
+    label: str = "Metadata_Perturbation",
 ) -> AnnData:
     """Collapse a differential table into a perturbation-by-feature-family matrix.
 
@@ -32,6 +33,7 @@ def feature_signature(
         by: ``var`` columns whose combination names a family.
             The default is the feature group, the channel it was measured in, and the compartment it was measured on.
         statistic: Column of the table to average within each family, such as ``"t"`` or ``"effect"`` (the raw contrast).
+        label: The ``obs`` column naming the groups of the table, as passed to ``groupby`` of :func:`~mantispy.tl.differential_features`.
 
     Returns:
         A new :class:`~anndata.AnnData` of perturbations by families, with each family's ``by`` columns and ``n_features`` in ``var``, beside the schema's remaining annotation columns, left empty because a family is not a measurement they describe.
@@ -100,13 +102,13 @@ def feature_signature(
         obs=pd.DataFrame(index=wide.index.astype(str).rename(None)),
         var=var,
     )
-    signature.obs["Metadata_Perturbation"] = signature.obs_names.to_numpy()
+    signature.obs[label] = signature.obs_names.to_numpy()
     obs = as_frame(adata.obs)
-    if "Metadata_Perturbation" in obs.columns:
+    if label in obs.columns:
         # Carry every column constant within a perturbation (spec §13.1), not just Metadata_ ones, and
         # drop a column that varies within a perturbation rather than copy an arbitrary first value.
-        carried = [column for column in obs.columns if column != "Metadata_Perturbation"]
-        grouped = obs[carried].groupby(obs["Metadata_Perturbation"], observed=True)
+        carried = [column for column in obs.columns if column != label]
+        grouped = obs[carried].groupby(obs[label], observed=True)
         constant = grouped.nunique(dropna=False).le(1).all()
         firsts = grouped.first()
         for column in carried:
@@ -117,12 +119,12 @@ def feature_signature(
             if values.notna().any():
                 signature.obs[column] = values.to_numpy()
     store = adata.uns.get("mantispy", {})
-    stamp(signature, resolution="aggregate", grouped_by=["Metadata_Perturbation"], history=store.get("history"))
+    stamp(signature, resolution="aggregate", grouped_by=[label], history=store.get("history"))
     record_history(
         signature,
         "feature_signature",
         params={"key": key, "by": list(by), "statistic": statistic},
-        source=level_change_source(adata, "aggregate", ["Metadata_Perturbation"]),
+        source=level_change_source(adata, "aggregate", [label]),
     )
     get_logger().info(
         "feature_signature: %d perturbations by %d families, from %d features",
