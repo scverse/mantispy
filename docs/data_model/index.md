@@ -1,5 +1,7 @@
 # Data model
 
+Starting from your own table? Follow {doc}`../tutorials/data/bring_your_own`.
+
 ## Why there is a schema
 
 Image-based profiling data arrives in many shapes: one row per segmented cell, one row per well, one row per gene.
