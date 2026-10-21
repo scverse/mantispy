@@ -66,7 +66,12 @@ A matrix of learned embeddings is stamped with `feature_kind="embedding"`.
 Add `provenance` to say which model produced it:
 
 ```python
-mt.io.stamp(adata, resolution="well", feature_kind="embedding", provenance={"model": "my-encoder", "version": "1.2", "pooling": "mean"})
+mt.io.stamp(
+    adata,
+    resolution="well",
+    feature_kind="embedding",
+    provenance={"model": "my-encoder", "version": "1.2", "pooling": "mean"},
+)
 ```
 
 `model` is required when `provenance` is given.
