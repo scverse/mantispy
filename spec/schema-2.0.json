@@ -101,7 +101,6 @@
         "consensus_from",
         "membership",
         "truth",
-        "embedding",
         "perturbation"
     ],
     "uns_results": [

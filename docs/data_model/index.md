@@ -35,8 +35,7 @@ Stamping runs the full validation, so an object that lacks them is rejected befo
 `Metadata_Well` is a zero-padded well name such as `A03`.
 `Metadata_Perturbation` is the canonical perturbation column; keep `Metadata_Compound` or `Metadata_Gene` beside it when you want the specific name.
 
-Embedding provenance is recorded with `stamp(provenance={"model": ..., "version": ..., "pooling": ...})` and stored in `uns["mantispy"]["embedding"]`.
-`model` is required when `provenance` is given.
+Learned-embedding features are declared with `feature_kind="embedding"`; there is no provenance slot.
 
 ## Why there is a schema
 

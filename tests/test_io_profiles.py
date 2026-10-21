@@ -465,56 +465,33 @@ def test_stamp_translates_the_control_model_of_a_1_0_object():
     assert adata.uns["mantispy"]["resolution"] == "well"
 
 
-def _embedding_adata(provenance=None):
+def _embedding_adata():
     adata = ad.AnnData(
         np.ones((2, 3), dtype="float32"),
         obs=pd.DataFrame({"Metadata_Plate": ["P1", "P1"], "Metadata_Well": ["A01", "A02"]}, index=["0", "1"]),
     )
     adata.var_names = ["emb_0", "emb_1", "emb_2"]
-    mt.io.stamp(adata, resolution="well", feature_kind="embedding", provenance=provenance)
+    mt.io.stamp(adata, resolution="well", feature_kind="embedding")
     return adata
 
 
-_PROVENANCE = {"model": "openphenom", "version": "1.0", "pooling": "mean"}
-
-
-def test_stamp_records_embedding_provenance():
-    adata = ad.AnnData(
-        np.ones((2, 3), dtype="float32"),
-        obs=pd.DataFrame({"Metadata_Plate": ["P1", "P1"], "Metadata_Well": ["A01", "A02"]}, index=["0", "1"]),
-    )
-    adata.var_names = ["emb_0", "emb_1", "emb_2"]
-    out = mt.io.stamp(adata, resolution="well", feature_kind="embedding", provenance=_PROVENANCE, copy=True)
-    assert out.uns["mantispy"]["embedding"]["model"] == "openphenom"
-
-
-def test_embedding_provenance_round_trips(tmp_path):
-    adata = _embedding_adata(_PROVENANCE)
-    path = tmp_path / "e.h5ad"
-    mt.io.write(adata, path)
-    assert mt.io.read(path).uns["mantispy"]["embedding"]["pooling"] == "mean"
-
-
-def test_embedding_object_without_provenance_is_valid():
+def test_stamp_has_no_provenance_kwarg():
     adata = _embedding_adata()
-    assert "embedding" not in adata.uns["mantispy"]
+    with pytest.raises(TypeError):
+        mt.io.stamp(adata, resolution="well", feature_kind="embedding", provenance={"model": "x"})
+
+
+def test_embedding_feature_kind_still_valid():
+    adata = _embedding_adata()
     assert mt.io.validate(adata).ok
+    assert "embedding" not in adata.uns["mantispy"]
+    assert set(adata.var["feature_kind"][adata.var["is_feature"]]) == {"embedding"}
 
 
-def test_registered_embedding_key_is_not_flagged():
+def test_embedding_uns_slot_is_not_a_registered_key():
     adata = _embedding_adata()
     adata.uns["mantispy"]["embedding"] = {"model": "m"}
-    report = mt.io.validate(adata)
-    assert report.ok
-    assert not any("embedding" in w for w in report.warnings)
-
-
-def test_embedding_provenance_without_a_model_warns():
-    adata = _embedding_adata()
-    adata.uns["mantispy"]["embedding"] = {"pooling": "mean"}
-    report = mt.io.validate(adata)
-    assert report.ok
-    assert any("model" in w for w in report.warnings)
+    assert any("not a registered result key" in w for w in mt.io.validate(adata).warnings)
 
 
 def test_stamp_records_the_perturbation_column():
