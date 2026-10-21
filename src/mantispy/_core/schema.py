@@ -28,14 +28,6 @@ if TYPE_CHECKING:
 #: schema (kept only for migration); see ``spec/morphology-schema-2.0.md``.
 SCHEMA_VERSION = "2.0"
 
-#: Status of :data:`SCHEMA_VERSION`. ``"experimental"`` until the migration is complete.
-SCHEMA_STATUS = "experimental"
-
-#: Statuses :func:`validate` accepts. An object keeps the status it was stamped with, so an
-#: ``"experimental"`` object still validates once the maintainers flip :data:`SCHEMA_STATUS` to
-#: ``"stable"``; only a status outside this set is rejected.
-SCHEMA_STATUSES: tuple[str, ...] = ("experimental", "stable")
-
 #: Versions :func:`migrate` can bring to :data:`SCHEMA_VERSION`, oldest first.
 SUPPORTED_VERSIONS: tuple[str, ...] = ("0.1", "1.0", "2.0")
 
@@ -144,7 +136,6 @@ REQUIRED_VAR: tuple[str, ...] = tuple(VAR_COLUMNS)
 #: The core descriptors every schema-2.0 object MUST carry under ``uns["mantispy"]``.
 REQUIRED_UNS: tuple[str, ...] = (
     "schema_version",
-    "schema_status",
     "resolution",
     "grouped_by",
     "history",
@@ -442,7 +433,6 @@ def stamp(
     adata.uns["mantispy"] = {
         **store,
         "schema_version": SCHEMA_VERSION,
-        "schema_status": SCHEMA_STATUS,
         "resolution": resolution,
         "grouped_by": list(grouped_by),
         "history": entries,
@@ -780,11 +770,6 @@ def validate(adata: AnnData, *, raise_on_error: bool = False) -> ValidationRepor
         )
         report.errors.append(f"schema_version {seen!r}: {remedy}{SCHEMA_VERSION!r}")
 
-    if "schema_status" not in store:
-        report.errors.append("uns['mantispy']['schema_status'] is missing")
-    elif store["schema_status"] not in SCHEMA_STATUSES:
-        report.errors.append(f"unknown schema_status {store['schema_status']!r}; must be one of {SCHEMA_STATUSES}")
-
     resolution = store.get("resolution")
     if resolution is None:
         report.errors.append(
@@ -1107,7 +1092,6 @@ def migrate(adata: AnnData, copy: bool = False) -> AnnData | None:
 
     store = target.uns.setdefault("mantispy", {})
     store["schema_version"] = SCHEMA_VERSION
-    store["schema_status"] = SCHEMA_STATUS
     store.setdefault("history", [])
     store["resolution"] = resolution
     store["grouped_by"] = grouped_by

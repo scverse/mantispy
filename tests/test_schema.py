@@ -10,7 +10,6 @@ from mantispy._core.schema import (
     FEATURE_KINDS,
     REQUIRED_UNS,
     RESOLUTIONS,
-    SCHEMA_STATUS,
     SCHEMA_VERSION,
     ensure_object_identity,
     get_resolution,
@@ -53,11 +52,14 @@ def test_valid_object_passes(adata):
     assert str(report) == "valid"
 
 
+def test_stamp_writes_no_schema_status(adata):
+    assert "schema_status" not in adata.uns["mantispy"]
+    assert validate(adata).ok is True
+
+
 def test_schema_version_is_2_0_experimental(adata):
     assert SCHEMA_VERSION == "2.0"
-    assert SCHEMA_STATUS == "experimental"
     assert adata.uns["mantispy"]["schema_version"] == "2.0"
-    assert adata.uns["mantispy"]["schema_status"] == "experimental"
 
 
 def test_stamp_seeds_history(adata):
@@ -365,7 +367,6 @@ def test_public_stamping_creates_a_valid_2_0_object():
     report = mt.io.validate(obj)
     assert report.ok, report.errors
     assert obj.uns["mantispy"]["schema_version"] == "2.0"
-    assert obj.uns["mantispy"]["schema_status"] == "experimental"
     assert obj.uns["mantispy"]["grouped_by"] == ["Metadata_Plate", "Metadata_Well"]
     assert [json.loads(r)["operation"] for r in obj.uns["mantispy"]["history"]] == ["stamp"]
 
@@ -414,7 +415,6 @@ def _set_wells(values):
         (lambda a: setattr(a, "var", a.var.drop(columns="feature_group")), "feature_group"),
         (lambda a: a.uns.pop("mantispy"), "schema_version"),
         (lambda a: a.uns["mantispy"].update(schema_version="99.0"), "99.0"),
-        (lambda a: a.uns["mantispy"].pop("schema_status"), "schema_status"),
         (lambda a: setattr(a, "X", a.X.astype(np.float64)), "float32"),
         (_set_wells(["A01", "A01", "nope", "A02"]), "Metadata_Well"),
     ],
@@ -424,7 +424,6 @@ def _set_wells(values):
         "no_var_column",
         "no_uns",
         "wrong_version",
-        "no_status",
         "float64_X",
         "bad_well_name",
     ],
@@ -477,7 +476,6 @@ def test_published_spec_matches_the_constants():
 
     spec = json.loads((pathlib.Path(__file__).parents[1] / f"spec/schema-{s.SCHEMA_VERSION}.json").read_text())
     assert spec["schema_version"] == s.SCHEMA_VERSION
-    assert spec["status"] == s.SCHEMA_STATUS
     assert spec["required_obs"] == {k: list(v) for k, v in s.REQUIRED_OBS.items()}
     assert spec["reserved_obs"] == list(s.RESERVED_OBS)
     assert spec["required_var"] == list(s.REQUIRED_VAR)
@@ -571,7 +569,6 @@ def test_migrate_fills_the_new_core_fields_on_a_1_0_object():
     migrate(obj)
     store = obj.uns["mantispy"]
     assert store["schema_version"] == SCHEMA_VERSION
-    assert store["schema_status"] == SCHEMA_STATUS
     assert store["history"] == []
     assert store["grouped_by"] == ["Metadata_Plate", "Metadata_Well"]
     assert (obj.var["feature_kind"] == "measurement").all()
@@ -952,16 +949,6 @@ def test_validate_reports_a_dirty_is_feature_instead_of_raising(adata):
     report = validate(adata)  # must not raise
     assert not report.ok
     assert any("is_feature" in error for error in report.errors), report.errors
-
-
-def test_schema_status_stable_validates_and_unknown_is_rejected(adata):
-    """An object keeps the status it was stamped with; a future 'stable' stays valid, a typo does not."""
-    adata.uns["mantispy"]["schema_status"] = "stable"
-    assert validate(adata).ok, validate(adata).errors
-    adata.uns["mantispy"]["schema_status"] = "provisional"
-    report = validate(adata)
-    assert not report.ok
-    assert any("schema_status" in error for error in report.errors), report.errors
 
 
 def test_io_stamp_is_atomic_when_feature_kind_is_undeclared():

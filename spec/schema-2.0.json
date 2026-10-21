@@ -3,7 +3,7 @@
     "title": "mantispy AnnData schema",
     "schema_version": "2.0",
     "status": "experimental",
-    "description": "Experimental contract for an AnnData object produced by mantispy, the target of the schema migration. 2.0 is a breaking redesign of the previous internal 1.0 schema; it may change without deprecation until the migration phases (identity, CellProfiler/SpatialData, controls, aggregation, provenance, results) are complete and the maintainers declare it stable. X holds float32 feature values; obs holds Metadata_ columns identifying where each profile came from; var holds the parsed feature annotation including feature_kind; uns['mantispy'] holds the core descriptors (schema_version, schema_status, resolution, grouped_by, history), the channel vocabulary and the result tables. The prose contract lives in spec/morphology-schema-2.0.md. 0.1 and 1.0 objects migrate with mt.io.migrate.",
+    "description": "Experimental contract for an AnnData object produced by mantispy, the target of the schema migration. 2.0 is a breaking redesign of the previous internal 1.0 schema; it may change without deprecation until the migration phases (identity, CellProfiler/SpatialData, controls, aggregation, provenance, results) are complete and the maintainers declare it stable. X holds float32 feature values; obs holds Metadata_ columns identifying where each profile came from; var holds the parsed feature annotation including feature_kind; uns['mantispy'] holds the core descriptors (schema_version, resolution, grouped_by, history), the channel vocabulary and the result tables. The prose contract lives in spec/morphology-schema-2.0.md. 0.1 and 1.0 objects migrate with mt.io.migrate.",
     "migrates_from": ["0.1", "1.0", "2.0"],
     "x_dtype": "float32",
     "resolutions": ["object", "well", "aggregate"],
@@ -86,14 +86,12 @@
     ],
     "required_uns": [
         "schema_version",
-        "schema_status",
         "resolution",
         "grouped_by",
         "history"
     ],
     "uns_keys": [
         "schema_version",
-        "schema_status",
         "resolution",
         "grouped_by",
         "history",
