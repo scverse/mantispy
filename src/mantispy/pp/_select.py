@@ -16,7 +16,7 @@ from anndata import AnnData
 from mantispy._core._corr import _blockwise, correlated_pairs, rank_revealing_subset
 from mantispy._core._reduce import get_matrix, group_codes, group_offsets
 from mantispy._core._stats import nanvar
-from mantispy._core.features import blocklist_hits, load_blocklist
+from mantispy._core.features import blocklist_hits, feature_kind_of, load_blocklist
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy._core.mutation import inplace_or_copy
@@ -230,6 +230,7 @@ def feature_select(
     copy: bool = False,
     *,
     noise_removal_cutoff_mode: str = "absolute",
+    subset: bool = False,
 ) -> AnnData | None:
     """Flag the features worth keeping.
 
@@ -271,11 +272,13 @@ def feature_select(
         noise_removal_cutoff_mode: ``noise_removal``: what ``noise_removal_stdev_cutoff`` is compared against.
             ``"absolute"`` (the default) keeps pycytominer's behaviour, comparing the raw within-group spread and so tied to the normalization scale.
             ``"ratio"`` compares the within-group spread to the feature's total spread, and ``"quantile"`` reads the cutoff as a quantile of the observed within-group spreads; both keep a useful subset under the control-based or MAD normalization the package recommends, where the absolute cutoff keeps everything or nothing.
+        subset: Inplace subset to the selected features, as well as flagging them in ``var[key_added]``.
+            With ``copy=True`` the returned copy is the subset.
 
     Returns:
         ``None``, or the modified copy.
         Writes ``var[key_added]`` and a per-operation count of removals to ``uns["mantispy"]["feature_select"]``, each count being what that operation removes on its own.
-        Nothing is dropped; use :func:`subset_features` for that.
+        Nothing is dropped unless ``subset=True``; :func:`subset_features` does it afterwards.
 
     Raises:
         ValueError: If ``operations`` names an operation that is not in ``OPERATIONS``.
@@ -294,6 +297,14 @@ def feature_select(
     unknown = set(operations) - set(OPERATIONS)
     if unknown:
         raise ValueError(f"unknown operation(s) {sorted(unknown)}; choose from {OPERATIONS}")
+    not_measured = feature_kind_of(adata) & {"embedding", "derived"}
+    if not_measured:
+        warnings.warn(
+            f"feature_select judges features by their values as measurements, but this object holds "
+            f"{sorted(not_measured)} features; the selection is unlikely to be meaningful",
+            UserWarning,
+            stacklevel=2,
+        )
 
     full = get_matrix(adata)
     keep = np.ones(adata.n_vars, dtype=bool)
@@ -378,6 +389,8 @@ def feature_select(
         adata.n_vars,
         ", ".join(f"{name} -{count}" for name, count in removed.items()),
     )
+    if subset:
+        adata._inplace_subset_var(keep)
     return None
 
 

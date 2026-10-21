@@ -9,6 +9,8 @@ mantispy follows three canonical workflows, and each has its own tutorials:
 - {doc}`Genetic screens <tutorials/genetic_screens>`: aggregate guides to genes and read a CRISPR screen as clusters and gene sets.
 - {doc}`Learned embeddings <tutorials/data/embeddings>`: bring in features from a trained model and treat them like measured ones.
 
+Have your own table? {doc}`Bring your own data <tutorials/data/bring_your_own>` takes it to a stamped mantispy object.
+
 ::::{grid} 1 2 2 3
 :gutter: 3
 

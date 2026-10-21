@@ -131,3 +131,14 @@ def test_a_signature_over_an_annotation_that_names_nothing_is_refused(annotated)
 
     with pytest.raises(ValueError, match="name no family"):
         mt.tl.feature_signature(adata, key="d")
+
+
+def test_signature_groups_by_the_requested_column(annotated):
+    adata = annotated()
+    adata.obs["Metadata_Gene"] = adata.obs.pop("Metadata_Perturbation")
+    mt.tl.differential_features(adata, groupby="Metadata_Gene", block=None, key_added="d")
+    signature = mt.tl.feature_signature(adata, key="d", label="Metadata_Gene")
+
+    assert "Metadata_Gene" in signature.obs
+    assert "Metadata_Perturbation" not in signature.obs
+    assert signature.uns["mantispy"]["grouped_by"] == ["Metadata_Gene"]

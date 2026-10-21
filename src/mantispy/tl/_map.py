@@ -197,6 +197,8 @@ def map(
     neg_sameby: Sequence[str] = (),
     neg_diffby: Sequence[str] = (),
     mode: str | None = None,
+    label: str = "Metadata_Perturbation",
+    batch: str = "Metadata_Plate",
     annotation_key: str | None = None,
     label_sep: str | None = None,
     reference: str | None = "negcon",
@@ -223,7 +225,7 @@ def map(
                 Is this perturbation distinguishable from the negative controls it was plated with?
                 Its replicates are retrieved against the control profiles on the query's own plate only.
                 This is the phenotypic activity of :cite:t:`Kalinin_2025`.
-                Needs ``reference`` and ``Metadata_Plate``; queries on a plate without controls are left out, with a warning.
+                Needs ``reference`` and the ``batch`` column; queries on a plate without controls are left out, with a warning.
             ``"consistency"``
                 Do perturbations sharing an annotation look more alike than those that do not?
                 This is the phenotypic consistency of :cite:t:`Kalinin_2025`.
@@ -235,6 +237,8 @@ def map(
             ``"cross_plate"``
                 Do a perturbation's replicates on other plates retrieve each other against all other profiles?
                 A replicate counts only if it is on a different plate, which separates reproducible biology from plate effects.
+        label: The ``obs`` column naming the perturbation, which the presets group replicates by.
+        batch: The ``obs`` column naming the plate or batch, which the presets draw negatives from.
         annotation_key: The ``obs`` column ``mode="consistency"`` groups by. A column holding a list of labels per row is scored as multilabel (see the mode description); a scalar column is a single label. A list-valued ``obs`` column does not survive ``write_h5ad``, so store the labels as a delimited string, which does survive, and split it with ``label_sep``.
         label_sep: Split a string ``annotation_key`` on this separator into a list of labels per row, so a stored ``"MEK|ERK"`` is scored as multilabel. ``None`` leaves the column as it is. An entry that is already a list, or is missing, is left untouched.
         reference: Which rows are the negative controls, which ``mode="activity"`` retrieves against and ``mode="replicability"`` leaves out: ``"negcon"``, the name of a boolean ``obs`` column, or ``None`` for none.
@@ -276,9 +280,9 @@ def map(
                 "mode='consistency' needs annotation_key=, the obs column holding the mechanism, "
                 "target or gene. For replicate retrieval, use mode='replicability'."
             )
-        settings = _resolve_mode(mode, label="Metadata_Perturbation", batch="Metadata_Plate", annotation=annotation_key)
+        settings = _resolve_mode(mode, label=label, batch=batch, annotation=annotation_key)
         if mode == "consistency":
-            perturbations = adata.obs["Metadata_Perturbation"].nunique() if "Metadata_Perturbation" in adata.obs else 0
+            perturbations = adata.obs[label].nunique() if label in adata.obs else 0
             if perturbations and adata.n_obs > perturbations:
                 warnings.warn(
                     f"mode='consistency' expects one profile per perturbation, and this object has "
@@ -361,8 +365,8 @@ def map(
     )
 
     if mode == "activity":
-        control_groups = set(np.asarray(meta.loc[is_control, "Metadata_Perturbation"], dtype=object))
-        table = table[~table["Metadata_Perturbation"].isin(control_groups)].reset_index(drop=True)
+        control_groups = set(np.asarray(meta.loc[is_control, label], dtype=object))
+        table = table[~table[label].isin(control_groups)].reset_index(drop=True)
         table = table.drop(columns=[REFERENCE_COLUMN], errors="ignore")
 
     adata.uns.setdefault("mantispy", {})[key_added] = table

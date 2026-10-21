@@ -344,3 +344,14 @@ def test_tvn_says_when_a_batch_cannot_scale_a_dimension():
     assert np.isfinite(adata.obsm["X_tvn"]).all()
     # The rotation leaves those components a spread of about 1e-16, not zero, and dividing by it gives finite 1e16s.
     assert np.abs(adata.obsm["X_tvn"]).max() < 1e3
+
+
+def test_auto_epsilon_honours_label_and_batch():
+    pytest.importorskip("copairs")
+    adata = _plantable()
+    adata.obs["Metadata_Gene"] = adata.obs.pop("Metadata_Perturbation")
+    adata.obs["Metadata_Batch"] = adata.obs.pop("Metadata_Plate")
+    with pytest.raises(ValueError, match="Metadata_Perturbation"):
+        mt.pp.sphere(adata, method="ZCA", epsilon="auto", copy=True)
+    out = mt.pp.sphere(adata, method="ZCA", epsilon="auto", label="Metadata_Gene", batch="Metadata_Batch", copy=True)
+    assert "sphere_epsilon" in out.uns["mantispy"]

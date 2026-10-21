@@ -1,3 +1,5 @@
+import json
+
 import anndata as ad
 import numpy as np
 import pandas as pd
@@ -58,8 +60,8 @@ def test_schema_version_is_2_0_experimental(adata):
     assert adata.uns["mantispy"]["schema_status"] == "experimental"
 
 
-def test_stamp_reserves_history(adata):
-    assert adata.uns["mantispy"]["history"] == []
+def test_stamp_seeds_history(adata):
+    assert [json.loads(r)["operation"] for r in adata.uns["mantispy"]["history"]] == ["stamp"]
 
 
 def test_core_namespace_has_every_required_key(adata):
@@ -295,6 +297,18 @@ def test_the_control_flag_must_agree_with_the_type(adata):
 # --- io.stamp: explicit kind, never guess ---------------------------------
 
 
+def test_validate_warns_on_composite_perturbation(adata):
+    adata.obs["Metadata_Perturbation"] = ["MKX;GENE2", "AAA", "BBB", "C|D"]
+    report = validate(adata)
+    assert any("Metadata_Perturbation" in w and "composite" in w.lower() for w in report.warnings)
+
+
+def test_validate_no_warn_single_label_perturbation(adata):
+    adata.obs["Metadata_Perturbation"] = ["AAA"] * adata.n_obs
+    report = validate(adata)
+    assert not any("composite" in w.lower() for w in report.warnings)
+
+
 def _embedding_matrix():
     return ad.AnnData(
         X=np.ones((2, 3), dtype=np.float32),
@@ -353,7 +367,7 @@ def test_public_stamping_creates_a_valid_2_0_object():
     assert obj.uns["mantispy"]["schema_version"] == "2.0"
     assert obj.uns["mantispy"]["schema_status"] == "experimental"
     assert obj.uns["mantispy"]["grouped_by"] == ["Metadata_Plate", "Metadata_Well"]
-    assert obj.uns["mantispy"]["history"] == []
+    assert [json.loads(r)["operation"] for r in obj.uns["mantispy"]["history"]] == ["stamp"]
 
 
 # --- display-only fallback must not weaken validation ---------------------
@@ -488,6 +502,38 @@ def test_an_unregistered_result_key_is_flagged(adata):
     store["totally_made_up"] = pd.DataFrame({"x": [1]})
     warnings = validate(adata).warnings
     assert any("totally_made_up" in w and "not a registered result key" in w for w in warnings)
+
+
+def test_validate_rejects_list_valued_obs(adata):
+    adata.obs["tags"] = pd.Series([["a"], ["b"], ["c"], ["d"]], index=adata.obs_names, dtype=object)
+    report = validate(adata)
+    assert not report.ok
+    assert any("'tags'" in error for error in report.errors)
+
+
+def test_validate_rejects_list_after_a_scalar_in_object_obs(adata):
+    adata.obs["mixed"] = pd.Series(["ok", [1, 2], "ok", "ok"], index=adata.obs_names, dtype=object)
+    report = validate(adata)
+    assert not report.ok
+    assert any("'mixed'" in error for error in report.errors)
+
+
+def test_validate_allows_scalar_object_obs(adata):
+    adata.obs["label"] = pd.Series(["a", "b", None, "d"], index=adata.obs_names, dtype=object)
+    assert validate(adata).ok
+
+
+def test_validate_allows_categorical_and_datetime_obs(adata):
+    adata.obs["group"] = pd.Categorical(["a", "b", "a", "b"])
+    adata.obs["when"] = pd.to_datetime(["2024-01-01"] * 4)
+    assert validate(adata).ok
+
+
+def test_result_key_warning_hides_internal_module_path(adata):
+    adata.uns["mantispy"]["totally_made_up"] = pd.DataFrame({"x": [1]})
+    warnings = validate(adata).warnings
+    assert any("totally_made_up" in w for w in warnings)
+    assert not any("mantispy._core.schema" in w for w in warnings)
 
 
 def test_a_real_result_table_is_registered(well_profiles):

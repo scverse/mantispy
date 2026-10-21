@@ -50,6 +50,19 @@ def test_noise_removal_needs_its_grouping_column(wells):
         mt.pp.feature_select(wells, operations=("noise_removal",))
 
 
+def test_feature_select_warns_on_embedding(wells):
+    wells.var["feature_kind"] = pd.Categorical(["embedding"] * wells.n_vars)
+    with pytest.warns(UserWarning, match="embedding"):
+        mt.pp.feature_select(wells, copy=True)
+
+
+def test_feature_select_silent_on_measurement(wells):
+    assert set(wells.var["feature_kind"].dropna()) == {"measurement"}
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        mt.pp.feature_select(wells, copy=True)
+
+
 def test_subset_features_requires_the_key(wells):
     with pytest.raises(KeyError, match="feature_select"):
         mt.pp.subset_features(wells, key="missing")
@@ -274,3 +287,26 @@ def test_feature_blocklist_exposes_the_bundled_list():
     assert names and all(isinstance(name, str) for name in names)
     with pytest.raises(ValueError, match="unknown blocklist"):
         mt.pp.feature_blocklist("nope")
+
+
+def test_feature_select_subset_reduces_in_place():
+    adata = _one_feature_per_operation()
+    assert mt.pp.feature_select(adata, operations=("drop_na_columns",), subset=True) is None
+    assert adata.n_vars == 3
+    assert "Cells_AreaShape_Sparse" not in adata.var_names
+    assert adata.var["selected"].all()
+
+
+def test_feature_select_subset_copy_leaves_original():
+    adata = _one_feature_per_operation()
+    reduced = mt.pp.feature_select(adata, operations=("drop_na_columns",), subset=True, copy=True)
+    assert isinstance(reduced, ad.AnnData)
+    assert reduced.n_vars == 3
+    assert adata.n_vars == 4
+
+
+def test_feature_select_default_keeps_every_feature():
+    adata = _one_feature_per_operation()
+    assert mt.pp.feature_select(adata, operations=("drop_na_columns",)) is None
+    assert adata.n_vars == 4
+    assert adata.var["selected"].sum() == 3

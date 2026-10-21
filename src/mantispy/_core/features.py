@@ -243,6 +243,16 @@ def measurement_kind(is_feature: Iterable[Any]) -> pd.Categorical:
     return pd.Categorical(["measurement" if flag else None for flag in is_feature])
 
 
+def feature_kind_of(adata: Any) -> set[str]:
+    """The ``feature_kind`` values present in ``adata.var``.
+
+    Empty when the column is absent or entirely null, as on an object built before the schema carried it.
+    """
+    if "feature_kind" not in adata.var:
+        return set()
+    return {str(kind) for kind in pd.Series(adata.var["feature_kind"]).dropna().unique()}
+
+
 def parse_feature_names(names: Sequence[str], channels: Sequence[str] | None = None) -> pd.DataFrame:
     """Parse ``names`` into a table of feature annotations indexed by name.
 

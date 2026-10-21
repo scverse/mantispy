@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import anndata as ad
 import numpy as np
 import pandas as pd
@@ -406,6 +408,54 @@ def test_a_failed_write_leaves_the_schema_stamp_untouched(tmp_path):
     assert adata.uns["mantispy"] == before
 
 
+def _raise_midwrite(self, path, *a, **k):
+    """Leave a partial output at ``path`` and fail, as an interrupted anndata/h5py write would."""
+    path = Path(path)
+    if path.suffix == ".zarr" or ".zarr" in path.name:
+        path.mkdir()
+    else:
+        path.write_bytes(b"partial")
+    raise RuntimeError("boom")
+
+
+def test_write_h5ad_atomic_on_failure(tmp_path, cells, monkeypatch):
+    monkeypatch.setattr(ad.AnnData, "write_h5ad", _raise_midwrite)
+    path = tmp_path / "out.h5ad"
+    with pytest.raises(RuntimeError, match="boom"):
+        mt.io.write(cells, path)
+    assert list(tmp_path.iterdir()) == []
+    path.write_bytes(b"original")
+    with pytest.raises(RuntimeError, match="boom"):
+        mt.io.write(cells, path)
+    assert path.read_bytes() == b"original"
+    assert [p.name for p in tmp_path.iterdir()] == ["out.h5ad"]
+
+
+def test_write_zarr_atomic_on_failure(tmp_path, cells, monkeypatch):
+    monkeypatch.setattr(ad.AnnData, "write_zarr", _raise_midwrite)
+    path = tmp_path / "out.zarr"
+    with pytest.raises(RuntimeError, match="boom"):
+        mt.io.write(cells, path)
+    assert list(tmp_path.iterdir()) == []
+    path.mkdir()
+    (path / "marker").write_bytes(b"original")
+    with pytest.raises(RuntimeError, match="boom"):
+        mt.io.write(cells, path)
+    assert (path / "marker").read_bytes() == b"original"
+    assert [p.name for p in tmp_path.iterdir()] == ["out.zarr"]
+
+
+def test_write_zarr_sweeps_orphaned_backup_from_a_crashed_run(tmp_path, cells):
+    path = tmp_path / "out.zarr"
+    mt.io.write(cells, path)
+    orphan = tmp_path / ".out.zarr.old-99999"
+    orphan.mkdir()
+    (orphan / "marker").write_bytes(b"stale")
+    mt.io.write(cells, path)
+    assert not orphan.exists()
+    assert mt.io.read(path).n_obs == cells.n_obs
+
+
 def test_stamp_translates_the_control_model_of_a_1_0_object():
     """mt.io.stamp is the route migrate recommends for a 1.0 object it refuses, so it must not keep the old flag."""
     adata = _a_1_0_well_object()
@@ -413,3 +463,55 @@ def test_stamp_translates_the_control_model_of_a_1_0_object():
     mt.io.stamp(adata, feature_kind="embedding")
     assert list(adata.obs["Metadata_Control_Type"]) == ["negcon", "treatment", "treatment", "treatment"]
     assert adata.uns["mantispy"]["resolution"] == "well"
+
+
+def _embedding_adata(provenance=None):
+    adata = ad.AnnData(
+        np.ones((2, 3), dtype="float32"),
+        obs=pd.DataFrame({"Metadata_Plate": ["P1", "P1"], "Metadata_Well": ["A01", "A02"]}, index=["0", "1"]),
+    )
+    adata.var_names = ["emb_0", "emb_1", "emb_2"]
+    mt.io.stamp(adata, resolution="well", feature_kind="embedding", provenance=provenance)
+    return adata
+
+
+_PROVENANCE = {"model": "openphenom", "version": "1.0", "pooling": "mean"}
+
+
+def test_stamp_records_embedding_provenance():
+    adata = ad.AnnData(
+        np.ones((2, 3), dtype="float32"),
+        obs=pd.DataFrame({"Metadata_Plate": ["P1", "P1"], "Metadata_Well": ["A01", "A02"]}, index=["0", "1"]),
+    )
+    adata.var_names = ["emb_0", "emb_1", "emb_2"]
+    out = mt.io.stamp(adata, resolution="well", feature_kind="embedding", provenance=_PROVENANCE, copy=True)
+    assert out.uns["mantispy"]["embedding"]["model"] == "openphenom"
+
+
+def test_embedding_provenance_round_trips(tmp_path):
+    adata = _embedding_adata(_PROVENANCE)
+    path = tmp_path / "e.h5ad"
+    mt.io.write(adata, path)
+    assert mt.io.read(path).uns["mantispy"]["embedding"]["pooling"] == "mean"
+
+
+def test_embedding_object_without_provenance_is_valid():
+    adata = _embedding_adata()
+    assert "embedding" not in adata.uns["mantispy"]
+    assert mt.io.validate(adata).ok
+
+
+def test_registered_embedding_key_is_not_flagged():
+    adata = _embedding_adata()
+    adata.uns["mantispy"]["embedding"] = {"model": "m"}
+    report = mt.io.validate(adata)
+    assert report.ok
+    assert not any("embedding" in w for w in report.warnings)
+
+
+def test_embedding_provenance_without_a_model_warns():
+    adata = _embedding_adata()
+    adata.uns["mantispy"]["embedding"] = {"pooling": "mean"}
+    report = mt.io.validate(adata)
+    assert report.ok
+    assert any("model" in w for w in report.warnings)

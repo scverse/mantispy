@@ -5,6 +5,8 @@ The design of :func:`read_profiles` follows ``scverse/cell-painting-io`` (MIT).
 
 from __future__ import annotations
 
+import os
+import shutil
 from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
 from typing import Literal
@@ -515,10 +517,31 @@ def write(adata: ad.AnnData, path: str | Path) -> None:
         else:
             adata.uns["mantispy"] = prior
         raise
-    if path.suffix == ".zarr":
-        adata.write_zarr(path)
-    else:
-        adata.write_h5ad(path)
+    # Write beside the destination, then swap in, so a failure never leaves a partial file at ``path``.
+    zarr = path.suffix == ".zarr"
+    tmp = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    if zarr:
+        # ponytail: reclaims backups orphaned by a crashed earlier run; a concurrent writer's live backup would also match.
+        for stale in path.parent.glob(f".{path.name}.old-*"):
+            shutil.rmtree(stale, ignore_errors=True)
+    try:
+        if zarr:
+            adata.write_zarr(tmp)
+            if path.is_dir():
+                backup = path.with_name(f".{path.name}.old-{os.getpid()}")
+                os.replace(path, backup)
+                os.replace(tmp, path)
+                shutil.rmtree(backup)
+            else:
+                os.replace(tmp, path)
+        else:
+            adata.write_h5ad(tmp)
+            os.replace(tmp, path)
+    finally:
+        if tmp.is_dir():
+            shutil.rmtree(tmp, ignore_errors=True)
+        else:
+            tmp.unlink(missing_ok=True)
 
 
 def stamp(
@@ -527,6 +550,7 @@ def stamp(
     *,
     feature_kind: str | None = None,
     grouped_by: Sequence[str] | None = None,
+    provenance: Mapping[str, str] | None = None,
     copy: bool = False,
 ) -> ad.AnnData | None:
     """Mark an :class:`~anndata.AnnData` built elsewhere as a mantispy object.
@@ -543,6 +567,8 @@ def stamp(
             Pass it when the whole matrix is one kind (a matrix of embeddings is ``"embedding"``); it fills every feature.
             Leave it ``None`` only when ``var["feature_kind"]`` is already complete and valid (as a mantispy-read object's is).
         grouped_by: For ``"aggregate"`` resolution, the columns that define one row; required there since there is no default.
+        provenance: Optional record of where an embedding came from, stored as ``uns["mantispy"]["embedding"]``.
+            Expected keys are ``model`` (required when given), ``version`` and ``pooling``.
         copy: Return a stamped copy instead of stamping in place.
 
     Returns:
@@ -622,6 +648,8 @@ def stamp(
             kinds[feature_mask(obj, "is_feature")] = feature_kind
             obj.var["feature_kind"] = kinds.to_numpy()
         _record(obj, resolution=resolution, grouped_by=grouped_by)
+        if provenance is not None:
+            obj.uns["mantispy"] = {**obj.uns["mantispy"], "embedding": dict(provenance)}
 
     # §16.1: stamping runs the full contract. Validate a stamped copy first, so a rejected stamp (e.g. a
     # float64 embedding matrix, or an unparsable well) never leaves the caller's object half-stamped.

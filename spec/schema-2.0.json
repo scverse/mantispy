@@ -104,7 +104,8 @@
         "aggregated_from",
         "consensus_from",
         "membership",
-        "truth"
+        "truth",
+        "embedding"
     ],
     "uns_results": [
         "feature_select",

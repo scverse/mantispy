@@ -161,6 +161,7 @@ UNS_KEYS: tuple[str, ...] = (
     "consensus_from",
     "membership",
     "truth",
+    "embedding",
 )
 
 #: Result tables mantispy writes under ``uns["mantispy"]`` and reads back.
@@ -365,6 +366,13 @@ def stamp(
         kept = store.get("grouped_by") if resolution == prior else None
         grouped_by = kept if kept is not None else default_grouped_by(resolution)
 
+    entries = list(history) if history is not None else list(store.get("history", []))
+    if not entries:
+        # Seed once, on the first stamp; later re-stamps (tools re-stamp constantly) leave the log alone.
+        from mantispy._core.provenance import history_record
+
+        entries.append(history_record("stamp", params={"resolution": resolution, "grouped_by": list(grouped_by)}))
+
     # A fresh dict assigned back, not an in-place update: on a view uns is the dict's own, so mutating it
     # writes nowhere the caller sees. Assigning routes through AnnData to the parent's dict.
     adata.uns["mantispy"] = {
@@ -373,7 +381,7 @@ def stamp(
         "schema_status": SCHEMA_STATUS,
         "resolution": resolution,
         "grouped_by": list(grouped_by),
-        "history": list(history) if history is not None else list(store.get("history", [])),
+        "history": entries,
     }
     # Every stamped object carries its well geometry: fill Metadata_Row/Col from the well when it has one.
     from mantispy._core.plate import fill_well_grid
@@ -491,9 +499,37 @@ def _check_result_keys(store: dict, report: ValidationReport) -> None:
         if any(key.endswith(suffix) and key.removesuffix(suffix) in results for suffix in _RESULT_COMPANION_SUFFIXES):
             continue
         report.warnings.append(
-            f"uns['mantispy'][{key!r}] is not a registered result key; register it in "
-            "mantispy._core.schema.UNS_RESULTS (and spec/schema-2.0.json) if it is a package result"
+            f"uns['mantispy'][{key!r}] is not a registered result key (not a recognized mantispy result); "
+            "ignore this if it is your own custom key_added"
         )
+
+
+def _check_embedding_provenance(store: dict, report: ValidationReport) -> None:
+    """Warn when the optional ``uns['mantispy']['embedding']`` record has no string ``model``."""
+    if "embedding" not in store:
+        return
+    record = store["embedding"]
+    if not isinstance(record, dict) or not isinstance(record.get("model"), str):
+        report.warnings.append("uns['mantispy']['embedding'] should be a mapping with a string 'model'")
+
+
+def _check_obs_writable(adata: AnnData, report: ValidationReport) -> None:
+    """Error on an object-dtype obs column holding list, tuple, set, dict or array cells.
+
+    Such a column cannot be written to h5ad, so catching it here fails early instead of at write time.
+    """
+    obs = as_frame(adata.obs)
+    for column in obs.columns:
+        series = obs[column]
+        if series.dtype != object:  # ponytail: only object dtype can hold containers; every value is checked
+            continue
+        containers = series.dropna().map(lambda value: isinstance(value, list | tuple | set | dict | np.ndarray))
+        if containers.any():
+            kind = type(series.dropna()[containers].iloc[0]).__name__
+            report.errors.append(
+                f"obs column {column!r} holds {kind} cells, which cannot be written to h5ad; "
+                "convert it to a scalar column"
+            )
 
 
 def _check_feature_kind(adata: AnnData, report: ValidationReport) -> None:
@@ -597,6 +633,32 @@ def _check_controls(adata: AnnData, report: ValidationReport) -> None:
         )
 
 
+#: A delimiter-joined perturbation label: ``;`` or ``|`` between word characters, or a comma between two
+#: letter runs (so ``1,2-dichloroethane`` does not match).
+_COMPOSITE_LABEL = r"\w[;|]\w|[A-Za-z]{2},\s?[A-Za-z]{2}"
+
+
+def _check_composite_perturbation(adata: AnnData, report: ValidationReport) -> None:
+    """Warn when ``Metadata_Perturbation`` holds delimiter-joined labels such as ``"MKX;GENE2"``.
+
+    This is a heuristic flag for a silent mislabel, not a representation: a joined label is treated as one
+    perturbation by every grouping and test.
+    """
+    # Full composite-perturbation handling awaits the finding-1.1 (multi-membership) schema decision.
+    obs = as_frame(adata.obs)
+    if "Metadata_Perturbation" not in obs:
+        return
+    labels = obs["Metadata_Perturbation"].dropna().astype(str)
+    if labels.empty:
+        return
+    composite = labels.str.contains(_COMPOSITE_LABEL, regex=True)
+    if composite.mean() >= 0.05:
+        report.warnings.append(
+            f"Metadata_Perturbation has {int(composite.sum())} composite value(s) joined by a delimiter "
+            f"(e.g. {labels[composite].iloc[0]!r}); each is treated as one perturbation, not several"
+        )
+
+
 def validate(adata: AnnData, *, raise_on_error: bool = False) -> ValidationReport:
     """Check ``adata`` against the mantispy schema.
 
@@ -650,6 +712,8 @@ def validate(adata: AnnData, *, raise_on_error: bool = False) -> ValidationRepor
     _check_grouped_by(adata, store, resolution, report)
     _check_history(store, report)
     _check_result_keys(store, report)
+    _check_embedding_provenance(store, report)
+    _check_obs_writable(adata, report)
 
     if resolution in REQUIRED_OBS:
         for column in REQUIRED_OBS[resolution]:
@@ -680,6 +744,7 @@ def validate(adata: AnnData, *, raise_on_error: bool = False) -> ValidationRepor
             report.errors.append(f"Metadata_Well has unparsable values: {sorted(unparsable)[:5]}")
 
     _check_controls(adata, report)
+    _check_composite_perturbation(adata, report)
 
     if adata.n_vars and "is_feature" in adata.var and not adata.var["is_feature"].any():
         report.warnings.append("no column in var is marked is_feature")
