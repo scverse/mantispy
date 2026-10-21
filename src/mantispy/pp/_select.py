@@ -230,6 +230,7 @@ def feature_select(
     copy: bool = False,
     *,
     noise_removal_cutoff_mode: str = "absolute",
+    subset: bool = False,
 ) -> AnnData | None:
     """Flag the features worth keeping.
 
@@ -271,11 +272,13 @@ def feature_select(
         noise_removal_cutoff_mode: ``noise_removal``: what ``noise_removal_stdev_cutoff`` is compared against.
             ``"absolute"`` (the default) keeps pycytominer's behaviour, comparing the raw within-group spread and so tied to the normalization scale.
             ``"ratio"`` compares the within-group spread to the feature's total spread, and ``"quantile"`` reads the cutoff as a quantile of the observed within-group spreads; both keep a useful subset under the control-based or MAD normalization the package recommends, where the absolute cutoff keeps everything or nothing.
+        subset: Inplace subset to the selected features, as well as flagging them in ``var[key_added]``.
+            With ``copy=True`` the returned copy is the subset.
 
     Returns:
         ``None``, or the modified copy.
         Writes ``var[key_added]`` and a per-operation count of removals to ``uns["mantispy"]["feature_select"]``, each count being what that operation removes on its own.
-        Nothing is dropped; use :func:`subset_features` for that.
+        Nothing is dropped unless ``subset=True``; :func:`subset_features` does it afterwards.
 
     Raises:
         ValueError: If ``operations`` names an operation that is not in ``OPERATIONS``.
@@ -386,6 +389,8 @@ def feature_select(
         adata.n_vars,
         ", ".join(f"{name} -{count}" for name, count in removed.items()),
     )
+    if subset:
+        adata._inplace_subset_var(keep)
     return None
 
 
