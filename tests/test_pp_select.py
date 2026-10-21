@@ -50,6 +50,19 @@ def test_noise_removal_needs_its_grouping_column(wells):
         mt.pp.feature_select(wells, operations=("noise_removal",))
 
 
+def test_feature_select_warns_on_embedding(wells):
+    wells.var["feature_kind"] = pd.Categorical(["embedding"] * wells.n_vars)
+    with pytest.warns(UserWarning, match="embedding"):
+        mt.pp.feature_select(wells, copy=True)
+
+
+def test_feature_select_silent_on_measurement(wells):
+    assert set(wells.var["feature_kind"].dropna()) == {"measurement"}
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        mt.pp.feature_select(wells, copy=True)
+
+
 def test_subset_features_requires_the_key(wells):
     with pytest.raises(KeyError, match="feature_select"):
         mt.pp.subset_features(wells, key="missing")

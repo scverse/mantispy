@@ -16,7 +16,7 @@ from anndata import AnnData
 from mantispy._core._corr import _blockwise, correlated_pairs, rank_revealing_subset
 from mantispy._core._reduce import get_matrix, group_codes, group_offsets
 from mantispy._core._stats import nanvar
-from mantispy._core.features import blocklist_hits, load_blocklist
+from mantispy._core.features import blocklist_hits, feature_kind_of, load_blocklist
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy._core.mutation import inplace_or_copy
@@ -294,6 +294,14 @@ def feature_select(
     unknown = set(operations) - set(OPERATIONS)
     if unknown:
         raise ValueError(f"unknown operation(s) {sorted(unknown)}; choose from {OPERATIONS}")
+    not_measured = feature_kind_of(adata) & {"embedding", "derived"}
+    if not_measured:
+        warnings.warn(
+            f"feature_select judges features by their values as measurements, but this object holds "
+            f"{sorted(not_measured)} features; the selection is unlikely to be meaningful",
+            UserWarning,
+            stacklevel=2,
+        )
 
     full = get_matrix(adata)
     keep = np.ones(adata.n_vars, dtype=bool)
