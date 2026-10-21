@@ -228,3 +228,11 @@ def test_unexpressed_genes_reads_a_depmap_matrix_from_a_csv_path(depmap_expressi
 def test_unexpressed_genes_rejects_an_unknown_model_id(depmap_expression):
     with pytest.raises(ValueError, match="not a model id"):
         _jump.unexpressed_genes(depmap_expression, "U2OS")
+
+
+def test_annotate_jump_warns_on_unmapped_ids(fake_crispr_metadata):
+    wells = mt.ds.synthetic_plate(n_wells=3, n_cells=1, n_features=3, seed=0)
+    wells.obs["Metadata_JCP2022"] = ["JCP2022_805264", "JCP2022_900001", "JCP2022_999999"]
+    with pytest.warns(UserWarning, match=r"1 JUMP id.*could not map.*gene"):
+        out = mt.pp.annotate_jump(wells, kind="crispr", copy=True)
+    assert out.n_obs == 3

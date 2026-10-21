@@ -14,6 +14,7 @@ References:
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -118,6 +119,7 @@ def join_jump_annotation(obs: pd.DataFrame, kind: str = "compound") -> pd.DataFr
         is_negcon = (joined["Metadata_JCP2022"] == NEGATIVE_CONTROL).to_numpy()
         joined["Metadata_Control_Type"] = np.where(is_negcon, "negcon", "treatment")
         joined["Metadata_Control"] = is_negcon
+        _warn_unmapped(joined, joined["Metadata_InChIKey"].isna().to_numpy() & ~is_negcon, "compound")
         return joined
 
     genes = jump_metadata(kind)[["Metadata_JCP2022", "Metadata_Symbol"]].rename(
@@ -136,8 +138,20 @@ def join_jump_annotation(obs: pd.DataFrame, kind: str = "compound") -> pd.DataFr
     joined["Metadata_Perturbation"] = joined["Metadata_Gene"].fillna(joined["Metadata_JCP2022"]).astype(str)
     joined["Metadata_Perturbation_Type"] = kind
     joined["Metadata_Control"] = (joined["Metadata_Control_Type"] != "treatment").to_numpy()
+    _warn_unmapped(joined, joined["Metadata_Gene"].isna().to_numpy(), "gene")
     joined["Metadata_ChromosomeArm"] = joined["Metadata_Gene"].map(_chromosome_arms())
     return joined
+
+
+def _warn_unmapped(joined: pd.DataFrame, unmapped: np.ndarray, what: str) -> None:
+    """Warn about annotated ids that have no ``what`` in the JUMP tables; wells with no id are logged by the well join."""
+    ids = joined.loc[unmapped & joined["Metadata_JCP2022"].notna().to_numpy(), "Metadata_JCP2022"].unique()
+    if len(ids):
+        warnings.warn(
+            f"{len(ids)} JUMP id(s) could not map to a {what}; their wells are kept as treatments without one.",
+            UserWarning,
+            stacklevel=3,
+        )
 
 
 def _join_wells(obs: pd.DataFrame) -> pd.DataFrame:
