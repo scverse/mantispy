@@ -520,6 +520,10 @@ def write(adata: ad.AnnData, path: str | Path) -> None:
     # Write beside the destination, then swap in, so a failure never leaves a partial file at ``path``.
     zarr = path.suffix == ".zarr"
     tmp = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    if zarr:
+        # ponytail: reclaims backups orphaned by a crashed earlier run; a concurrent writer's live backup would also match.
+        for stale in path.parent.glob(f".{path.name}.old-*"):
+            shutil.rmtree(stale, ignore_errors=True)
     try:
         if zarr:
             adata.write_zarr(tmp)

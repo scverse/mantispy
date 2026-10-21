@@ -445,6 +445,17 @@ def test_write_zarr_atomic_on_failure(tmp_path, cells, monkeypatch):
     assert [p.name for p in tmp_path.iterdir()] == ["out.zarr"]
 
 
+def test_write_zarr_sweeps_orphaned_backup_from_a_crashed_run(tmp_path, cells):
+    path = tmp_path / "out.zarr"
+    mt.io.write(cells, path)
+    orphan = tmp_path / ".out.zarr.old-99999"
+    orphan.mkdir()
+    (orphan / "marker").write_bytes(b"stale")
+    mt.io.write(cells, path)
+    assert not orphan.exists()
+    assert mt.io.read(path).n_obs == cells.n_obs
+
+
 def test_stamp_translates_the_control_model_of_a_1_0_object():
     """mt.io.stamp is the route migrate recommends for a 1.0 object it refuses, so it must not keep the old flag."""
     adata = _a_1_0_well_object()
