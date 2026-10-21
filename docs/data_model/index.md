@@ -2,6 +2,42 @@
 
 Starting from your own table? Follow {doc}`../tutorials/data/bring_your_own`.
 
+## Quick recipe
+
+Readers such as `mt.io.read_profiles` record these values for you.
+For an object that came from somewhere else, `mt.io.stamp` records them:
+
+```python
+import mantispy as mt
+
+# one row per well, features are CellProfiler measurements
+mt.io.stamp(adata, resolution="well", feature_kind="measurement")
+
+# one row per gene
+mt.io.stamp(adata, resolution="aggregate", grouped_by=["Metadata_Perturbation"], feature_kind="measurement")
+
+# a matrix of learned embeddings, one row per well
+mt.io.stamp(adata, resolution="well", feature_kind="embedding")
+```
+
+The `object` and `well` resolutions have a default `grouped_by`, so it can be left out.
+The `aggregate` resolution has none, because only you know which columns define one aggregate.
+Stamping at `aggregate` without `grouped_by` raises a `ValueError` that asks for it.
+
+Each resolution requires identifier columns in `obs`:
+
+- `object`: `Metadata_Plate`, `Metadata_Well`, `Metadata_ImageID`, `Metadata_ObjectType` and `Metadata_ObjectNumber`.
+- `well`: `Metadata_Plate` and `Metadata_Well`.
+- `aggregate`: none, but `grouped_by` names the columns that define a row.
+
+Stamping runs the full validation, so an object that lacks them is rejected before it is changed.
+
+`Metadata_Well` is a zero-padded well name such as `A03`.
+`Metadata_Perturbation` is the canonical perturbation column; keep `Metadata_Compound` or `Metadata_Gene` beside it when you want the specific name.
+
+Embedding provenance is recorded with `stamp(provenance={"model": ..., "version": ..., "pooling": ...})` and stored in `uns["mantispy"]["embedding"]`.
+`model` is required when `provenance` is given.
+
 ## Why there is a schema
 
 Image-based profiling data arrives in many shapes: one row per segmented cell, one row per well, one row per gene.
@@ -49,29 +85,6 @@ grouped_by = ["Metadata_Gene"]
 # a learned embedding (any resolution)
 feature_kind = "embedding"
 ```
-
-Readers such as `mt.io.read_profiles` record these values for you.
-For an object that came from somewhere else, `mt.io.stamp` records them:
-
-```python
-import mantispy as mt
-
-# one row per well, features are CellProfiler measurements
-mt.io.stamp(adata, resolution="well", feature_kind="measurement")
-
-# one row per gene
-mt.io.stamp(adata, resolution="aggregate", grouped_by=["Metadata_Gene"], feature_kind="measurement")
-
-# a matrix of learned embeddings, one row per well
-mt.io.stamp(adata, resolution="well", feature_kind="embedding")
-```
-
-The `object` and `well` resolutions have a default `grouped_by`, so it can be left out.
-The `aggregate` resolution has none, because only you know which columns define one aggregate.
-Stamping at `aggregate` without `grouped_by` raises a `ValueError` that asks for it.
-
-Each resolution also requires identifier columns in `obs`: plate and well for `well`, and additionally the image, object type and object number for `object`.
-Stamping runs the full validation, so an object that lacks them is rejected before it is changed.
 
 ## Where the field-level detail lives
 
