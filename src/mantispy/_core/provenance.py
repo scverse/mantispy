@@ -46,6 +46,27 @@ def record_params(adata: AnnData, func_name: str, params: dict[str, Any]) -> Non
     store[func_name] = {key: _jsonable(value) for key, value in params.items()}
 
 
+def history_record(
+    operation: str,
+    *,
+    params: dict[str, Any] | None = None,
+    input: str = "X",
+    output: str = "X",
+    source: dict[str, Any] | None = None,
+) -> str:
+    """One history record as the JSON string :func:`record_history` stores and :func:`read_history` decodes."""
+    record: dict[str, Any] = {
+        "operation": operation,
+        "params": {key: _jsonable(value) for key, value in (params or {}).items()},
+        "input": input,
+        "output": output,
+        "mantispy_version": _mantispy_version(),
+    }
+    if source is not None:
+        record["source"] = {key: _jsonable(value) for key, value in source.items()}
+    return json.dumps(record)
+
+
 def record_history(
     adata: AnnData,
     operation: str,
@@ -69,27 +90,20 @@ def record_history(
         output: Where it wrote to (``"X"`` or a layer name).
         source: For a level-changing operation, the source and target resolution/grouping.
     """
-    record: dict[str, Any] = {
-        "operation": operation,
-        "params": {key: _jsonable(value) for key, value in (params or {}).items()},
-        "input": input,
-        "output": output,
-        "mantispy_version": _mantispy_version(),
-    }
-    if source is not None:
-        record["source"] = {key: _jsonable(value) for key, value in source.items()}
     store = adata.uns.setdefault("mantispy", {})
     # Each record is stored as a JSON string: anndata writes a list of strings to h5ad cleanly but cannot
     # serialize a list of dicts. A loaded history comes back as a numpy array, so coerce to a list first.
     existing = store.get("history")
     history = list(existing) if existing is not None else []
-    history.append(json.dumps(record))
+    history.append(history_record(operation, params=params, input=input, output=output, source=source))
     store["history"] = history
 
 
 def read_history(adata: AnnData) -> list[dict[str, Any]]:
     """The ordered history records of ``adata`` as dicts (decoding the stored JSON strings)."""
-    return [json.loads(record) for record in adata.uns.get("mantispy", {}).get("history", [])]
+    history = adata.uns.get("mantispy", {}).get("history")
+    # A round-tripped history is a numpy array (an empty one a float64 array), not a list.
+    return [json.loads(record) for record in (history if history is not None else [])]
 
 
 def level_change_source(adata: AnnData, to_resolution: str, to_grouped_by: list[str]) -> dict[str, Any]:

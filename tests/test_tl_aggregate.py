@@ -102,10 +102,10 @@ def test_history_round_trips_and_appends_after_a_reload(adata, tmp_path):
     path = tmp_path / "wells.h5ad"
     wells.write_h5ad(path)
     reloaded = ad.read_h5ad(path)
-    assert [record["operation"] for record in read_history(reloaded)] == ["aggregate"]
+    assert [record["operation"] for record in read_history(reloaded)] == ["stamp", "aggregate"]
     # appending after a reload (history is an ndarray) must not raise and must extend the log
     plates = mt.tl.aggregate(reloaded, by=("Metadata_Plate",), min_cells=0)
-    assert [record["operation"] for record in read_history(plates)] == ["aggregate", "aggregate"]
+    assert [record["operation"] for record in read_history(plates)] == ["stamp", "aggregate", "aggregate"]
 
 
 def test_aggregate_inherits_and_extends_history(adata):

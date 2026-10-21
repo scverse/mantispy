@@ -1,3 +1,5 @@
+import json
+
 import anndata as ad
 import numpy as np
 import pandas as pd
@@ -58,8 +60,8 @@ def test_schema_version_is_2_0_experimental(adata):
     assert adata.uns["mantispy"]["schema_status"] == "experimental"
 
 
-def test_stamp_reserves_history(adata):
-    assert adata.uns["mantispy"]["history"] == []
+def test_stamp_seeds_history(adata):
+    assert [json.loads(r)["operation"] for r in adata.uns["mantispy"]["history"]] == ["stamp"]
 
 
 def test_core_namespace_has_every_required_key(adata):
@@ -353,7 +355,7 @@ def test_public_stamping_creates_a_valid_2_0_object():
     assert obj.uns["mantispy"]["schema_version"] == "2.0"
     assert obj.uns["mantispy"]["schema_status"] == "experimental"
     assert obj.uns["mantispy"]["grouped_by"] == ["Metadata_Plate", "Metadata_Well"]
-    assert obj.uns["mantispy"]["history"] == []
+    assert [json.loads(r)["operation"] for r in obj.uns["mantispy"]["history"]] == ["stamp"]
 
 
 # --- display-only fallback must not weaken validation ---------------------

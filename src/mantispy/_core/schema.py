@@ -366,6 +366,13 @@ def stamp(
         kept = store.get("grouped_by") if resolution == prior else None
         grouped_by = kept if kept is not None else default_grouped_by(resolution)
 
+    entries = list(history) if history is not None else list(store.get("history", []))
+    if not entries:
+        # Seed once, on the first stamp; later re-stamps (tools re-stamp constantly) leave the log alone.
+        from mantispy._core.provenance import history_record
+
+        entries.append(history_record("stamp", params={"resolution": resolution, "grouped_by": list(grouped_by)}))
+
     # A fresh dict assigned back, not an in-place update: on a view uns is the dict's own, so mutating it
     # writes nowhere the caller sees. Assigning routes through AnnData to the parent's dict.
     adata.uns["mantispy"] = {
@@ -374,7 +381,7 @@ def stamp(
         "schema_status": SCHEMA_STATUS,
         "resolution": resolution,
         "grouped_by": list(grouped_by),
-        "history": list(history) if history is not None else list(store.get("history", [])),
+        "history": entries,
     }
     # Every stamped object carries its well geometry: fill Metadata_Row/Col from the well when it has one.
     from mantispy._core.plate import fill_well_grid
