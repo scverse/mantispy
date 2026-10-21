@@ -107,7 +107,9 @@ def annotate_controls(
 
 
 @inplace_or_copy(expects="well")
-def annotate_jump(adata: AnnData, kind: str = "compound", copy: bool = False) -> AnnData | None:
+def annotate_jump(
+    adata: AnnData, kind: str = "compound", on_unmapped: str = "warn", copy: bool = False
+) -> AnnData | None:
     """Join the JUMP annotation onto profiles read from the Cell Painting Gallery.
 
     A JUMP plate parquet records only the source, plate and well of a profile.
@@ -116,6 +118,7 @@ def annotate_jump(adata: AnnData, kind: str = "compound", copy: bool = False) ->
     Args:
         adata: Well-level JUMP profiles carrying ``Metadata_Source``, ``Metadata_Plate`` and ``Metadata_Well``, or ``Metadata_JCP2022`` as the assembled profiles do.
         kind: Which annotation to join, ``"compound"``, ``"crispr"`` or ``"orf"``.
+        on_unmapped: What to do with wells whose id the annotation cannot map: ``"warn"`` keeps them, ``"drop"`` removes them and warns, ``"error"`` raises.
         copy: Return an annotated copy instead of annotating in place.
 
     Returns:
@@ -131,7 +134,13 @@ def annotate_jump(adata: AnnData, kind: str = "compound", copy: bool = False) ->
     from mantispy.io._jump import join_jump_annotation
 
     obs = as_frame(adata.obs)
-    joined = join_jump_annotation(obs.copy(), kind=kind)
+    joined = join_jump_annotation(obs.copy(), kind=kind, on_unmapped=on_unmapped)
+    if len(joined) < len(obs):
+        # The join keeps the row order, so its surviving labels are the positions of the wells to keep.
+        keep = np.zeros(len(obs), dtype=bool)
+        keep[joined.index.to_numpy()] = True
+        adata._inplace_subset_obs(keep)
+        obs = obs.loc[keep]
     joined.index = obs.index
     adata.obs = categorize_metadata(joined)
     record_perturbation(adata)

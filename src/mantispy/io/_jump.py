@@ -43,6 +43,7 @@ NEGATIVE_CONTROL = "JCP2022_033924"
 KINDS = ("compound", "crispr", "orf")
 
 _JOIN_ON = ["Metadata_Source", "Metadata_Plate", "Metadata_Well"]
+_ON_UNMAPPED = ("warn", "drop", "error")
 
 
 def jump_metadata(name: str) -> pd.DataFrame:
@@ -87,12 +88,13 @@ def read_jump(paths: str | Path | Sequence[str | Path], annotate: bool = True, *
     return adata
 
 
-def join_jump_annotation(obs: pd.DataFrame, kind: str = "compound") -> pd.DataFrame:
+def join_jump_annotation(obs: pd.DataFrame, kind: str = "compound", on_unmapped: str = "warn") -> pd.DataFrame:
     """Join the JUMP annotation onto an ``obs`` frame keyed by source, plate and well.
 
     Args:
         obs: A frame carrying ``Metadata_Source``, ``Metadata_Plate`` and ``Metadata_Well``, whose three key columns are cast to strings in place before the join, or one that already carries ``Metadata_JCP2022``, as JUMP's assembled profiles do.
         kind: Which perturbation the annotation is read for, one of :data:`KINDS`.
+        on_unmapped: What to do with wells whose id the annotation cannot map: ``"warn"`` keeps them, ``"drop"`` removes them and warns, ``"error"`` raises.
 
     Returns:
         A new frame with ``Metadata_JCP2022``, ``Metadata_Perturbation``, ``Metadata_Perturbation_Type`` and ``Metadata_Control`` joined onto `obs`, missing on the wells the annotation does not cover.
@@ -100,11 +102,13 @@ def join_jump_annotation(obs: pd.DataFrame, kind: str = "compound") -> pd.DataFr
         For ``"crispr"`` and ``"orf"`` ``Metadata_Gene`` and ``Metadata_Perturbation`` are the gene symbol (its reagents are the replicates), ``Metadata_Perturbation_Type`` is the kind, ``Metadata_Control_Type`` is ``"negcon"``, ``"poscon"`` or ``"treatment"`` (JUMP's ``"trt"``), ``Metadata_Control`` marks any control row, and ``Metadata_ChromosomeArm`` is the arm the gene sits on, such as ``"1p"``, missing for a gene without a mapped locus.
 
     Raises:
-        ValueError: `kind` is not one of :data:`KINDS`.
+        ValueError: `kind` is not one of :data:`KINDS`, `on_unmapped` is not ``"warn"``, ``"drop"`` or ``"error"``, or it is ``"error"`` and an id is unmapped.
         KeyError: `obs` has no ``Metadata_JCP2022`` and is missing one of the three columns the annotation is keyed by.
     """
     if kind not in KINDS:
         raise ValueError(f"kind must be one of {KINDS}, got {kind!r}")
+    if on_unmapped not in _ON_UNMAPPED:
+        raise ValueError(f"on_unmapped must be one of {_ON_UNMAPPED}, got {on_unmapped!r}")
 
     # The JUMP annotation is authoritative for control status; drop any incoming values so the controls
     # merge below does not collide with them into Metadata_Control_Type_x / _y.
@@ -119,8 +123,9 @@ def join_jump_annotation(obs: pd.DataFrame, kind: str = "compound") -> pd.DataFr
         is_negcon = (joined["Metadata_JCP2022"] == NEGATIVE_CONTROL).to_numpy()
         joined["Metadata_Control_Type"] = np.where(is_negcon, "negcon", "treatment")
         joined["Metadata_Control"] = is_negcon
-        _warn_unmapped(joined, joined["Metadata_InChIKey"].isna().to_numpy() & ~is_negcon, "compound")
-        return joined
+        return _handle_unmapped(
+            joined, joined["Metadata_InChIKey"].isna().to_numpy() & ~is_negcon, "compound", on_unmapped
+        )
 
     genes = jump_metadata(kind)[["Metadata_JCP2022", "Metadata_Symbol"]].rename(
         columns={"Metadata_Symbol": "Metadata_Gene"}
@@ -138,20 +143,25 @@ def join_jump_annotation(obs: pd.DataFrame, kind: str = "compound") -> pd.DataFr
     joined["Metadata_Perturbation"] = joined["Metadata_Gene"].fillna(joined["Metadata_JCP2022"]).astype(str)
     joined["Metadata_Perturbation_Type"] = kind
     joined["Metadata_Control"] = (joined["Metadata_Control_Type"] != "treatment").to_numpy()
-    _warn_unmapped(joined, joined["Metadata_Gene"].isna().to_numpy(), "gene")
+    joined = _handle_unmapped(joined, joined["Metadata_Gene"].isna().to_numpy(), "gene", on_unmapped)
     joined["Metadata_ChromosomeArm"] = joined["Metadata_Gene"].map(_chromosome_arms())
     return joined
 
 
-def _warn_unmapped(joined: pd.DataFrame, unmapped: np.ndarray, what: str) -> None:
-    """Warn about annotated ids that have no ``what`` in the JUMP tables; wells with no id are logged by the well join."""
-    ids = joined.loc[unmapped & joined["Metadata_JCP2022"].notna().to_numpy(), "Metadata_JCP2022"].unique()
-    if len(ids):
-        warnings.warn(
-            f"{len(ids)} JUMP id(s) could not map to a {what}; their wells are kept as treatments without one.",
-            UserWarning,
-            stacklevel=3,
-        )
+def _handle_unmapped(joined: pd.DataFrame, unmapped: np.ndarray, what: str, on_unmapped: str) -> pd.DataFrame:
+    """Warn, drop or raise for annotated ids that have no ``what`` in the JUMP tables; wells with no id are logged by the well join."""
+    unmapped = unmapped & joined["Metadata_JCP2022"].notna().to_numpy()
+    n_ids = len(joined.loc[unmapped, "Metadata_JCP2022"].unique())
+    if not n_ids:
+        return joined
+    message = f"{n_ids} JUMP id(s) could not map to a {what}"
+    if on_unmapped == "error":
+        raise ValueError(f"{message}; pass on_unmapped='drop' to remove their wells or 'warn' to keep them.")
+    if on_unmapped == "drop":
+        warnings.warn(f"{message}; their {int(unmapped.sum())} well(s) were dropped.", UserWarning, stacklevel=3)
+        return joined.loc[~unmapped]
+    warnings.warn(f"{message}; their wells are kept as treatments without one.", UserWarning, stacklevel=3)
+    return joined
 
 
 def _join_wells(obs: pd.DataFrame) -> pd.DataFrame:
