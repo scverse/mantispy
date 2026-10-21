@@ -551,6 +551,7 @@ def stamp(
     feature_kind: str | None = None,
     grouped_by: Sequence[str] | None = None,
     provenance: Mapping[str, str] | None = None,
+    perturbation: Mapping[str, str] | None = None,
     copy: bool = False,
 ) -> ad.AnnData | None:
     """Mark an :class:`~anndata.AnnData` built elsewhere as a mantispy object.
@@ -569,6 +570,8 @@ def stamp(
         grouped_by: For ``"aggregate"`` resolution, the columns that define one row; required there since there is no default.
         provenance: Optional record of where an embedding came from, stored as ``uns["mantispy"]["embedding"]``.
             Expected keys are ``model`` (required when given), ``version`` and ``pooling``.
+        perturbation: Optional record of where perturbation identity lives: ``column`` (the ``obs`` column naming the perturbation) and ``control_column`` (default ``Metadata_Control_Type``).
+            Left unset, an object with a ``Metadata_Perturbation`` column records that, and one without records nothing. Tools such as :func:`~mantispy.tl.consensus` and :func:`~mantispy.tl.map` read it as their default column.
         copy: Return a stamped copy instead of stamping in place.
 
     Returns:
@@ -647,7 +650,7 @@ def stamp(
             kinds = as_frame(obj.var)["feature_kind"].astype("object")
             kinds[feature_mask(obj, "is_feature")] = feature_kind
             obj.var["feature_kind"] = kinds.to_numpy()
-        _record(obj, resolution=resolution, grouped_by=grouped_by)
+        _record(obj, resolution=resolution, grouped_by=grouped_by, perturbation=perturbation)
         if provenance is not None:
             obj.uns["mantispy"] = {**obj.uns["mantispy"], "embedding": dict(provenance)}
 

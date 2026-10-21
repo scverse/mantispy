@@ -88,17 +88,20 @@ def reference_mask(adata: AnnData, reference: str | None) -> np.ndarray:
         return np.ones(adata.n_obs, dtype=bool)
 
     if reference in CONTROL_CLASSES:
-        if "Metadata_Control_Type" not in adata.obs:
+        from mantispy._core.schema import resolve_control_column
+
+        column = resolve_control_column(adata)
+        if column not in adata.obs:
             raise KeyError(
-                f"obs has no column 'Metadata_Control_Type' to select the {reference!r} reference. "
+                f"obs has no column {column!r} to select the {reference!r} reference. "
                 "Run mt.pp.annotate_controls to create it."
             )
-        types = as_frame(adata.obs)["Metadata_Control_Type"]
+        types = as_frame(adata.obs)[column]
         missing = int(types.isna().sum())
         if missing:
             # A missing class would otherwise read as "not the reference" and fit on a subset of the controls.
             raise ValueError(
-                f"obs['Metadata_Control_Type'] has {missing} missing value(s), so the {reference!r} reference "
+                f"obs[{column!r}] has {missing} missing value(s), so the {reference!r} reference "
                 "cannot be selected. Fill them, or check that the platemap covers every well."
             )
         return (types.astype(str) == reference).to_numpy()
@@ -121,8 +124,10 @@ def control_annotated(adata: AnnData) -> bool:
     A ``Metadata_Control`` boolean without ``Metadata_Control_Type`` raises: under schema 2.0 the boolean marks
     any control, so the negative controls cannot be told apart, and skipping would silently drop them.
     """
+    from mantispy._core.schema import resolve_control_column
+
     obs = as_frame(adata.obs)
-    if "Metadata_Control_Type" in obs:
+    if resolve_control_column(adata) in obs:
         return True
     if "Metadata_Control" in obs:
         raise KeyError(

@@ -14,7 +14,7 @@ from mantispy._core._numba import MEDIAN
 from mantispy._core._reduce import get_matrix, group_codes, group_offsets, reduce_grouped, reduced_var
 from mantispy._core.logging import report_drop
 from mantispy._core.provenance import level_change_source, record_history, record_params
-from mantispy._core.schema import stamp
+from mantispy._core.schema import resolve_perturbation_column, stamp
 from mantispy.tl._aggregate import _group_obs
 from mantispy.tl._similarity import similarity_matrix
 
@@ -67,7 +67,7 @@ def modz_weights(
 
 def consensus(
     adata: AnnData,
-    by: str = "Metadata_Perturbation",
+    by: str | None = None,
     method: str = "median",
     correlation: str = "spearman",
     min_replicates: int = 2,
@@ -79,7 +79,7 @@ def consensus(
 
     Args:
         adata: Profiles to summarize, normally well level.
-        by: Column defining a perturbation.
+        by: Column defining a perturbation, by default the perturbation column the object records, else ``Metadata_Perturbation``.
         method: ``"median"`` (the default, matching pycytominer and identical to :func:`~mantispy.tl.aggregate` by the same column) or ``"modz"``, which weights replicates by their agreement so a single bad replicate moves the signature far less than a plain mean would.
         correlation: How replicate agreement is measured: ``"spearman"`` (pycytominer's default, and insensitive to a few extreme features) or ``"pearson"``.
         min_replicates: Groups with fewer replicates are dropped.
@@ -112,6 +112,7 @@ def consensus(
     if correlation not in CORRELATIONS:
         raise ValueError(f"correlation must be one of {CORRELATIONS}, got {correlation!r}")
 
+    by = resolve_perturbation_column(adata, by)
     codes, keys = group_codes(adata, [by])
     counts = np.bincount(codes, minlength=len(keys))
     weights = np.ones(adata.n_obs)

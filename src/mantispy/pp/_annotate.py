@@ -13,6 +13,7 @@ from anndata import AnnData
 from mantispy._core.frames import as_frame, categorize_metadata
 from mantispy._core.logging import get_logger
 from mantispy._core.mutation import inplace_or_copy
+from mantispy._core.schema import record_perturbation
 
 PERTURBATION_KEYS = (
     "Metadata_Perturbation",
@@ -133,6 +134,7 @@ def annotate_jump(adata: AnnData, kind: str = "compound", copy: bool = False) ->
     joined = join_jump_annotation(obs.copy(), kind=kind)
     joined.index = obs.index
     adata.obs = categorize_metadata(joined)
+    record_perturbation(adata)
     get_logger().info(
         "annotate_jump: %d perturbations over %d wells, %d of them controls",
         int(joined["Metadata_JCP2022"].nunique()),

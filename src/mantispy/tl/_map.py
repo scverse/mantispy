@@ -13,6 +13,7 @@ from mantispy._core._reduce import representation
 from mantispy._core.frames import as_frame
 from mantispy._core.masks import reference_mask
 from mantispy._core.mutation import inplace_or_copy
+from mantispy._core.schema import resolve_perturbation_column
 
 #: Row index for each control and -1 elsewhere, so under ``mode="activity"`` replicates retrieve against controls only.
 # A transient per-row index of the reference set, added for copairs and dropped before return. It is
@@ -197,7 +198,7 @@ def map(
     neg_sameby: Sequence[str] = (),
     neg_diffby: Sequence[str] = (),
     mode: str | None = None,
-    label: str = "Metadata_Perturbation",
+    label: str | None = None,
     batch: str = "Metadata_Plate",
     annotation_key: str | None = None,
     label_sep: str | None = None,
@@ -238,6 +239,7 @@ def map(
                 Do a perturbation's replicates on other plates retrieve each other against all other profiles?
                 A replicate counts only if it is on a different plate, which separates reproducible biology from plate effects.
         label: The ``obs`` column naming the perturbation, which the presets group replicates by.
+            Defaults to the perturbation column the object records, else ``Metadata_Perturbation``.
         batch: The ``obs`` column naming the plate or batch, which the presets draw negatives from.
         annotation_key: The ``obs`` column ``mode="consistency"`` groups by. A column holding a list of labels per row is scored as multilabel (see the mode description); a scalar column is a single label. A list-valued ``obs`` column does not survive ``write_h5ad``, so store the labels as a delimited string, which does survive, and split it with ``label_sep``.
         label_sep: Split a string ``annotation_key`` on this separator into a list of labels per row, so a stored ``"MEK|ERK"`` is scored as multilabel. ``None`` leaves the column as it is. An entry that is already a list, or is missing, is left untouched.
@@ -269,6 +271,7 @@ def map(
             "mt.tl.map needs copairs, an optional extra. Install it with pip install 'mantispy[map]'."
         ) from error
 
+    label = resolve_perturbation_column(adata, label)
     explicit = any([pos_sameby, pos_diffby, neg_sameby, neg_diffby])
     if mode is not None and explicit:
         raise ValueError("pass either mode= or explicit pos_*/neg_* arguments, not both")

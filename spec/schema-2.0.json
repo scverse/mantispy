@@ -105,7 +105,8 @@
         "consensus_from",
         "membership",
         "truth",
-        "embedding"
+        "embedding",
+        "perturbation"
     ],
     "uns_results": [
         "feature_select",

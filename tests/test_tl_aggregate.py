@@ -121,3 +121,26 @@ def test_aggregate_inherits_and_extends_history(adata):
     assert history[-1]["source"]["to_resolution"] == "well"
     # the source object keeps its own, shorter history
     assert "aggregate" not in [record["operation"] for record in read_history(adata)]
+
+
+def _grouped_elsewhere(adata):
+    """Well profiles whose perturbation identity lives in a non-default column with fewer groups."""
+    wells = mt.tl.aggregate(adata, min_cells=0)
+    wells.obs["Alt_Perturbation"] = np.where(np.arange(wells.n_obs) % 2 == 0, "even", "odd")
+    return wells
+
+
+def test_consensus_defaults_to_the_recorded_perturbation_column(adata):
+    wells = _grouped_elsewhere(adata)
+    mt.io.stamp(wells, perturbation={"column": "Alt_Perturbation"})
+    assert set(mt.tl.consensus(wells, method="median").obs["Alt_Perturbation"]) == {"even", "odd"}
+    explicit = mt.tl.consensus(wells, by="Metadata_Perturbation", method="median")
+    assert "Alt_Perturbation" not in explicit.obs
+    assert explicit.n_obs != 2
+
+
+def test_consensus_without_a_record_keeps_the_default_column(adata):
+    wells = mt.tl.aggregate(adata, min_cells=0)
+    wells.uns["mantispy"].pop("perturbation", None)
+    out = mt.tl.consensus(wells, method="median")
+    assert set(out.obs["Metadata_Perturbation"]) == set(wells.obs["Metadata_Perturbation"])

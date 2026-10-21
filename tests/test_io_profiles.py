@@ -515,3 +515,41 @@ def test_embedding_provenance_without_a_model_warns():
     report = mt.io.validate(adata)
     assert report.ok
     assert any("model" in w for w in report.warnings)
+
+
+def test_stamp_records_the_perturbation_column():
+    adata = _embedding_adata()
+    assert "perturbation" not in adata.uns["mantispy"]
+    adata.obs["Metadata_Perturbation"] = ["a", "b"]
+    mt.io.stamp(adata, resolution="well", feature_kind="embedding")
+    assert adata.uns["mantispy"]["perturbation"]["column"] == "Metadata_Perturbation"
+    assert adata.uns["mantispy"]["perturbation"]["control_column"] == "Metadata_Control_Type"
+
+
+def test_stamp_perturbation_override_and_validation():
+    adata = _embedding_adata()
+    adata.obs["gene"] = ["a", "b"]
+    out = mt.io.stamp(adata, resolution="well", feature_kind="embedding", perturbation={"column": "gene"}, copy=True)
+    assert out.uns["mantispy"]["perturbation"]["column"] == "gene"
+    with pytest.raises(ValueError, match="no_such_column"):
+        mt.io.stamp(adata, resolution="well", feature_kind="embedding", perturbation={"column": "no_such_column"})
+    assert "perturbation" not in adata.uns["mantispy"]
+
+
+def test_perturbation_record_round_trips(tmp_path):
+    adata = _embedding_adata()
+    adata.obs["gene"] = ["a", "b"]
+    mt.io.stamp(adata, resolution="well", feature_kind="embedding", perturbation={"column": "gene"})
+    path = tmp_path / "p.h5ad"
+    mt.io.write(adata, path)
+    assert mt.io.read(path).uns["mantispy"]["perturbation"]["column"] == "gene"
+
+
+def test_validate_suggests_recording_the_perturbation_column():
+    adata = _embedding_adata()
+    adata.obs["Metadata_Perturbation"] = ["a", "b"]
+    report = mt.io.validate(adata)
+    assert report.ok
+    assert sum("perturbation=" in w for w in report.warnings) == 1
+    mt.io.stamp(adata, resolution="well", feature_kind="embedding")
+    assert not any("perturbation=" in w for w in mt.io.validate(adata).warnings)
