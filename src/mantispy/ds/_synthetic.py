@@ -242,7 +242,6 @@ def synthetic_plate(
         var=parse_feature_names(names, channels=channels),
     )
     stamp(adata, resolution="object")
-    adata.uns["mantispy"]["channels"] = channels
     # Key the image table by Metadata_ImageID to match obs and the schema check; the id of an image is
     # Plate|Well|ImageNumber, the same make_image_id builds for its cells.
     image_table = image_table.reset_index().rename(columns={"ImageNumber": "Metadata_ImageNumber"})

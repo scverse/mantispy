@@ -143,8 +143,6 @@ REQUIRED_UNS: tuple[str, ...] = (
 #: Keys describing the object itself: the required descriptors plus the optional ones.
 UNS_KEYS: tuple[str, ...] = (
     *REQUIRED_UNS,
-    "channels",
-    "dataset",
     "image_table",
     "params",
     "consensus_from",

@@ -93,8 +93,6 @@
         "schema_version",
         "resolution",
         "grouped_by",
-        "channels",
-        "dataset",
         "image_table",
         "params",
         "consensus_from",

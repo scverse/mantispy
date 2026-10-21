@@ -543,3 +543,16 @@ def test_validate_suggests_recording_the_perturbation_column():
     assert sum("perturbation=" in w for w in report.warnings) == 1
     mt.io.stamp(adata, resolution="well", feature_kind="embedding")
     assert not any("perturbation=" in w for w in mt.io.validate(adata).warnings)
+
+
+def test_loaders_write_no_channels_or_dataset(tmp_path):
+    path = tmp_path / "profiles.csv"
+    _frame().to_csv(path, index=False)
+    loaded = (
+        from_dataframe(_frame(), channels=["DNA"]),
+        mt.io.read_profiles(path, channels=["DNA"]),
+        mt.ds.synthetic_plate(),
+    )
+    for adata in loaded:
+        assert "channels" not in adata.uns["mantispy"]
+        assert "dataset" not in adata.uns["mantispy"]

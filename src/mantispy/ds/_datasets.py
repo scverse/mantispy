@@ -103,7 +103,6 @@ def _profiles(
     adata = read_profiles(
         _files(name, cache_dir, select=select), **{**_DATASETS[name].metadata.get("read", {}), **kwargs}
     )
-    adata.uns["mantispy"]["dataset"] = _DATASETS[name].metadata["accession"]
     return adata
 
 
@@ -247,7 +246,6 @@ def _rohban_raw(cache_dir: str | Path | None = None) -> AnnData:
     obs["Metadata_Gene"] = gene.astype("category")
     obs["Metadata_Construct"] = construct
     obs["Metadata_Allele"] = allele.astype("category")
-    adata.uns["mantispy"]["dataset"] = "cpg0017-rohban-pathways"
     get_logger().info(
         "rohban: %d wells x %d features, %d ORF constructs over %d genes",
         adata.n_obs,
@@ -399,7 +397,6 @@ def _assemble_jump_target2(plates: Sequence[str] | None, annotate: bool, cache_d
     adata = read_jump(profiles, annotate=annotate, on_column_mismatch="intersect", platemap=counts)
     batches = {_plate(file.name): file.name.split("__")[0] for file in _DATASETS["jump_target2"].files}
     adata.obs["Metadata_Batch"] = [batches[str(plate)] for plate in adata.obs["Metadata_Plate"]]
-    adata.uns["mantispy"]["dataset"] = "cpg0016-jump"
     get_logger().info(
         "jump_target2: %d wells x %d features from %d source(s)",
         adata.n_obs,
@@ -814,7 +811,6 @@ def _finish_guide_screen(adata: AnnData, name: str) -> AnnData:
     """Record the accession, mark the perturbation type and log the shape shared by the single-cell guide screens."""
     # These are CRISPR guide screens: Metadata_Perturbation is the guide, set by each loader.
     adata.obs["Metadata_Perturbation_Type"] = pd.Series("crispr", index=adata.obs_names, dtype="category")
-    adata.uns["mantispy"]["dataset"] = _DATASETS[name].metadata["accession"]
     get_logger().info(
         "%s: %d cells x %d features, %d gene(s) over %d guide(s)",
         name,
@@ -1155,7 +1151,6 @@ def _assemble_cells(entry: DatasetEntry, cache_dir: str | Path | None, *, annota
         adata.obs = join_jump_annotation(as_frame(adata.obs)).set_axis(adata.obs_names)
         _mark_selected(adata)
     stamp(adata, resolution="object")
-    adata.uns["mantispy"]["dataset"] = entry.metadata["accession"]
     get_logger().info(
         "jump_cells: %d cells x %d features from %d field(s) of view in %d well(s)",
         adata.n_obs,

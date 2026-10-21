@@ -20,7 +20,7 @@ from mantispy._core.schema import REQUIRED_OBS, REQUIRED_UNS, get_resolution, re
 FUNCTIONS = {"median": MEDIAN, "mean": MEAN}
 
 #: Keys describing the features or the experiment; result tables are keyed on the input rows, so they are dropped.
-_INHERITED = frozenset({"channels", "dataset", "truth", "feature_select", "blocklist"})
+_INHERITED = frozenset({"truth", "feature_select", "blocklist"})
 
 #: Columns that add up over a group, so they are recomputed for it rather than carried as constant metadata.
 _TALLIES = ("Metadata_CellCount", "Metadata_SiteCount", "Metadata_ReplicateCount")

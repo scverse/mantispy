@@ -238,9 +238,6 @@ def from_dataframe(
 
     adata = ad.AnnData(X=X, obs=obs, var=parsed.loc[feature_names])
     _record(adata, resolution=resolution, grouped_by=grouped_by)
-    # Recorded whether given or inferred, so the parse can be reproduced from the object.
-    if vocabulary:
-        adata.uns["mantispy"]["channels"] = list(vocabulary)
     return adata
 
 
