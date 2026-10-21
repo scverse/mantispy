@@ -89,5 +89,6 @@ feature_kind = "embedding"
 ## Where the field-level detail lives
 
 - {func}`mantispy.io.stamp` documents the arguments and the checks that run.
-- The schema specification, `spec/morphology-schema-2.0.md` in the repository, defines every field, requirement and naming rule. Section 2.6 is the source of the four axes above.
+- The {doc}`stamp reference <stamp_reference>` explains every key of `uns["mantispy"]`: what it is, who sets it and how to choose a value.
+- The {doc}`schema specification <schema_spec>` defines every field, requirement and naming rule. Section 2.6 is the source of the four axes above.
 - The [tutorials](../tutorials/general) show each axis on real data.

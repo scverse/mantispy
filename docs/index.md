@@ -82,6 +82,8 @@ references
 :maxdepth: 1
 
 data_model/index
+data_model/stamp_reference
+data_model/schema_spec
 ```
 
 ```{toctree}
