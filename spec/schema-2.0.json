@@ -84,11 +84,7 @@
         "qc_n_unique",
         "original_name"
     ],
-    "required_uns": [
-        "schema_version",
-        "resolution",
-        "grouped_by"
-    ],
+    "required_uns": ["schema_version", "resolution", "grouped_by"],
     "uns_keys": [
         "schema_version",
         "resolution",
