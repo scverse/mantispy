@@ -13,7 +13,7 @@ author = info["Author"]
 copyright = f"{datetime.now():%Y}, {author}"
 version = info["Version"]
 urls = dict(pu.split(", ") for pu in info.get_all("Project-URL"))
-repository_url = urls["Source"]
+source_repository = urls["Source"]
 
 release = info["Version"]
 
@@ -23,15 +23,8 @@ templates_path = ["_templates"]
 nitpicky = True
 needs_sphinx = "4.0"
 
-html_context = {
-    "display_github": True,
-    "github_user": "scverse",
-    "github_repo": project,
-    "github_version": "main",
-    "conf_py_path": "/docs/",
-}
-
 extensions = [
+    "scverse_doc",
     "myst_nb",
     "sphinx_copybutton",
     "sphinx.ext.autodoc",
@@ -45,7 +38,7 @@ extensions = [
     "sphinx_design",
     "IPython.sphinxext.ipython_console_highlighting",
     "sphinxext.opengraph",
-    "scverse_misc.sphinx_ext",
+    "scverse_misc.sphinx_ext",  # documents the scverse_misc.Settings object mantispy re-exports
 ]
 
 autosummary_generate = True
@@ -82,40 +75,30 @@ source_suffix = {
     ".myst": "myst-nb",
 }
 
-intersphinx_mapping = {
+from scverse_doc.registry import intersphinx as _scverse_intersphinx  # noqa: E402
+
+# scverse packages come from the shared registry; the rest are mantispy-specific. Entries here win.
+intersphinx_mapping = _scverse_intersphinx() | {
     "python": ("https://docs.python.org/3", None),
-    "anndata": ("https://anndata.scverse.org/en/stable/", None),
-    "scanpy": ("https://scanpy.scverse.org/en/stable/", None),
     "numpy": ("https://numpy.org/doc/stable/", None),
     "pandas": ("https://pandas.pydata.org/docs/", None),
-    "spatialdata": ("https://spatialdata.scverse.org/en/stable/", None),
     "matplotlib": ("https://matplotlib.org/stable/", None),
 }
 
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "**.ipynb_checkpoints"]
 
-html_theme = "scanpydoc"
+# The scverse theme (pydata-sphinx-theme) is registered by the scverse_doc extension.
 html_static_path = ["_static"]
 html_css_files = ["css/custom.css"]
-html_js_files = ["https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"]
+html_js_files = [
+    "https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js",
+    "js/plotly_resize.js",  # re-fit plotly figures to their container (pydata grid + cross-browser)
+]
 
 html_title = project
-
-html_theme_options = {
-    "repository_url": repository_url,
-    "repository_branch": "main",
-    "use_repository_button": True,
-    "use_issues_button": True,
-    "path_to_docs": "docs/",
-    "navigation_with_keys": False,
-    "accent_color": "#1a878a",
-    "logo": {
-        "image_light": "_static/mantispy-logo.png",
-        "image_dark": "_static/mantispy-logo.png",
-        "alt_text": "mantispy",
-    },
-    "show_toc_level": 2,
-}
+html_logo = "_static/mantispy-logo.png"
+# accent sets the theme fallback; custom.css owns the full teal/orange palette.
+html_theme_options = {"accent": "#1a878a"}
 html_show_sphinx = False
 ogp_image = "_static/mantispy-logo.png"
 
