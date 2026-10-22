@@ -197,7 +197,7 @@ def test_dropping_a_majority_of_features_warns_but_a_minority_stays_quiet(capsys
 
 
 def test_dropping_features_with_no_object_is_reported(capsys):
-    """A column naming no object (brieflow's ``cell_area``) parses with a missing object.
+    """A column naming no object (``AreaShape_Perimeter``) parses with a missing object.
 
     Reporting the drop sorted that missing value alongside the object names and raised a TypeError on pandas 3.
     """
@@ -209,15 +209,14 @@ def test_dropping_features_with_no_object_is_reported(capsys):
                 "Metadata_Plate": ["P1", "P1"],
                 "Metadata_Well": ["A01", "A02"],
                 "Cells_AreaShape_Area": [1.0, 2.0],
-                "cell_DAPI_mean": [3.0, 4.0],
-                "cell_area": [5.0, 6.0],
+                "AreaShape_Perimeter": [3.0, 4.0],
             }
         )
-        assert parse_feature_names(["cell_area"])["object"].isna().all()
+        assert parse_feature_names(["AreaShape_Perimeter"])["object"].isna().all()
         adata = from_dataframe(frame, channels=["DAPI"])
         assert adata.var_names.tolist() == ["Cells_AreaShape_Area"]
         captured = capsys.readouterr().err
-        assert "2 of 3 feature(s)" in captured
+        assert "1 of 2 feature(s)" in captured
         assert "<no object>" in captured
     finally:
         mt.settings.verbosity = previous
@@ -588,3 +587,48 @@ def test_loaders_write_no_channels_or_dataset(tmp_path):
     for adata in loaded:
         assert "channels" not in adata.uns["mantispy"]
         assert "dataset" not in adata.uns["mantispy"]
+
+
+def test_unrecognised_numeric_column_kept_as_opaque_feature():
+    df = pd.DataFrame({"Metadata_Site": ["s1", "s2"], "my_latent_0": [1.0, 2.0], "my_latent_1": [2.0, 3.0]})
+    adata = from_dataframe(df, resolution="object")
+    assert {"my_latent_0", "my_latent_1"} <= set(adata.var_names)
+    assert (adata.var.loc[["my_latent_0", "my_latent_1"], "feature_kind"] == "embedding").all()
+    assert adata.n_vars == 2
+
+
+def test_recognised_non_features_still_excluded_beside_opaque_columns():
+    df = pd.DataFrame(
+        {
+            "Metadata_Site": ["s1", "s2"],
+            "Location_Center_X": [1.0, 2.0],
+            "ObjectNumber": [1, 2],
+            "Cells_AreaShape_Area": [10.0, 11.0],
+            "my_latent_0": [0.5, 0.6],
+        }
+    )
+    adata = from_dataframe(df, resolution="object")
+    assert set(adata.var_names) == {"Cells_AreaShape_Area", "my_latent_0"}
+    assert adata.var.loc["Cells_AreaShape_Area", "feature_kind"] != "embedding"
+
+
+def test_keep_non_features_moves_only_recognised_non_features_to_obs():
+    df = pd.DataFrame({"Metadata_Site": ["s1", "s2"], "Location_Center_X": [1.0, 2.0], "my_latent_0": [0.5, 0.6]})
+    adata = from_dataframe(df, resolution="object", keep_non_features=True)
+    assert list(adata.var_names) == ["my_latent_0"]
+    assert "Location_Center_X" in adata.obs
+
+
+def test_table_of_only_opaque_columns_builds():
+    df = pd.DataFrame({"Metadata_Site": ["s1", "s2"], "dl_a": [1.0, 2.0], "dl_b": [3.0, 4.0], "dl_c": [5.0, 6.0]})
+    adata = from_dataframe(df, resolution="object")
+    assert list(adata.var_names) == ["dl_a", "dl_b", "dl_c"]
+    assert (adata.var["feature_kind"] == "embedding").all()
+
+
+def test_cellprofiler_frame_gains_no_columns_from_keep_by_default():
+    df = _frame()
+    df["Cells_Location_Center_X"] = 1.0
+    df["Cells_Number_Object_Number"] = 1.0
+    adata = from_dataframe(df)
+    assert set(adata.var_names) == {"Cells_AreaShape_Area", "Cells_Intensity_MeanIntensity_DNA"}

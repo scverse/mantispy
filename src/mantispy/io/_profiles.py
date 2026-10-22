@@ -15,7 +15,14 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
-from mantispy._core.features import _infer_channels, empty_annotation, parse_feature_names
+from mantispy._core.features import (
+    _BARE_NON_FEATURES,
+    _KNOWN_GROUPS,
+    _infer_channels,
+    annotation,
+    empty_annotation,
+    parse_feature_names,
+)
 from mantispy._core.frames import as_frame, categorize_metadata
 from mantispy._core.logging import get_logger, report_drop
 from mantispy._core.masks import feature_mask
@@ -171,16 +178,19 @@ def from_dataframe(
     if objects is not None:
         wanted = set(objects)
         excluded = ~parsed["object"].isin(wanted).to_numpy()
-        if (keep & excluded).any():
+        # A column in no known group is kept as an opaque feature below, so it is not reported as dropped.
+        recognised = parsed["feature_group"].isin(_KNOWN_GROUPS).to_numpy()
+        reported = keep & excluded & recognised
+        if reported.any():
             # A feature whose name names no object parses with a missing object; under pandas 3, astype(str)
             # keeps that missing value, so it is named here rather than sorted alongside the strings.
-            dropped = parsed["object"][keep & excluded]
+            dropped = parsed["object"][reported]
             dropped_objects = sorted(set(dropped.dropna().astype(str))) + (
                 ["<no object>"] if dropped.isna().any() else []
             )
             report_drop(
                 f"feature(s) measured on {dropped_objects}",
-                int((keep & excluded).sum()),
+                int(reported.sum()),
                 int(keep.sum()),
                 remedy="pass objects=None to keep every object",
                 # On a small export the whole-field Image_ columns often outnumber the per-cell ones.
@@ -189,7 +199,11 @@ def from_dataframe(
         keep = keep & ~excluded
     feature_names = parsed.index[keep].tolist()
 
-    if not feature_names and candidates:
+    discarded = [c for c in candidates if c not in set(feature_names)]
+    opaque = [
+        c for c in discarded if c not in _BARE_NON_FEATURES and parsed.loc[c, "feature_group"] not in _KNOWN_GROUPS
+    ]
+    if not feature_names and not opaque and candidates:
         objects_seen = sorted(set(parsed["object"].dropna().astype(str)))
         raise ValueError(
             f"none of the {len(candidates)} numeric column(s) parsed as a feature on "
@@ -199,15 +213,25 @@ def from_dataframe(
             "columns follow <Object>_<FeatureGroup>_<Feature>_<Channel>."
         )
 
-    discarded = [c for c in candidates if c not in set(feature_names)]
+    if opaque:
+        get_logger().info(
+            "kept %d column(s) that match no CellProfiler convention as opaque embedding features, such as %s",
+            len(opaque),
+            ", ".join(opaque[:3]),
+        )
+    rest = [c for c in discarded if c not in set(opaque)]
     if keep_non_features:
-        meta_columns += discarded
-    elif discarded:
+        meta_columns += rest
+    elif rest:
         get_logger().info(
             "dropped %d numeric non-feature column(s) such as %s; pass keep_non_features=True to keep them",
-            len(discarded),
-            ", ".join(discarded[:3]),
+            len(rest),
+            ", ".join(rest[:3]),
         )
+    var = parsed.loc[feature_names]
+    if opaque:
+        var = pd.concat([var, annotation(opaque, feature_kind="embedding", is_feature=True)])
+        feature_names = var.index.tolist()
 
     X = df[feature_names].to_numpy(dtype=np.float32)
     if sentinels is not None:
@@ -236,7 +260,7 @@ def from_dataframe(
         obs = ensure_object_identity(obs)
     obs.index = pd.Index([str(i) for i in range(len(obs))])
 
-    adata = ad.AnnData(X=X, obs=obs, var=parsed.loc[feature_names])
+    adata = ad.AnnData(X=X, obs=obs, var=var)
     _record(adata, resolution=resolution, grouped_by=grouped_by)
     return adata
 
