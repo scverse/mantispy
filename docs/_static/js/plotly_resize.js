@@ -3,14 +3,14 @@
 // never correct until the window happens to resize (browser-dependent; Firefox keeps the wide draw).
 // Observe each figure's container and resize the plot to match, so it fits in every browser.
 window.addEventListener("load", function () {
-  if (!window.Plotly || !window.ResizeObserver) return;
-  document.querySelectorAll(".plotly-graph-div").forEach(function (gd) {
-    const fit = function () {
-      try {
-        window.Plotly.Plots.resize(gd);
-      } catch (e) {}
-    };
-    new ResizeObserver(fit).observe(gd.parentElement);
-    fit();
-  });
+    if (!window.Plotly || !window.ResizeObserver) return;
+    document.querySelectorAll(".plotly-graph-div").forEach(function (gd) {
+        const fit = function () {
+            try {
+                window.Plotly.Plots.resize(gd);
+            } catch (e) {}
+        };
+        new ResizeObserver(fit).observe(gd.parentElement);
+        fit();
+    });
 });
