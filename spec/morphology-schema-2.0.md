@@ -137,12 +137,10 @@ All mantispy-owned object metadata MUST live under `uns["mantispy"]`.
 The namespace MUST contain:
 
 - `schema_version`
-- `schema_status`
 - `resolution`
 - `grouped_by`
-- `history`
 
-During the current refactor, `schema_status` MUST be `"experimental"`.
+The schema's stability status is stated in section 21, not stored in the object.
 
 A stable schema version MUST NOT be declared until the package implementation, loaders, staged datasets, tutorials, and CellProfiler integrations follow the contract.
 
@@ -608,43 +606,13 @@ The exact physical representation may be optimized during implementation, but it
 
 ## 14. Transformation provenance
 
-Mantispy keeps lightweight portable provenance inside the AnnData object.
+Mantispy does not keep an operation log inside the AnnData object. Earlier drafts stored one under `uns["mantispy"]["history"]`; it was removed.
 
 Full environment, file, notebook, and artifact lineage belongs in external workflow systems such as LaminDB and is not a hard mantispy dependency.
 
-### 14.1 History
+Result-specific parameters SHOULD be stored with the corresponding result when a plot or downstream function needs them. The latest call of each tool is recorded in `uns["mantispy"]["params"]`; a second call of the same function overwrites the first.
 
-`uns["mantispy"]["history"]` is an ordered append-only list.
-
-Each mantispy operation that changes data or creates a persistent result SHOULD append one record.
-
-A history record contains at least:
-
-```python
-{
-    "operation": "pp.normalize",
-    "params": {...},
-    "input": "X",
-    "output": "X",
-    "mantispy_version": "...",
-}
-```
-
-For operations that change resolution, the record SHOULD also include the source and target resolution or grouping information.
-
-The order of records in the list defines execution order. Timestamps are optional.
-
-### 14.2 No overwrite-by-function behavior
-
-Running the same operation twice MUST append two history records. A later call MUST NOT erase the earlier call's provenance.
-
-Result-specific parameters SHOULD be stored with the corresponding result when a plot or downstream function needs them.
-
-### 14.3 Level-changing operations
-
-A new AnnData object created by aggregation, consensus, signature construction, or another level-changing operation MUST inherit the source object's history and append its own operation.
-
-The new object MUST also preserve relevant mantispy descriptors unless the constructor intentionally changes them.
+A new AnnData object created by aggregation, consensus, signature construction, or another level-changing operation MUST preserve relevant mantispy descriptors unless the constructor intentionally changes them.
 
 ## 15. Result table schema
 
@@ -821,7 +789,7 @@ The migration includes at least the following changes:
 6. Migrate control semantics so `Metadata_Control` means any control and `Metadata_Control_Type` carries the fixed type vocabulary.
 7. Preserve all constant observation columns during aggregation rather than using the `Metadata_` prefix as a survival filter.
 8. Add optional source membership for aggregation without relying on row positions.
-9. Replace overwrite-by-function provenance with append-only `history` and preserve history through level changes.
+9. Store result-specific parameters with the result instead of keeping an operation log in the object.
 10. Add `feature_kind` to the required feature schema.
 11. Preserve source channel names without ingest-time canonicalization.
 12. Require an explicit concentration unit whenever concentration is stored.
@@ -861,7 +829,7 @@ The schema refactor is complete when all of the following are true:
 7. A perturbation aggregate states exactly which columns define one row through `grouped_by`.
 8. Negative and positive controls are unambiguous under the new control model.
 9. Dose-response data cannot be analyzed without explicit concentration units.
-10. Repeated mantispy operations preserve an ordered history rather than overwriting provenance.
+10. Result-specific parameters travel with the result they describe.
 11. CellProfiler measurements, embeddings, and derived features can be distinguished through `feature_kind`.
 12. Persistent result tables use the standardized naming rules.
 13. Full validation passes for the canonical compound, genetic, single-cell, embedding, and SpatialData fixtures.
