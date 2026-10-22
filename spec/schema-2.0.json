@@ -11,8 +11,6 @@
     "control_types": ["negcon", "poscon", "treatment", "empty"],
     "required_obs": {
         "object": [
-            "Metadata_Plate",
-            "Metadata_Well",
             "Metadata_ImageID",
             "Metadata_ObjectType",
             "Metadata_ObjectNumber"

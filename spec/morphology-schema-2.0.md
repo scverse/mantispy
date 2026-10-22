@@ -663,8 +663,6 @@ Optional metadata SHOULD produce warnings only when the function can still produ
 An object-level mantispy object requires:
 
 - `X` and the required `var` columns
-- `Metadata_Plate`
-- `Metadata_Well`
 - `Metadata_ImageID`
 - `Metadata_ObjectType`
 - `Metadata_ObjectNumber`
@@ -673,6 +671,7 @@ An object-level mantispy object requires:
 
 The following are conditional:
 
+- `Metadata_Plate` and `Metadata_Well` (absent for a slide or spatial table)
 - `Metadata_Site`
 - `Metadata_ImageNumber`
 - `Metadata_Center_X`

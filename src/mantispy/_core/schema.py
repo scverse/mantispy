@@ -58,7 +58,7 @@ CONCENTRATION_UNITS = ("M", "mM", "uM", "nM", "pM")
 #: Identifier columns required in ``obs``, per resolution. An object-level row must be identifiable
 #: without parsing ``obs_names``; the pair ``(Metadata_ImageID, Metadata_ObjectNumber)`` is unique.
 REQUIRED_OBS: dict[str, tuple[str, ...]] = {
-    "object": ("Metadata_Plate", "Metadata_Well", "Metadata_ImageID", "Metadata_ObjectType", "Metadata_ObjectNumber"),
+    "object": ("Metadata_ImageID", "Metadata_ObjectType", "Metadata_ObjectNumber"),
     "well": ("Metadata_Plate", "Metadata_Well"),
     # A consensus profile no longer belongs to a plate or a well.
     "aggregate": (),
@@ -279,7 +279,7 @@ def make_image_id(obs: pd.DataFrame) -> np.ndarray:
     if not columns:
         raise ValueError(
             f"cannot mint Metadata_ImageID: obs carries none of {_IMAGE_ID_COLUMNS}. Add a source "
-            "identity column (e.g. Metadata_Plate) before stamping at object resolution."
+            "identity column (e.g. Metadata_Site) or an explicit Metadata_ImageID before stamping at object resolution."
         )
     block = obs[columns]
     if block.isna().to_numpy().any():
