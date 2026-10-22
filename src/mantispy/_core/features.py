@@ -8,11 +8,16 @@ CellProfiler's::
 
     [<Object>_]<Group>_<feature words>[_<channel>...][_<numeric params>][_<NofM>]
 
-and cp_measure's, which separates its tokens with slashes, names the channel by index and glues the group to the feature in camel case::
+and cp_measure's::
 
-    <object>_<channel>/<aggregation>/<group><Feature words>[_<numeric params>][_<NofM>]
+    <Group>_<Feature>[_<params>][__<Channel>[__<Channel2>]]
 
-A name is read as cp_measure's only when it matches that shape in full, which a CellProfiler name cannot because CellProfiler never emits a ``/``.
+cp_measure joins the group, feature and params with a single _ and sets the channel or channels off with __.
+A colocalization feature names two channels, each after its own __.
+A bare token such as Area is a feature with no group, and the object comes from the caller, never from the name.
+
+parse_feature_names(convention=...) selects the grammar.
+An explicit value wins, and None reads the names as cp_measure's when any of them contains __.
 
 Columns that are not measurements (object numbers, parent/child links, locations, file names, metadata) get ``is_feature = False`` so callers can route them somewhere other than ``X``.
 """
@@ -23,7 +28,7 @@ import re
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from importlib.resources import files
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -49,6 +54,8 @@ NON_FEATURE_GROUPS = frozenset(
     {
         "Number",
         "ObjectNumber",
+        "ImageNumber",
+        "TableNumber",
         "Location",
         "Parent",
         "Children",
@@ -83,8 +90,10 @@ CHANNEL_BEARING_GROUPS = frozenset(
     }
 )
 
-#: Groups that hold measurements but carry no channel.
-PLAIN_FEATURE_GROUPS = frozenset({"AreaShape", "Neighbors", "AreaOccupied", "Zernike", "Skeleton"})
+#: Measurement groups that carry no channel in CellProfiler; Slope may carry channels in cp_measure.
+PLAIN_FEATURE_GROUPS = frozenset(
+    {"AreaShape", "SizeShape", "Neighbors", "AreaOccupied", "Zernike", "Skeleton", "ObjectSkeleton", "Slope"}
+)
 
 _KNOWN_GROUPS = NON_FEATURE_GROUPS | CHANNEL_BEARING_GROUPS | PLAIN_FEATURE_GROUPS
 
@@ -127,10 +136,6 @@ _POSITIONAL_AREASHAPE = frozenset({"Center", "BoundingBoxMinimum", "BoundingBoxM
 
 _RADIAL_BIN_RE = re.compile(r"^\d+of\d+$")
 _NUMERIC_RE = re.compile(r"^-?\d+(\.\d+)?$")
-
-_CP_MEASURE_RE = re.compile(
-    r"^(?P<object>[a-z]+)_(?P<channel>\d+)/(?P<agg>[a-z]+)/(?P<group>[a-z_]+)(?P<feature>[A-Z].*)$"
-)
 
 
 def _is_numeric(token: str) -> bool:
@@ -187,22 +192,30 @@ def _read_suffixes(row: dict, rest: list[str], group: str) -> None:
 
 
 def _parse_cp_measure(name: str) -> dict:
-    """Annotate one ``cp_measure`` name, whose channel is an index rather than the stain's name.
+    """Annotate one ``cp_measure`` name: ``<Group>_<Feature>[_<params>][__<Channel>[__<Channel2>]]``.
 
-    cp_measure is handed one channel at a time and numbers them in the order it was given them, so the index is all the name carries.
+    A single ``_`` separates group, feature and numeric parameters, and ``__`` precedes each channel.
+    The object is not in the name, so it is left for the caller.
+    A bare name such as ``Area`` is a feature with no group.
     """
     row: dict = dict.fromkeys(COLUMNS)
-    match = _CP_MEASURE_RE.match(name)
-    if match is None:
-        row["is_feature"] = False
+    row["is_feature"] = False
+    head, *channels = name.split("__")
+    tokens = head.split("_")
+    if name in _BARE_NON_FEATURES or not head:
+        return row
+    if channels:
+        row["channel"] = "|".join(channels)
+    if len(tokens) == 1:
+        row["feature"] = head
+        row["is_feature"] = True
         return row
 
-    # A group ending in "_" means the name separated it from the feature, as in "sizeshape_Solidity".
-    group = match["group"].rstrip("_")
-    row["object"] = match["object"]
+    group, rest = tokens[0], tokens[1:]
     row["feature_group"] = group
-    row["channel"] = match["channel"]
-    _read_suffixes(row, match["feature"].split("_"), group)
+    if group in NON_FEATURE_GROUPS or (group == "AreaShape" and rest[0] in _POSITIONAL_AREASHAPE):
+        return row
+    _read_suffixes(row, rest, group)
     return row
 
 
@@ -253,23 +266,32 @@ def feature_kind_of(adata: Any) -> set[str]:
     return {str(kind) for kind in pd.Series(adata.var["feature_kind"]).dropna().unique()}
 
 
-def parse_feature_names(names: Sequence[str], channels: Sequence[str] | None = None) -> pd.DataFrame:
+def parse_feature_names(
+    names: Sequence[str],
+    channels: Sequence[str] | None = None,
+    convention: Literal["cellprofiler", "cp_measure"] | None = None,
+) -> pd.DataFrame:
     """Parse ``names`` into a table of feature annotations indexed by name.
 
-    Which grammar to read is decided once, from ``names`` as a whole, because it is a property of the file that wrote them rather than of any one column.
+    One grammar is read for all of ``names``, because it is a property of the file that wrote them rather than of any one column.
 
     Args:
         names: Column names from a CellProfiler or cp_measure table.
         channels: The channel vocabulary.
             When omitted it is inferred from ``names``, which is less reliable than passing the channels the reader found in ``Image.csv``.
+            Not used for ``"cp_measure"``, whose names carry their channels after ``__``.
+        convention: The grammar to read.
+            ``"cp_measure"`` reads ``<Group>_<Feature>[__<Channel>[__<Channel2>]]`` and ``"cellprofiler"`` reads ``<Object>_<Group>_<Feature>_<Channel>``.
+            When omitted, names containing ``__`` select ``"cp_measure"`` and anything else ``"cellprofiler"``.
 
     Returns:
         A frame indexed by ``names`` with the columns listed in :data:`COLUMNS`.
         Text columns are ``category`` dtype (so they survive an h5ad round trip even when they are entirely missing) and ``is_feature`` is ``bool``.
     """
     names = list(names)
-    if any(_CP_MEASURE_RE.match(str(name)) for name in names):
-        # cp_measure names their own channel by index, so there is no vocabulary to infer or to be given.
+    if convention is None:
+        convention = "cp_measure" if any("__" in str(name) for name in names) else "cellprofiler"
+    if convention == "cp_measure":
         rows = [_parse_cp_measure(str(name)) for name in names]
     else:
         channel_set = frozenset(channels if channels is not None else _infer_channels(names))

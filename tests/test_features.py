@@ -63,12 +63,37 @@ def test_parses_feature_names(name, expected):
             assert actual == value, f"{key}: expected {value!r}, got {actual!r}"
 
 
-def test_the_grammar_is_chosen_from_the_whole_list():
-    """A file is written by one tool, so one cp_measure name settles how the rest are read, and a CellProfiler name in that file is a mixed file rather than a name to guess at."""
-    parsed = parse_feature_names(["cell_0/max/sizeshapeSolidity", "Cells_AreaShape_Area"], channels=CHANNELS)
+def test_cp_measure_channel_and_group_parsed():
+    rows = parse_feature_names(["Intensity_MeanIntensity__DNA", "AreaShape_Area"], convention="cp_measure")
+    assert rows.loc["Intensity_MeanIntensity__DNA", "feature_group"] == "Intensity"
+    assert rows.loc["Intensity_MeanIntensity__DNA", "channel"] == "DNA"
+    assert rows.loc["AreaShape_Area", "is_feature"]
 
-    assert parsed.loc["cell_0/max/sizeshapeSolidity", "feature_group"] == "sizeshape"
-    assert not parsed.loc["Cells_AreaShape_Area", "is_feature"]
+
+def test_cp_measure_colocalization_pair_channels():
+    row = parse_feature_names(["Correlation_Correlation__DNA__ER"], convention="cp_measure").iloc[0]
+    assert row["channel"] == "DNA|ER"
+
+
+def test_cp_measure_params_and_bare_names():
+    rows = parse_feature_names(["Texture_Contrast_3_0_256__ER", "Zernike_2_0", "Area"], convention="cp_measure")
+    assert rows.loc["Texture_Contrast_3_0_256__ER", "feature"] == "Contrast"
+    assert rows.loc["Texture_Contrast_3_0_256__ER", "scale"] == 3
+    assert rows.loc["Zernike_2_0", "params"] == "2_0"
+    assert rows.loc["Area", "is_feature"]
+    assert pd.isna(rows.loc["Area", "feature_group"])
+
+
+def test_cp_measure_convention_is_detected_from_double_underscore():
+    assert parse_feature_names(["Intensity_MeanIntensity__DNA"]).iloc[0]["channel"] == "DNA"
+
+
+def test_cellprofiler_names_are_unchanged_by_the_explicit_convention():
+    name = "Cells_Intensity_MeanIntensity_DNA"
+    pd.testing.assert_frame_equal(
+        parse_feature_names([name], channels=CHANNELS),
+        parse_feature_names([name], channels=CHANNELS, convention="cellprofiler"),
+    )
 
 
 @pytest.mark.parametrize(

@@ -29,6 +29,7 @@ These are structural tiers, not biology: a gene-level profile is `aggregate` wit
 
 `grouped_by` names the columns whose values define a row.
 For `well` it is the plate and well, and for `object` it is empty, and both are filled in by default.
+An `object` table needs no plate or well: a slide carries `Metadata_Site` or an explicit `Metadata_ImageID` instead.
 For `aggregate` only you know which columns define a row, so `mt.io.stamp` asks for them and raises a `ValueError` without them.
 
 ```python

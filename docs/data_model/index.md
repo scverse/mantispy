@@ -26,7 +26,7 @@ Stamping at `aggregate` without `grouped_by` raises a `ValueError` that asks for
 
 Each resolution requires identifier columns in `obs`:
 
-- `object`: `Metadata_Plate`, `Metadata_Well`, `Metadata_ImageID`, `Metadata_ObjectType` and `Metadata_ObjectNumber`.
+- `object`: `Metadata_ImageID`, `Metadata_ObjectType` and `Metadata_ObjectNumber`. A slide has no plate or well, so it carries `Metadata_Site` or an explicit `Metadata_ImageID` instead.
 - `well`: `Metadata_Plate` and `Metadata_Well`.
 - `aggregate`: none, but `grouped_by` names the columns that define a row.
 

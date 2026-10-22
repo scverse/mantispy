@@ -18,6 +18,7 @@ Read profiles, plates and JUMP data into `AnnData` or `SpatialData`, and check t
     io.read
     io.write
     io.stamp
+    io.from_dataframe
     io.validate
 ```
 

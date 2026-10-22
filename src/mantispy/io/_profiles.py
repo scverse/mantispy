@@ -15,7 +15,14 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
-from mantispy._core.features import _infer_channels, empty_annotation, parse_feature_names
+from mantispy._core.features import (
+    _BARE_NON_FEATURES,
+    _KNOWN_GROUPS,
+    _infer_channels,
+    annotation,
+    empty_annotation,
+    parse_feature_names,
+)
 from mantispy._core.frames import as_frame, categorize_metadata
 from mantispy._core.logging import get_logger, report_drop
 from mantispy._core.masks import feature_mask
@@ -112,10 +119,13 @@ def from_dataframe(
     objects: Sequence[str] | None = DEFAULT_OBJECTS,
     resolution: str = "well",
     grouped_by: Sequence[str] | None = None,
+    convention: Literal["cellprofiler", "cp_measure"] = "cellprofiler",
+    object_type: str = "Object",
 ) -> ad.AnnData:
     """Build an AnnData from a wide profile table.
 
     Numeric columns that parse as features become ``X``; text and ``Metadata_`` columns become ``obs``.
+    Numeric columns that follow no CellProfiler naming (a learned embedding, a proprietary feature table) are kept as features with ``feature_kind="embedding"``.
     Numeric columns that parse as non-features (object numbers, parent links, centroids) are dropped and logged by default, because published profile tables often carry dozens of them and they mean nothing at well level.
 
     Args:
@@ -134,13 +144,17 @@ def from_dataframe(
             The 1.0 names ``"cell"`` and ``"perturbation"`` are read as ``"object"`` and ``"aggregate"``.
         grouped_by: For ``"aggregate"`` resolution, the ``obs`` columns that define one row, such as
             ``["Metadata_Perturbation"]``; required there, since only the table's author knows its grouping.
+        convention: The feature-name grammar.
+            ``"cellprofiler"`` reads ``<Object>_<Group>_<Feature>_<Channel>``.
+            ``"cp_measure"`` reads ``<Group>_<Feature>[__<Channel>[__<Channel2>]]``; these names carry no object, so `objects` is ignored.
+        object_type: For ``"object"`` resolution, the ``Metadata_ObjectType`` written when the table does not carry one.
 
     Returns:
         An :class:`~anndata.AnnData` of observations by features at the recorded resolution, with the parsed feature annotation in ``var`` and the schema stamp, the resolution and the channel vocabulary it parsed with in ``uns["mantispy"]``.
         pycytominer's per-well ``Metadata_Count_Cells``, or ``Metadata_Object_Count`` without it, and ``Metadata_Site_Count`` are copied to ``Metadata_CellCount`` and ``Metadata_SiteCount``.
 
     Raises:
-        ValueError: `df` has no rows, no column parses as a feature on `objects`, or two metadata prefixes normalize onto the same column name.
+        ValueError: `df` has no rows, no column parses as a feature on `objects` and none is kept as an embedding, or two metadata prefixes normalize onto the same column name.
         KeyError: A name in `metadata_columns` is not in `df`.
     """
     resolution = RESOLUTION_RENAMES.get(resolution, resolution)
@@ -159,28 +173,42 @@ def from_dataframe(
     meta_columns = [c for c in df.columns if c.startswith(prefixes) or c in named or c not in numeric]
     candidates = [c for c in df.columns if c not in set(meta_columns)]
 
-    vocabulary = list(channels) if channels is not None else sorted(_infer_channels(candidates))
-    parsed = parse_feature_names(candidates, channels=vocabulary)
-    if channels is None and vocabulary:
-        get_logger().info(
-            "inferred the channel vocabulary %s from the column names; pass channels= to fix it, "
-            "since a different set of columns can infer a different vocabulary",
-            vocabulary,
-        )
-    keep = parsed["is_feature"].to_numpy()
+    if convention == "cp_measure":
+        # Channels are read off the "__" tokens, so there is no vocabulary to infer or to report.
+        parsed = parse_feature_names(candidates, convention=convention)
+    else:
+        vocabulary = list(channels) if channels is not None else sorted(_infer_channels(candidates))
+        parsed = parse_feature_names(candidates, channels=vocabulary, convention=convention)
+        if channels is None and vocabulary:
+            get_logger().info(
+                "inferred the channel vocabulary %s from the column names; pass channels= to fix it, "
+                "since a different set of columns can infer a different vocabulary",
+                vocabulary,
+            )
+    if convention == "cp_measure":
+        # The names carry no object, so the compartment filter would drop every one of them.
+        objects = None
+    # Columns in no known group are opaque features whatever objects= says. A bare cp_measure name such as
+    # "Area" has no group by design and is a feature.
+    opaque_mask = (~parsed["feature_group"].isin(_KNOWN_GROUPS) & ~parsed.index.isin(_BARE_NON_FEATURES)).to_numpy()
+    if convention == "cp_measure":
+        opaque_mask = opaque_mask & parsed["feature_group"].notna().to_numpy()
+    opaque = parsed.index[opaque_mask].tolist()
+    keep = parsed["is_feature"].to_numpy() & ~opaque_mask
     if objects is not None:
         wanted = set(objects)
         excluded = ~parsed["object"].isin(wanted).to_numpy()
-        if (keep & excluded).any():
+        reported = keep & excluded
+        if reported.any():
             # A feature whose name names no object parses with a missing object; under pandas 3, astype(str)
             # keeps that missing value, so it is named here rather than sorted alongside the strings.
-            dropped = parsed["object"][keep & excluded]
+            dropped = parsed["object"][reported]
             dropped_objects = sorted(set(dropped.dropna().astype(str))) + (
                 ["<no object>"] if dropped.isna().any() else []
             )
             report_drop(
                 f"feature(s) measured on {dropped_objects}",
-                int((keep & excluded).sum()),
+                int(reported.sum()),
                 int(keep.sum()),
                 remedy="pass objects=None to keep every object",
                 # On a small export the whole-field Image_ columns often outnumber the per-cell ones.
@@ -189,7 +217,8 @@ def from_dataframe(
         keep = keep & ~excluded
     feature_names = parsed.index[keep].tolist()
 
-    if not feature_names and candidates:
+    discarded = [c for c in candidates if c not in set(feature_names) and c not in set(opaque)]
+    if not feature_names and not opaque and candidates:
         objects_seen = sorted(set(parsed["object"].dropna().astype(str)))
         raise ValueError(
             f"none of the {len(candidates)} numeric column(s) parsed as a feature on "
@@ -199,15 +228,28 @@ def from_dataframe(
             "columns follow <Object>_<FeatureGroup>_<Feature>_<Channel>."
         )
 
-    discarded = [c for c in candidates if c not in set(feature_names)]
+    if opaque:
+        get_logger().info(
+            "kept %d column(s) that match no CellProfiler convention as opaque embedding features, such as %s",
+            len(opaque),
+            ", ".join(opaque[:3]),
+        )
+    rest = discarded
     if keep_non_features:
-        meta_columns += discarded
-    elif discarded:
+        meta_columns += rest
+    elif rest:
         get_logger().info(
             "dropped %d numeric non-feature column(s) such as %s; pass keep_non_features=True to keep them",
-            len(discarded),
-            ", ".join(discarded[:3]),
+            len(rest),
+            ", ".join(rest[:3]),
         )
+    var = parsed.loc[feature_names]
+    if opaque:
+        var = pd.concat([var, annotation(opaque, feature_kind="embedding", is_feature=True)])
+        # Concatenating categoricals with different categories degrades them to object, which h5ad cannot write.
+        for column in parsed.columns[[isinstance(d, pd.CategoricalDtype) for d in parsed.dtypes]]:
+            var[column] = var[column].astype("category")
+        feature_names = var.index.tolist()
 
     X = df[feature_names].to_numpy(dtype=np.float32)
     if sentinels is not None:
@@ -233,10 +275,10 @@ def from_dataframe(
     if resolution == "object":
         # Mint any object identity the frame lacks (a CytoTable parquet carries image/object numbers but
         # no Metadata_ImageID/ObjectType); a CellProfiler export already set them, so this leaves them.
-        obs = ensure_object_identity(obs)
+        obs = ensure_object_identity(obs, object_type=object_type)
     obs.index = pd.Index([str(i) for i in range(len(obs))])
 
-    adata = ad.AnnData(X=X, obs=obs, var=parsed.loc[feature_names])
+    adata = ad.AnnData(X=X, obs=obs, var=var)
     _record(adata, resolution=resolution, grouped_by=grouped_by)
     return adata
 
@@ -320,6 +362,7 @@ def read_profiles(
 
     Numeric columns that parse as CellProfiler features become ``X``.
     Text and ``Metadata_`` columns become ``obs``, with every metadata prefix normalized to ``Metadata_``.
+    Numeric columns that follow no CellProfiler naming (a learned embedding, a proprietary feature table) are kept as features with ``feature_kind="embedding"``.
     Numeric columns that parse as non-features (object numbers, parent links, centroids) are dropped and logged, because published profile tables often carry dozens of them and they mean nothing at well level.
 
     Args:
@@ -546,6 +589,7 @@ def stamp(
     resolution: str | None = None,
     *,
     feature_kind: str | None = None,
+    object_type: str = "Object",
     grouped_by: Sequence[str] | None = None,
     perturbation: Mapping[str, str] | None = None,
     copy: bool = False,
@@ -563,6 +607,7 @@ def stamp(
         feature_kind: The representation every feature carries: ``"measurement"``, ``"embedding"`` or ``"derived"``.
             Pass it when the whole matrix is one kind (a matrix of embeddings is ``"embedding"``); it fills every feature.
             Leave it ``None`` only when ``var["feature_kind"]`` is already complete and valid (as a mantispy-read object's is).
+        object_type: For ``"object"`` resolution, the name written to ``Metadata_ObjectType`` when ``obs`` does not already carry one, e.g. ``"cell"``.
         grouped_by: For ``"aggregate"`` resolution, the columns that define one row; required there since there is no default.
         perturbation: Optional record of where perturbation identity lives: ``column`` (the ``obs`` column naming the perturbation) and ``control_column`` (default ``Metadata_Control_Type``).
             Left unset, an object with a ``Metadata_Perturbation`` column records that, and one without records nothing. Tools such as :func:`~mantispy.tl.consensus` and :func:`~mantispy.tl.map` read it as their default column.
@@ -614,7 +659,7 @@ def stamp(
     if resolution == "object":
         # Mint the object-identity columns so an externally built object stamps like a reader-produced
         # one; done on a copy here, it raises now (pre-mutation) if obs carries no source identity.
-        identity = ensure_object_identity(as_frame(adata.obs).copy())
+        identity = ensure_object_identity(as_frame(adata.obs).copy(), object_type=object_type)
         minted = {column: identity[column].to_numpy() for column in OBJECT_IDENTITY}
     present = set(adata.obs.columns) | set(minted)
     missing_obs = [column for column in REQUIRED_OBS[resolution] if column not in present]

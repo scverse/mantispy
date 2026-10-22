@@ -416,8 +416,8 @@ def _set_wells(values):
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
-        (_drop_obs("Metadata_Plate"), "Metadata_Plate"),
-        (_drop_obs("Metadata_Well"), "Metadata_Well"),
+        (_drop_obs("Metadata_ImageID"), "Metadata_ImageID"),
+        (_drop_obs("Metadata_ObjectNumber"), "Metadata_ObjectNumber"),
         (lambda a: setattr(a, "var", a.var.drop(columns="feature_group")), "feature_group"),
         (lambda a: a.uns.pop("mantispy"), "schema_version"),
         (lambda a: a.uns["mantispy"].update(schema_version="99.0"), "99.0"),
@@ -425,8 +425,8 @@ def _set_wells(values):
         (_set_wells(["A01", "A01", "nope", "A02"]), "Metadata_Well"),
     ],
     ids=[
-        "no_plate",
-        "no_well",
+        "no_image_id",
+        "no_object_number",
         "no_var_column",
         "no_uns",
         "wrong_version",
@@ -441,9 +441,29 @@ def test_each_single_mutation_is_rejected(adata, mutate, message):
     assert any(message in error for error in report.errors), report.errors
 
 
+@pytest.mark.parametrize("column", ["Metadata_Plate", "Metadata_Well"])
+def test_well_resolution_requires_plate_and_well(column):
+    from mantispy.io._profiles import from_dataframe
+
+    df = pd.DataFrame(
+        {
+            "Metadata_Plate": ["P1", "P1"],
+            "Metadata_Well": ["A01", "A02"],
+            "Cells_AreaShape_Area": [1.0, 2.0],
+            "Cells_Intensity_MeanIntensity_DNA": [1.0, 2.0],
+        }
+    )
+    obj = from_dataframe(df, resolution="well", channels=["DNA"])
+    assert validate(obj).ok
+    obj.obs = obj.obs.drop(columns=column)
+    report = validate(obj)
+    assert not report.ok
+    assert any(column in error for error in report.errors), report.errors
+
+
 def test_raise_on_error(adata):
-    adata.obs.drop(columns="Metadata_Plate", inplace=True)
-    with pytest.raises(ValueError, match="Metadata_Plate"):
+    adata.obs.drop(columns="Metadata_ImageID", inplace=True)
+    with pytest.raises(ValueError, match="Metadata_ImageID"):
         validate(adata, raise_on_error=True)
 
 
@@ -468,6 +488,33 @@ def test_a_well_level_object_without_a_cell_count_is_warned_about(adata):
 
     adata.obs["Metadata_CellCount"] = 10.0
     assert not any("Metadata_CellCount" in warning for warning in validate(adata).warnings)
+
+
+def _well_less_object():
+    from mantispy.io._profiles import from_dataframe
+
+    df = pd.DataFrame(
+        {
+            "Metadata_Site": ["s1", "s1", "s2", "s2"],
+            "Cells_AreaShape_Area": [1.0, 2.0, 3.0, 4.0],
+            "Cells_Intensity_MeanIntensity_DNA": [1.0, 2.0, 3.0, 4.0],
+        }
+    )
+    return from_dataframe(df, resolution="object", channels=["DNA"])
+
+
+def test_object_resolution_validates_without_plate_or_well():
+    obj = _well_less_object()
+    assert "Metadata_Plate" not in obj.obs and "Metadata_Well" not in obj.obs
+    report = validate(obj)
+    assert report.ok, report.errors
+
+
+def test_plate_only_function_errors_clearly_without_well():
+    import mantispy as mt
+
+    with pytest.raises((KeyError, ValueError), match="Metadata_Well"):
+        mt.pp.correct_plate_position(_well_less_object())
 
 
 # --- public spec mirror + migration --------------------------------------
