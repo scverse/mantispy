@@ -15,7 +15,7 @@ from mantispy._core._reduce import group_codes, reduce_grouped, reduced_var
 from mantispy._core.frames import as_frame, categorize_metadata
 from mantispy._core.logging import get_logger
 from mantispy._core.provenance import record_params
-from mantispy._core.schema import REQUIRED_OBS, REQUIRED_UNS, get_resolution, resolution_for, stamp
+from mantispy._core.schema import REQUIRED_OBS, REQUIRED_UNS, RETIRED_KEYS, get_resolution, resolution_for, stamp
 
 FUNCTIONS = {"median": MEDIAN, "mean": MEAN}
 
@@ -100,7 +100,7 @@ def aggregate(
     resolution = resolution_for(columns)
     stamp(result, resolution=resolution, grouped_by=columns)
     result.uns["mantispy"].update({key: deepcopy(value) for key, value in store.items() if key in _INHERITED})
-    dropped = sorted(set(store) - _INHERITED - set(REQUIRED_UNS) - {"params"})
+    dropped = sorted(set(store) - _INHERITED - set(REQUIRED_UNS) - RETIRED_KEYS - {"params"})
     if dropped:
         get_logger().debug("aggregate dropped %s, which describe the input rows", dropped)
     if store_membership:
