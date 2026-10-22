@@ -80,7 +80,7 @@ optional-dependencies.spatial = [
   "shapely>=2",
   "spatialdata>=0.3",
 ]
-urls.Changelog = "https://mantispy.readthedocs.io/en/latest/changelog.html"
+urls.Changelog = "https://github.com/scverse/mantispy/releases"
 # https://docs.pypi.org/project_metadata/#project-urls
 urls.Documentation = "https://mantispy.readthedocs.io/"
 urls.Forum = "https://discourse.scverse.org/"
@@ -285,7 +285,6 @@ skip = [
   "src/**/__init__.py",
   "src/**/basic.py",
   "docs/api.md",
-  "docs/changelog.md",
   "docs/references.bib",
   "docs/references.md",
   "docs/notebooks/example.ipynb",

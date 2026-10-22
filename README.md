@@ -1,14 +1,22 @@
 <img src="https://raw.githubusercontent.com/scverse/mantispy/main/docs/_static/mantispy-logo.png" width="400" alt="mantispy">
 
 [![Tests][badge-tests]][tests]
+[![Build][badge-build]][build]
+[![Coverage][badge-codecov]][codecov]
 [![Documentation][badge-docs]][documentation]
 [![PyPI][badge-pypi]][pypi]
+[![Python Version][badge-pyversions]][pypi]
 [![License][badge-license]][license]
+[![pre-commit][badge-precommit]][pre-commit]
 
-[badge-pypi]: https://img.shields.io/pypi/v/mantispy?include_prereleases
-[badge-license]: https://img.shields.io/badge/license-BSD--3-blue
-[badge-tests]: https://img.shields.io/github/actions/workflow/status/scverse/mantispy/test.yaml?branch=main
+[badge-tests]: https://img.shields.io/github/actions/workflow/status/scverse/mantispy/test.yaml?branch=main&label=tests
+[badge-build]: https://img.shields.io/github/actions/workflow/status/scverse/mantispy/build.yaml?branch=main&label=build
+[badge-codecov]: https://codecov.io/gh/scverse/mantispy/graph/badge.svg
 [badge-docs]: https://app.readthedocs.org/projects/mantispy/badge/
+[badge-pypi]: https://img.shields.io/pypi/v/mantispy?include_prereleases
+[badge-pyversions]: https://img.shields.io/pypi/pyversions/mantispy
+[badge-license]: https://img.shields.io/badge/license-BSD--3-blue
+[badge-precommit]: https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit&logoColor=white
 
 mantispy brings Cell Painting and other image-based profiling data into the scverse ecosystem, from reading what a
 pipeline wrote through quality control, normalization and batch correction to evaluating what survived.
@@ -75,7 +83,7 @@ pip install 'mantispy[spatial]'
 
 ## Release notes
 
-See the [changelog][].
+See the [releases page](https://github.com/scverse/mantispy/releases).
 
 ## Contact
 
@@ -95,11 +103,27 @@ mantispy is released under the BSD 3-Clause license.
 [scverse discourse]: https://discourse.scverse.org/
 [issue tracker]: https://github.com/scverse/mantispy/issues
 [tests]: https://github.com/scverse/mantispy/actions/workflows/test.yaml
+[build]: https://github.com/scverse/mantispy/actions/workflows/build.yaml
+[codecov]: https://codecov.io/gh/scverse/mantispy
+[pre-commit]: https://github.com/pre-commit/pre-commit
 [documentation]: https://mantispy.readthedocs.io
-[changelog]: https://mantispy.readthedocs.io/page/changelog.html
 [api documentation]: https://mantispy.readthedocs.io/page/api.html
 [pypi]: https://pypi.org/project/mantispy
 [license]: https://github.com/scverse/mantispy/blob/main/LICENSE
 [mantispy]: https://github.com/scverse/mantispy
 [tutorial-1]: https://mantispy.readthedocs.io/page/tutorials/data/cellprofiler.html
 [tutorial-5]: https://mantispy.readthedocs.io/page/tutorials/compounds/hits.html
+
+## scverse
+
+mantispy is part of the scverse® project ([website](https://scverse.org), [governance](https://scverse.org/about/roles)) and is fiscally sponsored by [NumFOCUS](https://numfocus.org/).
+If you like scverse® and want to support our mission, please consider making a tax-deductible [donation](https://numfocus.org/donate-to-scverse) to help the project pay for developer time, professional services, travel, workshops, and a variety of other needs.
+
+<div align="center">
+<a href="https://numfocus.org/project/scverse">
+  <img
+    src="https://raw.githubusercontent.com/numfocus/templates/master/images/numfocus-logo.png"
+    width="200"
+  >
+</a>
+</div>
