@@ -91,9 +91,6 @@
         "grouped_by",
         "image_table",
         "params",
-        "consensus_from",
-        "membership",
-        "truth",
         "perturbation"
     ],
     "uns_results": [

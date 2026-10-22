@@ -98,7 +98,7 @@ def test_polish_records_effects_and_honours_key_added(gradient_cells):
 def test_regress_out_removes_cell_count_dependence():
     cells = synthetic_plate(n_wells=96, n_cells=30, n_features=10, confounder_effect=3.0, seed=0)
     wells = mt.tl.aggregate(cells, min_cells=0)
-    confounded = wells.uns["mantispy"]["truth"]["confounded_features"][0]
+    confounded = cells.uns["truth"]["confounded_features"][0]
     position = wells.var_names.get_loc(confounded)
     counts = wells.obs["Metadata_CellCount"].to_numpy(dtype=float)
 

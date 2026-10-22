@@ -19,7 +19,9 @@ def profiles():
         n_plates=2, n_wells=48, n_cells=10, n_features=40, n_perturbations=3, effect_size=3.0, seed=0
     )
     mt.pp.normalize(cells, by="Metadata_Plate", reference="negcon")
-    return mt.tl.aggregate(cells, min_cells=0)
+    profiles = mt.tl.aggregate(cells, min_cells=0)
+    profiles.uns["truth"] = cells.uns["truth"]  # top-level uns is not carried through aggregate
+    return profiles
 
 
 def test_feature_sets_builds_a_decoupler_net(profiles):
@@ -64,7 +66,7 @@ def test_rank_features_carries_the_parsed_annotation(profiles):
     mt.tl.rank_features(profiles, groupby="Metadata_Perturbation")
     table = profiles.uns["mantispy"]["rank_features"]
     assert {"group", "feature", "score", "pvalue", "qvalue", "feature_group", "channel"} <= set(table.columns)
-    truth = profiles.uns["mantispy"]["truth"]["affected_features"]
+    truth = profiles.uns["truth"]["affected_features"]
     group = next(name for name, features in truth.items() if features)
     top = table[table["group"] == group].nlargest(3, "score")["feature"].tolist()
     assert set(truth[group]) & set(top)

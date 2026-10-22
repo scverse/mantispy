@@ -310,7 +310,7 @@ teaches them nothing.
   Not a hand-assembled `dict` literal of labelled numbers — that output cannot be sorted,
   filtered, plotted or pasted into an analysis.
 - **Do not check output against ground truth in a page.** Comparing a result with
-  `uns["mantispy"]["truth"]` shows the function works; that belongs in `tests/`, where it runs on
+  `uns["truth"]` shows the function works; that belongs in `tests/`, where it runs on
   every push. A page shows the reader what the result looks like.
 - **Never import a private name.** Anything a page imports is code readers will copy, and a
   `_`-prefixed module carries no stability guarantee. If a page needs it, it belongs in the public

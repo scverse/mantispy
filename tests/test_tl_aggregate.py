@@ -46,52 +46,6 @@ def test_a_constant_column_survives_whatever_its_name(adata):
     assert "cell_quality" not in wells.obs  # varying columns are dropped, not silently copied
 
 
-def test_store_membership_records_source_identity_and_round_trips(adata, tmp_path):
-    """§13.4: opt-in membership references stable identity (ImageID + ObjectNumber), not row positions."""
-    wells = mt.tl.aggregate(adata, min_cells=0, store_membership=True)
-    membership = wells.uns["mantispy"]["membership"]
-    assert membership["source_resolution"] == "object"
-    assert "Metadata_ImageID" in membership["identity_columns"]
-    assert "Metadata_ObjectNumber" in membership["identity_columns"]
-    members = membership["members"]
-    assert len(members) == adata.n_obs  # every source cell is accounted for
-    assert set(members["Metadata_AggregateRow"]) == set(wells.obs_names)
-    # default is off
-    assert "membership" not in mt.tl.aggregate(adata, min_cells=0).uns["mantispy"]
-    # survives an h5ad round-trip
-    path = tmp_path / "wells.h5ad"
-    wells.write_h5ad(path)
-    import anndata as ad
-
-    back = ad.read_h5ad(path).uns["mantispy"]["membership"]
-    assert len(back["members"]) == adata.n_obs
-
-
-def test_membership_omits_the_cells_of_a_dropped_group(adata):
-    """A group dropped by min_cells contributes no members, so membership references identity, not positions."""
-    adata.obs["Metadata_Well"] = adata.obs["Metadata_Well"].astype(str)
-    adata.obs.loc[adata.obs_names[:3], "Metadata_Well"] = "ZZ99"  # a well of only 3 cells
-    wells = mt.tl.aggregate(adata, min_cells=10, store_membership=True)
-    members = wells.uns["mantispy"]["membership"]["members"]
-    assert "ZZ99" not in set(members["Metadata_Well"])  # the small well is gone
-    assert len(members) == adata.n_obs - 3  # only the kept groups' cells
-    assert set(members["Metadata_AggregateRow"]) == set(wells.obs_names)
-
-
-def test_membership_on_a_reloaded_aggregate_source(adata, tmp_path):
-    """Regression: a grouped_by reloaded from h5ad is a numpy array; the membership fallback must not test it with `or`."""
-    import anndata as ad
-
-    aggregate = mt.tl.aggregate(adata, by=("Metadata_Plate", "Metadata_Perturbation"), min_cells=0)
-    assert aggregate.uns["mantispy"]["resolution"] == "aggregate"  # so REQUIRED_OBS is empty → fallback branch
-    path = tmp_path / "agg.h5ad"
-    aggregate.write_h5ad(path)
-    reloaded = ad.read_h5ad(path)  # grouped_by now comes back as an ndarray
-    coarser = mt.tl.aggregate(reloaded, by=("Metadata_Plate",), min_cells=0, store_membership=True)
-    identity = coarser.uns["mantispy"]["membership"]["identity_columns"]
-    assert identity == ["Metadata_Plate", "Metadata_Perturbation"]  # the reloaded grouping, not a crash
-
-
 def _grouped_elsewhere(adata):
     """Well profiles whose perturbation identity lives in a non-default column with fewer groups."""
     wells = mt.tl.aggregate(adata, min_cells=0)

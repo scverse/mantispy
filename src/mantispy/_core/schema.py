@@ -145,9 +145,6 @@ UNS_KEYS: tuple[str, ...] = (
     *REQUIRED_UNS,
     "image_table",
     "params",
-    "consensus_from",
-    "membership",
-    "truth",
     "perturbation",
 )
 
