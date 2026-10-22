@@ -441,6 +441,26 @@ def test_each_single_mutation_is_rejected(adata, mutate, message):
     assert any(message in error for error in report.errors), report.errors
 
 
+@pytest.mark.parametrize("column", ["Metadata_Plate", "Metadata_Well"])
+def test_well_resolution_requires_plate_and_well(column):
+    from mantispy.io._profiles import from_dataframe
+
+    df = pd.DataFrame(
+        {
+            "Metadata_Plate": ["P1", "P1"],
+            "Metadata_Well": ["A01", "A02"],
+            "Cells_AreaShape_Area": [1.0, 2.0],
+            "Cells_Intensity_MeanIntensity_DNA": [1.0, 2.0],
+        }
+    )
+    obj = from_dataframe(df, resolution="well", channels=["DNA"])
+    assert validate(obj).ok
+    obj.obs = obj.obs.drop(columns=column)
+    report = validate(obj)
+    assert not report.ok
+    assert any(column in error for error in report.errors), report.errors
+
+
 def test_raise_on_error(adata):
     adata.obs.drop(columns="Metadata_ImageID", inplace=True)
     with pytest.raises(ValueError, match="Metadata_ImageID"):
