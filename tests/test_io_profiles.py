@@ -702,6 +702,21 @@ def test_from_dataframe_cp_measure_keeps_colocalization_channel_pair():
     assert "channels" not in adata.uns["mantispy"]
 
 
+def test_from_dataframe_reads_object_skeleton_as_a_measurement():
+    df = pd.DataFrame(
+        {
+            "Metadata_Plate": ["P", "P"],
+            "Metadata_Well": ["A01", "A02"],
+            "Cells_ObjectSkeleton_NumberBranchEnds": [2.0, 3.0],
+        }
+    )
+    row = parse_feature_names(["Cells_ObjectSkeleton_NumberBranchEnds"]).iloc[0]
+    assert row["feature_group"] == "ObjectSkeleton"
+    assert bool(row["is_feature"])
+    adata = from_dataframe(df)
+    assert adata.var.loc["Cells_ObjectSkeleton_NumberBranchEnds", "feature_kind"] == "measurement"
+
+
 def test_from_dataframe_reads_an_unknown_cellprofiler_group_as_an_embedding():
     """A recognised object with a group outside the known set is kept, but as an opaque embedding feature."""
     df = pd.DataFrame(

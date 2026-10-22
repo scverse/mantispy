@@ -92,7 +92,7 @@ CHANNEL_BEARING_GROUPS = frozenset(
 
 #: Measurement groups that carry no channel in CellProfiler; Slope may carry channels in cp_measure.
 PLAIN_FEATURE_GROUPS = frozenset(
-    {"AreaShape", "SizeShape", "Neighbors", "AreaOccupied", "Zernike", "Skeleton", "Slope"}
+    {"AreaShape", "SizeShape", "Neighbors", "AreaOccupied", "Zernike", "Skeleton", "ObjectSkeleton", "Slope"}
 )
 
 _KNOWN_GROUPS = NON_FEATURE_GROUPS | CHANNEL_BEARING_GROUPS | PLAIN_FEATURE_GROUPS
