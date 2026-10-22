@@ -666,3 +666,30 @@ def test_mixed_measurement_and_embedding_round_trip(tmp_path):
     got = pd.DataFrame(loaded.X, columns=loaded.var_names)
     np.testing.assert_allclose(got["Cells_AreaShape_Area"], [10.0, 20.0, 30.0])
     np.testing.assert_allclose(got["my_latent_0"], [0.1, 0.2, 0.3], rtol=1e-6)
+
+
+def test_from_dataframe_cp_measure_builds_features_and_keeps_opaque():
+    df = pd.DataFrame(
+        {
+            "Metadata_Site": ["s1", "s1"],
+            "Intensity_MeanIntensity__DNA": [0.5, 0.6],
+            "AreaShape_Area": [10.0, 11.0],
+            "my_latent_0": [1.0, 2.0],
+        }
+    )
+    adata = from_dataframe(df, convention="cp_measure", object_type="cell", resolution="object")
+    var = adata.var
+    assert list(adata.var_names) == ["Intensity_MeanIntensity__DNA", "AreaShape_Area", "my_latent_0"]
+    assert var.loc["Intensity_MeanIntensity__DNA", "feature_kind"] == "measurement"
+    assert var.loc["Intensity_MeanIntensity__DNA", "feature_group"] == "Intensity"
+    assert var.loc["Intensity_MeanIntensity__DNA", "channel"] == "DNA"
+    assert var.loc["AreaShape_Area", "feature_kind"] == "measurement"
+    assert var.loc["my_latent_0", "feature_kind"] == "embedding"
+    assert (adata.obs["Metadata_ObjectType"] == "cell").all()
+
+
+def test_cp_measure_table_leaves_the_cellprofiler_default_alone():
+    df = pd.DataFrame({"Metadata_Plate": ["P"], "Metadata_Well": ["A01"], "Cells_AreaShape_Area": [3.0]})
+    adata = from_dataframe(df)
+    assert list(adata.var_names) == ["Cells_AreaShape_Area"]
+    assert adata.var.loc["Cells_AreaShape_Area", "object"] == "Cells"

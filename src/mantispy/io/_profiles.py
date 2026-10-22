@@ -17,7 +17,6 @@ import pandas as pd
 
 from mantispy._core.features import (
     _BARE_NON_FEATURES,
-    _CP_MEASURE_RE,
     _KNOWN_GROUPS,
     _infer_channels,
     annotation,
@@ -120,6 +119,8 @@ def from_dataframe(
     objects: Sequence[str] | None = DEFAULT_OBJECTS,
     resolution: str = "well",
     grouped_by: Sequence[str] | None = None,
+    convention: Literal["cellprofiler", "cp_measure"] = "cellprofiler",
+    object_type: str = "Object",
 ) -> ad.AnnData:
     """Build an AnnData from a wide profile table.
 
@@ -143,6 +144,10 @@ def from_dataframe(
             The 1.0 names ``"cell"`` and ``"perturbation"`` are read as ``"object"`` and ``"aggregate"``.
         grouped_by: For ``"aggregate"`` resolution, the ``obs`` columns that define one row, such as
             ``["Metadata_Perturbation"]``; required there, since only the table's author knows its grouping.
+        convention: The feature-name grammar.
+            ``"cellprofiler"`` reads ``<Object>_<Group>_<Feature>_<Channel>``.
+            ``"cp_measure"`` reads ``<Group>_<Feature>[__<Channel>[__<Channel2>]]``; these names carry no object, so `objects` is ignored.
+        object_type: For ``"object"`` resolution, the ``Metadata_ObjectType`` written when the table does not carry one.
 
     Returns:
         An :class:`~anndata.AnnData` of observations by features at the recorded resolution, with the parsed feature annotation in ``var`` and the schema stamp, the resolution and the channel vocabulary it parsed with in ``uns["mantispy"]``.
@@ -169,19 +174,21 @@ def from_dataframe(
     candidates = [c for c in df.columns if c not in set(meta_columns)]
 
     vocabulary = list(channels) if channels is not None else sorted(_infer_channels(candidates))
-    parsed = parse_feature_names(candidates, channels=vocabulary)
+    parsed = parse_feature_names(candidates, channels=vocabulary, convention=convention)
     if channels is None and vocabulary:
         get_logger().info(
             "inferred the channel vocabulary %s from the column names; pass channels= to fix it, "
             "since a different set of columns can infer a different vocabulary",
             vocabulary,
         )
-    # Columns in no CellProfiler group are opaque features whatever objects= says. cp_measure names carry
-    # their own groups ("sizeshape"), so that grammar is left to the parser.
-    if any(_CP_MEASURE_RE.match(str(c)) for c in candidates):
-        opaque_mask = np.zeros(len(candidates), dtype=bool)
-    else:
-        opaque_mask = (~parsed["feature_group"].isin(_KNOWN_GROUPS) & ~parsed.index.isin(_BARE_NON_FEATURES)).to_numpy()
+    if convention == "cp_measure":
+        # The names carry no object, so the compartment filter would drop every one of them.
+        objects = None
+    # Columns in no known group are opaque features whatever objects= says. A bare cp_measure name such as
+    # "Area" has no group by design and is a feature.
+    opaque_mask = (~parsed["feature_group"].isin(_KNOWN_GROUPS) & ~parsed.index.isin(_BARE_NON_FEATURES)).to_numpy()
+    if convention == "cp_measure":
+        opaque_mask = opaque_mask & parsed["feature_group"].notna().to_numpy()
     opaque = parsed.index[opaque_mask].tolist()
     keep = parsed["is_feature"].to_numpy() & ~opaque_mask
     if objects is not None:
@@ -264,7 +271,7 @@ def from_dataframe(
     if resolution == "object":
         # Mint any object identity the frame lacks (a CytoTable parquet carries image/object numbers but
         # no Metadata_ImageID/ObjectType); a CellProfiler export already set them, so this leaves them.
-        obs = ensure_object_identity(obs)
+        obs = ensure_object_identity(obs, object_type=object_type)
     obs.index = pd.Index([str(i) for i in range(len(obs))])
 
     adata = ad.AnnData(X=X, obs=obs, var=var)
