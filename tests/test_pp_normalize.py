@@ -90,3 +90,13 @@ def test_default_reference_is_the_negative_controls(adata):
     on_everything = mt.pp.normalize(adata, by="Metadata_Plate", reference=None, copy=True)
     np.testing.assert_array_equal(default.X, on_controls.X)
     assert not np.allclose(default.X, on_everything.X)
+
+
+def test_normalize_reads_the_recorded_control_column():
+    adata = synthetic_plate(n_plates=2, n_wells=24, n_cells=10, n_features=12, seed=0)
+    adata.obs["Ctl"] = adata.obs["Metadata_Control_Type"].astype(str)
+    expected = mt.pp.normalize(adata, reference="negcon", copy=True).X
+    adata.obs["Metadata_Control_Type"] = "treatment"
+    adata.obs["Metadata_Control"] = False
+    mt.io.stamp(adata, perturbation={"column": "Metadata_Perturbation", "control_column": "Ctl"})
+    assert np.allclose(mt.pp.normalize(adata, reference="negcon", copy=True).X, expected, equal_nan=True)

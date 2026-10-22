@@ -1,13 +1,13 @@
 """The mantispy AnnData contract.
 
-An object is described by three things: the ``Metadata_`` columns in ``obs`` that identify where a profile came from, the parsed annotation columns in ``var`` that say what each feature measures, and a ``uns["mantispy"]`` dict holding the core descriptors (schema version and status, the resolution, the grouping that defines one observation, and the provenance history).
+An object is described by three things: the ``Metadata_`` columns in ``obs`` that identify where a profile came from, the parsed annotation columns in ``var`` that say what each feature measures, and a ``uns["mantispy"]`` dict holding the core descriptors (the schema version, the resolution and the grouping that defines one observation).
 
 Under schema 2.0 the resolution is explicit, not advisory: a mantispy object MUST carry ``uns["mantispy"]["resolution"]`` and ``uns["mantispy"]["grouped_by"]``, and functions that need them fail clearly when they are absent rather than guessing.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -27,14 +27,6 @@ if TYPE_CHECKING:
 #: The current schema. 2.0 is a breaking, still-experimental redesign of the previous internal 1.0
 #: schema (kept only for migration); see ``spec/morphology-schema-2.0.md``.
 SCHEMA_VERSION = "2.0"
-
-#: Status of :data:`SCHEMA_VERSION`. ``"experimental"`` until the migration is complete.
-SCHEMA_STATUS = "experimental"
-
-#: Statuses :func:`validate` accepts. An object keeps the status it was stamped with, so an
-#: ``"experimental"`` object still validates once the maintainers flip :data:`SCHEMA_STATUS` to
-#: ``"stable"``; only a status outside this set is rejected.
-SCHEMA_STATUSES: tuple[str, ...] = ("experimental", "stable")
 
 #: Versions :func:`migrate` can bring to :data:`SCHEMA_VERSION`, oldest first.
 SUPPORTED_VERSIONS: tuple[str, ...] = ("0.1", "1.0", "2.0")
@@ -144,24 +136,16 @@ REQUIRED_VAR: tuple[str, ...] = tuple(VAR_COLUMNS)
 #: The core descriptors every schema-2.0 object MUST carry under ``uns["mantispy"]``.
 REQUIRED_UNS: tuple[str, ...] = (
     "schema_version",
-    "schema_status",
     "resolution",
     "grouped_by",
-    "history",
 )
 
 #: Keys describing the object itself: the required descriptors plus the optional ones.
 UNS_KEYS: tuple[str, ...] = (
     *REQUIRED_UNS,
-    "channels",
-    "dataset",
     "image_table",
     "params",
-    "aggregated_from",
-    "consensus_from",
-    "membership",
-    "truth",
-    "embedding",
+    "perturbation",
 )
 
 #: Result tables mantispy writes under ``uns["mantispy"]`` and reads back.
@@ -272,11 +256,10 @@ def _recover_grouped_by(store: dict, adata: AnnData, resolution: str) -> list[st
         return default_grouped_by(resolution)
     params = store.get("params")
     consensus = params.get("consensus") if isinstance(params, dict) else None
-    for source in (store.get("aggregated_from"), consensus):
-        if isinstance(source, dict):
-            columns = _as_columns(source.get("by"))
-            if columns:
-                return columns
+    if isinstance(consensus, dict):
+        columns = _as_columns(consensus.get("by"))
+        if columns:
+            return columns
     return ["Metadata_Perturbation"] if "Metadata_Perturbation" in adata.obs else []
 
 
@@ -337,19 +320,79 @@ def ensure_object_identity(obs: pd.DataFrame, object_type: str = "Object") -> pd
     return obs
 
 
+#: Where perturbation identity lives unless an object records otherwise.
+PERTURBATION_COLUMN = "Metadata_Perturbation"
+CONTROL_COLUMN = "Metadata_Control_Type"
+
+
+def _perturbation_record(adata: AnnData, store: dict, perturbation: Mapping[str, str] | None) -> dict[str, str] | None:
+    """The ``perturbation`` record :func:`stamp` should write, or ``None`` to leave the stored one alone.
+
+    An explicit record must name an existing ``obs`` column. Without one, an object that records none
+    gets the default columns when ``obs`` has the default perturbation column.
+    """
+    if perturbation is not None:
+        unknown = set(perturbation) - {"column", "control_column"}
+        if unknown or not isinstance(perturbation.get("column"), str):
+            raise ValueError("perturbation must be a mapping with a string 'column' and optional 'control_column'")
+        if perturbation["column"] not in adata.obs:
+            raise ValueError(f"perturbation column {perturbation['column']!r} is not a column of obs")
+        control = perturbation.get("control_column")
+        if control is not None and control not in adata.obs:
+            raise ValueError(f"perturbation control_column {control!r} is not a column of obs")
+        return _default_record(adata, perturbation["column"], control if control is not None else CONTROL_COLUMN)
+    if "perturbation" not in store and PERTURBATION_COLUMN in adata.obs:
+        return _default_record(adata, PERTURBATION_COLUMN, CONTROL_COLUMN)
+    return None
+
+
+def _default_record(adata: AnnData, column: str, control_column: str) -> dict[str, str]:
+    """A perturbation record that names ``control_column`` only when ``obs`` has it."""
+    return {"column": column, **({"control_column": control_column} if control_column in adata.obs else {})}
+
+
+def _recorded_column(adata: AnnData, field: str, default: str) -> str:
+    store = adata.uns.get("mantispy")
+    record = store.get("perturbation") if isinstance(store, dict) else None
+    value = record.get(field) if isinstance(record, dict) else None
+    return value if isinstance(value, str) and value in adata.obs else default
+
+
+def resolve_perturbation_column(adata: AnnData, column: str | None = None) -> str:
+    """The obs column holding perturbation identity: ``column`` if given, else the recorded one, else the default."""
+    return column if column is not None else _recorded_column(adata, "column", PERTURBATION_COLUMN)
+
+
+def record_perturbation(adata: AnnData) -> None:
+    """Record the default perturbation columns on ``adata`` when ``obs`` carries ``Metadata_Perturbation``."""
+    store = adata.uns.get("mantispy")
+    store = store if isinstance(store, dict) else {}
+    if PERTURBATION_COLUMN in adata.obs:
+        adata.uns["mantispy"] = {
+            **store,
+            "perturbation": {"column": PERTURBATION_COLUMN, "control_column": CONTROL_COLUMN},
+        }
+
+
+def resolve_control_column(adata: AnnData) -> str:
+    """The obs column holding the control type: the recorded one when it exists, else ``Metadata_Control_Type``."""
+    return _recorded_column(adata, "control_column", CONTROL_COLUMN)
+
+
 def stamp(
     adata: AnnData,
     resolution: str | None = None,
     *,
     grouped_by: Iterable[str] | None = None,
-    history: list | None = None,
+    perturbation: Mapping[str, str] | None = None,
 ) -> None:
-    """Stamp ``adata`` as a schema-2.0 object: the five :data:`REQUIRED_UNS` descriptors.
+    """Stamp ``adata`` as a schema-2.0 object: the :data:`REQUIRED_UNS` descriptors.
 
     ``resolution`` defaults to the one already recorded (so re-stamping keeps it) and raises if none is.
     ``grouped_by`` defaults per :func:`default_grouped_by` (``aggregate`` has none and must be
-    given), but a stale grouping is dropped when the resolution changes. ``history`` keeps an existing
-    list or starts empty. Nothing is written until every value resolves, so a rejected stamp leaves the
+    given), but a stale grouping is dropped when the resolution changes. ``perturbation`` names the ``obs`` columns holding perturbation identity
+    (``column``) and control type (``control_column``); unset, an object that records none gets the
+    defaults when ``obs`` has ``Metadata_Perturbation``. Nothing is written until every value resolves, so a rejected stamp leaves the
     object untouched.
     """
     store = adata.uns.get("mantispy", {})
@@ -366,22 +409,16 @@ def stamp(
         kept = store.get("grouped_by") if resolution == prior else None
         grouped_by = kept if kept is not None else default_grouped_by(resolution)
 
-    entries = list(history) if history is not None else list(store.get("history", []))
-    if not entries:
-        # Seed once, on the first stamp; later re-stamps (tools re-stamp constantly) leave the log alone.
-        from mantispy._core.provenance import history_record
-
-        entries.append(history_record("stamp", params={"resolution": resolution, "grouped_by": list(grouped_by)}))
+    recorded = _perturbation_record(adata, store, perturbation)
 
     # A fresh dict assigned back, not an in-place update: on a view uns is the dict's own, so mutating it
     # writes nowhere the caller sees. Assigning routes through AnnData to the parent's dict.
     adata.uns["mantispy"] = {
         **store,
         "schema_version": SCHEMA_VERSION,
-        "schema_status": SCHEMA_STATUS,
         "resolution": resolution,
         "grouped_by": list(grouped_by),
-        "history": entries,
+        **({"perturbation": recorded} if recorded is not None else {}),
     }
     # Every stamped object carries its well geometry: fill Metadata_Row/Col from the well when it has one.
     from mantispy._core.plate import fill_well_grid
@@ -473,14 +510,6 @@ def _check_grouped_by(adata: AnnData, store: dict, resolution: str | None, repor
         report.errors.append(f"grouped_by references column(s) missing from obs: {missing}")
 
 
-def _check_history(store: dict, report: ValidationReport) -> None:
-    """Check ``uns['mantispy']['history']`` is present and a list."""
-    if "history" not in store:
-        report.errors.append("uns['mantispy']['history'] is missing")
-    elif not isinstance(store["history"], list | np.ndarray):
-        report.errors.append(f"history must be a list, got {type(store['history']).__name__}")
-
-
 def _check_result_keys(store: dict, report: ValidationReport) -> None:
     """Warn on a persistent result key under ``uns['mantispy']`` that is not registered (spec §15.3).
 
@@ -504,13 +533,24 @@ def _check_result_keys(store: dict, report: ValidationReport) -> None:
         )
 
 
-def _check_embedding_provenance(store: dict, report: ValidationReport) -> None:
-    """Warn when the optional ``uns['mantispy']['embedding']`` record has no string ``model``."""
-    if "embedding" not in store:
+def _check_perturbation_record(adata: AnnData, store: dict, report: ValidationReport) -> None:
+    """Suggest recording the perturbation column, and warn when a recorded one is malformed or missing."""
+    if "perturbation" not in store:
+        if PERTURBATION_COLUMN in adata.obs:
+            report.warnings.append(
+                f"obs has {PERTURBATION_COLUMN!r} but the object does not record which column identifies "
+                "perturbations; mt.io.stamp(adata, perturbation={'column': ...}) records it for the tools"
+            )
         return
-    record = store["embedding"]
-    if not isinstance(record, dict) or not isinstance(record.get("model"), str):
-        report.warnings.append("uns['mantispy']['embedding'] should be a mapping with a string 'model'")
+    record = store["perturbation"]
+    if not isinstance(record, dict) or not isinstance(record.get("column"), str):
+        report.warnings.append("the recorded perturbation should be a mapping with a string 'column'")
+    elif record["column"] not in adata.obs:
+        report.warnings.append(f"the recorded perturbation column {record['column']!r} is not a column of obs")
+    elif isinstance(record.get("control_column"), str) and record["control_column"] not in adata.obs:
+        report.warnings.append(
+            f"the recorded perturbation control_column {record['control_column']!r} is not a column of obs"
+        )
 
 
 def _check_obs_writable(adata: AnnData, report: ValidationReport) -> None:
@@ -695,11 +735,6 @@ def validate(adata: AnnData, *, raise_on_error: bool = False) -> ValidationRepor
         )
         report.errors.append(f"schema_version {seen!r}: {remedy}{SCHEMA_VERSION!r}")
 
-    if "schema_status" not in store:
-        report.errors.append("uns['mantispy']['schema_status'] is missing")
-    elif store["schema_status"] not in SCHEMA_STATUSES:
-        report.errors.append(f"unknown schema_status {store['schema_status']!r}; must be one of {SCHEMA_STATUSES}")
-
     resolution = store.get("resolution")
     if resolution is None:
         report.errors.append(
@@ -710,9 +745,8 @@ def validate(adata: AnnData, *, raise_on_error: bool = False) -> ValidationRepor
         report.errors.append(f"unknown resolution {resolution!r}; must be one of {RESOLUTIONS}")
 
     _check_grouped_by(adata, store, resolution, report)
-    _check_history(store, report)
     _check_result_keys(store, report)
-    _check_embedding_provenance(store, report)
+    _check_perturbation_record(adata, store, report)
     _check_obs_writable(adata, report)
 
     if resolution in REQUIRED_OBS:
@@ -1021,8 +1055,6 @@ def migrate(adata: AnnData, copy: bool = False) -> AnnData | None:
 
     store = target.uns.setdefault("mantispy", {})
     store["schema_version"] = SCHEMA_VERSION
-    store["schema_status"] = SCHEMA_STATUS
-    store.setdefault("history", [])
     store["resolution"] = resolution
     store["grouped_by"] = grouped_by
     if feature_kind is not None:

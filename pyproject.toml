@@ -131,6 +131,7 @@ doc = [
 # 3.14 wheel yet; the docs build itself renders committed outputs and runs on any version.
 tutorials = [
   { include-group = "doc" },
+  "boto3",
   "copairs>=0.5.5",
   "harmonypy>=2",
   "igraph",

@@ -10,7 +10,6 @@ from anndata import AnnData
 from mantispy._core.features import annotation
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
-from mantispy._core.provenance import level_change_source, record_history
 from mantispy._core.schema import stamp
 
 DEFAULT_BY = ("feature_group", "channel", "object")
@@ -118,14 +117,7 @@ def feature_signature(
             values = firsts[column].reindex(signature.obs_names)
             if values.notna().any():
                 signature.obs[column] = values.to_numpy()
-    store = adata.uns.get("mantispy", {})
-    stamp(signature, resolution="aggregate", grouped_by=[label], history=store.get("history"))
-    record_history(
-        signature,
-        "feature_signature",
-        params={"key": key, "by": list(by), "statistic": statistic},
-        source=level_change_source(adata, "aggregate", [label]),
-    )
+    stamp(signature, resolution="aggregate", grouped_by=[label])
     get_logger().info(
         "feature_signature: %d perturbations by %d families, from %d features",
         signature.n_obs,

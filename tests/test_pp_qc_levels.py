@@ -20,7 +20,7 @@ def imaged():
 def test_image_qc_recovers_the_injected_bad_images(imaged, method):
     mt.pp.image_qc(imaged, method=method, channel="DNA")
     result = imaged.uns["mantispy"]["image_qc"]
-    truth = set(imaged.uns["mantispy"]["truth"]["bad_images"])
+    truth = set(imaged.uns["truth"]["bad_images"])
 
     # The score must separate the degraded images completely, wherever the default threshold falls.
     scores = result["qc_image_score"]
@@ -33,7 +33,7 @@ def test_image_qc_recovers_the_injected_bad_images(imaged, method):
 
 def test_image_qc_broadcasts_and_filters(imaged):
     mt.pp.image_qc(imaged)
-    bad = imaged.uns["mantispy"]["truth"]["bad_images"]
+    bad = imaged.uns["truth"]["bad_images"]
     in_bad = imaged.obs["Metadata_ImageID"].isin(bad)
     assert len(bad) > 0 and in_bad.any(), "fixture must have cells in the injected bad images for this to mean anything"
     assert not imaged.obs.loc[in_bad, "qc_image_pass"].any()

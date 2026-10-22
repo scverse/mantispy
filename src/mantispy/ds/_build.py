@@ -171,7 +171,6 @@ def _assemble_bbbc021(cache_dir: str | Path | None = None) -> AnnData:
         obs["Metadata_Compound"].astype(str) + "@" + obs["Metadata_Concentration"].astype(str)
     )
     obs["Metadata_Perturbation_Type"] = pd.Series("compound", index=obs.index, dtype="category")
-    adata.uns["mantispy"]["dataset"] = "BBBC021"
     get_logger().info("BBBC021: %d wells x %d features", adata.n_obs, adata.n_vars)
     return adata
 
@@ -425,7 +424,6 @@ def _assemble_pki(cache_dir: str | Path | None = None) -> AnnData:
     label = np.where(control, "DMSO", np.char.add(np.char.add(compound.astype(str), "@"), dose.astype(str)))
     obs["Metadata_Perturbation"] = pd.Categorical(label)
     obs["Metadata_Perturbation_Type"] = pd.Series("compound", index=obs.index, dtype="category")
-    adata.uns["mantispy"]["dataset"] = "cpg0008-pki"
     get_logger().info(
         "pki: %d wells x %d features, %d compounds x %d doses",
         adata.n_obs,

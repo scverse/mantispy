@@ -17,7 +17,7 @@ from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger, report_drop
 from mantispy._core.masks import control_annotated, held_out_reference, reference_mask
 from mantispy._core.mutation import inplace_or_copy
-from mantispy._core.provenance import level_change_source, record_history, record_params
+from mantispy._core.provenance import record_params
 from mantispy._core.schema import require_concentration_unit, stamp
 from mantispy.tl._design import viability
 
@@ -1036,8 +1036,7 @@ def dose_trajectory(
         ),
         var=var,
     )
-    store = adata.uns.get("mantispy", {})
-    stamp(result, resolution="aggregate", grouped_by=[compound_key], history=store.get("history"))
+    stamp(result, resolution="aggregate", grouped_by=[compound_key])
     call_params = {
         "compound_key": compound_key,
         "dose_key": dose_key,
@@ -1047,12 +1046,6 @@ def dose_trajectory(
         "n_positions": n_positions,
     }
     record_params(result, "dose_trajectory", call_params)
-    record_history(
-        result,
-        "dose_trajectory",
-        params=call_params,
-        source=level_change_source(adata, "aggregate", [compound_key]),
-    )
     get_logger().info(
         "dose_trajectory: %d compound(s) over %d position(s); windows of %s concentration(s)",
         result.n_obs,

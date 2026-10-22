@@ -1,5 +1,3 @@
-import json
-
 import anndata as ad
 import numpy as np
 import pandas as pd
@@ -10,7 +8,6 @@ from mantispy._core.schema import (
     FEATURE_KINDS,
     REQUIRED_UNS,
     RESOLUTIONS,
-    SCHEMA_STATUS,
     SCHEMA_VERSION,
     ensure_object_identity,
     get_resolution,
@@ -53,15 +50,26 @@ def test_valid_object_passes(adata):
     assert str(report) == "valid"
 
 
+def test_stamp_writes_no_schema_status(adata):
+    assert "schema_status" not in adata.uns["mantispy"]
+    assert validate(adata).ok is True
+
+
 def test_schema_version_is_2_0_experimental(adata):
     assert SCHEMA_VERSION == "2.0"
-    assert SCHEMA_STATUS == "experimental"
     assert adata.uns["mantispy"]["schema_version"] == "2.0"
-    assert adata.uns["mantispy"]["schema_status"] == "experimental"
 
 
-def test_stamp_seeds_history(adata):
-    assert [json.loads(r)["operation"] for r in adata.uns["mantispy"]["history"]] == ["stamp"]
+def test_stamp_seeds_no_history(adata):
+    assert "history" not in adata.uns["mantispy"]
+
+
+def test_mutating_tool_records_params_not_history(adata):
+    import mantispy as mt
+
+    mt.pp.normalize(adata, reference=None)
+    assert "normalize" in adata.uns["mantispy"]["params"]
+    assert "history" not in adata.uns["mantispy"]
 
 
 def test_core_namespace_has_every_required_key(adata):
@@ -365,9 +373,8 @@ def test_public_stamping_creates_a_valid_2_0_object():
     report = mt.io.validate(obj)
     assert report.ok, report.errors
     assert obj.uns["mantispy"]["schema_version"] == "2.0"
-    assert obj.uns["mantispy"]["schema_status"] == "experimental"
     assert obj.uns["mantispy"]["grouped_by"] == ["Metadata_Plate", "Metadata_Well"]
-    assert [json.loads(r)["operation"] for r in obj.uns["mantispy"]["history"]] == ["stamp"]
+    assert "history" not in obj.uns["mantispy"]
 
 
 # --- display-only fallback must not weaken validation ---------------------
@@ -414,7 +421,6 @@ def _set_wells(values):
         (lambda a: setattr(a, "var", a.var.drop(columns="feature_group")), "feature_group"),
         (lambda a: a.uns.pop("mantispy"), "schema_version"),
         (lambda a: a.uns["mantispy"].update(schema_version="99.0"), "99.0"),
-        (lambda a: a.uns["mantispy"].pop("schema_status"), "schema_status"),
         (lambda a: setattr(a, "X", a.X.astype(np.float64)), "float32"),
         (_set_wells(["A01", "A01", "nope", "A02"]), "Metadata_Well"),
     ],
@@ -424,7 +430,6 @@ def _set_wells(values):
         "no_var_column",
         "no_uns",
         "wrong_version",
-        "no_status",
         "float64_X",
         "bad_well_name",
     ],
@@ -477,7 +482,6 @@ def test_published_spec_matches_the_constants():
 
     spec = json.loads((pathlib.Path(__file__).parents[1] / f"spec/schema-{s.SCHEMA_VERSION}.json").read_text())
     assert spec["schema_version"] == s.SCHEMA_VERSION
-    assert spec["status"] == s.SCHEMA_STATUS
     assert spec["required_obs"] == {k: list(v) for k, v in s.REQUIRED_OBS.items()}
     assert spec["reserved_obs"] == list(s.RESERVED_OBS)
     assert spec["required_var"] == list(s.REQUIRED_VAR)
@@ -561,7 +565,7 @@ def test_an_object_from_the_previous_schema_migrates(adata, tmp_path):
 
 
 def test_migrate_fills_the_new_core_fields_on_a_1_0_object():
-    """A genuine 1.0 object lacks grouped_by, history, status and feature_kind; migrate supplies them."""
+    """A genuine 1.0 object lacks grouped_by, status and feature_kind; migrate supplies them."""
     obj = ad.AnnData(
         X=np.ones((2, 1), dtype=np.float32),
         obs=pd.DataFrame({"Metadata_Plate": ["P1", "P1"], "Metadata_Well": ["A01", "A02"]}, index=["0", "1"]),
@@ -571,8 +575,7 @@ def test_migrate_fills_the_new_core_fields_on_a_1_0_object():
     migrate(obj)
     store = obj.uns["mantispy"]
     assert store["schema_version"] == SCHEMA_VERSION
-    assert store["schema_status"] == SCHEMA_STATUS
-    assert store["history"] == []
+    assert "history" not in store
     assert store["grouped_by"] == ["Metadata_Plate", "Metadata_Well"]
     assert (obj.var["feature_kind"] == "measurement").all()
     assert validate(obj).ok, validate(obj).errors
@@ -678,7 +681,7 @@ def test_migrate_translates_the_old_resolution_names(old, new):
     )
     store = {"schema_version": "1.0", "resolution": old}
     if old == "perturbation":
-        store["aggregated_from"] = {"by": ["Metadata_Plate"]}
+        store["params"] = {"consensus": {"by": ["Metadata_Plate"]}}
     obj.uns["mantispy"] = store
     migrate(obj)
     assert obj.uns["mantispy"]["resolution"] == new
@@ -848,7 +851,7 @@ def test_migrate_recovers_aggregate_grouping_from_provenance():
     obj.uns["mantispy"] = {
         "schema_version": "1.0",
         "resolution": "perturbation",
-        "aggregated_from": {"by": ["Metadata_Gene"]},
+        "params": {"consensus": {"by": ["Metadata_Gene"]}},
     }
     migrate(obj)
     assert obj.uns["mantispy"]["resolution"] == "aggregate"
@@ -893,7 +896,7 @@ def test_an_object_with_no_features_does_not_validate():
 
 
 def test_migrate_recovers_grouping_from_array_valued_provenance():
-    """aggregated_from['by'] comes back from h5ad as a numpy array; recovery must not use `arr or ...`."""
+    """consensus['by'] comes back from h5ad as a numpy array; recovery must not use `arr or ...`."""
     obs = pd.DataFrame({"Metadata_Gene": ["a", "b"], "Metadata_Compound": ["x", "y"]}, index=["0", "1"])
     obj = ad.AnnData(
         X=np.ones((2, 1), dtype=np.float32),
@@ -903,7 +906,7 @@ def test_migrate_recovers_grouping_from_array_valued_provenance():
     obj.uns["mantispy"] = {
         "schema_version": "1.0",
         "resolution": "aggregate",
-        "aggregated_from": {"by": np.array(["Metadata_Gene", "Metadata_Compound"], dtype=object)},
+        "params": {"consensus": {"by": np.array(["Metadata_Gene", "Metadata_Compound"], dtype=object)}},
     }
     migrate(obj)
     assert obj.uns["mantispy"]["grouped_by"] == ["Metadata_Gene", "Metadata_Compound"]
@@ -952,16 +955,6 @@ def test_validate_reports_a_dirty_is_feature_instead_of_raising(adata):
     report = validate(adata)  # must not raise
     assert not report.ok
     assert any("is_feature" in error for error in report.errors), report.errors
-
-
-def test_schema_status_stable_validates_and_unknown_is_rejected(adata):
-    """An object keeps the status it was stamped with; a future 'stable' stays valid, a typo does not."""
-    adata.uns["mantispy"]["schema_status"] = "stable"
-    assert validate(adata).ok, validate(adata).errors
-    adata.uns["mantispy"]["schema_status"] = "provisional"
-    report = validate(adata)
-    assert not report.ok
-    assert any("schema_status" in error for error in report.errors), report.errors
 
 
 def test_io_stamp_is_atomic_when_feature_kind_is_undeclared():

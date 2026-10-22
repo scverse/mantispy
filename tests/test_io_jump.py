@@ -236,3 +236,47 @@ def test_annotate_jump_warns_on_unmapped_ids(fake_crispr_metadata):
     with pytest.warns(UserWarning, match=r"1 JUMP id.*could not map.*gene"):
         out = mt.pp.annotate_jump(wells, kind="crispr", copy=True)
     assert out.n_obs == 3
+
+
+def _unmapped_wells():
+    wells = mt.ds.synthetic_plate(n_wells=3, n_cells=1, n_features=3, seed=0)
+    wells.obs["Metadata_JCP2022"] = ["JCP2022_805264", "JCP2022_900001", "JCP2022_999999"]
+    return wells
+
+
+def test_annotate_jump_on_unmapped_warn_keeps_the_wells(fake_crispr_metadata):
+    with pytest.warns(UserWarning, match=r"1 JUMP id.*could not map"):
+        out = mt.pp.annotate_jump(_unmapped_wells(), kind="crispr", on_unmapped="warn", copy=True)
+    assert out.n_obs == 3
+
+
+@pytest.mark.parametrize("copy", [True, False])
+def test_annotate_jump_on_unmapped_drop_removes_the_wells(fake_crispr_metadata, copy):
+    wells = _unmapped_wells()
+    with pytest.warns(UserWarning, match=r"1 JUMP id.*could not map.*dropped"):
+        out = mt.pp.annotate_jump(wells, kind="crispr", on_unmapped="drop", copy=copy)
+    result = out if copy else wells
+    assert result.n_obs == 2
+    assert not result.obs["Metadata_Gene"].isna().any()
+    assert list(result.obs["Metadata_Gene"].astype(str)) == ["PLK1", "PSMB2"]
+
+
+def test_annotate_jump_on_unmapped_drop_removes_compound_wells(monkeypatch):
+    tables = {"compound": pd.DataFrame({"Metadata_JCP2022": ["JCP2022_000001"], "Metadata_InChIKey": ["KEY-A"]})}
+    monkeypatch.setattr(_jump, "jump_metadata", tables.__getitem__)
+    wells = mt.ds.synthetic_plate(n_wells=2, n_cells=1, n_features=3, seed=0)
+    wells.obs["Metadata_JCP2022"] = ["JCP2022_000001", "JCP2022_999999"]
+    with pytest.warns(UserWarning, match=r"1 JUMP id.*could not map.*compound.*dropped"):
+        out = mt.pp.annotate_jump(wells, on_unmapped="drop", copy=True)
+    assert out.n_obs == 1
+    assert not out.obs["Metadata_InChIKey"].isna().any()
+
+
+def test_annotate_jump_on_unmapped_error_raises(fake_crispr_metadata):
+    with pytest.raises(ValueError, match=r"1 JUMP id.*could not map.*gene"):
+        mt.pp.annotate_jump(_unmapped_wells(), kind="crispr", on_unmapped="error", copy=True)
+
+
+def test_annotate_jump_rejects_an_unknown_on_unmapped(fake_crispr_metadata):
+    with pytest.raises(ValueError, match="on_unmapped"):
+        mt.pp.annotate_jump(_unmapped_wells(), kind="crispr", on_unmapped="ignore", copy=True)

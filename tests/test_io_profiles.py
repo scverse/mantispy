@@ -465,53 +465,112 @@ def test_stamp_translates_the_control_model_of_a_1_0_object():
     assert adata.uns["mantispy"]["resolution"] == "well"
 
 
-def _embedding_adata(provenance=None):
+def _embedding_adata():
     adata = ad.AnnData(
         np.ones((2, 3), dtype="float32"),
         obs=pd.DataFrame({"Metadata_Plate": ["P1", "P1"], "Metadata_Well": ["A01", "A02"]}, index=["0", "1"]),
     )
     adata.var_names = ["emb_0", "emb_1", "emb_2"]
-    mt.io.stamp(adata, resolution="well", feature_kind="embedding", provenance=provenance)
+    mt.io.stamp(adata, resolution="well", feature_kind="embedding")
     return adata
 
 
-_PROVENANCE = {"model": "openphenom", "version": "1.0", "pooling": "mean"}
-
-
-def test_stamp_records_embedding_provenance():
-    adata = ad.AnnData(
-        np.ones((2, 3), dtype="float32"),
-        obs=pd.DataFrame({"Metadata_Plate": ["P1", "P1"], "Metadata_Well": ["A01", "A02"]}, index=["0", "1"]),
-    )
-    adata.var_names = ["emb_0", "emb_1", "emb_2"]
-    out = mt.io.stamp(adata, resolution="well", feature_kind="embedding", provenance=_PROVENANCE, copy=True)
-    assert out.uns["mantispy"]["embedding"]["model"] == "openphenom"
-
-
-def test_embedding_provenance_round_trips(tmp_path):
-    adata = _embedding_adata(_PROVENANCE)
-    path = tmp_path / "e.h5ad"
-    mt.io.write(adata, path)
-    assert mt.io.read(path).uns["mantispy"]["embedding"]["pooling"] == "mean"
-
-
-def test_embedding_object_without_provenance_is_valid():
+def test_stamp_has_no_provenance_kwarg():
     adata = _embedding_adata()
-    assert "embedding" not in adata.uns["mantispy"]
+    with pytest.raises(TypeError):
+        mt.io.stamp(adata, resolution="well", feature_kind="embedding", provenance={"model": "x"})
+
+
+def test_embedding_feature_kind_still_valid():
+    adata = _embedding_adata()
     assert mt.io.validate(adata).ok
+    assert "embedding" not in adata.uns["mantispy"]
+    assert set(adata.var["feature_kind"][adata.var["is_feature"]]) == {"embedding"}
 
 
-def test_registered_embedding_key_is_not_flagged():
+def test_embedding_uns_slot_is_not_a_registered_key():
     adata = _embedding_adata()
     adata.uns["mantispy"]["embedding"] = {"model": "m"}
-    report = mt.io.validate(adata)
-    assert report.ok
-    assert not any("embedding" in w for w in report.warnings)
+    assert any("not a registered result key" in w for w in mt.io.validate(adata).warnings)
 
 
-def test_embedding_provenance_without_a_model_warns():
+def test_stamp_records_the_perturbation_column():
     adata = _embedding_adata()
-    adata.uns["mantispy"]["embedding"] = {"pooling": "mean"}
+    assert "perturbation" not in adata.uns["mantispy"]
+    adata.obs["Metadata_Perturbation"] = ["a", "b"]
+    adata.obs["Metadata_Control"] = [True, False]
+    adata.obs["Metadata_Control_Type"] = ["negcon", "treatment"]
+    mt.io.stamp(adata, resolution="well", feature_kind="embedding")
+    assert adata.uns["mantispy"]["perturbation"]["column"] == "Metadata_Perturbation"
+    assert adata.uns["mantispy"]["perturbation"]["control_column"] == "Metadata_Control_Type"
+
+
+def test_stamp_perturbation_override_and_validation():
+    adata = _embedding_adata()
+    adata.obs["gene"] = ["a", "b"]
+    out = mt.io.stamp(adata, resolution="well", feature_kind="embedding", perturbation={"column": "gene"}, copy=True)
+    assert out.uns["mantispy"]["perturbation"]["column"] == "gene"
+    with pytest.raises(ValueError, match="no_such_column"):
+        mt.io.stamp(adata, resolution="well", feature_kind="embedding", perturbation={"column": "no_such_column"})
+    assert "perturbation" not in adata.uns["mantispy"]
+
+
+def test_stamp_rejects_a_missing_control_column():
+    adata = _embedding_adata()
+    adata.obs["gene"] = ["a", "b"]
+    with pytest.raises(ValueError, match="control_column"):
+        mt.io.stamp(
+            adata,
+            resolution="well",
+            feature_kind="embedding",
+            perturbation={"column": "gene", "control_column": "typo"},
+        )
+    assert "perturbation" not in adata.uns["mantispy"]
+
+
+def test_stamp_omits_absent_default_control_column():
+    adata = _embedding_adata()
+    adata.obs["Metadata_Perturbation"] = ["a", "b"]
+    assert "Metadata_Control_Type" not in adata.obs
+    mt.io.stamp(adata, resolution="well", feature_kind="embedding")
+    record = adata.uns["mantispy"]["perturbation"]
+    assert record["column"] == "Metadata_Perturbation"
+    assert "control_column" not in record
+    assert not [w for w in mt.io.validate(adata).warnings if "control_column" in w]
+    gene = _embedding_adata()
+    gene.obs["gene"] = ["a", "b"]
+    mt.io.stamp(gene, resolution="well", feature_kind="embedding", perturbation={"column": "gene"})
+    assert "control_column" not in gene.uns["mantispy"]["perturbation"]
+    assert not [w for w in mt.io.validate(gene).warnings if "control_column" in w]
+
+
+def test_perturbation_record_round_trips(tmp_path):
+    adata = _embedding_adata()
+    adata.obs["gene"] = ["a", "b"]
+    mt.io.stamp(adata, resolution="well", feature_kind="embedding", perturbation={"column": "gene"})
+    path = tmp_path / "p.h5ad"
+    mt.io.write(adata, path)
+    assert mt.io.read(path).uns["mantispy"]["perturbation"]["column"] == "gene"
+
+
+def test_validate_suggests_recording_the_perturbation_column():
+    adata = _embedding_adata()
+    adata.obs["Metadata_Perturbation"] = ["a", "b"]
     report = mt.io.validate(adata)
     assert report.ok
-    assert any("model" in w for w in report.warnings)
+    assert sum("perturbation=" in w for w in report.warnings) == 1
+    mt.io.stamp(adata, resolution="well", feature_kind="embedding")
+    assert not any("perturbation=" in w for w in mt.io.validate(adata).warnings)
+
+
+def test_loaders_write_no_channels_or_dataset(tmp_path):
+    path = tmp_path / "profiles.csv"
+    _frame().to_csv(path, index=False)
+    loaded = (
+        from_dataframe(_frame(), channels=["DNA"]),
+        mt.io.read_profiles(path, channels=["DNA"]),
+        mt.ds.synthetic_plate(),
+    )
+    for adata in loaded:
+        assert "channels" not in adata.uns["mantispy"]
+        assert "dataset" not in adata.uns["mantispy"]

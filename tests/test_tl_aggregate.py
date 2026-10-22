@@ -46,78 +46,29 @@ def test_a_constant_column_survives_whatever_its_name(adata):
     assert "cell_quality" not in wells.obs  # varying columns are dropped, not silently copied
 
 
-def test_store_membership_records_source_identity_and_round_trips(adata, tmp_path):
-    """§13.4: opt-in membership references stable identity (ImageID + ObjectNumber), not row positions."""
-    wells = mt.tl.aggregate(adata, min_cells=0, store_membership=True)
-    membership = wells.uns["mantispy"]["membership"]
-    assert membership["source_resolution"] == "object"
-    assert "Metadata_ImageID" in membership["identity_columns"]
-    assert "Metadata_ObjectNumber" in membership["identity_columns"]
-    members = membership["members"]
-    assert len(members) == adata.n_obs  # every source cell is accounted for
-    assert set(members["Metadata_AggregateRow"]) == set(wells.obs_names)
-    # default is off
-    assert "membership" not in mt.tl.aggregate(adata, min_cells=0).uns["mantispy"]
-    # survives an h5ad round-trip
-    path = tmp_path / "wells.h5ad"
-    wells.write_h5ad(path)
-    import anndata as ad
-
-    back = ad.read_h5ad(path).uns["mantispy"]["membership"]
-    assert len(back["members"]) == adata.n_obs
-
-
-def test_membership_omits_the_cells_of_a_dropped_group(adata):
-    """A group dropped by min_cells contributes no members, so membership references identity, not positions."""
-    adata.obs["Metadata_Well"] = adata.obs["Metadata_Well"].astype(str)
-    adata.obs.loc[adata.obs_names[:3], "Metadata_Well"] = "ZZ99"  # a well of only 3 cells
-    wells = mt.tl.aggregate(adata, min_cells=10, store_membership=True)
-    members = wells.uns["mantispy"]["membership"]["members"]
-    assert "ZZ99" not in set(members["Metadata_Well"])  # the small well is gone
-    assert len(members) == adata.n_obs - 3  # only the kept groups' cells
-    assert set(members["Metadata_AggregateRow"]) == set(wells.obs_names)
-
-
-def test_membership_on_a_reloaded_aggregate_source(adata, tmp_path):
-    """Regression: a grouped_by reloaded from h5ad is a numpy array; the membership fallback must not test it with `or`."""
-    import anndata as ad
-
-    aggregate = mt.tl.aggregate(adata, by=("Metadata_Plate", "Metadata_Perturbation"), min_cells=0)
-    assert aggregate.uns["mantispy"]["resolution"] == "aggregate"  # so REQUIRED_OBS is empty → fallback branch
-    path = tmp_path / "agg.h5ad"
-    aggregate.write_h5ad(path)
-    reloaded = ad.read_h5ad(path)  # grouped_by now comes back as an ndarray
-    coarser = mt.tl.aggregate(reloaded, by=("Metadata_Plate",), min_cells=0, store_membership=True)
-    identity = coarser.uns["mantispy"]["membership"]["identity_columns"]
-    assert identity == ["Metadata_Plate", "Metadata_Perturbation"]  # the reloaded grouping, not a crash
-
-
-def test_history_round_trips_and_appends_after_a_reload(adata, tmp_path):
-    """§14: history survives h5ad and a loaded object (ndarray history) can still be appended to."""
-    import anndata as ad
-
-    from mantispy._core.provenance import read_history
-
+def _grouped_elsewhere(adata):
+    """Well profiles whose perturbation identity lives in a non-default column with fewer groups."""
     wells = mt.tl.aggregate(adata, min_cells=0)
-    path = tmp_path / "wells.h5ad"
-    wells.write_h5ad(path)
-    reloaded = ad.read_h5ad(path)
-    assert [record["operation"] for record in read_history(reloaded)] == ["stamp", "aggregate"]
-    # appending after a reload (history is an ndarray) must not raise and must extend the log
-    plates = mt.tl.aggregate(reloaded, by=("Metadata_Plate",), min_cells=0)
-    assert [record["operation"] for record in read_history(plates)] == ["stamp", "aggregate", "aggregate"]
+    wells.obs["Alt_Perturbation"] = np.where(np.arange(wells.n_obs) % 2 == 0, "even", "odd")
+    return wells
 
 
-def test_aggregate_inherits_and_extends_history(adata):
-    """§14.3: an aggregate carries the source history and appends its own level-changing record."""
-    from mantispy._core.provenance import read_history
+def test_consensus_defaults_to_the_recorded_perturbation_column(adata):
+    wells = _grouped_elsewhere(adata)
+    mt.io.stamp(wells, perturbation={"column": "Alt_Perturbation"})
+    assert set(mt.tl.consensus(wells, method="median").obs["Alt_Perturbation"]) == {"even", "odd"}
+    explicit = mt.tl.consensus(wells, by="Metadata_Perturbation", method="median")
+    assert "Alt_Perturbation" not in explicit.obs
+    assert explicit.n_obs != 2
 
-    mt.pp.normalize(adata)  # one in-place op → one history record on the source
+
+def test_consensus_without_a_record_keeps_the_default_column(adata):
     wells = mt.tl.aggregate(adata, min_cells=0)
-    history = read_history(wells)
-    operations = [record["operation"] for record in history]
-    assert "normalize" in operations  # inherited from the source
-    assert operations[-1] == "aggregate"
-    assert history[-1]["source"]["to_resolution"] == "well"
-    # the source object keeps its own, shorter history
-    assert "aggregate" not in [record["operation"] for record in read_history(adata)]
+    wells.uns["mantispy"].pop("perturbation", None)
+    out = mt.tl.consensus(wells, method="median")
+    assert set(out.obs["Metadata_Perturbation"]) == set(wells.obs["Metadata_Perturbation"])
+
+
+def test_aggregate_writes_no_aggregated_from(adata):
+    result = mt.tl.aggregate(adata, by=("Metadata_Plate", "Metadata_Well"))
+    assert "aggregated_from" not in result.uns["mantispy"]

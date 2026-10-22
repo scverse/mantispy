@@ -1,23 +1,14 @@
-"""Recording how an object was made: result parameters under uns["mantispy"]["params"] and an ordered, append-only log under uns["mantispy"]["history"]."""
+"""Recording how an object was made: result parameters under uns["mantispy"]["params"]."""
 
 from __future__ import annotations
 
 import json
-from importlib.metadata import PackageNotFoundError, version
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 if TYPE_CHECKING:
     from anndata import AnnData
-
-
-def _mantispy_version() -> str:
-    """The installed mantispy version, or ``"unknown"`` when the package is not installed."""
-    try:
-        return version("mantispy")
-    except PackageNotFoundError:
-        return "unknown"
 
 
 def _jsonable(value: Any) -> Any:
@@ -39,82 +30,7 @@ def record_params(adata: AnnData, func_name: str, params: dict[str, Any]) -> Non
     """Record a call's parameters under ``uns['mantispy']['params'][func_name]``.
 
     This is the latest-call store a plot or downstream function reads for result-specific parameters, so a
-    second call of the same function overwrites the first. The ordered record of every call lives in
-    :func:`record_history`.
+    second call of the same function overwrites the first.
     """
     store = adata.uns.setdefault("mantispy", {}).setdefault("params", {})
     store[func_name] = {key: _jsonable(value) for key, value in params.items()}
-
-
-def history_record(
-    operation: str,
-    *,
-    params: dict[str, Any] | None = None,
-    input: str = "X",
-    output: str = "X",
-    source: dict[str, Any] | None = None,
-) -> str:
-    """One history record as the JSON string :func:`record_history` stores and :func:`read_history` decodes."""
-    record: dict[str, Any] = {
-        "operation": operation,
-        "params": {key: _jsonable(value) for key, value in (params or {}).items()},
-        "input": input,
-        "output": output,
-        "mantispy_version": _mantispy_version(),
-    }
-    if source is not None:
-        record["source"] = {key: _jsonable(value) for key, value in source.items()}
-    return json.dumps(record)
-
-
-def record_history(
-    adata: AnnData,
-    operation: str,
-    *,
-    params: dict[str, Any] | None = None,
-    input: str = "X",
-    output: str = "X",
-    source: dict[str, Any] | None = None,
-) -> None:
-    """Append one record to the ordered, append-only ``uns['mantispy']['history']`` log (spec §14).
-
-    Unlike :func:`record_params`, this never overwrites: running the same operation twice appends two
-    records, so the list is the execution order. A level-changing operation passes ``source`` to record
-    the resolution/grouping it came from and produced.
-
-    Args:
-        adata: The object whose history to extend.
-        operation: The mantispy function, e.g. ``"pp.normalize"`` or ``"tl.aggregate"``.
-        params: The call's parameters, coerced to JSON-safe values.
-        input: Where the operation read from (``"X"`` or a layer name).
-        output: Where it wrote to (``"X"`` or a layer name).
-        source: For a level-changing operation, the source and target resolution/grouping.
-    """
-    store = adata.uns.setdefault("mantispy", {})
-    # Each record is stored as a JSON string: anndata writes a list of strings to h5ad cleanly but cannot
-    # serialize a list of dicts. A loaded history comes back as a numpy array, so coerce to a list first.
-    existing = store.get("history")
-    history = list(existing) if existing is not None else []
-    history.append(history_record(operation, params=params, input=input, output=output, source=source))
-    store["history"] = history
-
-
-def read_history(adata: AnnData) -> list[dict[str, Any]]:
-    """The ordered history records of ``adata`` as dicts (decoding the stored JSON strings)."""
-    history = adata.uns.get("mantispy", {}).get("history")
-    # A round-tripped history is a numpy array (an empty one a float64 array), not a list.
-    return [json.loads(record) for record in (history if history is not None else [])]
-
-
-def level_change_source(adata: AnnData, to_resolution: str, to_grouped_by: list[str]) -> dict[str, Any]:
-    """The ``source`` record for a level-changing operation: the resolution and grouping it came from and produced."""
-    from mantispy._core.schema import get_resolution
-
-    store = adata.uns.get("mantispy", {})
-    grouped_by = store.get("grouped_by")
-    return {
-        "resolution": get_resolution(adata, default="object"),
-        "grouped_by": list(grouped_by) if grouped_by is not None else [],
-        "to_resolution": to_resolution,
-        "to_grouped_by": list(to_grouped_by),
-    }

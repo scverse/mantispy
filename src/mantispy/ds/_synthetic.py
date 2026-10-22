@@ -85,7 +85,7 @@ def synthetic_plate(
 ) -> ad.AnnData:
     """Generate a synthetic plate with known ground truth.
 
-    Every injected effect is recorded under ``uns["mantispy"]["truth"]`` so tests and tutorials can check that a method recovers it.
+    Every injected effect is recorded under the top-level ``uns["truth"]`` (not a schema key, and not carried through aggregation) so tests and tutorials can check that a method recovers it.
 
     Args:
         n_plates: Number of plates.
@@ -111,7 +111,7 @@ def synthetic_plate(
         seed: Seed for reproducibility.
 
     Returns:
-        An :class:`~anndata.AnnData` at cell resolution, carrying every injected effect under ``uns["mantispy"]["truth"]``, the channel vocabulary under ``channels`` and the per-image quality metrics under ``image_table``.
+        An :class:`~anndata.AnnData` at cell resolution, carrying every injected effect under ``uns["truth"]``, the channel vocabulary under ``channels`` and the per-image quality metrics under ``image_table``.
 
     Raises:
         ValueError: `n_features` needs more distinct names than `channels` can spell, or `n_wells` exceeds the largest standard plate format.
@@ -242,12 +242,11 @@ def synthetic_plate(
         var=parse_feature_names(names, channels=channels),
     )
     stamp(adata, resolution="object")
-    adata.uns["mantispy"]["channels"] = channels
     # Key the image table by Metadata_ImageID to match obs and the schema check; the id of an image is
     # Plate|Well|ImageNumber, the same make_image_id builds for its cells.
     image_table = image_table.reset_index().rename(columns={"ImageNumber": "Metadata_ImageNumber"})
     image_table["Metadata_ImageID"] = make_image_id(image_table)
     truth["bad_images"] = image_table.set_index("Metadata_ImageNumber")["Metadata_ImageID"].loc[bad_images].tolist()
     adata.uns["mantispy"]["image_table"] = image_table.set_index("Metadata_ImageID")
-    adata.uns["mantispy"]["truth"] = truth
+    adata.uns["truth"] = truth
     return adata

@@ -137,12 +137,10 @@ All mantispy-owned object metadata MUST live under `uns["mantispy"]`.
 The namespace MUST contain:
 
 - `schema_version`
-- `schema_status`
 - `resolution`
 - `grouped_by`
-- `history`
 
-During the current refactor, `schema_status` MUST be `"experimental"`.
+The schema's stability status is stated in section 21, not stored in the object.
 
 A stable schema version MUST NOT be declared until the package implementation, loaders, staged datasets, tutorials, and CellProfiler integrations follow the contract.
 
@@ -577,74 +575,15 @@ The existing count names remain canonical:
 
 Functions SHOULD write the relevant count when the source data allow it.
 
-### 13.4 Optional source membership
-
-Aggregation MAY retain explicit source membership when the caller requests it.
-
-Membership storage is optional because object-level membership can be large.
-
-When membership is stored, it MUST reference stable source identity fields rather than integer row positions.
-
-For cell-to-profile aggregation, source members are identified by:
-
-```text
-Metadata_ImageID + Metadata_ObjectNumber
-```
-
-The target implementation SHOULD store membership under:
-
-```python
-uns["mantispy"]["membership"]
-```
-
-with enough metadata to state:
-
-- the source resolution
-- the source identity columns
-- the target observation row
-- the source identities belonging to that target
-
-The exact physical representation may be optimized during implementation, but it MUST NOT rely on source row positions.
-
 ## 14. Transformation provenance
 
-Mantispy keeps lightweight portable provenance inside the AnnData object.
+Mantispy does not keep an operation log inside the AnnData object. Earlier drafts stored one under `uns["mantispy"]["history"]`; it was removed.
 
 Full environment, file, notebook, and artifact lineage belongs in external workflow systems such as LaminDB and is not a hard mantispy dependency.
 
-### 14.1 History
+Result-specific parameters SHOULD be stored with the corresponding result when a plot or downstream function needs them. The latest call of each tool is recorded in `uns["mantispy"]["params"]`; a second call of the same function overwrites the first.
 
-`uns["mantispy"]["history"]` is an ordered append-only list.
-
-Each mantispy operation that changes data or creates a persistent result SHOULD append one record.
-
-A history record contains at least:
-
-```python
-{
-    "operation": "pp.normalize",
-    "params": {...},
-    "input": "X",
-    "output": "X",
-    "mantispy_version": "...",
-}
-```
-
-For operations that change resolution, the record SHOULD also include the source and target resolution or grouping information.
-
-The order of records in the list defines execution order. Timestamps are optional.
-
-### 14.2 No overwrite-by-function behavior
-
-Running the same operation twice MUST append two history records. A later call MUST NOT erase the earlier call's provenance.
-
-Result-specific parameters SHOULD be stored with the corresponding result when a plot or downstream function needs them.
-
-### 14.3 Level-changing operations
-
-A new AnnData object created by aggregation, consensus, signature construction, or another level-changing operation MUST inherit the source object's history and append its own operation.
-
-The new object MUST also preserve relevant mantispy descriptors unless the constructor intentionally changes them.
+A new AnnData object created by aggregation, consensus, signature construction, or another level-changing operation MUST preserve relevant mantispy descriptors unless the constructor intentionally changes them.
 
 ## 15. Result table schema
 
@@ -820,14 +759,13 @@ The migration includes at least the following changes:
 5. Unify SpatialData linkage on one region and instance-key convention.
 6. Migrate control semantics so `Metadata_Control` means any control and `Metadata_Control_Type` carries the fixed type vocabulary.
 7. Preserve all constant observation columns during aggregation rather than using the `Metadata_` prefix as a survival filter.
-8. Add optional source membership for aggregation without relying on row positions.
-9. Replace overwrite-by-function provenance with append-only `history` and preserve history through level changes.
-10. Add `feature_kind` to the required feature schema.
-11. Preserve source channel names without ingest-time canonicalization.
-12. Require an explicit concentration unit whenever concentration is stored.
-13. Standardize persistent result-table column names and register every persistent result key.
-14. Run full validation at mantispy IO boundaries and targeted validation inside public functions.
-15. Rebuild staged datasets and update tutorials after the code migration.
+8. Store result-specific parameters with the result instead of keeping an operation log in the object.
+9. Add `feature_kind` to the required feature schema.
+10. Preserve source channel names without ingest-time canonicalization.
+11. Require an explicit concentration unit whenever concentration is stored.
+12. Standardize persistent result-table column names and register every persistent result key.
+13. Run full validation at mantispy IO boundaries and targeted validation inside public functions.
+14. Rebuild staged datasets and update tutorials after the code migration.
 
 ## 21. Stability policy
 
@@ -857,14 +795,13 @@ The schema refactor is complete when all of the following are true:
 3. Related nucleus, cytoplasm, and cell object IDs are preserved when they exist.
 4. A cell can be traced to a globally unique image identifier.
 5. Cell-to-well aggregation records the correct resolution and grouping and preserves constant metadata.
-6. Optional membership can identify the source cells of a profile using stable identity fields.
-7. A perturbation aggregate states exactly which columns define one row through `grouped_by`.
-8. Negative and positive controls are unambiguous under the new control model.
-9. Dose-response data cannot be analyzed without explicit concentration units.
-10. Repeated mantispy operations preserve an ordered history rather than overwriting provenance.
-11. CellProfiler measurements, embeddings, and derived features can be distinguished through `feature_kind`.
-12. Persistent result tables use the standardized naming rules.
-13. Full validation passes for the canonical compound, genetic, single-cell, embedding, and SpatialData fixtures.
-14. The public tutorials and staged datasets follow the same schema as the implementation.
+6. A perturbation aggregate states exactly which columns define one row through `grouped_by`.
+7. Negative and positive controls are unambiguous under the new control model.
+8. Dose-response data cannot be analyzed without explicit concentration units.
+9. Result-specific parameters travel with the result they describe.
+10. CellProfiler measurements, embeddings, and derived features can be distinguished through `feature_kind`.
+11. Persistent result tables use the standardized naming rules.
+12. Full validation passes for the canonical compound, genetic, single-cell, embedding, and SpatialData fixtures.
+13. The public tutorials and staged datasets follow the same schema as the implementation.
 
 Only after these criteria are met should the maintainers choose and publish the first stable schema version.

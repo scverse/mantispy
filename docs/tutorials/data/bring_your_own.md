@@ -58,18 +58,11 @@ mt.io.stamp(adata, resolution="well", feature_kind="measurement")
 # one row per gene
 mt.io.stamp(adata, resolution="aggregate", grouped_by=["Metadata_Perturbation"], feature_kind="measurement")
 
-# learned embeddings, with a record of where they came from
+# learned embeddings
 adata.X = adata.X.astype("float32")
-mt.io.stamp(
-    adata,
-    resolution="well",
-    feature_kind="embedding",
-    provenance={"model": "my-encoder", "version": "1.2", "pooling": "mean"},
-)
+mt.io.stamp(adata, resolution="well", feature_kind="embedding")
 ```
 
-`provenance` is optional and applies to embeddings.
-It is stored in `uns["mantispy"]["embedding"]`, and `model` is required when it is given.
 `X` is stored as `float32`, so convert a `float64` matrix before stamping.
 
 ## Check it

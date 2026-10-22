@@ -35,8 +35,7 @@ Stamping runs the full validation, so an object that lacks them is rejected befo
 `Metadata_Well` is a zero-padded well name such as `A03`.
 `Metadata_Perturbation` is the canonical perturbation column; keep `Metadata_Compound` or `Metadata_Gene` beside it when you want the specific name.
 
-Embedding provenance is recorded with `stamp(provenance={"model": ..., "version": ..., "pooling": ...})` and stored in `uns["mantispy"]["embedding"]`.
-`model` is required when `provenance` is given.
+Learned-embedding features are declared with `feature_kind="embedding"`; there is no provenance slot.
 
 ## Why there is a schema
 
@@ -89,5 +88,6 @@ feature_kind = "embedding"
 ## Where the field-level detail lives
 
 - {func}`mantispy.io.stamp` documents the arguments and the checks that run.
-- The schema specification, `spec/morphology-schema-2.0.md` in the repository, defines every field, requirement and naming rule. Section 2.6 is the source of the four axes above.
+- The {doc}`stamp reference <stamp_reference>` explains every key of `uns["mantispy"]`: what it is, who sets it and how to choose a value.
+- The {doc}`schema specification <schema_spec>` defines every field, requirement and naming rule. Section 2.6 is the source of the four axes above.
 - The [tutorials](../tutorials/general) show each axis on real data.

@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 from mantispy._core.mutation import inplace_or_copy
-from mantispy._core.provenance import read_history, record_params
+from mantispy._core.provenance import record_params
 
 
 def _adata():
@@ -26,18 +26,13 @@ def _double(adata, factor: float = 2.0, note: str = "hi", copy: bool = False):
     adata.X = adata.X + factor
 
 
-def test_a_decorated_op_appends_an_append_only_history_record():
-    """§14.1/§14.2: every mutating call appends one record; a second call appends a second (no overwrite)."""
+def test_a_decorated_op_records_the_latest_params_and_no_history():
     adata = _adata()
     _double(adata, factor=3.0)
     _double(adata, factor=3.0)
-    history = read_history(adata)
-    assert [record["operation"] for record in history] == ["_double", "_double"]
-    assert history[0]["params"]["factor"] == pytest.approx(3.0)
-    assert history[0]["input"] == "X" and history[0]["output"] == "X"
-    assert "mantispy_version" in history[0]
-    # params (the latest-call store) keeps only one; history keeps both.
+    assert adata.uns["mantispy"]["params"]["_double"]["factor"] == pytest.approx(3.0)
     assert list(adata.uns["mantispy"]["params"]) == ["_double"]
+    assert "history" not in adata.uns["mantispy"]
 
 
 def test_decorator_rejects_a_function_with_no_arguments():
