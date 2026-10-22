@@ -498,6 +498,8 @@ def test_stamp_records_the_perturbation_column():
     adata = _embedding_adata()
     assert "perturbation" not in adata.uns["mantispy"]
     adata.obs["Metadata_Perturbation"] = ["a", "b"]
+    adata.obs["Metadata_Control"] = [True, False]
+    adata.obs["Metadata_Control_Type"] = ["negcon", "treatment"]
     mt.io.stamp(adata, resolution="well", feature_kind="embedding")
     assert adata.uns["mantispy"]["perturbation"]["column"] == "Metadata_Perturbation"
     assert adata.uns["mantispy"]["perturbation"]["control_column"] == "Metadata_Control_Type"
@@ -524,6 +526,22 @@ def test_stamp_rejects_a_missing_control_column():
             perturbation={"column": "gene", "control_column": "typo"},
         )
     assert "perturbation" not in adata.uns["mantispy"]
+
+
+def test_stamp_omits_absent_default_control_column():
+    adata = _embedding_adata()
+    adata.obs["Metadata_Perturbation"] = ["a", "b"]
+    assert "Metadata_Control_Type" not in adata.obs
+    mt.io.stamp(adata, resolution="well", feature_kind="embedding")
+    record = adata.uns["mantispy"]["perturbation"]
+    assert record["column"] == "Metadata_Perturbation"
+    assert "control_column" not in record
+    assert not [w for w in mt.io.validate(adata).warnings if "control_column" in w]
+    gene = _embedding_adata()
+    gene.obs["gene"] = ["a", "b"]
+    mt.io.stamp(gene, resolution="well", feature_kind="embedding", perturbation={"column": "gene"})
+    assert "control_column" not in gene.uns["mantispy"]["perturbation"]
+    assert not [w for w in mt.io.validate(gene).warnings if "control_column" in w]
 
 
 def test_perturbation_record_round_trips(tmp_path):

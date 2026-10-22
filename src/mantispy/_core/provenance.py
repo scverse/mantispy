@@ -3,21 +3,12 @@
 from __future__ import annotations
 
 import json
-from importlib.metadata import PackageNotFoundError, version
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 if TYPE_CHECKING:
     from anndata import AnnData
-
-
-def _mantispy_version() -> str:
-    """The installed mantispy version, or ``"unknown"`` when the package is not installed."""
-    try:
-        return version("mantispy")
-    except PackageNotFoundError:
-        return "unknown"
 
 
 def _jsonable(value: Any) -> Any:

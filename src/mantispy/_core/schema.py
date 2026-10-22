@@ -338,19 +338,20 @@ def _perturbation_record(adata: AnnData, store: dict, perturbation: Mapping[str,
         unknown = set(perturbation) - {"column", "control_column"}
         if unknown or not isinstance(perturbation.get("column"), str):
             raise ValueError("perturbation must be a mapping with a string 'column' and optional 'control_column'")
-        record = {
-            "column": perturbation["column"],
-            "control_column": perturbation.get("control_column", CONTROL_COLUMN),
-        }
-        if record["column"] not in adata.obs:
-            raise ValueError(f"perturbation column {record['column']!r} is not a column of obs")
+        if perturbation["column"] not in adata.obs:
+            raise ValueError(f"perturbation column {perturbation['column']!r} is not a column of obs")
         control = perturbation.get("control_column")
         if control is not None and control not in adata.obs:
             raise ValueError(f"perturbation control_column {control!r} is not a column of obs")
-        return record
+        return _default_record(adata, perturbation["column"], control if control is not None else CONTROL_COLUMN)
     if "perturbation" not in store and PERTURBATION_COLUMN in adata.obs:
-        return {"column": PERTURBATION_COLUMN, "control_column": CONTROL_COLUMN}
+        return _default_record(adata, PERTURBATION_COLUMN, CONTROL_COLUMN)
     return None
+
+
+def _default_record(adata: AnnData, column: str, control_column: str) -> dict[str, str]:
+    """A perturbation record that names ``control_column`` only when ``obs`` has it."""
+    return {"column": column, **({"control_column": control_column} if control_column in adata.obs else {})}
 
 
 def _recorded_column(adata: AnnData, field: str, default: str) -> str:
