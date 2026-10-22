@@ -90,7 +90,10 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "**.ipynb_checkpoints"]
 # The scverse theme (pydata-sphinx-theme) is registered by the scverse_doc extension.
 html_static_path = ["_static"]
 html_css_files = ["css/custom.css"]
-html_js_files = ["https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"]
+html_js_files = [
+    "https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js",
+    "js/plotly_resize.js",  # re-fit plotly figures to their container (pydata grid + cross-browser)
+]
 
 html_title = project
 html_logo = "_static/mantispy-logo.png"
