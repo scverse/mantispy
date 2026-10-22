@@ -9,7 +9,7 @@ Pick the resolution that matches the table, then make sure `obs` carries the ide
 
 | `resolution` | One row is | Required `obs` columns | `grouped_by` |
 | --- | --- | --- | --- |
-| `object` | one segmented cell or other object | `Metadata_Plate`, `Metadata_Well`, `Metadata_ImageID`, `Metadata_ObjectType`, `Metadata_ObjectNumber` | defaults |
+| `object` | one segmented cell or other object | `Metadata_ImageID`, `Metadata_ObjectType`, `Metadata_ObjectNumber`, plus `Metadata_Plate` and `Metadata_Well` for a plate | defaults |
 | `well` | one well | `Metadata_Plate`, `Metadata_Well` | defaults to plate and well |
 | `aggregate` | one consensus profile, such as a gene or a compound | none | you give it, for example `["Metadata_Perturbation"]` |
 
@@ -64,6 +64,29 @@ mt.io.stamp(adata, resolution="well", feature_kind="embedding")
 ```
 
 `X` is stored as `float32`, so convert a `float64` matrix before stamping.
+
+## Build one from a DataFrame
+
+{func}`~mantispy.io.from_dataframe` turns a table that is already in memory into a stamped object.
+It splits `Metadata_*` columns from features and parses CellProfiler feature names.
+
+A slide or any other table without plates and wells needs no `Metadata_Plate` or `Metadata_Well` at object resolution.
+The field of view comes from `Metadata_Site`, or from an explicit `Metadata_ImageID` if the table has one.
+An object is identified by `Metadata_ImageID`, `Metadata_ObjectType` and `Metadata_ObjectNumber`.
+
+```python
+adata = mt.io.from_dataframe(df, resolution="object", object_type="cell")
+```
+
+A table from cp_measure uses different feature names.
+Say so with `convention`; the default is `"cellprofiler"`.
+
+```python
+adata = mt.io.from_dataframe(df, convention="cp_measure", object_type="cell")
+```
+
+Numeric columns that match neither convention, such as proprietary or learned features, are kept as features with `feature_kind="embedding"`, never dropped.
+`object_type` is also an argument of {func}`~mantispy.io.stamp`.
 
 ## Check it
 
