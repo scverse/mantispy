@@ -71,7 +71,6 @@ Found a bug? Interested in improving mantispy? Check out our GitHub for the late
 
 installation
 api
-changelog
 contributing
 references
 ```
