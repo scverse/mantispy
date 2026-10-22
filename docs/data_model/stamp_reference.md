@@ -56,8 +56,7 @@ Both columns must exist in `obs`.
 
 ### Embeddings
 
-A matrix of learned embeddings is stamped with `feature_kind="embedding"`.
-Learned-embedding features are declared with `feature_kind="embedding"`; there is no provenance slot.
+A matrix of learned embeddings is declared with `feature_kind="embedding"`; there is no provenance slot.
 
 ## Result tables
 
