@@ -49,6 +49,8 @@ NON_FEATURE_GROUPS = frozenset(
     {
         "Number",
         "ObjectNumber",
+        "ImageNumber",
+        "TableNumber",
         "Location",
         "Parent",
         "Children",

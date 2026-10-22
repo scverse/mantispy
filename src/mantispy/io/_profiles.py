@@ -17,6 +17,7 @@ import pandas as pd
 
 from mantispy._core.features import (
     _BARE_NON_FEATURES,
+    _CP_MEASURE_RE,
     _KNOWN_GROUPS,
     _infer_channels,
     annotation,
@@ -123,6 +124,7 @@ def from_dataframe(
     """Build an AnnData from a wide profile table.
 
     Numeric columns that parse as features become ``X``; text and ``Metadata_`` columns become ``obs``.
+    Numeric columns that follow no CellProfiler naming (a learned embedding, a proprietary feature table) are kept as features with ``feature_kind="embedding"``.
     Numeric columns that parse as non-features (object numbers, parent links, centroids) are dropped and logged by default, because published profile tables often carry dozens of them and they mean nothing at well level.
 
     Args:
@@ -147,7 +149,7 @@ def from_dataframe(
         pycytominer's per-well ``Metadata_Count_Cells``, or ``Metadata_Object_Count`` without it, and ``Metadata_Site_Count`` are copied to ``Metadata_CellCount`` and ``Metadata_SiteCount``.
 
     Raises:
-        ValueError: `df` has no rows, no column parses as a feature on `objects`, or two metadata prefixes normalize onto the same column name.
+        ValueError: `df` has no rows, no column parses as a feature on `objects` and none is kept as an embedding, or two metadata prefixes normalize onto the same column name.
         KeyError: A name in `metadata_columns` is not in `df`.
     """
     resolution = RESOLUTION_RENAMES.get(resolution, resolution)
@@ -174,13 +176,18 @@ def from_dataframe(
             "since a different set of columns can infer a different vocabulary",
             vocabulary,
         )
-    keep = parsed["is_feature"].to_numpy()
+    # Columns in no CellProfiler group are opaque features whatever objects= says. cp_measure names carry
+    # their own groups ("sizeshape"), so that grammar is left to the parser.
+    if any(_CP_MEASURE_RE.match(str(c)) for c in candidates):
+        opaque_mask = np.zeros(len(candidates), dtype=bool)
+    else:
+        opaque_mask = (~parsed["feature_group"].isin(_KNOWN_GROUPS) & ~parsed.index.isin(_BARE_NON_FEATURES)).to_numpy()
+    opaque = parsed.index[opaque_mask].tolist()
+    keep = parsed["is_feature"].to_numpy() & ~opaque_mask
     if objects is not None:
         wanted = set(objects)
         excluded = ~parsed["object"].isin(wanted).to_numpy()
-        # A column in no known group is kept as an opaque feature below, so it is not reported as dropped.
-        recognised = parsed["feature_group"].isin(_KNOWN_GROUPS).to_numpy()
-        reported = keep & excluded & recognised
+        reported = keep & excluded
         if reported.any():
             # A feature whose name names no object parses with a missing object; under pandas 3, astype(str)
             # keeps that missing value, so it is named here rather than sorted alongside the strings.
@@ -199,10 +206,7 @@ def from_dataframe(
         keep = keep & ~excluded
     feature_names = parsed.index[keep].tolist()
 
-    discarded = [c for c in candidates if c not in set(feature_names)]
-    opaque = [
-        c for c in discarded if c not in _BARE_NON_FEATURES and parsed.loc[c, "feature_group"] not in _KNOWN_GROUPS
-    ]
+    discarded = [c for c in candidates if c not in set(feature_names) and c not in set(opaque)]
     if not feature_names and not opaque and candidates:
         objects_seen = sorted(set(parsed["object"].dropna().astype(str)))
         raise ValueError(
@@ -219,7 +223,7 @@ def from_dataframe(
             len(opaque),
             ", ".join(opaque[:3]),
         )
-    rest = [c for c in discarded if c not in set(opaque)]
+    rest = discarded
     if keep_non_features:
         meta_columns += rest
     elif rest:
@@ -231,6 +235,9 @@ def from_dataframe(
     var = parsed.loc[feature_names]
     if opaque:
         var = pd.concat([var, annotation(opaque, feature_kind="embedding", is_feature=True)])
+        # Concatenating categoricals with different categories degrades them to object, which h5ad cannot write.
+        for column in parsed.columns[[isinstance(d, pd.CategoricalDtype) for d in parsed.dtypes]]:
+            var[column] = var[column].astype("category")
         feature_names = var.index.tolist()
 
     X = df[feature_names].to_numpy(dtype=np.float32)
@@ -344,6 +351,7 @@ def read_profiles(
 
     Numeric columns that parse as CellProfiler features become ``X``.
     Text and ``Metadata_`` columns become ``obs``, with every metadata prefix normalized to ``Metadata_``.
+    Numeric columns that follow no CellProfiler naming (a learned embedding, a proprietary feature table) are kept as features with ``feature_kind="embedding"``.
     Numeric columns that parse as non-features (object numbers, parent links, centroids) are dropped and logged, because published profile tables often carry dozens of them and they mean nothing at well level.
 
     Args:

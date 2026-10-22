@@ -632,3 +632,37 @@ def test_cellprofiler_frame_gains_no_columns_from_keep_by_default():
     df["Cells_Number_Object_Number"] = 1.0
     adata = from_dataframe(df)
     assert set(adata.var_names) == {"Cells_AreaShape_Area", "Cells_Intensity_MeanIntensity_DNA"}
+
+
+def test_opaque_column_is_an_embedding_with_every_object_kept():
+    df = pd.DataFrame({"Metadata_Site": ["s1", "s2"], "my_latent_0": [1.0, 2.0], "Cells_AreaShape_Area": [3.0, 4.0]})
+    adata = from_dataframe(df, resolution="object", objects=None)
+    assert adata.var.loc["my_latent_0", "feature_kind"] == "embedding"
+    assert adata.var.loc["Cells_AreaShape_Area", "feature_kind"] == "measurement"
+
+
+@pytest.mark.parametrize("name", ["Image_ImageNumber", "Image_TableNumber", "Cells_ImageNumber"])
+def test_prefixed_image_and_table_numbers_are_excluded(name):
+    df = pd.DataFrame({"Metadata_Site": ["s1", "s2"], name: [1.0, 2.0], "Cells_AreaShape_Area": [3.0, 4.0]})
+    adata = from_dataframe(df, resolution="object", objects=None)
+    assert list(adata.var_names) == ["Cells_AreaShape_Area"]
+
+
+def test_mixed_measurement_and_embedding_round_trip(tmp_path):
+    df = pd.DataFrame(
+        {
+            "Metadata_Site": ["s1", "s2", "s3"],
+            "my_latent_0": [0.1, 0.2, 0.3],
+            "Cells_AreaShape_Area": [10.0, 20.0, 30.0],
+        }
+    )
+    adata = from_dataframe(df, resolution="object")
+    assert mt.io.validate(adata).ok, mt.io.validate(adata).errors
+    path = tmp_path / "mixed.h5ad"
+    mt.io.write(adata, path)
+    loaded = mt.io.read(path)
+    assert loaded.var.loc["Cells_AreaShape_Area", "feature_kind"] == "measurement"
+    assert loaded.var.loc["my_latent_0", "feature_kind"] == "embedding"
+    got = pd.DataFrame(loaded.X, columns=loaded.var_names)
+    np.testing.assert_allclose(got["Cells_AreaShape_Area"], [10.0, 20.0, 30.0])
+    np.testing.assert_allclose(got["my_latent_0"], [0.1, 0.2, 0.3], rtol=1e-6)
