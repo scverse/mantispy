@@ -118,14 +118,3 @@ def test_consensus_without_a_record_keeps_the_default_column(adata):
 def test_aggregate_writes_no_aggregated_from(adata):
     result = mt.tl.aggregate(adata, by=("Metadata_Plate", "Metadata_Well"))
     assert "aggregated_from" not in result.uns["mantispy"]
-
-
-def test_aggregate_does_not_log_retired_source_keys(adata, caplog):
-    import logging
-
-    adata.uns["mantispy"]["history"] = []
-    adata.uns["mantispy"]["channels"] = ["DNA"]
-    with caplog.at_level(logging.DEBUG, logger="mantispy"):
-        mt.tl.aggregate(adata, by=("Metadata_Plate", "Metadata_Well"))
-    messages = " ".join(record.getMessage() for record in caplog.records)
-    assert "history" not in messages and "channels" not in messages

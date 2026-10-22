@@ -1016,31 +1016,3 @@ def test_get_resolution_rejects_a_value_that_is_no_resolution(adata):
     adata.uns["mantispy"]["resolution"] = "plate"
     with pytest.raises(ValueError, match="unknown resolution"):
         get_resolution(adata)
-
-
-_RETIRED = ("schema_status", "history", "embedding", "aggregated_from", "channels", "dataset")
-
-
-def _with_retired_keys(obj):
-    obj.uns["mantispy"].update(
-        {
-            "schema_status": "experimental",
-            "history": [],
-            "embedding": "x",
-            "aggregated_from": {},
-            "channels": ["DNA"],
-            "dataset": "d",
-        }
-    )
-    return obj
-
-
-def test_validate_tolerates_retired_keys(adata):
-    report = validate(_with_retired_keys(adata))
-    assert report.ok is True
-    assert not [w for w in report.warnings if any(name in w for name in _RETIRED)]
-
-
-def test_migrate_strips_retired_keys(adata):
-    migrate(_with_retired_keys(adata))
-    assert not set(_RETIRED) & set(adata.uns["mantispy"])

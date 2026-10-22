@@ -151,10 +151,6 @@ UNS_KEYS: tuple[str, ...] = (
     "perturbation",
 )
 
-#: Keys earlier builds stamped that no longer exist; old objects may still carry them.
-RETIRED_KEYS: frozenset[str] = frozenset(
-    {"schema_status", "history", "embedding", "aggregated_from", "channels", "dataset"}
-)
 #: Result tables mantispy writes under ``uns["mantispy"]`` and reads back.
 UNS_RESULTS: tuple[str, ...] = (
     "feature_select",
@@ -529,7 +525,7 @@ def _check_result_keys(store: dict, report: ValidationReport) -> None:
     results = set(UNS_RESULTS)
     known = set(UNS_KEYS) | results
     for key in store:
-        if not isinstance(key, str) or key in known or key in RETIRED_KEYS:
+        if not isinstance(key, str) or key in known:
             continue
         if any(key.endswith(suffix) and key.removesuffix(suffix) in results for suffix in _RESULT_COMPANION_SUFFIXES):
             continue
@@ -985,13 +981,6 @@ def _rekey_legacy_image_table(store: dict, identity: pd.DataFrame) -> None:
     store["image_table"] = table.set_axis(pd.Index(ids.astype(str).to_numpy(), name="Metadata_ImageID"))
 
 
-def _strip_retired(store: object) -> None:
-    """Drop the keys earlier builds stamped and this one no longer writes."""
-    if isinstance(store, dict):
-        for key in RETIRED_KEYS & store.keys():
-            del store[key]
-
-
 def migrate(adata: AnnData, copy: bool = False) -> AnnData | None:
     """Bring an object written by an earlier mantispy up to :data:`SCHEMA_VERSION`.
 
@@ -1020,7 +1009,6 @@ def migrate(adata: AnnData, copy: bool = False) -> AnnData | None:
     seen = store.get("schema_version") if isinstance(store, dict) else None
 
     if seen == SCHEMA_VERSION:
-        _strip_retired(store)
         return target if copy else None
     if seen not in SUPPORTED_VERSIONS:
         raise ValueError(
@@ -1071,7 +1059,6 @@ def migrate(adata: AnnData, copy: bool = False) -> AnnData | None:
     store["schema_version"] = SCHEMA_VERSION
     store["resolution"] = resolution
     store["grouped_by"] = grouped_by
-    _strip_retired(store)
     if feature_kind is not None:
         target.var["feature_kind"] = feature_kind
     if identity is not None:
