@@ -368,6 +368,10 @@ def test_stamp_object_type_names_the_object():
     assert (obj.obs["Metadata_ObjectType"] == "cell").all()
 
 
+def test_from_dataframe_is_public():
+    assert mt.io.from_dataframe is not None
+
+
 @pytest.mark.parametrize("resolution", ["aggregate", "perturbation"])
 def test_an_aggregate_profile_table_can_be_read_with_its_grouping(resolution):
     """A consensus table has no plate or well; the reader takes the grouping, and the 1.0 name still reads."""
