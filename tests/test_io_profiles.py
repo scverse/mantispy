@@ -688,6 +688,35 @@ def test_from_dataframe_cp_measure_builds_features_and_keeps_opaque():
     assert (adata.obs["Metadata_ObjectType"] == "cell").all()
 
 
+def test_from_dataframe_cp_measure_keeps_colocalization_channel_pair():
+    df = pd.DataFrame(
+        {
+            "Metadata_Site": ["s1", "s1"],
+            "Correlation_Correlation__DNA__ER": [0.1, 0.2],
+            "Intensity_MeanIntensity__DNA": [0.5, 0.6],
+        }
+    )
+    adata = from_dataframe(df, convention="cp_measure", object_type="cell", resolution="object")
+    assert adata.var.loc["Correlation_Correlation__DNA__ER", "channel"] == "DNA|ER"
+    assert adata.var.loc["Intensity_MeanIntensity__DNA", "channel"] == "DNA"
+    assert "channels" not in adata.uns["mantispy"]
+
+
+def test_from_dataframe_reads_an_unknown_cellprofiler_group_as_an_embedding():
+    """A recognised object with a group outside the known set is kept, but as an opaque embedding feature."""
+    df = pd.DataFrame(
+        {
+            "Metadata_Plate": ["P", "P"],
+            "Metadata_Well": ["A01", "A02"],
+            "Cells_AreaShape_Area": [3.0, 4.0],
+            "Cells_Math_Value": [1.0, 2.0],
+        }
+    )
+    adata = from_dataframe(df)
+    assert adata.var.loc["Cells_AreaShape_Area", "feature_kind"] == "measurement"
+    assert adata.var.loc["Cells_Math_Value", "feature_kind"] == "embedding"
+
+
 def test_cp_measure_table_leaves_the_cellprofiler_default_alone():
     df = pd.DataFrame({"Metadata_Plate": ["P"], "Metadata_Well": ["A01"], "Cells_AreaShape_Area": [3.0]})
     adata = from_dataframe(df)

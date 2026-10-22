@@ -279,6 +279,8 @@ def test_jump_lite_does_not_read_an_embedding_dimension_as_a_measurement(tmp_pat
     adata = mt.ds.jump_lite(model=model, annotate=False)
 
     assert bool(adata.var["feature_group"].notna().any()) is parsed
+    if model == "cp_measure":
+        assert (adata.var["feature_kind"] == "embedding").all()
     assert adata.n_vars == len(names)
     assert list(adata.obs["Metadata_CellCount"]) == [120, 130]
 

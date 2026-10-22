@@ -8,11 +8,16 @@ CellProfiler's::
 
     [<Object>_]<Group>_<feature words>[_<channel>...][_<numeric params>][_<NofM>]
 
-and cp_measure's, which separates its tokens with slashes, names the channel by index and glues the group to the feature in camel case::
+and cp_measure's::
 
-    <object>_<channel>/<aggregation>/<group><Feature words>[_<numeric params>][_<NofM>]
+    <Group>_<Feature>[_<params>][__<Channel>[__<Channel2>]]
 
-A name is read as cp_measure's only when it matches that shape in full, which a CellProfiler name cannot because CellProfiler never emits a ``/``.
+cp_measure joins the group, feature and params with a single _ and sets the channel or channels off with __.
+A colocalization feature names two channels, each after its own __.
+A bare token such as Area is a feature with no group, and the object comes from the caller, never from the name.
+
+parse_feature_names(convention=...) selects the grammar.
+An explicit value wins, and None reads the names as cp_measure's when any of them contains __.
 
 Columns that are not measurements (object numbers, parent/child links, locations, file names, metadata) get ``is_feature = False`` so callers can route them somewhere other than ``X``.
 """
@@ -85,7 +90,7 @@ CHANNEL_BEARING_GROUPS = frozenset(
     }
 )
 
-#: Groups that hold measurements but carry no channel.
+#: Measurement groups that carry no channel in CellProfiler; Slope may carry channels in cp_measure.
 PLAIN_FEATURE_GROUPS = frozenset(
     {"AreaShape", "SizeShape", "Neighbors", "AreaOccupied", "Zernike", "Skeleton", "Slope"}
 )

@@ -173,14 +173,18 @@ def from_dataframe(
     meta_columns = [c for c in df.columns if c.startswith(prefixes) or c in named or c not in numeric]
     candidates = [c for c in df.columns if c not in set(meta_columns)]
 
-    vocabulary = list(channels) if channels is not None else sorted(_infer_channels(candidates))
-    parsed = parse_feature_names(candidates, channels=vocabulary, convention=convention)
-    if channels is None and vocabulary:
-        get_logger().info(
-            "inferred the channel vocabulary %s from the column names; pass channels= to fix it, "
-            "since a different set of columns can infer a different vocabulary",
-            vocabulary,
-        )
+    if convention == "cp_measure":
+        # Channels are read off the "__" tokens, so there is no vocabulary to infer or to report.
+        parsed = parse_feature_names(candidates, convention=convention)
+    else:
+        vocabulary = list(channels) if channels is not None else sorted(_infer_channels(candidates))
+        parsed = parse_feature_names(candidates, channels=vocabulary, convention=convention)
+        if channels is None and vocabulary:
+            get_logger().info(
+                "inferred the channel vocabulary %s from the column names; pass channels= to fix it, "
+                "since a different set of columns can infer a different vocabulary",
+                vocabulary,
+            )
     if convention == "cp_measure":
         # The names carry no object, so the compartment filter would drop every one of them.
         objects = None
