@@ -546,6 +546,7 @@ def stamp(
     resolution: str | None = None,
     *,
     feature_kind: str | None = None,
+    object_type: str = "Object",
     grouped_by: Sequence[str] | None = None,
     perturbation: Mapping[str, str] | None = None,
     copy: bool = False,
@@ -563,6 +564,7 @@ def stamp(
         feature_kind: The representation every feature carries: ``"measurement"``, ``"embedding"`` or ``"derived"``.
             Pass it when the whole matrix is one kind (a matrix of embeddings is ``"embedding"``); it fills every feature.
             Leave it ``None`` only when ``var["feature_kind"]`` is already complete and valid (as a mantispy-read object's is).
+        object_type: For ``"object"`` resolution, the name written to ``Metadata_ObjectType`` when ``obs`` does not already carry one, e.g. ``"cell"``.
         grouped_by: For ``"aggregate"`` resolution, the columns that define one row; required there since there is no default.
         perturbation: Optional record of where perturbation identity lives: ``column`` (the ``obs`` column naming the perturbation) and ``control_column`` (default ``Metadata_Control_Type``).
             Left unset, an object with a ``Metadata_Perturbation`` column records that, and one without records nothing. Tools such as :func:`~mantispy.tl.consensus` and :func:`~mantispy.tl.map` read it as their default column.
@@ -614,7 +616,7 @@ def stamp(
     if resolution == "object":
         # Mint the object-identity columns so an externally built object stamps like a reader-produced
         # one; done on a copy here, it raises now (pre-mutation) if obs carries no source identity.
-        identity = ensure_object_identity(as_frame(adata.obs).copy())
+        identity = ensure_object_identity(as_frame(adata.obs).copy(), object_type=object_type)
         minted = {column: identity[column].to_numpy() for column in OBJECT_IDENTITY}
     present = set(adata.obs.columns) | set(minted)
     missing_obs = [column for column in REQUIRED_OBS[resolution] if column not in present]

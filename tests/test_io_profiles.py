@@ -358,6 +358,16 @@ def test_stamp_mints_object_identity_for_an_external_object():
     assert mt.io.validate(obj).ok, mt.io.validate(obj).errors
 
 
+def test_stamp_object_type_names_the_object():
+    obj = ad.AnnData(
+        np.ones((4, 2), dtype=np.float32),
+        obs=pd.DataFrame({"Metadata_Site": ["s1", "s1", "s2", "s2"]}, index=[str(i) for i in range(4)]),
+        var=parse_feature_names(["Cells_AreaShape_Area", "Cells_Intensity_MeanIntensity_DNA"], channels=["DNA"]),
+    )
+    mt.io.stamp(obj, resolution="object", object_type="cell")
+    assert (obj.obs["Metadata_ObjectType"] == "cell").all()
+
+
 @pytest.mark.parametrize("resolution", ["aggregate", "perturbation"])
 def test_an_aggregate_profile_table_can_be_read_with_its_grouping(resolution):
     """A consensus table has no plate or well; the reader takes the grouping, and the 1.0 name still reads."""
