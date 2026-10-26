@@ -16,7 +16,7 @@ from mantispy._core.logging import get_logger
 from mantispy._core.mutation import inplace_or_copy
 from mantispy.get._accessors import to_dataframe
 
-SINGLE_METHODS = ("ulm", "mlm", "ora", "aucell", "gsea", "gsva", "zscore", "waggr", "viper")
+SINGLE_METHODS = ("ulm", "mlm", "ora", "aucell", "gsea", "gsva", "zscore", "viper")
 METHODS = (*SINGLE_METHODS, "consensus")
 
 CONSENSUS_PANEL = ("ulm", "zscore", "aucell", "ora")
@@ -27,11 +27,12 @@ COMPOSITES = {"group_by_channel": ["feature_group", "channel"]}
 def _ora_n_up(adata: AnnData, top_fraction: float) -> int:
     """The ``n_up`` that makes ORA test the top ``top_fraction`` of features against the rest.
 
-    decoupler keeps features ranked above ``n_up``, so the top k of n needs ``n_up = n - k``.
+    decoupler selects the ``n_up`` top-ranked features as the observed set, so the top
+    ``top_fraction`` of ``n`` features needs ``n_up = round(n * top_fraction)``, at least one.
     """
     if not 0.0 < top_fraction < 1.0:
         raise ValueError(f"top_fraction must be in (0, 1), got {top_fraction!r}")
-    return int(round(adata.n_vars * (1.0 - top_fraction)))
+    return max(1, int(round(adata.n_vars * top_fraction)))
 
 
 def feature_sets(adata: AnnData, by: str | Sequence[str] = "feature_group") -> pd.DataFrame:
@@ -169,7 +170,7 @@ def enrich(
             Built from ``by`` when omitted.
         by: Passed to :func:`feature_sets` when ``net`` is not given.
         method: One of ``METHODS``.
-            ``"ulm"`` fits a linear model per set and is the usual choice; ``"mlm"`` fits all sets jointly, which handles overlapping sets; ``"ora"`` is an over-representation test on the extremes; ``"aucell"``, ``"gsea"``, ``"gsva"``, ``"zscore"``, ``"waggr"`` and ``"viper"`` are the remaining decoupler scorers.
+            ``"ulm"`` fits a linear model per set and is the usual choice; ``"mlm"`` fits all sets jointly, which handles overlapping sets; ``"ora"`` is an over-representation test on the extremes; ``"aucell"``, ``"gsea"``, ``"gsva"``, ``"zscore"`` and ``"viper"`` are the remaining decoupler scorers.
             ``"consensus"`` runs a panel of the single methods and combines their calls, decoupler's robustness feature.
         methods: The panel for ``method="consensus"``, each entry one of the single methods (``METHODS`` without ``"consensus"``).
             Defaults to ``CONSENSUS_PANEL``.
