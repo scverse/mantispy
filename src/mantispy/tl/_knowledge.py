@@ -206,8 +206,8 @@ def enrich_hits(
             "are empty and there is nothing to compare. Loosen the threshold if nothing was called, tighten "
             "it if everything was, or rank by phenotype strength instead."
         )
-    # ORA keeps genes ranked above n_up, so n_up = n_bg - n_hits selects the hits and reproduces Fisher's exact test.
-    scores, qvalues = dc.mt.ora(membership, net, tmin=1, n_bg=n_bg, n_up=n_bg - n_hits, empty=False, verbose=False)
+    # ORA selects the n_up top-ranked genes as the observed set, so n_up = n_hits picks exactly the hits and reproduces Fisher's exact test.
+    scores, qvalues = dc.mt.ora(membership, net, tmin=1, n_bg=n_bg, n_up=n_hits, empty=False, verbose=False)
     table = pd.DataFrame(
         {
             "set": list(scores.columns),
