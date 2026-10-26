@@ -95,8 +95,8 @@ def test_round_trip(profiles, tmp_path):
 
 
 def test_ora_scores_the_extreme_features_not_the_ordinary_ones():
-    """decoupler keeps features whose rank exceeds n_up, so enrich sets a default n_up.
-    Without it ORA runs on the bottom 95%, gives the most extreme set p = 1.0 and reports the depleted set as the hit."""
+    """decoupler selects the n_up top-ranked features as the observed set, so enrich sets a default n_up.
+    Without it ORA observes decoupler's default top 5%, which need not match top_fraction and misreads the hit."""
     names = [f"Cells_AreaShape_f{i}" for i in range(100)]
     adata = ad.AnnData(
         np.arange(100, dtype=np.float32)[None, :],
@@ -112,7 +112,7 @@ def test_ora_scores_the_extreme_features_not_the_ordinary_ones():
     assert float(adata.obsm["padj_ora"]["TOP"].iloc[0]) < 0.05
 
     explicit = adata.copy()
-    mt.tl.enrich(explicit, net=net, method="ora", n_bg=100, tmin=5, n_up=5)
+    mt.tl.enrich(explicit, net=net, method="ora", n_bg=100, tmin=5, n_up=50)
     assert float(explicit.obsm["score_ora"]["TOP"].iloc[0]) != float(scores["TOP"].iloc[0])
 
 
@@ -336,7 +336,7 @@ def test_enrich_rejects_a_negative_n_permutations(active):
 
 
 def test_permutation_ora_uses_the_top_tail(active):
-    """The permutation path must forward the ORA n_up default, so ORA scores the top top_fraction rather than decoupler's bottom-95% tail.
+    """The permutation path must forward the ORA n_up default, so ORA observes the top top_fraction rather than decoupler's own default top set.
     On data with a genuinely active set, ORA then calls it with a smaller permutation padj than an inert set."""
     adata, net, is_active_sample = active
     mt.tl.enrich(adata, net=net, method="ora", tmin=2, n_permutations=30)
