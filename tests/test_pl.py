@@ -142,3 +142,47 @@ def test_groupby_orders_and_titles_the_plates(plotted):
     plotted.obs["Metadata_Batch"] = None
     with pytest.raises(ValueError, match="missing values"):
         mt.pl.plate(plotted, color=plotted.var_names[0], groupby="Metadata_Batch")
+
+
+def test_qc_plots_label_and_relabel_the_grouping(plotted):
+    """group_label names the grouping variable; labels rename its values, with str() for any left out."""
+    feats = list(plotted.var_names[:1])
+
+    # feature_distributions: legend untitled and values raw by default ...
+    mt.pl.feature_distributions(plotted, features=feats, groupby="Metadata_Control")
+    legend = plt.gcf().axes[0].get_legend()
+    assert legend.get_title().get_text() == ""
+    assert {text.get_text() for text in legend.get_texts()} == {"True", "False"}
+    plt.close("all")
+
+    # ... and titled plus relabelled when asked, with the unmapped value falling back to str.
+    mt.pl.feature_distributions(
+        plotted, features=feats, groupby="Metadata_Control", group_label="Well type", labels={True: "control"}
+    )
+    legend = plt.gcf().axes[0].get_legend()
+    assert legend.get_title().get_text() == "Well type"
+    assert {text.get_text() for text in legend.get_texts()} == {"control", "False"}
+    plt.close("all")
+
+    # cell_counts: group_label is the x-axis title, labels rename the boxes.
+    _, ax = plt.subplots()
+    mt.pl.cell_counts(
+        plotted, groupby="Metadata_Control", ax=ax, group_label="Well type", labels={True: "control", False: "treated"}
+    )
+    assert ax.get_xlabel() == "Well type"
+    assert {label.get_text() for label in ax.get_xticklabels()} == {"control", "treated"}
+    plt.close("all")
+
+    # nan_matrix: group_label titles the plate axis, labels rename plates, unmapped plates keep their name.
+    _, ax = plt.subplots()
+    mt.pl.nan_matrix(plotted, ax=ax, group_label="plate", labels={"Plate01": "P1"})
+    assert ax.get_ylabel() == "plate"
+    assert {label.get_text() for label in ax.get_yticklabels()} == {"P1", "Plate02"}
+    plt.close("all")
+
+    # qc forwards both into its per-plate cell-counts panel.
+    mt.pl.qc(plotted, group_label="plate", labels={"Plate01": "P1"})
+    panel = plt.gcf().axes[0]
+    assert panel.get_xlabel() == "plate"
+    assert {label.get_text() for label in panel.get_xticklabels()} == {"P1", "Plate02"}
+    plt.close("all")

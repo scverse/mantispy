@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from collections.abc import Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -21,8 +21,20 @@ if TYPE_CHECKING:
     from matplotlib.axes import Axes
 
 
+def _display(values: Iterable[Any], labels: Mapping[Any, str] | None) -> list[str]:
+    """Group values as display strings; values missing from ``labels`` fall back to ``str``."""
+    if labels is None:
+        return [str(value) for value in values]
+    return [str(labels.get(value, value)) for value in values]
+
+
 def cell_counts(
-    adata: AnnData, groupby: str = "Metadata_Plate", ax: Axes | None = None, count_key: str = "Metadata_CellCount"
+    adata: AnnData,
+    groupby: str = "Metadata_Plate",
+    ax: Axes | None = None,
+    count_key: str = "Metadata_CellCount",
+    group_label: str | None = None,
+    labels: Mapping[Any, str] | None = None,
 ) -> Axes | None:
     """Distribution of cells per well, split by ``groupby``.
 
@@ -31,6 +43,8 @@ def cell_counts(
         groupby: ``obs`` column whose groups become the boxes.
         ax: Axes to draw on, or ``None`` for a new figure.
         count_key: ``obs`` column holding the cell count of profiles.
+        group_label: Axis title for the grouping variable, or ``None`` to use ``groupby``.
+        labels: Display names for group values, keyed by value; values left out keep their own name.
 
     Returns:
         The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
@@ -43,26 +57,28 @@ def cell_counts(
     if cells:
         codes, keys = group_codes(adata, ["Metadata_Plate", "Metadata_Well"])
         counts = np.bincount(codes, minlength=len(keys))
-        labels = obs.groupby(codes, observed=True)[groupby].first()
+        group_names = obs.groupby(codes, observed=True)[groupby].first()
     elif count_key in obs:
         counts = obs[count_key].to_numpy(dtype=float)
-        labels = obs[groupby]
+        group_names = obs[groupby]
     else:
         raise KeyError(f"obs has no column {count_key!r}; mt.tl.aggregate writes one, or name another with count_key=")
 
     ax = _axes(ax, (6, 4))
     # A missing label is a group of its own rather than one that matches nothing.
-    groups, names = labels.factorize(use_na_sentinel=False)
+    groups, names = group_names.factorize(use_na_sentinel=False)
+    shown_names = _display(names, labels)
     known = np.isfinite(counts)
-    ax.boxplot([counts[known & (groups == i)] for i in range(len(names))], tick_labels=[str(name) for name in names])
+    ax.boxplot([counts[known & (groups == i)] for i in range(len(names))], tick_labels=shown_names)
     ylabel = "cells per well" if cells else count_key
+    axis_label = group_label if group_label is not None else groupby
     ax.set_ylabel(ylabel)
-    ax.set_xlabel(groupby)
+    ax.set_xlabel(axis_label)
     ax.tick_params(axis="x", rotation=45)
 
-    label_of = np.array([str(name) for name in names])
-    tidy = pd.DataFrame({groupby: label_of[groups[known]], ylabel: counts[known]})
-    _maybe_interactive("box", ax=ax, data=tidy, x=groupby, y=ylabel, title="cell counts")
+    label_of = np.array(shown_names)
+    tidy = pd.DataFrame({axis_label: label_of[groups[known]], ylabel: counts[known]})
+    _maybe_interactive("box", ax=ax, data=tidy, x=axis_label, y=ylabel, title="cell counts")
     return _returned(ax)
 
 
@@ -72,6 +88,8 @@ def feature_distributions(
     groupby: str = "Metadata_Plate",
     layer_before: str | None = "raw",
     kind: str = "ecdf",
+    group_label: str | None = None,
+    labels: Mapping[Any, str] | None = None,
 ) -> np.ndarray | None:
     """Per-feature distributions, before and after normalization when ``layer_before`` exists.
 
@@ -82,6 +100,8 @@ def feature_distributions(
         layer_before: Layer holding the values before normalization, or ``None`` to draw only the current ones.
             A layer that the object does not hold is skipped in the same way.
         kind: ``"ecdf"``, ``"hist"``, or ``"ridge"`` for one offset filled density per group, which is easier to read with many groups.
+        group_label: Legend title for the grouping variable, or ``None`` to leave the legend untitled.
+        labels: Display names for group values, keyed by value; values left out keep their own name.
 
     Returns:
         ``None``; this plot always creates its own figure, a 2-D grid with one row per layer shown and one column per feature.
@@ -97,25 +117,27 @@ def feature_distributions(
     show_before = layer_before is not None and layer_before in adata.layers
     layers = [layer_before, None] if show_before else [None]
 
+    groups = list(dict.fromkeys(adata.obs[groupby]))
+    shown = _display(groups, labels)
     figure, axes = plt.subplots(len(layers), len(features), figsize=(4 * len(features), 3 * len(layers)), squeeze=False)
     for row, layer in enumerate(layers):
         matrix = get_matrix(adata, layer)
         for column, feature in enumerate(features):
             axis = axes[row, column]
             values = matrix[:, adata.var_names.get_loc(feature)]
-            for offset, group in enumerate(dict.fromkeys(adata.obs[groupby])):
+            for offset, (group, name) in enumerate(zip(groups, shown, strict=True)):
                 selected = values[(adata.obs[groupby] == group).to_numpy()]
                 selected = selected[~np.isnan(selected)]
                 if not selected.size:
                     continue
                 if kind == "ecdf":
-                    axis.plot(np.sort(selected), np.linspace(0, 1, selected.size), lw=1, label=str(group))
+                    axis.plot(np.sort(selected), np.linspace(0, 1, selected.size), lw=1, label=name)
                 elif kind == "ridge":
-                    _ridge(axis, selected, offset, str(group))
+                    _ridge(axis, selected, offset, name)
                 else:
-                    axis.hist(selected, bins=50, histtype="step", density=True, label=str(group))
+                    axis.hist(selected, bins=50, histtype="step", density=True, label=name)
             axis.set_title(f"{feature}\n{'raw' if layer else 'current'}", fontsize=8)
-    axes[0, 0].legend(fontsize=6)
+    axes[0, 0].legend(fontsize=6, title=group_label)
     figure.tight_layout()
     return _returned(axes, owned=True)
 
@@ -132,13 +154,21 @@ def _ridge(axis: Axes, values: np.ndarray, offset: int, label: str) -> None:
     axis.fill_between(grid, offset, offset + density, alpha=0.7, lw=0.6, edgecolor="black", label=label)
 
 
-def nan_matrix(adata: AnnData, max_features: int = 200, ax: Axes | None = None) -> Axes | None:
+def nan_matrix(
+    adata: AnnData,
+    max_features: int = 200,
+    ax: Axes | None = None,
+    group_label: str | None = None,
+    labels: Mapping[Any, str] | None = None,
+) -> Axes | None:
     """Fraction of missing values per feature, per plate.
 
     Args:
         adata: Object to measure the missing values of.
         max_features: How many features to draw, taken in ``var_names`` order.
         ax: Axes to draw on, or ``None`` for a new figure.
+        group_label: Title for the plate axis, or ``None`` to leave it untitled.
+        labels: Display names for plates, keyed by value; plates left out keep their own name.
 
     Returns:
         The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
@@ -149,17 +179,20 @@ def nan_matrix(adata: AnnData, max_features: int = 200, ax: Axes | None = None) 
     fractions = np.stack([missing[codes == index].mean(axis=0) for index in range(len(keys))])
 
     shown = fractions[:, :max_features]
+    plate_names = _display(keys, labels)
     image = ax.imshow(shown, aspect="auto", cmap="magma", vmin=0, vmax=1)
     ax.set_yticks(range(len(keys)))
-    ax.set_yticklabels([str(key) for key in keys], fontsize=7)
+    ax.set_yticklabels(plate_names, fontsize=7)
     ax.set_xlabel("feature")
+    if group_label is not None:
+        ax.set_ylabel(group_label)
     ax.figure.colorbar(image, ax=ax, label="NaN fraction")
 
     _maybe_interactive(
         "heatmap",
         ax=ax,
         matrix=shown,
-        rows=[str(key) for key in keys],
+        rows=plate_names,
         columns=[str(name) for name in adata.var_names[:max_features]],
         value_label="NaN fraction",
         title="missing values",
@@ -167,7 +200,12 @@ def nan_matrix(adata: AnnData, max_features: int = 200, ax: Axes | None = None) 
     return _returned(ax)
 
 
-def qc(adata: AnnData, figsize: tuple[float, float] = (12, 8)) -> np.ndarray | None:
+def qc(
+    adata: AnnData,
+    figsize: tuple[float, float] = (12, 8),
+    group_label: str | None = None,
+    labels: Mapping[Any, str] | None = None,
+) -> np.ndarray | None:
     """Two-by-two summary of the QC metrics :func:`~mantispy.pp.calculate_qc_metrics` writes.
 
     Each panel is drawn only if the object holds what it needs, so a partial run still gives a figure.
@@ -175,6 +213,8 @@ def qc(adata: AnnData, figsize: tuple[float, float] = (12, 8)) -> np.ndarray | N
     Args:
         adata: Object carrying the QC annotations.
         figsize: Size of the whole figure, in inches.
+        group_label: Title for the plate axis in the per-plate panels, or ``None`` to use ``"Metadata_Plate"``.
+        labels: Display names for plates, keyed by value; plates left out keep their own name.
 
     Returns:
         ``None``; this plot always creates its own figure, a two-by-two grid of the QC panels.
@@ -183,7 +223,7 @@ def qc(adata: AnnData, figsize: tuple[float, float] = (12, 8)) -> np.ndarray | N
 
     figure, axes = plt.subplots(2, 2, figsize=figsize)
     if get_resolution(adata, default="object") == "object" or "Metadata_CellCount" in adata.obs:
-        cell_counts(adata, ax=axes[0, 0])
+        cell_counts(adata, ax=axes[0, 0], group_label=group_label, labels=labels)
 
     if "qc_n_nan" in adata.var:
         axes[0, 1].hist(adata.var["qc_n_nan"], bins=40)
@@ -192,8 +232,12 @@ def qc(adata: AnnData, figsize: tuple[float, float] = (12, 8)) -> np.ndarray | N
     flags = [column for column in ("qc_is_border", "qc_area_outlier", "qc_pass") if column in adata.obs]
     if flags:
         obs = as_frame(adata.obs)
-        obs.groupby("Metadata_Plate", observed=True)[flags].mean().plot.bar(ax=axes[1, 0])
+        fractions = obs.groupby("Metadata_Plate", observed=True)[flags].mean()
+        fractions.index = _display(fractions.index, labels)
+        fractions.plot.bar(ax=axes[1, 0])
         axes[1, 0].set_ylabel("fraction of cells")
+        if group_label is not None:
+            axes[1, 0].set_xlabel(group_label)
         axes[1, 0].legend(fontsize=6)
 
     if "qc_variance" in adata.var:
