@@ -297,18 +297,18 @@ def feature_select(
     unknown = set(operations) - set(OPERATIONS)
     if unknown:
         raise ValueError(f"unknown operation(s) {sorted(unknown)}; choose from {OPERATIONS}")
+    # A non-empty not_measured implies the feature_kind column exists (feature_kind_of returns {} otherwise).
+    # Warn only when the non-measurement features are the majority: a few embedding columns among mostly real
+    # measurements still selects meaningfully on the measurements.
     not_measured = feature_kind_of(adata) & {"embedding", "derived"}
-    if not_measured and "feature_kind" in adata.var:
-        n_not_measured = int(adata.var["feature_kind"].isin(not_measured).sum())
-        # Warn only when the non-measurement features are the majority: a handful of embedding columns among
-        # mostly real measurements still selects meaningfully on the measurements.
-        if n_not_measured * 2 > adata.n_vars:
-            warnings.warn(
-                f"feature_select judges features by their values as measurements, but {n_not_measured} of "
-                f"{adata.n_vars} features here are {sorted(not_measured)}; the selection is unlikely to be meaningful",
-                UserWarning,
-                stacklevel=2,
-            )
+    n_not_measured = int(adata.var["feature_kind"].isin(not_measured).sum()) if not_measured else 0
+    if n_not_measured * 2 > adata.n_vars:
+        warnings.warn(
+            f"feature_select judges features by their values as measurements, but {n_not_measured} of "
+            f"{adata.n_vars} features here are {sorted(not_measured)}; the selection is unlikely to be meaningful",
+            UserWarning,
+            stacklevel=2,
+        )
 
     full = get_matrix(adata)
     keep = np.ones(adata.n_vars, dtype=bool)

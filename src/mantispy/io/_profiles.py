@@ -54,6 +54,10 @@ THIN_FEATURE_SET = 10
 #: The three compartments, as in ``pycytominer.infer_cp_features``.
 DEFAULT_OBJECTS: tuple[str, ...] = ("Cells", "Cytoplasm", "Nuclei")
 
+#: Objects whose features the default filter drops by design, so dropping them stays at info level however many
+#: there are: ``Image`` is the whole-field measurements, not a per-object compartment.
+_BY_DESIGN_DROPPED_OBJECTS = frozenset({"Image"})
+
 #: pycytominer's per-well counts and the names mantispy reads them under, the first one present winning.
 _UPSTREAM_COUNTS = {
     "Metadata_Count_Cells": "Metadata_CellCount",
@@ -211,11 +215,11 @@ def from_dataframe(
                 int(reported.sum()),
                 int(keep.sum()),
                 remedy="pass objects=None to keep every object",
-                # Dropping only the whole-field Image_ measurements is by design and stays at info, even when a
-                # small export has more of them than per-cell columns. Dropping any other object, or columns
-                # whose name carries no object prefix (<no object>, e.g. Granularity_1_DNA), is a real loss and
-                # escalates to a warning once it takes half or more of the features.
-                escalate=bool(set(dropped_objects) - {"Image"}) or int((keep & ~excluded).sum()) < THIN_FEATURE_SET,
+                # Dropping only the by-design objects (whole-field Image_) stays at info however many there are;
+                # dropping any other object, or names with no object prefix (<no object>, e.g. Granularity_1_DNA),
+                # is a real loss and escalates to a warning once it takes half or more of the features.
+                escalate=bool(set(dropped_objects) - _BY_DESIGN_DROPPED_OBJECTS)
+                or int((keep & ~excluded).sum()) < THIN_FEATURE_SET,
             )
         keep = keep & ~excluded
     feature_names = parsed.index[keep].tolist()

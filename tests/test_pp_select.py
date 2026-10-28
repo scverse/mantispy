@@ -46,8 +46,9 @@ def test_key_added_and_unknown_operation(wells):
 
 def test_default_operations_is_public():
     from mantispy.pp import DEFAULT_OPERATIONS
+    from mantispy.pp._select import OPERATIONS
 
-    assert isinstance(DEFAULT_OPERATIONS, tuple) and DEFAULT_OPERATIONS
+    assert isinstance(DEFAULT_OPERATIONS, tuple) and set(DEFAULT_OPERATIONS) <= set(OPERATIONS)
 
 
 def test_feature_select_warns_only_when_non_measurements_are_the_majority():
