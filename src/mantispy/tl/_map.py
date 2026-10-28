@@ -101,6 +101,8 @@ def _score_map(
     multilabel_col: str | None = None,
     warn: bool = True,
     compute_null: bool = True,
+    n_jobs: int | None = None,
+    batch_size: int | None = None,
 ) -> tuple[pd.DataFrame, list[str]]:
     """The copairs scoring shared by :func:`map` and :func:`~mantispy.metrics.evaluate_integration`.
 
@@ -118,14 +120,25 @@ def _score_map(
     """
     from copairs import map as copairs_map
 
+    # copairs sizes its own thread pool from os.cpu_count() (cytomining/copairs#163), which over-subscribes a
+    # SLURM allocation of a few CPUs; batch_size caps peak memory. Pass each only when the caller set it.
+    ap_kwargs = {"batch_size": batch_size} if batch_size is not None else {}
     if multilabel_col is not None:
         from copairs.map import multilabel as copairs_multilabel
 
         precision = copairs_multilabel.average_precision(
-            meta, features, **settings, multilabel_col=multilabel_col, distance=distance, progress_bar=False
+            meta,
+            features,
+            **settings,
+            multilabel_col=multilabel_col,
+            distance=distance,
+            progress_bar=False,
+            **ap_kwargs,
         )
     else:
-        precision = copairs_map.average_precision(meta, features, **settings, distance=distance, progress_bar=False)
+        precision = copairs_map.average_precision(
+            meta, features, **settings, distance=distance, progress_bar=False, **ap_kwargs
+        )
     if drop_positions is not None:
         precision = precision[~precision.index.isin(drop_positions)]
     group_columns = [column for column in settings["pos_sameby"] if column != REFERENCE_COLUMN]
@@ -176,6 +189,7 @@ def _score_map(
             seed=seed,
             progress_bar=False,
             cache_dir=cache,
+            max_workers=n_jobs,
         ).drop(columns=list(_UNWRITABLE), errors="ignore")
     # Canonical schema names (§15.1): copairs' score/p-value/decision columns → score/pvalue/qvalue/is_significant.
     # below_p (the raw-p decision) stays as a tool-specific column beside the canonical is_significant.
@@ -208,6 +222,8 @@ def map(
     threshold: float = 0.05,
     seed: int = 0,
     distance: str = "cosine",
+    n_jobs: int | None = None,
+    batch_size: int | None = None,
     key_added: str = "map",
     copy: bool = False,
 ) -> AnnData | None:
@@ -250,6 +266,10 @@ def map(
         threshold: Significance threshold passed to copairs.
         seed: Seed for the permutation null.
         distance: Distance copairs ranks by.
+        n_jobs: Threads for the null permutations (copairs' ``max_workers``).
+            ``None`` lets copairs size its own pool from ``os.cpu_count()``, which over-subscribes a job allocated only a few CPUs; set it to the cores you were given.
+        batch_size: Pair-distance batch size copairs scores at, which caps peak memory.
+            ``None`` uses copairs' default (20000).
         key_added: Where to store results.
         copy: Return a modified copy instead of mutating in place.
 
@@ -365,6 +385,8 @@ def map(
         distance=distance,
         drop_positions=drop_positions,
         multilabel_col=multilabel_col,
+        n_jobs=n_jobs,
+        batch_size=batch_size,
     )
 
     if mode == "activity":

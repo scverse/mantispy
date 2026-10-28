@@ -252,6 +252,68 @@ def test_evaluate_integration_both_returns_the_map_column_and_both_totals():
     assert np.isfinite(frame[["Total", "Total+mAP", "mean_average_precision"]].to_numpy()).all()
 
 
+def test_evaluate_integration_metrics_map_only_skips_scib():
+    """metrics=['map'] returns the mAP frame alone even with scib-metrics installed, and does not warn."""
+    pytest.importorskip("scib_metrics")
+    pytest.importorskip("copairs")
+    adata = _scib_ready()
+
+    import warnings as _warnings
+
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("error")  # a map-only request must not emit the "scib not installed" warning
+        frame = mt.metrics.evaluate_integration(adata, reps=("X_pca",), metrics=["map"])
+    assert list(frame.columns) == ["mean_average_precision"]
+
+
+def test_evaluate_integration_metrics_subset_runs_fewer_scib_metrics():
+    """A scib-only metrics list runs just those metrics and adds no mAP column."""
+    pytest.importorskip("scib_metrics")
+    adata = _scib_ready()
+
+    frame = mt.metrics.evaluate_integration(adata, reps=("X_pca",), metrics=["ilisi_knn", "clisi_knn"])
+    assert "mean_average_precision" not in frame.columns
+    assert frame.shape[0] == 1 and frame.select_dtypes("number").shape[1] >= 2
+
+
+def test_evaluate_integration_rejects_an_unknown_metric():
+    pytest.importorskip("scib_metrics")
+    with pytest.raises(ValueError, match="unknown metric"):
+        mt.metrics.evaluate_integration(_scib_ready(), metrics=["not_a_metric"])
+
+
+def test_evaluate_integration_scib_needs_features_in_X():
+    """The scib panel computes a PCA baseline from adata.X; a feature-free object gets a clear error, not scib's."""
+    pytest.importorskip("scib_metrics")
+    import anndata as ad
+
+    adata = _scib_ready()
+    bare = ad.AnnData(X=np.empty((adata.n_obs, 0), dtype=np.float32), obs=adata.obs.copy())
+    bare.obsm["X_pca"] = np.asarray(adata.obsm["X_pca"])
+    with pytest.raises(ValueError, match="unintegrated X"):
+        mt.metrics.evaluate_integration(bare, reps=("X_pca",), metrics=["ilisi_knn"])
+
+
+def test_evaluate_integration_names_label_batch_confounding():
+    """One label per batch leaves the mAP with no cross-batch negative; the error names the confounding."""
+    pytest.importorskip("copairs")
+    import anndata as ad
+
+    rng = np.random.default_rng(0)
+    n = 40
+    # Each label sits in exactly one batch, so no within-label pair can differ by batch.
+    labels = np.array([f"p{index % 4}" for index in range(n)])
+    batches = np.array([f"b{int(label[1:])}" for label in labels])
+    obs = pd.DataFrame(
+        {"Metadata_Perturbation": labels, "Metadata_Batch": batches},
+        index=[str(index) for index in range(n)],
+    )
+    adata = ad.AnnData(X=rng.normal(size=(n, 6)).astype(np.float32), obs=obs)
+    adata.obsm["X_pca"] = rng.normal(size=(n, 6))
+    with pytest.raises(ValueError, match="confounded"):
+        mt.metrics.evaluate_integration(adata, reps=("X_pca",), metrics=["map"])
+
+
 def test_map_is_one_for_separable_labels_and_drops_when_shuffled():
     """Ground truth: tight, well-separated label clusters retrieve perfectly, and shuffling the labels drops mAP to chance."""
     pytest.importorskip("copairs")

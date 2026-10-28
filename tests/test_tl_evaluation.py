@@ -341,6 +341,15 @@ def test_map_is_reproducible_and_supports_a_representation(profiles):
 
 
 @requires_copairs
+def test_map_n_jobs_and_batch_size_do_not_change_the_result(profiles):
+    """n_jobs/batch_size are plumbing for copairs' pool and memory; the scores must not depend on them."""
+    mt.tl.map(profiles, mode="activity", null_size=200, seed=1)
+    default = profiles.uns["mantispy"]["map"]["score"].to_numpy()
+    mt.tl.map(profiles, mode="activity", null_size=200, seed=1, n_jobs=2, batch_size=128)
+    np.testing.assert_allclose(default, profiles.uns["mantispy"]["map"]["score"].to_numpy())
+
+
+@requires_copairs
 def test_map_argument_errors(profiles):
     with pytest.raises(ValueError, match="not both"):
         mt.tl.map(profiles, mode="activity", pos_sameby=["Metadata_Perturbation"])

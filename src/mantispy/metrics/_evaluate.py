@@ -19,6 +19,9 @@ if TYPE_CHECKING:
 #: The copairs pair-argument keys a caller must fully specify to bypass a preset.
 _PAIR_KEYS = ("pos_sameby", "pos_diffby", "neg_sameby", "neg_diffby")
 
+#: Tokens in ``metrics=`` that select the mAP rather than a scib metric.
+_MAP_TOKENS = frozenset({"map", "mean_average_precision"})
+
 
 def _has_scib() -> bool:
     """Whether scib-metrics, the engine behind the benchmark panel, can be imported."""
@@ -96,8 +99,39 @@ def _rep_map(
     return float(table["score"].mean())
 
 
+def _scib_metric_specs(scib_names: list[str] | None) -> tuple[Any, Any]:
+    """The scib ``(BioConservation, BatchCorrection)`` toggling only the requested metrics, or ``(None, None)``.
+
+    ``None`` keeps scib's default panel. Otherwise every flag not named is turned off, so a caller pays only for
+    the metrics it asked for.
+
+    Raises:
+        ValueError: A name is neither a bio-conservation nor a batch-correction metric.
+    """
+    from scib_metrics.benchmark import BatchCorrection, BioConservation
+
+    if scib_names is None:
+        return None, None
+    bio_fields = set(BioConservation().__dataclass_fields__)
+    batch_fields = set(BatchCorrection().__dataclass_fields__)
+    requested = set(scib_names)
+    if unknown := requested - bio_fields - batch_fields:
+        raise ValueError(
+            f"unknown metric(s) {sorted(unknown)}; choose from {sorted(bio_fields | batch_fields)} or 'map'"
+        )
+    bio = BioConservation(**{field: field in requested for field in bio_fields})
+    batch = BatchCorrection(**{field: field in requested for field in batch_fields})
+    return bio, batch
+
+
 def _benchmark(
-    adata: AnnData, *, reps: Sequence[str], label_key: str, batch_key: str, min_max_scale: bool
+    adata: AnnData,
+    *,
+    reps: Sequence[str],
+    label_key: str,
+    batch_key: str,
+    min_max_scale: bool,
+    scib_names: list[str] | None = None,
 ) -> pd.DataFrame:
     """scib-metrics' public ``get_results`` frame for the representations, kept as a seam a test can read directly.
 
@@ -106,6 +140,14 @@ def _benchmark(
     """
     from scib_metrics.benchmark import Benchmarker
 
+    bio, batch = _scib_metric_specs(scib_names)
+    # Omit the spec args for the default panel (both None): Benchmarker rejects (None, None) but has its own
+    # BioConservation()/BatchCorrection() defaults when the args are absent.
+    specs = {}
+    if bio is not None:
+        specs["bio_conservation_metrics"] = bio
+    if batch is not None:
+        specs["batch_correction_metrics"] = batch
     # progress_bar=False keeps the tqdm bars out of executed notebooks and test logs.
     bm = Benchmarker(
         adata,
@@ -114,6 +156,7 @@ def _benchmark(
         embedding_obsm_keys=list(reps),
         n_jobs=-1,
         progress_bar=False,
+        **specs,
     )
     bm.benchmark()
     return bm.get_results(min_max_scale=min_max_scale)
@@ -126,6 +169,7 @@ def evaluate_integration(
     label_key: str = "Metadata_Perturbation",
     batch_key: str = "Metadata_Batch",
     min_max_scale: bool = False,
+    metrics: Sequence[str] | None = None,
     map_mode: str = "replicability",
     map_kwargs: dict[str, Any] | None = None,
     ax: Axes | None = None,
@@ -169,6 +213,12 @@ def evaluate_integration(
         batch_key: ``obs`` column with the nuisance grouping.
         min_max_scale: Colour and score each metric column scaled across the representations, as scib does by
             default. Off by default so a single representation still has honest absolute values to colour by.
+        metrics: Which metrics to run, to control cost. ``None`` runs the full scib panel plus the mAP. A list
+            names exactly what to run: ``"map"`` for the mAP, and any scib metric flag (``"ilisi_knn"``,
+            ``"clisi_knn"``, ``"kbet_per_label"``, ``"pcr_comparison"``, ``"graph_connectivity"``,
+            ``"isolated_labels"``, ``"silhouette_label"``, ...). ``metrics=["map"]`` skips scib entirely, the
+            cheapest option. The full panel is expensive: expect several minutes and many GB on tens of
+            thousands of cells, since kBET and the clustering metrics dominate.
         map_mode: The copairs pairing for mAP, ``"replicability"`` (the Arevalo ``mAP-nonrep`` default) or
             ``"cross_plate"``. See ``_map_settings``.
         map_kwargs: Overrides for any of the four copairs pair arguments, on top of ``map_mode``.
@@ -178,8 +228,11 @@ def evaluate_integration(
         The numeric results, one row per representation and one column per metric, the mAP and both totals.
 
     Raises:
-        ImportError: Neither scib-metrics nor copairs is installed.
-        ValueError: The object has one row per perturbation, which has no replicate pairs to score.
+        ImportError: A requested family is missing its extra (neither installed, or ``metrics`` asks for one
+            that is not installed).
+        ValueError: The scib panel is requested with no features in ``adata.X``; the mAP is requested but
+            ``label_key`` has no replicates or is confounded with ``batch_key``; or ``metrics`` names an unknown
+            metric or selects nothing runnable.
         KeyError: ``obs`` is missing ``label_key`` or ``batch_key``.
     """
     from mantispy.pl._evaluation import _integration_heatmap
@@ -200,43 +253,81 @@ def evaluate_integration(
     if missing:
         raise KeyError(f"obs is missing the column(s) the benchmark needs: {missing}")
 
-    # Count the treated labels, since the mAP drops the controls; value_counts drops NaN labels too.
-    treated_labels = adata.obs[label_key]
-    if control_annotated(adata):
-        treated_labels = treated_labels[~reference_mask(adata, "negcon")]
-    counts = treated_labels.value_counts()
-    if counts.empty:
+    # metrics=None runs the full default panel plus the mAP; a list fully specifies it, where "map" selects the
+    # mAP and every other name a scib metric (validated against scib's flags inside _benchmark).
+    if metrics is None:
+        scib_names, want_map = None, True
+    else:
+        names = [str(metric) for metric in metrics]
+        want_map = bool(_MAP_TOKENS & set(names))
+        scib_names = [name for name in names if name not in _MAP_TOKENS]
+    use_map = want_map and have_copairs
+    use_scib = have_scib and (scib_names is None or len(scib_names) > 0)
+    if metrics is not None:
+        if want_map and not have_copairs:
+            raise ImportError('the mAP ("map") needs copairs; install pip install "mantispy[map]".')
+        if scib_names and not have_scib:
+            raise ImportError(f'metric(s) {scib_names} need scib-metrics; install pip install "mantispy[integration]".')
+    if not use_scib and not use_map:
         raise ValueError(
-            f"evaluate_integration found no treated profiles to score: obs[{label_key!r}] is empty or all missing "
-            "once the controls are dropped."
-        )
-    if int(counts.max()) < 2:
-        raise ValueError(
-            "evaluate_integration needs replicate profiles across batches, and this object looks like one row "
-            f"per perturbation (no value of obs[{label_key!r}] has two or more profiles). It scores the "
-            "integration of well-level replicates; for consensus profiles use mt.tl.map(mode='consistency') or "
-            "mt.metrics.known_relationships instead."
+            f"metrics={metrics!r} selected nothing to run given the installed extras; pass 'map' and/or "
+            "scib metric names."
         )
 
-    if have_copairs:
+    if use_map:
+        # The mAP drops the controls; value_counts drops NaN labels too.
+        treated_labels = adata.obs[label_key]
+        if control_annotated(adata):
+            treated_labels = treated_labels[~reference_mask(adata, "negcon")]
+        counts = treated_labels.value_counts()
+        if counts.empty:
+            raise ValueError(
+                f"evaluate_integration found no treated profiles to score: obs[{label_key!r}] is empty or all "
+                "missing once the controls are dropped."
+            )
+        if int(counts.max()) < 2:
+            raise ValueError(
+                "evaluate_integration needs replicate profiles across batches, and this object looks like one row "
+                f"per perturbation (no value of obs[{label_key!r}] has two or more profiles). It scores the "
+                "integration of well-level replicates; for consensus profiles use mt.tl.map(mode='consistency') "
+                "or mt.metrics.known_relationships instead."
+            )
         settings = _map_settings(map_mode, label_key, batch_key, map_kwargs)
         prepared = _map_meta(adata, settings)
-        map_values = [_rep_map(adata, rep, settings, prepared) for rep in reps]
+        try:
+            map_values = [_rep_map(adata, rep, settings, prepared) for rep in reps]
+        except Exception as error:  # copairs' UnpairedException is not a public type we can name
+            if "negative pair" not in str(error).lower():
+                raise
+            raise ValueError(
+                f"evaluate_integration could not form negative pairs for the mAP, which usually means "
+                f"label_key={label_key!r} is confounded with batch_key={batch_key!r} (e.g. one {label_key} per "
+                f"{batch_key}), so no profile has a within-label, cross-batch negative. Score a label that is not "
+                "nested within the batch, or check the design."
+            ) from error
 
-    if not have_scib:
-        warnings.warn(
-            "scib-metrics is not installed, so evaluate_integration draws only the per-representation mean "
-            'average precision. Install pip install "mantispy[integration,map]" to add the full scib-metrics '
-            "panel (bio conservation, batch correction and the Total).",
-            UserWarning,
-            stacklevel=2,
-        )
+    if not use_scib:
+        if not have_scib and metrics is None:
+            warnings.warn(
+                "scib-metrics is not installed, so evaluate_integration draws only the per-representation mean "
+                'average precision. Install pip install "mantispy[integration,map]" to add the full scib-metrics '
+                "panel (bio conservation, batch correction and the Total).",
+                UserWarning,
+                stacklevel=2,
+            )
         frame = pd.DataFrame(
             {"mean_average_precision": map_values},
             index=pd.Index(list(reps), name="representation"),
         )
         _integration_heatmap(frame, {"Retrieval": ["mean_average_precision"]}, ax=ax)
         return frame
+
+    if adata.X is None or adata.n_vars == 0:
+        raise ValueError(
+            "evaluate_integration's scib panel needs an unintegrated X with features in adata.X (it computes a "
+            f"PCA baseline), but adata has {adata.n_vars} var(s). Pass metrics=['map'] for retrieval only, or give "
+            "the object its measured features as X."
+        )
 
     if min_max_scale and len(reps) == 1:
         warnings.warn(
@@ -247,7 +338,9 @@ def evaluate_integration(
             stacklevel=2,
         )
 
-    results = _benchmark(adata, reps=reps, label_key=label_key, batch_key=batch_key, min_max_scale=min_max_scale)
+    results = _benchmark(
+        adata, reps=reps, label_key=label_key, batch_key=batch_key, min_max_scale=min_max_scale, scib_names=scib_names
+    )
     metric_type = results.loc["Metric Type"]
     data = results.drop(index="Metric Type").astype(float).loc[list(reps)]
 
@@ -256,7 +349,7 @@ def evaluate_integration(
     aggregate_cols = ["Batch correction", "Bio conservation", "Total"]
 
     blocks: dict[str, list[str]] = {"Bio conservation": bio_cols, "Batch correction": batch_cols}
-    if have_copairs:
+    if use_map:
         map_column = pd.Series(map_values, index=data.index)
         if min_max_scale:
             # Fold the mAP in on the same worst->0, best->1 scale as the bio metrics it joins, so Total+mAP and
