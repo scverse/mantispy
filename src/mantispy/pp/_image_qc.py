@@ -139,7 +139,7 @@ def image_qc(
         )
 
     score = np.zeros(len(table))
-    passed = np.ones(len(table), dtype=bool)
+    failed = np.zeros(len(table), dtype=bool)
     for group in pd.unique(groups):
         rows = np.flatnonzero(groups == group)
         block = values[rows]
@@ -154,10 +154,10 @@ def image_qc(
             else:
                 cutoff = float(threshold)
         score[rows] = block_score
-        passed[rows] = block_score <= cutoff
+        failed[rows] = block_score > cutoff
 
     table["qc_image_score"] = score
-    table["qc_image_fail"] = ~passed
+    table["qc_image_fail"] = failed
 
     if "Metadata_ImageID" not in adata.obs:
         raise KeyError("obs has no 'Metadata_ImageID' column to broadcast image QC onto")
@@ -172,7 +172,7 @@ def image_qc(
     # Both writes come after the last raise, so a failed call leaves no verdict in uns disagreeing with obs.
     adata.obs["qc_image_fail"] = broadcast.fillna(False).to_numpy(dtype=bool)
     store["image_qc"] = table
-    get_logger().info("image_qc(%s) flagged %d of %d images", method, int((~passed).sum()), len(table))
+    get_logger().info("image_qc(%s) flagged %d of %d images", method, int(failed.sum()), len(table))
     return None
 
 

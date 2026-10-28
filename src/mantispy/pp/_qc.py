@@ -123,7 +123,7 @@ def _area_features(adata: AnnData, area_feature: str | None = None) -> pd.Index:
     if area_feature is not None:
         if area_feature not in adata.var_names:
             raise KeyError(f"area_feature={area_feature!r} is not a var name")
-        return adata.var_names[adata.var_names == area_feature]
+        return pd.Index([area_feature])
     named = adata.var["feature"].astype(str).eq("Area") if "feature" in adata.var else []
     return adata.var_names[named]
 
