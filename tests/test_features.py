@@ -96,6 +96,24 @@ def test_cellprofiler_names_are_unchanged_by_the_explicit_convention():
     )
 
 
+def test_channel_names_with_underscores_parse_as_a_whole_suffix():
+    """A channel whose own name holds an underscore (ERK1_ERK2, Mouse_IgG) must match as one suffix."""
+    channels = [*CHANNELS, "ERK1_ERK2", "Mouse_IgG"]
+    rows = parse_feature_names(
+        ["Cells_Intensity_MeanIntensity_ERK1_ERK2", "Cells_Intensity_MeanIntensity_Mouse_IgG"],
+        channels=channels,
+    )
+    erk = rows.loc["Cells_Intensity_MeanIntensity_ERK1_ERK2"]
+    assert erk["channel"] == "ERK1_ERK2" and erk["feature"] == "MeanIntensity"
+    assert rows.loc["Cells_Intensity_MeanIntensity_Mouse_IgG", "channel"] == "Mouse_IgG"
+
+
+def test_inference_keeps_a_known_stain_beside_an_underscored_channel():
+    """Without channels=, a known stain (DNA) is still inferred even next to an underscored channel name."""
+    rows = parse_feature_names(["Cells_Intensity_MeanIntensity_ERK1_ERK2", "Cells_Intensity_MeanIntensity_DNA"])
+    assert rows.loc["Cells_Intensity_MeanIntensity_DNA", "channel"] == "DNA"
+
+
 @pytest.mark.parametrize(
     "name",
     [

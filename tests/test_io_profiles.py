@@ -52,6 +52,12 @@ def test_well_grid_is_filled_on_read():
     assert obs["Metadata_Col"].dtype.kind == "i"
 
 
+def test_from_dataframe_accepts_row_column_field_wells():
+    """CZI optical-pooled-screen wells (A/1/0) read without manual conversion; the field is dropped."""
+    obs = from_dataframe(_frame(well=("A/1/0", "A/2/0", "B/1/1", "H/12/3")), channels=["DNA"]).obs
+    assert sorted(obs["Metadata_Well"].unique()) == ["A01", "A02", "B01", "H12"]
+
+
 def test_well_grid_is_filled_on_stamp():
     adata = ad.AnnData(
         np.ones((2, 2), dtype="float32"),
