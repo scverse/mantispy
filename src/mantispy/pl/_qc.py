@@ -229,7 +229,7 @@ def qc(
         axes[0, 1].hist(adata.var["qc_n_nan"], bins=40)
         axes[0, 1].set_xlabel("cells missing this feature")
 
-    flags = [column for column in ("qc_is_border", "qc_area_outlier", "qc_pass") if column in adata.obs]
+    flags = [column for column in ("qc_is_border", "qc_area_outlier", "qc_fail") if column in adata.obs]
     if flags:
         obs = as_frame(adata.obs)
         fractions = obs.groupby("Metadata_Plate", observed=True)[flags].mean()
