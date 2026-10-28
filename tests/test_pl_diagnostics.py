@@ -66,7 +66,7 @@ def test_well_level_pass_maps_reuse_pl_plate(diagnosed):
     """No dedicated pl.well_qc: the plate heatmap already draws any obs column."""
     mt.pp.well_qc(diagnosed, min_cells=5)
     # plate owns the figure over several plates, so it draws and returns None; check the panels it drew.
-    assert mt.pl.plate(diagnosed, color="qc_well_pass") is None
+    assert mt.pl.plate(diagnosed, color="qc_well_fail") is None
     panels = [axis for axis in plt.gcf().axes if axis.images]
     assert len(panels) == diagnosed.obs["Metadata_Plate"].nunique()
     plt.close("all")

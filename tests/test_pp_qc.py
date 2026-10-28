@@ -26,11 +26,11 @@ def test_border_flag_needs_coordinates_and_shape(adata):
 
 def test_filter_cells_drops_failures_and_small_wells(adata):
     mt.pp.calculate_qc_metrics(adata)
-    passing = int(adata.obs["qc_pass"].sum())
+    passing = int((~adata.obs["qc_fail"]).sum())
     filtered = mt.pp.filter_cells(adata, min_cells_per_well=0, copy=True)
     assert filtered.n_obs == passing
 
-    assert mt.pp.filter_cells(adata, min_cells_per_well=21, qc_pass=False, copy=True).n_obs == 0
+    assert mt.pp.filter_cells(adata, min_cells_per_well=21, require_qc=False, copy=True).n_obs == 0
 
 
 def test_filter_cells_without_metrics_says_what_to_run(adata):
@@ -109,7 +109,7 @@ def _area_cells(nuclei_first: bool):
 
 
 def test_the_area_outlier_flag_does_not_depend_on_var_column_order():
-    """Matching every compartment's AreaShape_Area and taking the first made qc_area_outlier, and so qc_pass, depend on column order: Cells-first flagged 0 of 40 cells and Nuclei-first flagged 1, on the same data and with no warning."""
+    """Matching every compartment's AreaShape_Area and taking the first made qc_area_outlier, and so qc_fail, depend on column order: Cells-first flagged 0 of 40 cells and Nuclei-first flagged 1, on the same data and with no warning."""
     flagged = []
     for nuclei_first in (False, True):
         adata = _area_cells(nuclei_first)
@@ -118,9 +118,8 @@ def test_the_area_outlier_flag_does_not_depend_on_var_column_order():
     assert flagged == [1, 1]
 
 
-def test_qc_metrics_refuses_an_object_whose_var_names_no_area():
-    """The guard asked whether the feature column was populated, not whether it named an area.
-    A genuinely parsed Intensity-and-Texture export passes that guard, and _area_outlier_flag then returns an all-false flag, the silently weakened qc_pass the guard exists to stop."""
+def _no_area_object():
+    """A 20-cell Intensity/Texture export whose names parse but measure no area."""
     import anndata as ad
 
     from mantispy._core.features import parse_feature_names
@@ -128,16 +127,28 @@ def test_qc_metrics_refuses_an_object_whose_var_names_no_area():
     names = ["Cells_Intensity_MeanIntensity_DNA", "Cells_Texture_Contrast_DNA"]
     var = parse_feature_names(names)
     assert var["feature"].notna().all(), "the annotation is parsed; it simply measured no area"
-
     values = np.random.default_rng(0).normal(500.0, 10.0, (20, 2)).astype(np.float32)
-    adata = ad.AnnData(
-        X=values,
-        obs=pd.DataFrame(
-            {"Metadata_Plate": "P1", "Metadata_Well": [f"A{index % 4 + 1:02d}" for index in range(20)]},
-            index=[str(index) for index in range(20)],
-        ),
-        var=var,
+    obs = pd.DataFrame(
+        {"Metadata_Plate": "P1", "Metadata_Well": [f"A{index % 4 + 1:02d}" for index in range(20)]},
+        index=[str(index) for index in range(20)],
     )
+    return ad.AnnData(X=values, obs=obs, var=var)
 
-    with pytest.raises(KeyError, match="area"):
-        mt.pp.calculate_qc_metrics(adata)
+
+def test_qc_metrics_skips_the_area_check_when_no_area_is_found(capsys):
+    """No area column: qc_area_outlier is skipped (left all False) with a warning, the other metrics still run."""
+    adata = _no_area_object()
+    mt.pp.calculate_qc_metrics(adata)
+    assert "qc_area_outlier is skipped" in capsys.readouterr().err
+    assert not adata.obs["qc_area_outlier"].any()
+    assert "qc_fail" in adata.obs and "qc_nan_fraction" in adata.obs
+
+
+def test_qc_metrics_area_feature_names_the_column_or_rejects_an_unknown_one(capsys):
+    """area_feature= names the column to score on a table whose names do not parse as an area."""
+    adata = _no_area_object()
+    mt.pp.calculate_qc_metrics(adata, area_feature="Cells_Intensity_MeanIntensity_DNA")
+    assert "qc_area_outlier is skipped" not in capsys.readouterr().err
+
+    with pytest.raises(KeyError, match="area_feature"):
+        mt.pp.calculate_qc_metrics(adata, area_feature="not_a_column")

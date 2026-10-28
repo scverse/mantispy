@@ -36,7 +36,7 @@ def well_qc(
 
     Returns:
         ``None``, or the modified copy.
-        Writes ``uns["mantispy"]["well_qc"]``, a frame with the columns ``Metadata_Plate``, ``Metadata_Well``, ``n_cells``, ``nan_fraction``, ``control_cv`` and ``qc_well_pass``, and broadcasts ``obs["qc_well_pass"]``.
+        Writes ``uns["mantispy"]["well_qc"]``, a frame with the columns ``Metadata_Plate``, ``Metadata_Well``, ``n_cells``, ``nan_fraction``, ``control_cv`` and ``qc_well_fail`` (``True`` for a flagged well), and broadcasts ``obs["qc_well_fail"]``.
 
     Notes:
         The table keeps plate and well as columns because a MultiIndex in ``uns`` cannot be written to h5ad.
@@ -86,9 +86,9 @@ def well_qc(
     passed = (table["n_cells"] >= min_cells) & (table["nan_fraction"] <= max_nan_fraction)
     if max_control_cv is not None:
         passed &= table["control_cv"].isna() | (table["control_cv"] <= max_control_cv)
-    table["qc_well_pass"] = passed
+    table["qc_well_fail"] = ~passed
 
     adata.uns.setdefault("mantispy", {})["well_qc"] = table
-    adata.obs["qc_well_pass"] = passed.to_numpy()[codes]
+    adata.obs["qc_well_fail"] = (~passed).to_numpy()[codes]
     get_logger().info("well_qc failed %d of %d wells", int((~passed).sum()), len(table))
     return None

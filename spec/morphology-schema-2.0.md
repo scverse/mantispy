@@ -85,7 +85,7 @@ Sparse input MAY be accepted by readers and functions, but the schema does not r
 
 `Metadata_<Concept>` is used for observation-level identity, experimental context, provenance, or biological annotation, whether read from upstream or computed by mantispy. Examples include `Metadata_Plate`, `Metadata_Well`, `Metadata_Batch`, `Metadata_Source`, `Metadata_Compound`, `Metadata_Concentration`, `Metadata_Gene`, `Metadata_sgRNA`, `Metadata_Construct`, `Metadata_Allele`, `Metadata_Barcode`, `Metadata_ImageID`, and `Metadata_ObjectNumber`.
 
-Quantitative analysis results MUST NOT use this namespace. They use lowercase snake_case names such as `qc_pass`, `hits_qvalue`, `effect`, `cluster`, and `map`. The boundary is annotation versus result: a column describing where an observation came from or what condition produced it is `Metadata_`; a number mantispy computed from the data is not.
+Quantitative analysis results MUST NOT use this namespace. They use lowercase snake_case names such as `qc_fail`, `hits_qvalue`, `effect`, `cluster`, and `map`. The boundary is annotation versus result: a column describing where an observation came from or what condition produced it is `Metadata_`; a number mantispy computed from the data is not.
 
 The prefix is a naming convention. It MUST NOT be used as the sole rule for deciding which columns survive aggregation, are passed to metrics, or are exported.
 

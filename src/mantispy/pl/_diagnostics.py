@@ -90,7 +90,7 @@ def image_qc(adata: AnnData, ax: Axes | None = None) -> Axes | None:
     table = _table(adata, "image_qc", "mt.pp.image_qc")
     ax = _axes(ax, (8, 4))
 
-    failed = ~table["qc_image_pass"].to_numpy(dtype=bool)
+    failed = table["qc_image_fail"].to_numpy(dtype=bool)
     positions = np.arange(len(table))
     ax.scatter(positions[~failed], table["qc_image_score"].to_numpy()[~failed], s=6, label="pass")
     ax.scatter(positions[failed], table["qc_image_score"].to_numpy()[failed], s=18, color="crimson", label="flagged")
