@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 _PAIR_KEYS = ("pos_sameby", "pos_diffby", "neg_sameby", "neg_diffby")
 
 #: Tokens in ``metrics=`` that select the mAP rather than a scib metric.
-_MAP_TOKENS = frozenset({"map", "mean_average_precision"})
+_MAP_TOKENS = frozenset({"map"})
 
 
 def _has_scib() -> bool:
@@ -99,29 +99,32 @@ def _rep_map(
     return float(table["score"].mean())
 
 
-def _scib_metric_specs(scib_names: list[str] | None) -> tuple[Any, Any]:
-    """The scib ``(BioConservation, BatchCorrection)`` toggling only the requested metrics, or ``(None, None)``.
+def _scib_metric_specs(scib_names: list[str] | None) -> dict[str, Any]:
+    """The ``Benchmarker`` metric-spec kwargs that run only the requested scib metrics.
 
-    ``None`` keeps scib's default panel. Otherwise every flag not named is turned off, so a caller pays only for
-    the metrics it asked for.
+    ``None`` returns ``{}`` so Benchmarker keeps its own default panel (it rejects an explicit ``(None, None)``).
+    Otherwise every flag not named is turned off, so a caller pays only for the metrics it asked for.
 
     Raises:
         ValueError: A name is neither a bio-conservation nor a batch-correction metric.
     """
+    if scib_names is None:
+        return {}
+    import dataclasses
+
     from scib_metrics.benchmark import BatchCorrection, BioConservation
 
-    if scib_names is None:
-        return None, None
-    bio_fields = set(BioConservation().__dataclass_fields__)
-    batch_fields = set(BatchCorrection().__dataclass_fields__)
+    bio_fields = {field.name for field in dataclasses.fields(BioConservation)}
+    batch_fields = {field.name for field in dataclasses.fields(BatchCorrection)}
     requested = set(scib_names)
     if unknown := requested - bio_fields - batch_fields:
         raise ValueError(
             f"unknown metric(s) {sorted(unknown)}; choose from {sorted(bio_fields | batch_fields)} or 'map'"
         )
-    bio = BioConservation(**{field: field in requested for field in bio_fields})
-    batch = BatchCorrection(**{field: field in requested for field in batch_fields})
-    return bio, batch
+    return {
+        "bio_conservation_metrics": BioConservation(**{field: field in requested for field in bio_fields}),
+        "batch_correction_metrics": BatchCorrection(**{field: field in requested for field in batch_fields}),
+    }
 
 
 def _benchmark(
@@ -140,14 +143,6 @@ def _benchmark(
     """
     from scib_metrics.benchmark import Benchmarker
 
-    bio, batch = _scib_metric_specs(scib_names)
-    # Omit the spec args for the default panel (both None): Benchmarker rejects (None, None) but has its own
-    # BioConservation()/BatchCorrection() defaults when the args are absent.
-    specs = {}
-    if bio is not None:
-        specs["bio_conservation_metrics"] = bio
-    if batch is not None:
-        specs["batch_correction_metrics"] = batch
     # progress_bar=False keeps the tqdm bars out of executed notebooks and test logs.
     bm = Benchmarker(
         adata,
@@ -156,7 +151,7 @@ def _benchmark(
         embedding_obsm_keys=list(reps),
         n_jobs=-1,
         progress_bar=False,
-        **specs,
+        **_scib_metric_specs(scib_names),
     )
     bm.benchmark()
     return bm.get_results(min_max_scale=min_max_scale)
@@ -256,19 +251,16 @@ def evaluate_integration(
     # metrics=None runs the full default panel plus the mAP; a list fully specifies it, where "map" selects the
     # mAP and every other name a scib metric (validated against scib's flags inside _benchmark).
     if metrics is None:
-        scib_names, want_map = None, True
+        scib_names, use_map, use_scib = None, have_copairs, have_scib
     else:
         names = [str(metric) for metric in metrics]
-        want_map = bool(_MAP_TOKENS & set(names))
         scib_names = [name for name in names if name not in _MAP_TOKENS]
-    use_map = want_map and have_copairs
-    use_scib = have_scib and (scib_names is None or len(scib_names) > 0)
-    if metrics is not None:
-        if want_map and not have_copairs:
+        use_map, use_scib = len(scib_names) < len(names), bool(scib_names)
+        if use_map and not have_copairs:
             raise ImportError('the mAP ("map") needs copairs; install pip install "mantispy[map]".')
-        if scib_names and not have_scib:
+        if use_scib and not have_scib:
             raise ImportError(f'metric(s) {scib_names} need scib-metrics; install pip install "mantispy[integration]".')
-    if not use_scib and not use_map:
+    if not use_map and not use_scib:
         raise ValueError(
             f"metrics={metrics!r} selected nothing to run given the installed extras; pass 'map' and/or "
             "scib metric names."
@@ -307,7 +299,7 @@ def evaluate_integration(
             ) from error
 
     if not use_scib:
-        if not have_scib and metrics is None:
+        if metrics is None:  # scib genuinely not installed (an explicit map-only request chose this silently)
             warnings.warn(
                 "scib-metrics is not installed, so evaluate_integration draws only the per-representation mean "
                 'average precision. Install pip install "mantispy[integration,map]" to add the full scib-metrics '

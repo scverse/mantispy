@@ -121,24 +121,16 @@ def _score_map(
     from copairs import map as copairs_map
 
     # copairs sizes its own thread pool from os.cpu_count() (cytomining/copairs#163), which over-subscribes a
-    # SLURM allocation of a few CPUs; batch_size caps peak memory. Pass each only when the caller set it.
-    ap_kwargs = {"batch_size": batch_size} if batch_size is not None else {}
+    # SLURM allocation of a few CPUs; batch_size caps peak memory. Pass batch_size only when the caller set it.
+    ap_kwargs = {"distance": distance, "progress_bar": False, **({"batch_size": batch_size} if batch_size else {})}
     if multilabel_col is not None:
         from copairs.map import multilabel as copairs_multilabel
 
         precision = copairs_multilabel.average_precision(
-            meta,
-            features,
-            **settings,
-            multilabel_col=multilabel_col,
-            distance=distance,
-            progress_bar=False,
-            **ap_kwargs,
+            meta, features, **settings, multilabel_col=multilabel_col, **ap_kwargs
         )
     else:
-        precision = copairs_map.average_precision(
-            meta, features, **settings, distance=distance, progress_bar=False, **ap_kwargs
-        )
+        precision = copairs_map.average_precision(meta, features, **settings, **ap_kwargs)
     if drop_positions is not None:
         precision = precision[~precision.index.isin(drop_positions)]
     group_columns = [column for column in settings["pos_sameby"] if column != REFERENCE_COLUMN]
