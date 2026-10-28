@@ -52,7 +52,7 @@ def aggregate(
 
     Returns:
         A new :class:`~anndata.AnnData` with one row per group.
-        ``var`` is carried over unchanged; ``obs`` holds the grouping columns, `count_key`, `site_key` when the fields of view are known, and every other ``Metadata_`` column that is constant within every group.
+        ``var`` is carried over unchanged; ``obs`` holds the grouping columns, `count_key`, `site_key` when the fields of view are known, and every other ``obs`` column (not only ``Metadata_`` ones) that is constant within every group.
         `count_key` is the number of cells behind a row, so its scope follows ``by``: grouping by site counts the cells of one field of view, grouping by well those of every field.
         Profiles contribute the cells they carry rather than one each, and profiles that carry no count give an unknown one.
         `site_key` is the number of fields that contributed cells, summed where the rows carry it and counted from ``Metadata_Site`` otherwise.
