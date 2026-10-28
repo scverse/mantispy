@@ -44,6 +44,26 @@ def test_key_added_and_unknown_operation(wells):
         mt.pp.feature_select(wells, operations=("nonsense",))
 
 
+def test_default_operations_is_public():
+    from mantispy.pp import DEFAULT_OPERATIONS
+
+    assert isinstance(DEFAULT_OPERATIONS, tuple) and DEFAULT_OPERATIONS
+
+
+def test_feature_select_warns_only_when_non_measurements_are_the_majority():
+    """A few embedding columns among real measurements must not trigger the meaningless-selection warning."""
+    adata = _one_feature_per_operation()  # four features
+    adata.var["feature_kind"] = pd.Categorical(["embedding", "measurement", "measurement", "measurement"])
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        mt.pp.feature_select(adata, copy=True)
+    assert not any("unlikely to be meaningful" in str(w.message) for w in record)
+
+    adata.var["feature_kind"] = pd.Categorical(["embedding", "embedding", "embedding", "measurement"])
+    with pytest.warns(UserWarning, match="unlikely to be meaningful"):
+        mt.pp.feature_select(adata, copy=True)
+
+
 def test_noise_removal_needs_its_grouping_column(wells):
     wells.obs = wells.obs.drop(columns="Metadata_Perturbation")
     with pytest.raises(KeyError, match="group replicates by"):

@@ -143,6 +143,37 @@ def test_write_read_round_trip(tmp_path, cells, suffix):
     assert isinstance(loaded.uns["mantispy"]["image_table"], pd.DataFrame)
 
 
+def test_write_compression_reaches_h5ad_and_round_trips(tmp_path, cells):
+    """write forwards compression to write_h5ad: the X dataset carries the gzip filter and reads back equal."""
+    import h5py
+
+    path = tmp_path / "gz.h5ad"
+    mt.io.write(cells, path, compression="gzip")
+    with h5py.File(path) as handle:
+        assert handle["X"].compression == "gzip"
+    np.testing.assert_array_equal(mt.io.read(path).X, cells.X)
+
+
+def test_dropping_a_majority_of_named_features_warns_at_default_verbosity(capsys):
+    """A bulk drop of the caller's own columns (here names that carry no object) must reach the user by default.
+
+    Only the by-design whole-field ``Image_`` drop stays quiet when it is large.
+    """
+    previous = mt.settings.verbosity
+    mt.settings.verbosity = 1
+    try:
+        # Kept set deliberately above THIN_FEATURE_SET so only the "non-Image object dropped" rule escalates.
+        kept = {f"Cells_AreaShape_F{i}": [1.0, 2.0] for i in range(10)}
+        bare = {f"Granularity_{i}_DNA": [3.0, 4.0] for i in range(1, 12)}
+        frame = pd.DataFrame({"Metadata_Plate": ["P1", "P1"], "Metadata_Well": ["A01", "A02"], **kept, **bare})
+        from_dataframe(frame, channels=["DNA"])
+        captured = capsys.readouterr().err
+        assert "11 of 21 feature(s)" in captured
+        assert "<no object>" in captured and "objects=None" in captured
+    finally:
+        mt.settings.verbosity = previous
+
+
 def test_colliding_metadata_prefixes_are_refused():
     """Both normalise to Metadata_Plate, and obs would then hold a duplicate column whose every later lookup returns a frame instead of a series."""
     frame = pd.DataFrame(

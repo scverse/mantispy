@@ -211,8 +211,11 @@ def from_dataframe(
                 int(reported.sum()),
                 int(keep.sum()),
                 remedy="pass objects=None to keep every object",
-                # On a small export the whole-field Image_ columns often outnumber the per-cell ones.
-                escalate=int((keep & ~excluded).sum()) < THIN_FEATURE_SET,
+                # Dropping only the whole-field Image_ measurements is by design and stays at info, even when a
+                # small export has more of them than per-cell columns. Dropping any other object, or columns
+                # whose name carries no object prefix (<no object>, e.g. Granularity_1_DNA), is a real loss and
+                # escalates to a warning once it takes half or more of the features.
+                escalate=bool(set(dropped_objects) - {"Image"}) or int((keep & ~excluded).sum()) < THIN_FEATURE_SET,
             )
         keep = keep & ~excluded
     feature_names = parsed.index[keep].tolist()
@@ -527,13 +530,21 @@ def read(path: str | Path, backed: Literal["r", "r+"] | None = None, migrate_sch
     )
 
 
-def write(adata: ad.AnnData, path: str | Path) -> None:
+def write(
+    adata: ad.AnnData,
+    path: str | Path,
+    compression: Literal["gzip", "lzf"] | None = None,
+    compression_opts: int | None = None,
+) -> None:
     """Validate and write ``adata`` as h5ad (default) or zarr (``.zarr`` suffix).
 
     Args:
         adata: Object to write, stamped with the current schema version before it is checked.
         path: Where to write it.
             A ``.zarr`` suffix selects the zarr writer.
+        compression: Passed to :meth:`~anndata.AnnData.write_h5ad`; ``"gzip"`` shrinks a large imaging table
+            substantially at the cost of write time. Ignored for the zarr writer, which compresses by default.
+        compression_opts: The compression level passed alongside `compression` (h5ad only).
 
     Raises:
         ValueError: The object does not satisfy the schema, with every failure :func:`~mantispy.io.validate` found in the message.
@@ -575,7 +586,7 @@ def write(adata: ad.AnnData, path: str | Path) -> None:
             else:
                 os.replace(tmp, path)
         else:
-            adata.write_h5ad(tmp)
+            adata.write_h5ad(tmp, compression=compression, compression_opts=compression_opts)
             os.replace(tmp, path)
     finally:
         if tmp.is_dir():
