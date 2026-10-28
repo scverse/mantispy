@@ -314,10 +314,10 @@ def evaluate_integration(
         _integration_heatmap(frame, {"Retrieval": ["mean_average_precision"]}, ax=ax)
         return frame
 
-    if adata.X is None or adata.n_vars == 0:
+    if adata.n_vars == 0:
         raise ValueError(
-            "evaluate_integration's scib panel needs an unintegrated X with features in adata.X (it computes a "
-            f"PCA baseline), but adata has {adata.n_vars} var(s). Pass metrics=['map'] for retrieval only, or give "
+            "evaluate_integration's scib panel needs an unintegrated X with features (it computes a PCA "
+            f"baseline), but adata has {adata.n_vars} var(s). Pass metrics=['map'] for retrieval only, or give "
             "the object its measured features as X."
         )
 
