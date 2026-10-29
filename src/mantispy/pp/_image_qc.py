@@ -103,7 +103,7 @@ def image_qc(
 
     Returns:
         ``None``, or the modified copy.
-        Writes ``uns["mantispy"]["image_qc"]`` (the image table plus ``qc_image_score`` and ``qc_image_pass``) and broadcasts ``obs["qc_image_pass"]``.
+        Writes ``uns["mantispy"]["image_qc"]`` (the image table plus ``qc_image_score`` and ``qc_image_fail``) and broadcasts ``obs["qc_image_fail"]``, ``True`` for a flagged image.
 
     Raises:
         KeyError: If the image table is missing, holds none of the requested metrics, or lacks the ``by`` column, or ``obs`` has no ``Metadata_ImageID`` to broadcast onto.
@@ -139,7 +139,7 @@ def image_qc(
         )
 
     score = np.zeros(len(table))
-    passed = np.ones(len(table), dtype=bool)
+    failed = np.zeros(len(table), dtype=bool)
     for group in pd.unique(groups):
         rows = np.flatnonzero(groups == group)
         block = values[rows]
@@ -154,25 +154,25 @@ def image_qc(
             else:
                 cutoff = float(threshold)
         score[rows] = block_score
-        passed[rows] = block_score <= cutoff
+        failed[rows] = block_score > cutoff
 
     table["qc_image_score"] = score
-    table["qc_image_pass"] = passed
+    table["qc_image_fail"] = failed
 
     if "Metadata_ImageID" not in adata.obs:
         raise KeyError("obs has no 'Metadata_ImageID' column to broadcast image QC onto")
-    broadcast = adata.obs["Metadata_ImageID"].map(table["qc_image_pass"])
+    broadcast = adata.obs["Metadata_ImageID"].map(table["qc_image_fail"])
     n_missing = int(broadcast.isna().sum())
     if n_missing:
         warnings.warn(
-            f"{n_missing} cells have an ImageID not present in the image table; treating them as passing",
+            f"{n_missing} cells have an ImageID not present in the image table; treating them as not flagged",
             UserWarning,
             stacklevel=3,
         )
     # Both writes come after the last raise, so a failed call leaves no verdict in uns disagreeing with obs.
-    adata.obs["qc_image_pass"] = broadcast.fillna(True).to_numpy(dtype=bool)
+    adata.obs["qc_image_fail"] = broadcast.fillna(False).to_numpy(dtype=bool)
     store["image_qc"] = table
-    get_logger().info("image_qc(%s) flagged %d of %d images", method, int((~passed).sum()), len(table))
+    get_logger().info("image_qc(%s) flagged %d of %d images", method, int(failed.sum()), len(table))
     return None
 
 
@@ -181,19 +181,19 @@ def filter_images(adata: AnnData, copy: bool = False) -> AnnData | None:
     """Drop every cell belonging to an image that failed :func:`~mantispy.pp.image_qc`.
 
     Args:
-        adata: Object carrying ``obs["qc_image_pass"]``.
+        adata: Object carrying ``obs["qc_image_fail"]``.
         copy: Return a filtered copy instead of filtering in place.
 
     Returns:
         ``None``, or the filtered copy.
-        Subsets ``obs`` to the cells whose image passed, and reports how many were dropped.
+        Subsets ``obs`` to the cells whose image was not flagged, and reports how many were dropped.
 
     Raises:
-        KeyError: If ``obs`` has no ``qc_image_pass``, which :func:`~mantispy.pp.image_qc` writes.
+        KeyError: If ``obs`` has no ``qc_image_fail``, which :func:`~mantispy.pp.image_qc` writes.
     """
-    if "qc_image_pass" not in adata.obs:
-        raise KeyError("obs has no 'qc_image_pass'; run mt.pp.image_qc first")
-    keep = as_frame(adata.obs)["qc_image_pass"].to_numpy(dtype=bool)
+    if "qc_image_fail" not in adata.obs:
+        raise KeyError("obs has no 'qc_image_fail'; run mt.pp.image_qc first")
+    keep = ~as_frame(adata.obs)["qc_image_fail"].to_numpy(dtype=bool)
     report_drop("cells", int((~keep).sum()), adata.n_obs, remedy="loosen the image QC thresholds")
     adata._inplace_subset_obs(keep)
     return None

@@ -277,7 +277,7 @@ def test_key_added_normalizes_a_backed_object_without_rewriting_x(backed):
 def test_filtering_a_backed_object_names_the_way_out(backed, name):
     """These take no key_added, so the guard skipped them and anndata refused the subset with a message that names .to_memory() but not copy=True."""
     mt.pp.calculate_qc_metrics(backed)
-    backed.obs["qc_image_pass"] = True
+    backed.obs["qc_image_fail"] = False
 
     with pytest.raises(ValueError, match="copy=True"):
         getattr(mt.pp, name)(backed)

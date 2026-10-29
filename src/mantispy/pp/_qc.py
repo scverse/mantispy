@@ -44,6 +44,7 @@ def calculate_qc_metrics(
     image_shape: tuple[int, int] | None = None,
     border_margin: int = 10,
     max_nan_fraction: float = 0.5,
+    area_feature: str | None = None,
     copy: bool = False,
 ) -> AnnData | None:
     """Compute per-cell and per-feature QC metrics.
@@ -53,25 +54,36 @@ def calculate_qc_metrics(
         image_shape: ``(height, width)`` of a field of view.
             Without it, and without ``Metadata_Center_X``/``_Y`` in ``obs``, the border flag stays ``False``.
         border_margin: Distance from the image edge, in pixels, inside which a cell is a border cell.
-        max_nan_fraction: Largest fraction of missing features a cell may have and still pass.
-            Partial NaN is routine in CellProfiler output (Zernike and RadialDistribution features are undefined for small objects), so requiring no missing values would fail almost every cell.
+        max_nan_fraction: Largest fraction of missing features a cell may have before it is flagged.
+            Partial NaN is routine in CellProfiler output (Zernike and RadialDistribution features are undefined for small objects), so requiring no missing values would flag almost every cell.
+        area_feature: The ``var`` name of the area measurement to score for outliers.
+            By default the columns whose parsed ``feature`` is ``Area`` are used; pass this for a table whose names do not parse (``mt.io.stamp`` could not fill ``var["feature"]``).
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
         ``None``, or the modified copy.
-        Writes the ``obs`` columns ``qc_n_nan_features``, ``qc_nan_fraction``, ``qc_is_border``, ``qc_area_outlier`` and ``qc_pass``, and the ``var`` columns ``qc_n_nan``, ``qc_variance`` and ``qc_n_unique``.
+        Writes the ``obs`` columns ``qc_n_nan_features``, ``qc_nan_fraction``, ``qc_is_border``, ``qc_area_outlier`` and ``qc_fail``, and the ``var`` columns ``qc_n_nan``, ``qc_variance`` and ``qc_n_unique``.
+        Every ``qc_*`` boolean is ``True`` for a problem, matching the ecosystem convention; ``qc_fail`` is their union and the flag :func:`filter_cells` reads.
+        When no area column is found and `area_feature` is not given, ``qc_area_outlier`` is skipped (left all ``False``) with a warning and the other metrics are still computed.
 
     Raises:
-        KeyError: If no column in ``var`` names an area, so ``qc_area_outlier`` cannot be scored and ``qc_pass`` would be an ``and`` over one check fewer than it claims.
+        KeyError: `area_feature` is given but is not a ``var`` name.
     """
-    # Before get_matrix densifies, so a call that is going to be rejected does not read the matrix.
-    area = _area_features(adata)
+    area = _area_features(adata, area_feature)
 
     X = get_matrix(adata)
     missing = np.isnan(X)
     nan_fraction = missing.mean(axis=1)
     border = _border_flag(adata, image_shape, border_margin)
-    area_outlier = _area_outlier_flag(adata, X, area)
+    if len(area):
+        area_outlier = _area_outlier_flag(adata, X, area)
+    else:
+        get_logger().warning(
+            "no column in var names an area, so qc_area_outlier is skipped (left all False); the other QC "
+            "metrics are still computed. Pass area_feature= to name the area column when the table does not "
+            "use CellProfiler feature names."
+        )
+        area_outlier = np.zeros(adata.n_obs, dtype=bool)
 
     adata.obs["qc_n_nan_features"] = missing.sum(axis=1).astype(np.int32)
     adata.obs["qc_nan_fraction"] = nan_fraction
@@ -81,7 +93,7 @@ def calculate_qc_metrics(
 
     adata.obs["qc_is_border"] = border
     adata.obs["qc_area_outlier"] = area_outlier
-    adata.obs["qc_pass"] = ~border & ~area_outlier & (nan_fraction <= max_nan_fraction)
+    adata.obs["qc_fail"] = border | area_outlier | (nan_fraction > max_nan_fraction)
     return None
 
 
@@ -100,23 +112,20 @@ def _border_flag(adata: AnnData, image_shape: tuple[int, int] | None, margin: in
     return (x < margin) | (y < margin) | (x > width - margin) | (y > height - margin)
 
 
-def _area_features(adata: AnnData) -> pd.Index:
-    """The ``var`` names that measure an area, refusing an object where none do.
+def _area_features(adata: AnnData, area_feature: str | None = None) -> pd.Index:
+    """The ``var`` names that measure an area: `area_feature` if given, else those whose ``feature`` is ``Area``.
+
+    Returns an empty index when neither is available, leaving the caller to skip the area metric.
 
     Raises:
-        KeyError: No column in ``var`` names an area.
+        KeyError: `area_feature` is given but is not a ``var`` name.
     """
+    if area_feature is not None:
+        if area_feature not in adata.var_names:
+            raise KeyError(f"area_feature={area_feature!r} is not a var name")
+        return pd.Index([area_feature])
     named = adata.var["feature"].astype(str).eq("Area") if "feature" in adata.var else []
-    area = adata.var_names[named]
-    if not len(area):
-        raise KeyError(
-            "no column in var names an area, and qc_area_outlier has nothing to score. var's 'feature' "
-            "column is written by mt.io.read_profiles and built by mantispy._core.features."
-            "parse_feature_names for a var table made by hand; mt.io.stamp supplies it empty, which "
-            "names no area either. An object with no area measurement — an embedding, an "
-            "Intensity-only export, or anything from tl.feature_signature — has no cell-level QC to run."
-        )
-    return area
+    return adata.var_names[named]
 
 
 def _area_outlier_flag(adata: AnnData, X: np.ndarray, area: pd.Index) -> np.ndarray:
@@ -143,7 +152,7 @@ def _area_outlier_flag(adata: AnnData, X: np.ndarray, area: pd.Index) -> np.ndar
 def filter_cells(
     adata: AnnData,
     min_cells_per_well: int = 50,
-    qc_pass: bool = True,
+    require_qc: bool = True,
     copy: bool = False,
 ) -> AnnData | None:
     """Drop cells that fail QC or sit in under-populated wells.
@@ -152,7 +161,7 @@ def filter_cells(
         adata: Object to filter.
         min_cells_per_well: Wells with fewer cells than this are dropped entirely, counted over the cells that survive the other checks in this call so that the cells being dropped cannot hold a well above the floor.
             ``0`` disables the check.
-        qc_pass: Also require ``obs["qc_pass"]``, which :func:`calculate_qc_metrics` writes.
+        require_qc: Also drop cells flagged by ``obs["qc_fail"]``, which :func:`calculate_qc_metrics` writes.
         copy: Return a filtered copy instead of filtering in place.
 
     Returns:
@@ -160,13 +169,13 @@ def filter_cells(
         Subsets ``obs`` to the surviving cells, and warns when that leaves none.
 
     Raises:
-        KeyError: If ``qc_pass`` is requested but ``obs`` has no such column.
+        KeyError: If ``require_qc`` is set but ``obs`` has no ``qc_fail`` column.
     """
     keep = np.ones(adata.n_obs, dtype=bool)
-    if qc_pass:
-        if "qc_pass" not in adata.obs:
-            raise KeyError("obs has no 'qc_pass'; run mt.pp.calculate_qc_metrics first, or pass qc_pass=False")
-        keep &= as_frame(adata.obs)["qc_pass"].to_numpy(dtype=bool)
+    if require_qc:
+        if "qc_fail" not in adata.obs:
+            raise KeyError("obs has no 'qc_fail'; run mt.pp.calculate_qc_metrics first, or pass require_qc=False")
+        keep &= ~as_frame(adata.obs)["qc_fail"].to_numpy(dtype=bool)
     if min_cells_per_well > 0:
         codes, keys = group_codes(adata, ["Metadata_Plate", "Metadata_Well"])
         # Count the survivors, so one call agrees with running the two checks as separate calls.
@@ -178,7 +187,7 @@ def filter_cells(
             "filter_cells dropped %d of %d cells (%.1f%%)", dropped, adata.n_obs, 100 * dropped / adata.n_obs
         )
     if not keep.any():
-        get_logger().warning("filter_cells removed every cell; check qc_pass and min_cells_per_well")
+        get_logger().warning("filter_cells removed every cell; check qc_fail and min_cells_per_well")
     adata._inplace_subset_obs(keep)
     return None
 

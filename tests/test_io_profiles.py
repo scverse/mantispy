@@ -52,6 +52,12 @@ def test_well_grid_is_filled_on_read():
     assert obs["Metadata_Col"].dtype.kind == "i"
 
 
+def test_from_dataframe_accepts_row_column_field_wells():
+    """CZI optical-pooled-screen wells (A/1/0) read without manual conversion; the field is dropped."""
+    obs = from_dataframe(_frame(well=("A/1/0", "A/2/0", "B/1/1", "H/12/3")), channels=["DNA"]).obs
+    assert sorted(obs["Metadata_Well"].unique()) == ["A01", "A02", "B01", "H12"]
+
+
 def test_well_grid_is_filled_on_stamp():
     adata = ad.AnnData(
         np.ones((2, 2), dtype="float32"),
@@ -141,6 +147,33 @@ def test_write_read_round_trip(tmp_path, cells, suffix):
     pd.testing.assert_frame_equal(loaded.obs, cells.obs)
     assert loaded.uns["mantispy"]["schema_version"] == SCHEMA_VERSION
     assert isinstance(loaded.uns["mantispy"]["image_table"], pd.DataFrame)
+
+
+def test_write_compression_reaches_h5ad_and_round_trips(tmp_path, cells):
+    """write forwards compression to write_h5ad: the X dataset carries the gzip filter and reads back equal."""
+    import h5py
+
+    path = tmp_path / "gz.h5ad"
+    mt.io.write(cells, path, compression="gzip")
+    with h5py.File(path) as handle:
+        assert handle["X"].compression == "gzip"
+    np.testing.assert_array_equal(mt.io.read(path).X, cells.X)
+
+
+def test_dropping_a_majority_of_named_features_warns_at_default_verbosity(capsys, monkeypatch):
+    """A bulk drop of the caller's own columns (here names that carry no object) must reach the user by default.
+
+    Only the by-design whole-field ``Image_`` drop stays quiet when it is large.
+    """
+    monkeypatch.setattr(mt.settings, "verbosity", 1)
+    # Kept set deliberately above THIN_FEATURE_SET so only the "non-Image object dropped" rule escalates.
+    kept = {f"Cells_AreaShape_F{i}": [1.0, 2.0] for i in range(10)}
+    bare = {f"Granularity_{i}_DNA": [3.0, 4.0] for i in range(1, 12)}
+    frame = pd.DataFrame({"Metadata_Plate": ["P1", "P1"], "Metadata_Well": ["A01", "A02"], **kept, **bare})
+    from_dataframe(frame, channels=["DNA"])
+    captured = capsys.readouterr().err
+    assert "11 of 21 feature(s)" in captured
+    assert "<no object>" in captured and "objects=None" in captured
 
 
 def test_colliding_metadata_prefixes_are_refused():

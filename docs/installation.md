@@ -13,6 +13,8 @@ Pass `--pre` to install it:
 pip install --pre mantispy
 ```
 
+With [uv](https://github.com/astral-sh/uv) the equivalent is `uv pip install --pre mantispy`, or `uv add --prerelease allow mantispy` in a project.
+
 ## Development version
 
 Install the latest development version from GitHub:

@@ -17,13 +17,17 @@ if TYPE_CHECKING:
 PLATE_FORMATS: dict[int, tuple[int, int]] = {96: (8, 12), 384: (16, 24), 1536: (32, 48)}
 
 _WELL_RE = re.compile(r"^([A-Za-z]{1,2})[\s_-]?(\d{1,2})$")
+#: ``row/column[/field]``, the spelling CZI's optical-pooled-screen releases use (``A/1/0``). The field is a
+#: site index, not part of the well, so it is matched and discarded.
+_WELL_SLASH_RE = re.compile(r"^([A-Za-z]{1,2})/(\d{1,2})(?:/\d+)?$")
 
 
 def normalize_well(well: str) -> str:
     """Return ``well`` in canonical ``A01`` form.
 
     Args:
-        well: A well name in any of the common spellings, e.g. ``A1``, ``a01``, ``B_3``.
+        well: A well name in any of the common spellings, e.g. ``A1``, ``a01``, ``B_3``, or the
+            ``row/column/field`` form ``A/1/0`` (the field is dropped).
 
     Returns:
         The well name as an uppercase row label followed by a zero-padded column number.
@@ -31,7 +35,8 @@ def normalize_well(well: str) -> str:
     Raises:
         ValueError: If ``well`` does not look like a well name.
     """
-    match = _WELL_RE.match(str(well).strip())
+    text = str(well).strip()
+    match = _WELL_RE.match(text) or _WELL_SLASH_RE.match(text)
     if match is None:
         raise ValueError(f"cannot parse well name: {well!r}")
     row, column = match.group(1).upper(), int(match.group(2))

@@ -155,7 +155,38 @@ def _infer_channels(names: Sequence[str]) -> list[str]:
                 for candidate in tokens[i + 2 :]:
                     if not _is_numeric(candidate) and not _RADIAL_BIN_RE.match(candidate):
                         seen[candidate].add(tokens[i + 1])
-    return sorted(token for token, features in seen.items() if len(features) >= 2)
+    # A token is taken as a channel when it recurs across features, or is a known stain (DNA, ER, Mito, ...),
+    # which stays recognisable even in a thin table where no channel reaches two features. Inference still
+    # cannot see a channel whose own name holds an underscore (ERK1_ERK2); pass channels= for those.
+    return sorted(token for token, features in seen.items() if len(features) >= 2 or token.lower() in CHANNEL_ALIASES)
+
+
+def _channel_specs(channels: frozenset[str]) -> list[list[str]]:
+    """The channel vocabulary split into token runs, longest first, built once per :func:`parse_feature_names`."""
+    return sorted((channel.split("_") for channel in channels), key=len, reverse=True)
+
+
+def _extract_channels(rest: list[str], specs: list[list[str]]) -> tuple[list[str], list[str]]:
+    """Pull the channel names out of ``rest``, matching each vocabulary entry as a whole ``_``-joined run.
+
+    A channel name may itself contain underscores (``ERK1_ERK2``, ``Mouse_IgG``), so it is matched against a
+    run of tokens, not token by token. ``specs`` is the vocabulary pre-split longest first (see
+    :func:`_channel_specs`), so a colocalization feature's two channels are each kept in the order they appear
+    and a longer name wins over a shorter one it starts with.
+    """
+    found: list[str] = []
+    remaining: list[str] = []
+    index = 0
+    while index < len(rest):
+        for spec in specs:
+            if rest[index : index + len(spec)] == spec:
+                found.append("_".join(spec))
+                index += len(spec)
+                break
+        else:
+            remaining.append(rest[index])
+            index += 1
+    return found, remaining
 
 
 def _split_object(tokens: list[str]) -> tuple[str | None, str, list[str]]:
@@ -219,7 +250,7 @@ def _parse_cp_measure(name: str) -> dict:
     return row
 
 
-def _parse_one(name: str, channels: frozenset[str]) -> dict:
+def _parse_one(name: str, specs: list[list[str]]) -> dict:
     row: dict = dict.fromkeys(COLUMNS)
     row["is_feature"] = False
 
@@ -238,10 +269,9 @@ def _parse_one(name: str, channels: frozenset[str]) -> dict:
         row["is_feature"] = True
         return row
 
-    found_channels = [token for token in rest if token in channels]
+    found_channels, rest = _extract_channels(rest, specs)
     if found_channels:
         row["channel"] = "|".join(found_channels)
-        rest = [token for token in rest if token not in channels]
 
     _read_suffixes(row, rest, group)
     return row
@@ -295,7 +325,8 @@ def parse_feature_names(
         rows = [_parse_cp_measure(str(name)) for name in names]
     else:
         channel_set = frozenset(channels if channels is not None else _infer_channels(names))
-        rows = [_parse_one(str(name), channel_set) for name in names]
+        specs = _channel_specs(channel_set)  # split the vocabulary once, not once per name
+        rows = [_parse_one(str(name), specs) for name in names]
     parsed = pd.DataFrame(rows, index=pd.Index(names), columns=COLUMNS)
     parsed["feature_kind"] = measurement_kind(parsed["is_feature"].fillna(False))
     for column in _TEXT_COLUMNS:

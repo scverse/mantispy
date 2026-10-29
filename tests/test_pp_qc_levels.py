@@ -26,7 +26,7 @@ def test_image_qc_recovers_the_injected_bad_images(imaged, method):
     scores = result["qc_image_score"]
     assert scores.loc[sorted(truth)].min() > scores.drop(index=sorted(truth)).max()
 
-    flagged = set(result.index[~result["qc_image_pass"]])
+    flagged = set(result.index[result["qc_image_fail"]])
     assert truth <= flagged, f"missed {sorted(truth - flagged)}"
     assert len(flagged - truth) <= 2, f"false positives: {sorted(flagged - truth)}"
 
@@ -36,9 +36,9 @@ def test_image_qc_broadcasts_and_filters(imaged):
     bad = imaged.uns["truth"]["bad_images"]
     in_bad = imaged.obs["Metadata_ImageID"].isin(bad)
     assert len(bad) > 0 and in_bad.any(), "fixture must have cells in the injected bad images for this to mean anything"
-    assert not imaged.obs.loc[in_bad, "qc_image_pass"].any()
+    assert imaged.obs.loc[in_bad, "qc_image_fail"].all()
 
-    n_failing = int((~imaged.obs["qc_image_pass"]).sum())
+    n_failing = int(imaged.obs["qc_image_fail"].sum())
     assert mt.pp.filter_images(imaged, copy=True).n_obs == imaged.n_obs - n_failing
 
 
@@ -63,19 +63,19 @@ def test_image_qc_warns_about_unmatched_cells(imaged):
     imaged.obs["Metadata_ImageID"] = imaged.obs["Metadata_ImageID"].astype(str) + "_unmatched"
     with pytest.warns(UserWarning, match="not present in the image table"):
         mt.pp.image_qc(imaged)
-    assert imaged.obs["qc_image_pass"].all()
+    assert not imaged.obs["qc_image_fail"].any()
 
 
 def test_well_qc_criteria(cells):
     mt.pp.well_qc(cells, min_cells=16)
-    assert not cells.obs["qc_well_pass"].any()
+    assert cells.obs["qc_well_fail"].all()
 
     mt.pp.well_qc(cells, min_cells=1, max_nan_fraction=1.0)
-    assert cells.uns["mantispy"]["well_qc"]["qc_well_pass"].all()
+    assert not cells.uns["mantispy"]["well_qc"]["qc_well_fail"].any()
 
     mt.pp.well_qc(cells, min_cells=1, max_control_cv=0.0)
     table = cells.uns["mantispy"]["well_qc"]
-    assert not table.loc[table["control_cv"].notna(), "qc_well_pass"].any()
+    assert table.loc[table["control_cv"].notna(), "qc_well_fail"].all()
     assert table["control_cv"].isna().any()
 
 

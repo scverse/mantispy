@@ -47,7 +47,7 @@ classifiers = [
 dynamic = [ "version" ]
 dependencies = [
   "anndata>=0.13",
-  "decoupler>=2.2",
+  "decoupler>=2.3",
   "matplotlib>=3.9",
   "numba>=0.60",
   "numpy>=1.26",
@@ -55,6 +55,9 @@ dependencies = [
   "platformdirs>=4",
   "pooch>=1.8",
   "pyarrow>=16",
+  # pynndescent 0.7.0 hands scanpy a scipy csr_array, whose dropped getnnz breaks
+  # scanpy.pp.neighbors; drop this pin once scanpy or pynndescent fixes it upstream.
+  "pynndescent<0.7",
   "scanpy>=1.12",
   "scikit-learn>=1.4",
   "scipy>=1.11",

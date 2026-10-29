@@ -15,6 +15,15 @@ def test_normalize_well_rejects(bad):
         normalize_well(bad)
 
 
+@pytest.mark.parametrize(
+    ("given", "expected"),
+    [("A/1/0", "A01"), ("A/1", "A01"), ("B/12/3", "B12"), ("h/2/15", "H02")],
+)
+def test_normalize_well_accepts_row_column_field(given, expected):
+    """CZI optical-pooled-screen releases write wells as row/column/field; the field is dropped."""
+    assert normalize_well(given) == expected
+
+
 def test_row_label_round_trips_past_z():
     """1536-well plates have rows past Z, where chr(65 + row) alone gives non-letters."""
     assert [row_label(r) for r in (0, 25, 26, 31)] == ["A", "Z", "AA", "AF"]
