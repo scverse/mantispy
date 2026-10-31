@@ -71,3 +71,9 @@ The single-cell tutorial clusters cells with `scanpy.tl.leiden(..., flavor="igra
 ```console
 pip install igraph
 ```
+
+To run every tutorial and case study, install all of the above at once:
+
+```console
+pip install 'mantispy[map,harmony,integration,interactive]' igraph
+```
