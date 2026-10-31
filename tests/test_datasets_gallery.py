@@ -113,6 +113,17 @@ def test_pki_loads_with_a_dose_series(pki):
 
 
 @pytest.mark.network
+def test_pki_carries_the_cell_line_of_each_plate(pki):
+    # Four cell lines, two plates each, so a treatment's replicate wells must not be pooled across them.
+    lines = pki.obs.groupby("Metadata_CellLine", observed=True)["Metadata_Plate"].nunique()
+    assert lines.to_dict() == {"A549": 2, "MDA-MB-231": 2, "PATU-8988T": 2, "U2OS": 2}
+    assert (pki.obs["Metadata_CellLine"].value_counts() == 768).all()
+    one = mt.ds.pki(plates=["BR00122974"])
+    assert (one.obs["Metadata_CellLine"] == "U2OS").all()
+    assert "Metadata_CellLine" in mt.ds.pki(feature_selected=True).obs
+
+
+@pytest.mark.network
 def test_a_single_plate_can_be_loaded(rohban):
     one = mt.ds.rohban(plates=["41744"])
     assert one.obs["Metadata_Plate"].nunique() == 1
