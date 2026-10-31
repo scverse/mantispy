@@ -1,0 +1,43 @@
+name: Papercut or docs problem
+description: Something small that confused or annoyed you, in a tutorial, a docstring or a function
+labels: [documentation, sbi2-hackathon]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Small things are welcome here: an unclear sentence, a confusing argument name, an error message that didn't help, a step a tutorial skips.
+        If something is broken or gives a wrong result, please use the bug report instead.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: What were you doing?
+      description: The tutorial, docs page or function you were using, and the step you were on. A link or a short code snippet helps.
+      placeholder: "Working through the compound screens tutorial, at the cell that calls `mt.tl.map(...)`."
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What was confusing or annoying?
+      description: What you expected, what happened instead, and how long it took you to get past it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggestion
+      description: Optional. How you would fix it, e.g. a rewording, a better default or a clearer error message.
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: mantispy version
+      description: The output of `python -c "import mantispy; print(mantispy.__version__)"`.
+      placeholder: 0.1.0a2
+    validations:
+      required: true
