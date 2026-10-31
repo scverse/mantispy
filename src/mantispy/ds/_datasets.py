@@ -383,7 +383,7 @@ def pki(
         feature_selected: Return the feature-selected block instead of all features.
 
     Returns:
-        Wells by features at well resolution when both flags are ``False``, else the staged variant selected by the two flags, read with :func:`mantispy.io.read`, with ``Metadata_Perturbation`` (compound at concentration), ``Metadata_Perturbation_Type`` (``"compound"``), ``Metadata_Compound``, ``Metadata_Concentration`` (the platemap's ``mmoles_per_liter``), ``Metadata_MOA``, ``Metadata_Control``, ``Metadata_CellCount`` and ``Metadata_SiteCount``.
+        Wells by features at well resolution when both flags are ``False``, else the staged variant selected by the two flags, read with :func:`mantispy.io.read`, with ``Metadata_Perturbation`` (compound at concentration), ``Metadata_Perturbation_Type`` (``"compound"``), ``Metadata_Compound``, ``Metadata_Concentration`` (the platemap's ``mmoles_per_liter``), ``Metadata_MOA``, ``Metadata_Control_Type``, ``Metadata_Control``, ``Metadata_CellCount`` and ``Metadata_SiteCount``.
         The well-level variants also carry ``Metadata_CellLine``, read from the plate barcode.
 
     Raises:
@@ -391,8 +391,8 @@ def pki(
         ValueError: ``aggregated`` or ``feature_selected`` is not a bool, or ``plates`` is given for a variant.
 
     Notes:
-        ``Metadata_Control`` marks the DMSO wells only.
-        The positive controls (``Metadata_control_type == "poscon"``) are not flagged, because they are perturbations and should not be normalized against.
+        ``Metadata_Control_Type`` is ``"negcon"`` for the DMSO wells and ``"poscon"`` for the four positive-control compounds.
+        ``Metadata_Control`` is ``True`` for both (schema 2.0), so normalize with ``reference="negcon"`` and select the non-DMSO wells with ``adata[adata.obs["Metadata_Control_Type"] != "negcon"]``.
 
         ``Metadata_Perturbation`` does not include the cell line, so grouping by it alone pools four biologically different replicate sets.
         Analyse one line with ``adata[adata.obs["Metadata_CellLine"] == "U2OS"]``, or build a per-line consensus from the wells by grouping on a key that joins the two columns.
