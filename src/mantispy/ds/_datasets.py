@@ -136,7 +136,7 @@ def _fetch_variant(
 
 
 def aconcagua(cache_dir: str | Path | None = None) -> AnnData:
-    """Aconcagua, the Brieflow reanalysis of a genome-scale optical pooled CRISPR screen of essential genes in HeLa cells.
+    """Aconcagua, the Brieflow reanalysis of an optical pooled CRISPR screen of 5,072 fitness-conferring genes in HeLa cells.
 
     One row per guide per well: the median profile of a guide's cells in a well, after a per plate-and-well robust normalization against the well's non-targeting controls, over a subset of the screen built for the optical-pooled-screens case study.
     The cells were segmented and measured with brieflow's ``cp_emulator`` in four channels (DNA, alpha-tubulin, gamma-H2AX and F-actin); the brieflow feature names are mapped to mantispy's CellProfiler-style grammar.
@@ -888,7 +888,7 @@ _SCALLOPS_VARIANTS = {
 def scallops_arv471(cache_dir: str | Path | None = None, *, aggregated: bool = False) -> AnnData:
     """SCALLOPS ARV-471, single cells of an optical pooled screen under an estrogen-receptor degrader.
 
-    The drug arm of a genome-scale optical pooled CRISPR screen from ``Genentech/scallops-manuscript``, its Figure 3 table.
+    The drug arm of an estrogen-receptor-focused optical pooled CRISPR screen in MCF7 cells from ``Genentech/scallops-manuscript``, its Figure 3 table: a library of 146 genes plus 12 olfactory-receptor genes as targeting negatives.
     Cells express a guide library and are treated with ARV-471 (vepdegestrant), a PROTAC that recruits the CRL4-CRBN E3 ligase to the estrogen receptor and drives its degradation, then read by in-situ sequencing of the guide barcodes and a phenotype round that stains DNA and the estrogen receptor and counts ESR1, CCND1 and GREB1 transcripts.
     A guide that knocks out a gene the drug needs rescues the receptor, so cells carrying it keep the phenotype of an untreated cell.
     The genes with that known mechanism are the members of the ligase the PROTAC hijacks, ``CRBN``, ``DDB1``, ``CUL4A`` and ``CUL4B``, and ``ESR1`` itself, the drug's target.
