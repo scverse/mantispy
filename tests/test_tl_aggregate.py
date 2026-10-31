@@ -46,6 +46,32 @@ def test_a_constant_column_survives_whatever_its_name(adata):
     assert "cell_quality" not in wells.obs  # varying columns are dropped, not silently copied
 
 
+def test_aggregate_warns_when_min_cells_wipes_a_plates_controls():
+    """min_cells dropping every negcon well of a plate leaves later reference= empty (audit A3)."""
+    import anndata as ad
+    import pandas as pd
+
+    rng = np.random.default_rng(0)
+    # P1's negcon wells hold 2 cells each; everything else holds 10, so min_cells=5 drops only P1's negcon.
+    spec = [
+        ("P1", "A01", "negcon", 2),
+        ("P1", "A02", "negcon", 2),
+        ("P1", "B01", "treatment", 10),
+        ("P2", "A01", "negcon", 10),
+        ("P2", "B01", "treatment", 10),
+    ]
+    rows = [(plate, well, control) for plate, well, control, n in spec for _ in range(n)]
+    obs = pd.DataFrame(rows, columns=["Metadata_Plate", "Metadata_Well", "Metadata_Control_Type"])
+    obs["Metadata_Control"] = obs["Metadata_Control_Type"] != "treatment"
+    obs.index = obs.index.astype(str)
+    adata = ad.AnnData(X=rng.normal(size=(len(obs), 5)).astype(np.float32), obs=obs)
+    adata.var_names = [f"Cells_AreaShape_F{index}" for index in range(5)]
+    mt.io.stamp(adata, resolution="object", feature_kind="measurement")
+
+    with pytest.warns(UserWarning, match="negcon on plate P1"):
+        mt.tl.aggregate(adata, min_cells=5)
+
+
 def _grouped_elsewhere(adata):
     """Well profiles whose perturbation identity lives in a non-default column with fewer groups."""
     wells = mt.tl.aggregate(adata, min_cells=0)

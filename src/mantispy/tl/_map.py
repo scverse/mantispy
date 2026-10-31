@@ -332,7 +332,10 @@ def map(
             "keeps features with up to 5% missing values."
         )
     obs = as_frame(adata.obs)
-    meta = obs[[c for c in obs.columns if c.startswith("Metadata_")]].reset_index(drop=True)
+    # copairs is handed the Metadata_ columns plus every obs column the pair spec or label names, so a column
+    # without the prefix (batch="source", a user-added label) reaches copairs instead of tripping its matcher.
+    passthrough = needed | {label}
+    meta = obs[[c for c in obs.columns if c.startswith("Metadata_") or c in passthrough]].reset_index(drop=True)
     drop_positions = None
     if mode == "activity":
         is_control = reference_mask(adata, reference)

@@ -35,6 +35,16 @@ def test_activity_scores_treatments_against_the_controls(profiles):
     assert {"map", "map_qvalue"} <= set(profiles.obs.columns)
 
 
+@requires_copairs
+def test_map_accepts_a_label_column_without_the_metadata_prefix(profiles):
+    """A user column without the Metadata_ prefix must reach copairs, not trip its matcher (audit A2)."""
+    profiles.obs["perturbation"] = profiles.obs["Metadata_Perturbation"].astype(str).to_numpy()
+    mt.tl.map(profiles, mode="activity", label="perturbation", null_size=200)
+    table = profiles.uns["mantispy"]["map"]
+    assert len(table) > 0
+    assert "perturbation" in table.columns
+
+
 def _inert_p_value(pure_noise_screen, controls_elsewhere: int) -> float:
     """Score a compound drawn exactly as its plate's controls are, beside a second plate of nothing but controls.
     Each plate has its own seed, so the first is identical whatever the second holds."""

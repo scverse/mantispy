@@ -123,7 +123,7 @@ def edistance(
         With ``reference=None``, writes only the square, group-labeled matrix at ``uns["mantispy"][key_added + "_pairwise"]``.
 
     Raises:
-        ValueError: ``reference`` selects fewer than two rows.
+        ValueError: ``reference`` selects fewer than two rows, or the profiles hold missing values, which cannot be scored.
 
     Notes:
         The null permutes the group and reference labels over the pooled rows and recomputes the statistic, the standard permutation test for a two-sample quantity.
@@ -135,6 +135,17 @@ def edistance(
         Check the false positive rate on your own screen with :func:`~mantispy.metrics.diagnose_testing`, which relabels control wells as pseudo-treatments of the same size and reports the fraction that are called.
     """
     values = representation(adata, use_rep)
+    if np.isnan(values).any():
+        nan_cols = np.flatnonzero(np.isnan(values).any(axis=0))
+        if use_rep is None:
+            names = list(np.asarray(adata.var_names)[nan_cols][:10])
+            where = f"features {names}" + (", and more" if nan_cols.size > 10 else "")
+        else:
+            where = f"{nan_cols.size} column(s) of obsm[{use_rep!r}]"
+        raise ValueError(
+            f"e-distance cannot score profiles with missing values: {where}. "
+            "Drop them with mt.pp.feature_select(adata, na_cutoff=0.0), or select features without NaN."
+        )
     codes, keys = group_codes(adata, groupby)
     order, offsets = group_offsets(codes, len(keys))
     generator = np.random.default_rng(seed)
