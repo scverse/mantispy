@@ -136,7 +136,7 @@ def _fetch_variant(
 
 
 def aconcagua(cache_dir: str | Path | None = None) -> AnnData:
-    """Aconcagua, a genome-scale optical pooled CRISPR screen of essential genes in HeLa cells.
+    """Aconcagua, the Brieflow reanalysis of a genome-scale optical pooled CRISPR screen of essential genes in HeLa cells.
 
     One row per guide per well: the median profile of a guide's cells in a well, after a per plate-and-well robust normalization against the well's non-targeting controls, over a subset of the screen built for the optical-pooled-screens case study.
     The cells were segmented and measured with brieflow's ``cp_emulator`` in four channels (DNA, alpha-tubulin, gamma-H2AX and F-actin); the brieflow feature names are mapped to mantispy's CellProfiler-style grammar.
@@ -153,7 +153,7 @@ def aconcagua(cache_dir: str | Path | None = None) -> AnnData:
         Guide-by-well profiles read with :func:`mantispy.io.read`, carrying ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Guide``, ``Metadata_Gene``, ``Metadata_Perturbation`` (the gene, or ``"nontargeting"``), ``Metadata_Perturbation_Type`` (``"crispr"``), ``Metadata_Control`` and ``Metadata_Control_Type`` (``negcon``/``poscon``/``treatment``), ``Metadata_Tier`` (``control``/``strong``/``weak``/``random``), ``Metadata_CellCount`` and ``Metadata_MitoticFraction``.
 
     References:
-        :cite:t:`Di_Bernardo_2026`, this screen; :cite:p:`Funk_2022`, the screen it extends.
+        :cite:t:`Di_Bernardo_2026`, the Brieflow reanalysis; :cite:p:`Funk_2022`, the screen it reanalyses.
         The per-cell measurements are from brieflow; the subset is available through the CZ Biohub OPS Explorer.
     """
     return _fetch_variant("aconcagua", "aconcagua_guide_well.h5ad", cache_dir)
@@ -688,7 +688,7 @@ def _assemble_jump_lite(model: str, annotate: bool, cache_dir: str | Path | None
 def jump_lite(model: str = "openphenom", annotate: bool = True, cache_dir: str | Path | None = None) -> AnnData:
     """JUMP-Lite Target-2: 1,536 wells, four imaging sites, one feature set at a time.
 
-    ``cpg0016-jump``, the compact benchmark of :cite:t:`Munoz_2026`.
+    ``cpg0016-jump``, the four-plate Target-2 compression pilot of :cite:t:`Munoz_2026`, not the JUMP-Lite benchmark itself: the paper builds that from 163,776 wells and leaves out source_9 and the Target-2 plates, so its scores do not transfer directly to these wells.
     Four plates of the JUMP Target-2 plate map, one from each of ``source_3``, ``source_4``, ``source_5`` and ``source_6``, so the four batches are four different laboratories running the same 302 compounds with 64 DMSO wells each.
 
     Every ``model`` covers the same 1,536 wells, which is what makes this a comparison rather than six datasets: the rows, their order and the metadata are identical and only the feature block changes.

@@ -5,7 +5,7 @@ If you don't have Python installed, we recommend [uv](https://github.com/astral-
 
 ## Alpha release
 
-mantispy 0.1.0a1 is an alpha pre-release.
+mantispy 0.1.0a2 is an alpha pre-release.
 pip skips pre-releases by default, so a plain `pip install mantispy` does not select it.
 Pass `--pre` to install it:
 
