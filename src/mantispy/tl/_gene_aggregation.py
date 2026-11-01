@@ -138,7 +138,12 @@ def aggregate_guides(
         raise ValueError(f"no control guide is present; obs[{gene!r}] has no value equal to {control!r}")
     n_control = int(control_scored.sum())
     if n_control == 0:
-        raise ValueError(f"every control guide has a missing {score!r}, so there is no null to calibrate against")
+        raise ValueError(
+            f"every {control!r} guide has a missing {score!r}, so there is no null to calibrate against. "
+            f"mt.tl.guide_activity leaves its reference class unscored, so {control!r} cannot be both that "
+            "reference and this control. Score against one control class and calibrate against another, or "
+            "split a single control class in two: label half of its guides as a separate class to use here."
+        )
     if n_control < _FEW_CONTROLS:
         warnings.warn(
             f"only {n_control} non-targeting guides are scored, so the null is coarse. Widen the control set "
