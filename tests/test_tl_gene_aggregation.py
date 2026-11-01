@@ -141,6 +141,13 @@ def test_a_control_label_absent_from_the_data_is_an_error(adata):
         mt.tl.aggregate_guides(adata, score="p", guide="Metadata_sgRNA", gene="Metadata_Gene", control="absent_label")
 
 
+def test_control_class_all_unscored_explains_the_reference_trap(adata):
+    """Using the guide_activity reference as the control here leaves every control unscored (audit B2)."""
+    adata.obs.loc[adata.obs["Metadata_Gene"] == "nontargeting", "p"] = np.nan
+    with pytest.raises(ValueError, match="cannot be both that reference and this control"):
+        _call(adata)
+
+
 def test_a_guide_at_p_one_is_kept_not_dropped(adata):
     # p == 1.0 (the weakest guide a rank-based score can produce) must stay in its gene and the null,
     # not be silently dropped by a clip to exactly 1.0 that would send its z to -inf.

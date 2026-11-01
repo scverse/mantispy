@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 from anndata import AnnData
 
@@ -51,6 +53,8 @@ def guide_activity(
 
     Notes:
         A feature that does not vary across the reference guides carries no information and is dropped, so a profile of all-constant features cannot be scored.
+
+        The p-value cannot fall below ``1 / (n_reference + 1)``, the floor a guide past every reference guide reaches. With few reference guides many guides share that floor, their activities are not separated, and hit counts built on them come out degenerate; a warning fires when more than half the guides sit on it.
     """
     obs = as_frame(adata.obs)
     if group not in obs:
@@ -77,6 +81,22 @@ def guide_activity(
     at_or_above = ref_sorted.size - np.searchsorted(ref_sorted, activity, side="left")
     pvalue = (at_or_above + 1) / (ref_sorted.size + 1)
     pvalue[is_reference] = np.nan  # the reference sets the scale, it is not scored
+
+    # The smallest p a guide can reach is 1/(n_reference+1): a guide past every reference guide. When many
+    # guides pile up there they are not separated from one another, and hit counts built on them come out
+    # degenerate, so warn rather than let the floor pass silently.
+    floor = 1.0 / (ref_sorted.size + 1)
+    scored = ~is_reference & np.isfinite(pvalue)
+    at_floor = int((scored & (pvalue <= floor)).sum())
+    if scored.any() and at_floor > 0.5 * int(scored.sum()):
+        warnings.warn(
+            f"{at_floor} of {int(scored.sum())} guides sit at the p-value floor 1/(n_reference+1) = "
+            f"{floor:.2g}, the smallest value {ref_sorted.size} reference guides can give, so their "
+            "activities are not separated and later hit counts are degenerate. Add reference guides, or "
+            "rank activity directly with mt.tl.map.",
+            UserWarning,
+            stacklevel=3,
+        )
 
     adata.obs[key_added] = pvalue
     get_logger().info(

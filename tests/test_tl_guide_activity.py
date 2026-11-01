@@ -58,3 +58,14 @@ def test_all_constant_features_cannot_be_scored():
     obs = pd.DataFrame({"Metadata_Gene": ["intergenic"] * 25 + ["geneA"] * 25})
     with pytest.raises(ValueError, match="every feature is constant"):
         mt.tl.guide_activity(AnnData(x, obs=obs), reference="intergenic")
+
+
+def test_many_guides_at_the_pvalue_floor_warn():
+    """Few reference guides make a coarse floor that most guides pile onto, so hit counts go degenerate (audit B3)."""
+    rng = np.random.default_rng(0)
+    ref = rng.normal(0, 1, (4, 10))  # only four reference guides, so the floor is 1/5
+    active = rng.normal(0, 1, (40, 10)) + 8.0  # far beyond any reference guide, so all hit the floor
+    x = np.vstack([ref, active]).astype("float32")
+    obs = pd.DataFrame({"Metadata_Gene": ["intergenic"] * 4 + ["geneA"] * 40})
+    with pytest.warns(UserWarning, match="p-value floor"):
+        mt.tl.guide_activity(AnnData(x, obs=obs), reference="intergenic")
