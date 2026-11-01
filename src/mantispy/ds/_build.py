@@ -408,7 +408,7 @@ def _assemble_pki(cache_dir: str | Path | None = None) -> AnnData:
 
     from mantispy._core.frames import as_frame
     from mantispy._core.logging import get_logger
-    from mantispy.ds._datasets import _augmented
+    from mantispy.ds._datasets import _add_pki_cell_line, _augmented
 
     adata = _augmented("pki", None, cache_dir)
     obs = as_frame(adata.obs)
@@ -424,6 +424,7 @@ def _assemble_pki(cache_dir: str | Path | None = None) -> AnnData:
     label = np.where(control, "DMSO", np.char.add(np.char.add(compound.astype(str), "@"), dose.astype(str)))
     obs["Metadata_Perturbation"] = pd.Categorical(label)
     obs["Metadata_Perturbation_Type"] = pd.Series("compound", index=obs.index, dtype="category")
+    _add_pki_cell_line(adata)
     get_logger().info(
         "pki: %d wells x %d features, %d compounds x %d doses",
         adata.n_obs,

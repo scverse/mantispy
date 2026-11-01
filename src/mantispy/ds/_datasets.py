@@ -334,6 +334,25 @@ _PKI_VARIANTS = {
     (True, True): "pki_agg_selected.h5ad",  # perturbation level (modz), feature selected
 }
 
+#: The cell line each pki plate was run in, from the screen's ``analysis/input/cell_type.csv``.
+_PKI_CELL_LINES = {
+    "BR00122970": "PATU-8988T",
+    "BR00122971": "PATU-8988T",
+    "BR00122972": "MDA-MB-231",
+    "BR00122973": "MDA-MB-231",
+    "BR00122974": "U2OS",
+    "BR00122975": "U2OS",
+    "BR00122977": "A549",
+    "BR00122978": "A549",
+}
+
+
+def _add_pki_cell_line(adata: AnnData) -> AnnData:
+    """Write ``Metadata_CellLine`` from the plate barcode; the hosted well-level files predate the column."""
+    plates = adata.obs["Metadata_Plate"].astype(str)
+    adata.obs["Metadata_CellLine"] = pd.Categorical(plates.map(_PKI_CELL_LINES))
+    return adata
+
 
 def pki(
     plates: Sequence[str] | None = None,
@@ -342,15 +361,17 @@ def pki(
     aggregated: bool = False,
     feature_selected: bool = False,
 ) -> AnnData:
-    """Kinase inhibitors over a dose series, from the JUMP pilot.
+    """Kinase inhibitors over a dose series, in four cell lines.
 
-    ``cpg0008-pki``: fifteen compounds over a seven-point dose range (eleven at three doses, four at one) in U2OS cells, over eight plates with 32 to 64 replicate wells per treatment.
+    ``cpg0008-pki``: a Broad Institute and Gray lab collaboration profiling selective protein kinase inhibitors.
+    Fifteen compounds over a seven-point dose range (eleven at three doses, four at one), over eight plates in four cell lines, two plates each: PATU-8988T (``BR00122970``, ``BR00122971``), MDA-MB-231 (``BR00122972``, ``BR00122973``), U2OS (``BR00122974``, ``BR00122975``) and A549 (``BR00122977``, ``BR00122978``).
+    Every plate runs the same plate map, so a treatment's 32 to 64 replicate wells span all four cell lines, 8 to 16 in each.
 
     The base and its variants are pre-built by ``scripts/build_staged_datasets.py`` from the eight raw plate tables and rehosted on ``scverse-exampledata``, so the loader fetches a single h5ad rather than reassembling the base on every call. The two flags select the variant:
 
     - both ``False``: the raw wells with every feature, the object the recipe tutorials start from.
     - ``feature_selected=True``: the well-level block after pycytominer-default feature selection.
-    - ``aggregated=True``: one ``modz`` consensus (Spearman, ``min_replicates=2``) per ``Metadata_Perturbation`` over every well, DMSO included, so each compound-at-dose is one profile.
+    - ``aggregated=True``: one ``modz`` consensus (Spearman, ``min_replicates=2``) per ``Metadata_Perturbation`` over every well, DMSO included, so each compound-at-dose is one profile. The consensus pools the four cell lines; see the notes for a per-line one.
     - ``aggregated=True, feature_selected=True``: that same consensus on the feature-selected block.
 
     Args:
@@ -362,15 +383,20 @@ def pki(
         feature_selected: Return the feature-selected block instead of all features.
 
     Returns:
-        Wells by features at well resolution when both flags are ``False``, else the staged variant selected by the two flags, read with :func:`mantispy.io.read`, with ``Metadata_Perturbation`` (compound at concentration), ``Metadata_Perturbation_Type`` (``"compound"``), ``Metadata_Compound``, ``Metadata_Concentration`` (the platemap's ``mmoles_per_liter``), ``Metadata_MOA``, ``Metadata_Control``, ``Metadata_CellCount`` and ``Metadata_SiteCount``.
+        Wells by features at well resolution when both flags are ``False``, else the staged variant selected by the two flags, read with :func:`mantispy.io.read`, with ``Metadata_Perturbation`` (compound at concentration), ``Metadata_Perturbation_Type`` (``"compound"``), ``Metadata_Compound``, ``Metadata_Concentration`` (the platemap's ``mmoles_per_liter``), ``Metadata_MOA``, ``Metadata_Control_Type``, ``Metadata_Control``, ``Metadata_CellCount`` and ``Metadata_SiteCount``.
+        The well-level variants also carry ``Metadata_CellLine``, read from the plate barcode.
 
     Raises:
         KeyError: A plate is not one of the eight.
         ValueError: ``aggregated`` or ``feature_selected`` is not a bool, or ``plates`` is given for a variant.
 
     Notes:
-        ``Metadata_Control`` marks the DMSO wells only.
-        The positive controls (``Metadata_control_type == "poscon"``) are not flagged, because they are perturbations and should not be normalized against.
+        ``Metadata_Control_Type`` is ``"negcon"`` for the DMSO wells and ``"poscon"`` for the four positive-control compounds.
+        ``Metadata_Control`` is ``True`` for both (schema 2.0), so normalize with ``reference="negcon"`` and select the non-DMSO wells with ``adata[adata.obs["Metadata_Control_Type"] != "negcon"]``.
+
+        ``Metadata_Perturbation`` does not include the cell line, so grouping by it alone pools four biologically different replicate sets.
+        Analyse one line with ``adata[adata.obs["Metadata_CellLine"] == "U2OS"]``, or build a per-line consensus from the wells by grouping on a key that joins the two columns.
+        The hosted ``aggregated=True`` files are pre-built from the pooled wells and carry no ``Metadata_CellLine``.
     """
     _require_bools(aggregated=aggregated, feature_selected=feature_selected)
     if (aggregated or feature_selected) and plates is not None:
@@ -378,6 +404,9 @@ def pki(
             "plates only applies to the raw wells; a pre-aggregated or feature-selected variant cannot be plate-subset"
         )
     adata = _fetch_variant("pki", _PKI_VARIANTS[aggregated, feature_selected], cache_dir)
+    if aggregated:
+        return adata
+    adata = _add_pki_cell_line(adata)
     if plates is not None:
         adata = _subset_plates(adata, "pki", plates)
     return adata

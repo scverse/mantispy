@@ -5,6 +5,7 @@ The assertions cover the two things BBBC021 lacks, cell counts and real doses.
 """
 
 import numpy as np
+import pandas as pd
 import pytest
 
 import mantispy as mt
@@ -104,12 +105,42 @@ def test_bbbc021_flags_must_be_bool():
 def test_pki_loads_with_a_dose_series(pki):
     assert pki.shape == (3072, 5839)
     assert mt.io.validate(pki).ok, mt.io.validate(pki).errors
-    treated = pki.obs[~pki.obs["Metadata_Control"].to_numpy()]
+    # Schema 2.0 flags every control, poscon included, in Metadata_Control; DMSO is Control_Type "negcon".
+    control_type = pki.obs["Metadata_Control_Type"].astype(str)
+    assert control_type.value_counts().to_dict() == {"treatment": 2112, "negcon": 832, "poscon": 128}
+    assert (pki.obs["Metadata_Control"].to_numpy() == (control_type != "treatment").to_numpy()).all()
+    treated = pki.obs[(control_type != "negcon").to_numpy()]
     assert treated["Metadata_Compound"].nunique() == 15
     assert sorted(treated["Metadata_Concentration"].unique()) == [0.004, 0.01, 0.04, 0.2, 0.4, 1.0, 2.0]
     # Every DMSO well is one perturbation group, not one group per empty platemap row.
-    assert (pki.obs.loc[pki.obs["Metadata_Control"], "Metadata_Perturbation"] == "DMSO").all()
+    assert (pki.obs.loc[(control_type == "negcon").to_numpy(), "Metadata_Perturbation"] == "DMSO").all()
     assert pki.obs["Metadata_CellCount"].between(1, 1e5).all()
+
+
+@pytest.mark.network
+def test_pki_carries_the_cell_line_of_each_plate(pki):
+    # Four cell lines, two plates each, so a treatment's replicate wells must not be pooled across them.
+    lines = pki.obs.groupby("Metadata_CellLine", observed=True)["Metadata_Plate"].nunique()
+    assert lines.to_dict() == {"A549": 2, "MDA-MB-231": 2, "PATU-8988T": 2, "U2OS": 2}
+    assert (pki.obs["Metadata_CellLine"].value_counts() == 768).all()
+    one = mt.ds.pki(plates=["BR00122974"])
+    assert (one.obs["Metadata_CellLine"] == "U2OS").all()
+    assert "Metadata_CellLine" in mt.ds.pki(feature_selected=True).obs
+
+
+def test_pki_cell_line_map_covers_every_plate():
+    from anndata import AnnData
+
+    from mantispy.ds._datasets import _PKI_CELL_LINES, _add_pki_cell_line
+
+    plates = sorted(_PKI_CELL_LINES) * 3
+    obs = pd.DataFrame({"Metadata_Plate": plates}, index=[str(i) for i in range(len(plates))])
+    adata = AnnData(np.zeros((len(plates), 1)), obs=obs)
+    _add_pki_cell_line(adata)
+    lines = adata.obs["Metadata_CellLine"]
+    assert not lines.isna().any()
+    per_line = adata.obs.groupby("Metadata_CellLine", observed=True)["Metadata_Plate"].nunique()
+    assert per_line.to_dict() == {"A549": 2, "MDA-MB-231": 2, "PATU-8988T": 2, "U2OS": 2}
 
 
 @pytest.mark.network
