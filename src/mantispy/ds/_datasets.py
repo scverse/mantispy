@@ -394,6 +394,8 @@ def pki(
         ``Metadata_Control_Type`` is ``"negcon"`` for the DMSO wells and ``"poscon"`` for the four positive-control compounds.
         ``Metadata_Control`` is ``True`` for both (schema 2.0), so normalize with ``reference="negcon"`` and select the non-DMSO wells with ``adata[adata.obs["Metadata_Control_Type"] != "negcon"]``.
 
+        ``Metadata_Concentration`` is the platemap's ``mmoles_per_liter``, so its unit is millimolar. The values reach 2 mM, which is high for a final in-well dose of a kinase inhibitor, so it is most likely the source (stock) concentration; the upstream data records neither the dilution nor the final dose.
+
         ``Metadata_Perturbation`` does not include the cell line, so grouping by it alone pools four biologically different replicate sets.
         Analyse one line with ``adata[adata.obs["Metadata_CellLine"] == "U2OS"]``, or build a per-line consensus from the wells by grouping on a key that joins the two columns.
         The hosted ``aggregated=True`` files are pre-built from the pooled wells and carry no ``Metadata_CellLine``.
