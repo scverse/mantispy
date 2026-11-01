@@ -67,3 +67,12 @@ def test_a_staged_builder_keeps_upstream_control_classes():
     types, flag = _control_pair(pd.Series(["negcon", "poscon", "empty", "trt", "compound"]))
     assert list(types) == ["negcon", "poscon", "empty", "treatment", "treatment"]
     assert list(flag) == [True, True, True, False, False]
+
+
+def test_reference_hints_when_given_a_label_value_not_a_column(wells):
+    """reference= wants a control class or a boolean column, never a label value like "DMSO" (audit B1)."""
+    wells.obs["Metadata_Perturbation"] = "DMSO"
+    with pytest.raises(KeyError, match="is_ref"):
+        reference_mask(wells, "DMSO")
+    with pytest.raises(KeyError, match="boolean obs column"):
+        reference_mask(wells, "not_a_value_anywhere")

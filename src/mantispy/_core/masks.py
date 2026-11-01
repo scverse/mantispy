@@ -107,7 +107,17 @@ def reference_mask(adata: AnnData, reference: str | None) -> np.ndarray:
         return (types.astype(str) == reference).to_numpy()
 
     if reference not in adata.obs:
-        raise KeyError(f"obs has no column {reference!r} to use as reference.")
+        # A common slip is passing a label value ("DMSO", "baseline") where reference= wants a control class
+        # or a boolean column. If the value names a cell in some obs column, point at the column to build from.
+        frame = as_frame(adata.obs)
+        in_column = next((c for c in frame.columns if reference in set(frame[c].astype(str).unique())), None)
+        hint = (
+            f" To use {reference!r} as the reference, add a boolean column, e.g. "
+            f"adata.obs['is_ref'] = adata.obs[{in_column!r}] == {reference!r}."
+            if in_column is not None
+            else f" Pass {CONTROL_CLASSES} or the name of a boolean obs column."
+        )
+        raise KeyError(f"obs has no column {reference!r} to use as reference.{hint}")
 
     return _flag_mask(
         pd.Series(adata.obs[reference]),

@@ -95,6 +95,16 @@ def test_pairwise_edistance_is_symmetric_with_a_zero_diagonal(scored):
     np.testing.assert_allclose(np.diag(values), 0.0, atol=1e-6)
 
 
+def test_edistance_refuses_profiles_with_missing_values(scored):
+    """A NaN in a selected feature otherwise makes every energy distance silently NaN (audit A1)."""
+    scored.X[0, 2] = np.nan
+    with pytest.raises(ValueError, match="missing values"):
+        mt.tl.edistance(scored, n_permutations=50)
+    # the offending feature is named, so the user knows what to drop
+    with pytest.raises(ValueError, match=str(scored.var_names[2])):
+        mt.tl.edistance(scored, n_permutations=50)
+
+
 def test_results_round_trip(scored, tmp_path):
     mt.tl.hit_calling(scored, n_permutations=100)
     mt.tl.edistance(scored, n_permutations=100)

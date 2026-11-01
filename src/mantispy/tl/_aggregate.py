@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Sequence
 from copy import deepcopy
 
@@ -15,7 +16,7 @@ from mantispy._core._reduce import group_codes, reduce_grouped, reduced_var
 from mantispy._core.frames import as_frame, categorize_metadata
 from mantispy._core.logging import get_logger
 from mantispy._core.provenance import record_params
-from mantispy._core.schema import REQUIRED_UNS, get_resolution, resolution_for, stamp
+from mantispy._core.schema import REQUIRED_UNS, get_resolution, resolution_for, resolve_control_column, stamp
 
 FUNCTIONS = {"median": MEDIAN, "mean": MEAN}
 
@@ -88,6 +89,7 @@ def aggregate(
     keep = ~(tallies[count_key] < min_cells)
     if not keep.any():
         get_logger().warning("aggregate dropped every group; min_cells=%d exceeds every group size", min_cells)
+    _warn_dropped_controls(obs, keep, resolve_control_column(adata), min_cells)
 
     obs = obs.loc[keep].reset_index(drop=True)
     obs.index = pd.Index([str(index) for index in range(len(obs))])
@@ -112,6 +114,34 @@ def aggregate(
     }
     record_params(result, "aggregate", call_params)
     return result
+
+
+def _warn_dropped_controls(obs: pd.DataFrame, keep: np.ndarray, control_col: str, min_cells: int) -> None:
+    """Warn when ``min_cells`` removes every negcon/poscon group of a plate.
+
+    A later ``normalize(reference=)`` or ``map(mode="activity")`` then has no reference there, so a silent
+    drop reads downstream as a confusing "no controls" error far from its cause.
+    """
+    if control_col not in obs:
+        return
+    types = obs[control_col].astype(str).to_numpy()
+    plate_col = "Metadata_Plate" if "Metadata_Plate" in obs else None
+    plates = obs[plate_col].astype(str).to_numpy() if plate_col else np.zeros(len(obs), dtype=object)
+    lost = []
+    for plate in pd.unique(plates):
+        on_plate = plates == plate
+        for control in ("negcon", "poscon"):
+            present = on_plate & (types == control)
+            if present.any() and not (present & keep).any():
+                lost.append(f"{control} on plate {plate}" if plate_col else control)
+    if lost:
+        warnings.warn(
+            f"aggregate(min_cells={min_cells}) dropped every {', '.join(lost)} group, so a later "
+            "normalize(reference=) or map(mode='activity') has no reference there. Lower min_cells, "
+            "or check the cell counts of the control wells.",
+            UserWarning,
+            stacklevel=2,
+        )
 
 
 def _site_counts(frame: pd.DataFrame, codes: np.ndarray, n_groups: int) -> np.ndarray:
