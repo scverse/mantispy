@@ -30,6 +30,10 @@ def test_loads_annotated_and_valid(bbbc021):
         "Metadata_Perturbation_Type",
         "Metadata_CellCount",
         "Metadata_SiteCount",
+        "Metadata_Control_Type",
+        "Metadata_ConcentrationUnit",
+        "Metadata_Row",
+        "Metadata_Col",
     }
     # Summed from the well's Image.csv; the profile's mean Cells_Number_Object_Number is exactly what these give.
     well = bbbc021.obs[(bbbc021.obs["Metadata_Plate"] == "Week1_22123") & (bbbc021.obs["Metadata_Well"] == "B02")]
