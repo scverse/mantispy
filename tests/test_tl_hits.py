@@ -98,11 +98,12 @@ def test_pairwise_edistance_is_symmetric_with_a_zero_diagonal(scored):
 def test_edistance_refuses_profiles_with_missing_values(scored):
     """A NaN in a selected feature otherwise makes every energy distance silently NaN (audit A1)."""
     scored.X[0, 2] = np.nan
-    with pytest.raises(ValueError, match="missing values"):
+    with pytest.raises(ValueError, match="missing values") as error:
         mt.tl.edistance(scored, n_permutations=50)
     # the offending feature is named, so the user knows what to drop
-    with pytest.raises(ValueError, match=str(scored.var_names[2])):
-        mt.tl.edistance(scored, n_permutations=50)
+    assert str(scored.var_names[2]) in str(error.value)
+    # the advice must name subset=True, since feature_select only flags without it (audit item 2)
+    assert "subset=True" in str(error.value)
 
 
 def test_results_round_trip(scored, tmp_path):

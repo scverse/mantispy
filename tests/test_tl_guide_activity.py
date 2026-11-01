@@ -69,3 +69,15 @@ def test_many_guides_at_the_pvalue_floor_warn():
     obs = pd.DataFrame({"Metadata_Gene": ["intergenic"] * 4 + ["geneA"] * 40})
     with pytest.warns(UserWarning, match="p-value floor"):
         mt.tl.guide_activity(AnnData(x, obs=obs), reference="intergenic")
+
+
+def test_a_quarter_of_guides_at_the_floor_warns():
+    """The warning must fire in the Altair case, where about half the guides sit on the floor, not only above it (audit item 4)."""
+    rng = np.random.default_rng(0)
+    ref = rng.normal(0, 1, (10, 10))  # floor is 1/11
+    extreme = rng.normal(0, 1, (10, 10)) + 8.0  # beyond every reference guide -> on the floor
+    quiet = rng.normal(0, 1, (20, 10))  # like the reference -> not on the floor
+    x = np.vstack([ref, extreme, quiet]).astype("float32")  # 10 of 30 scored guides (a third) on the floor
+    obs = pd.DataFrame({"Metadata_Gene": ["intergenic"] * 10 + ["geneA"] * 30})
+    with pytest.warns(UserWarning, match="p-value floor"):
+        mt.tl.guide_activity(AnnData(x, obs=obs), reference="intergenic")

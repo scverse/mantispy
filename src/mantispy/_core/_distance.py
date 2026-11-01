@@ -61,7 +61,7 @@ def mahalanobis_transform(
         raise ValueError(
             f"only {complete.shape[0]} of {reference.shape[0]} reference rows have no missing "
             "values, which is too few to estimate a covariance. Drop the incomplete features "
-            "first, e.g. mt.pp.feature_select(adata, na_cutoff=0.0)."
+            "first, e.g. mt.pp.feature_select(adata, na_cutoff=0.0, subset=True)."
         )
     if robust:
         from sklearn.covariance import MinCovDet

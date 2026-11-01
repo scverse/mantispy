@@ -77,9 +77,14 @@ def test_feature_select_warns_when_a_selected_feature_keeps_nan():
     )
     adata = ad.AnnData(x, obs=obs)
     adata.var_names = [f"Cells_AreaShape_F{index}" for index in range(4)]
-    with pytest.warns(UserWarning, match="still hold NaN"):
+    with pytest.warns(UserWarning, match="still hold NaN") as record:
         mt.pp.feature_select(adata, operations=("drop_na_columns",))
     assert bool(adata.var["selected"].iloc[1])  # the near-complete feature is kept, NaN and all
+    # The advice must name the subsetting step: feature_select only flags, so na_cutoff=0.0 alone does not
+    # drop anything (audit item 2). Following the advice as written must actually clear the NaN.
+    assert any("subset" in str(w.message) for w in record)
+    mt.pp.feature_select(adata, operations=("drop_na_columns",), na_cutoff=0.0, subset=True)
+    assert adata.n_vars == 3 and not np.isnan(np.asarray(adata.X)).any()
 
 
 def test_noise_removal_needs_its_grouping_column(wells):
