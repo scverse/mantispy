@@ -331,7 +331,7 @@ def map(
     if np.isnan(features).any():
         raise ValueError(
             "mAP cannot rank profiles with missing values. Drop the affected features "
-            "with mt.pp.feature_select(adata, na_cutoff=0.0); the default na_cutoff=0.05 "
+            "with mt.pp.feature_select(adata, na_cutoff=0.0, subset=True); the default na_cutoff=0.05 "
             "keeps features with up to 5% missing values."
         )
     obs = as_frame(adata.obs)

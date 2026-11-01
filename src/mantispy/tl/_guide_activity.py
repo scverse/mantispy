@@ -54,7 +54,7 @@ def guide_activity(
     Notes:
         A feature that does not vary across the reference guides carries no information and is dropped, so a profile of all-constant features cannot be scored.
 
-        The p-value cannot fall below ``1 / (n_reference + 1)``, the floor a guide past every reference guide reaches. With few reference guides many guides share that floor, their activities are not separated, and hit counts built on them come out degenerate; a warning fires when more than half the guides sit on it.
+        The p-value cannot fall below ``1 / (n_reference + 1)``, the floor a guide past every reference guide reaches. With few reference guides many guides share that floor, their activities are not separated, and hit counts built on them come out degenerate; a warning fires when a quarter or more of the guides sit on it.
     """
     obs = as_frame(adata.obs)
     if group not in obs:
@@ -88,7 +88,7 @@ def guide_activity(
     floor = 1.0 / (ref_sorted.size + 1)
     scored = ~is_reference & np.isfinite(pvalue)
     at_floor = int((scored & (pvalue <= floor)).sum())
-    if scored.any() and at_floor > 0.5 * int(scored.sum()):
+    if scored.any() and at_floor >= 0.25 * int(scored.sum()):
         warnings.warn(
             f"{at_floor} of {int(scored.sum())} guides sit at the p-value floor 1/(n_reference+1) = "
             f"{floor:.2g}, the smallest value {ref_sorted.size} reference guides can give, so their "

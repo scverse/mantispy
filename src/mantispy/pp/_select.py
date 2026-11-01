@@ -392,13 +392,14 @@ def feature_select(
     with_nan = kept[np.isnan(full[:, kept]).any(axis=0)] if kept.size else kept
     if with_nan.size:
         lever = (
-            "lower na_cutoff to 0.0"
+            "Lower na_cutoff to 0.0"
             if "drop_na_columns" in operations
-            else "add the drop_na_columns operation with na_cutoff=0.0"
+            else "Add the drop_na_columns operation with na_cutoff=0.0"
         )
         warnings.warn(
             f"{with_nan.size} selected feature(s) still hold NaN in some rows, which pp.sphere and PCA cannot "
-            f"take. {lever[0].upper()}{lever[1:]} to drop them, or impute before those steps.",
+            f"take. {lever} and pass subset=True (or run mt.pp.subset_features afterwards) to drop them, or "
+            "impute before those steps.",
             UserWarning,
             stacklevel=3,
         )
