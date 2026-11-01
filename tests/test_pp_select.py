@@ -65,6 +65,23 @@ def test_feature_select_warns_only_when_non_measurements_are_the_majority():
         mt.pp.feature_select(adata, copy=True)
 
 
+def test_feature_select_warns_when_a_selected_feature_keeps_nan():
+    """A feature with NaN in fewer than na_cutoff of its rows survives selection and then breaks PCA/sphere (audit A4)."""
+    rng = np.random.default_rng(0)
+    n_obs = 40
+    x = rng.normal(size=(n_obs, 4)).astype(np.float32)
+    x[0, 1] = np.nan  # one NaN cell, 2.5% of rows, below the 5% na_cutoff, so drop_na_columns keeps the feature
+    obs = pd.DataFrame(
+        {"Metadata_Perturbation": np.repeat([f"g{group}" for group in range(4)], n_obs // 4)},
+        index=[str(index) for index in range(n_obs)],
+    )
+    adata = ad.AnnData(x, obs=obs)
+    adata.var_names = [f"Cells_AreaShape_F{index}" for index in range(4)]
+    with pytest.warns(UserWarning, match="still hold NaN"):
+        mt.pp.feature_select(adata, operations=("drop_na_columns",))
+    assert bool(adata.var["selected"].iloc[1])  # the near-complete feature is kept, NaN and all
+
+
 def test_noise_removal_needs_its_grouping_column(wells):
     wells.obs = wells.obs.drop(columns="Metadata_Perturbation")
     with pytest.raises(KeyError, match="group replicates by"):
