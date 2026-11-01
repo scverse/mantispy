@@ -735,6 +735,31 @@ def test_from_dataframe_cp_measure_keeps_colocalization_channel_pair():
     assert "channels" not in adata.uns["mantispy"]
 
 
+def test_from_dataframe_cp_measure_reads_bare_texture_and_moment_names():
+    """cp_measure writes a Haralick or moment statistic as the leading token, not under Texture_/AreaShape_;
+    these must be measurements with the CellProfiler group, not opaque embeddings (audit A5)."""
+    df = pd.DataFrame(
+        {
+            "Metadata_Site": ["s1", "s2"],
+            "Variance_3_00_256__DNA": [1.0, 2.0],  # a Haralick texture statistic
+            "SpatialMoment_0_1": [3.0, 4.0],  # an image moment
+            "HuMoment_2": [5.0, 6.0],
+            "Center_X": [7.0, 8.0],  # the centroid is location, not a feature
+            "my_latent_0": [0.5, 0.6],  # a genuine embedding stays one
+        }
+    )
+    adata = from_dataframe(df, convention="cp_measure", object_type="cell", resolution="object")
+    var = adata.var
+    assert var.loc["Variance_3_00_256__DNA", "feature_kind"] == "measurement"
+    assert var.loc["Variance_3_00_256__DNA", "feature_group"] == "Texture"
+    assert var.loc["Variance_3_00_256__DNA", "feature"] == "Variance"
+    assert var.loc["Variance_3_00_256__DNA", "channel"] == "DNA"
+    assert var.loc["SpatialMoment_0_1", "feature_group"] == "AreaShape"
+    assert var.loc["HuMoment_2", "feature_kind"] == "measurement"
+    assert "Center_X" not in adata.var_names  # the centroid is dropped as location
+    assert var.loc["my_latent_0", "feature_kind"] == "embedding"
+
+
 def test_from_dataframe_reads_object_skeleton_as_a_measurement():
     df = pd.DataFrame(
         {
