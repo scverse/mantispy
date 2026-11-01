@@ -134,6 +134,25 @@ _BARE_NON_FEATURES = frozenset({"ImageNumber", "ObjectNumber", "TableNumber"})
 #: CellProfiler 4 writes the centroid under ``AreaShape`` instead of ``Location``.
 _POSITIONAL_AREASHAPE = frozenset({"Center", "BoundingBoxMinimum", "BoundingBoxMaximum"})
 
+#: cp_measure names a Haralick texture statistic as the leading token, where CellProfiler writes ``Texture_<stat>``.
+#: Mapping the stat onto the ``Texture`` group keeps its feature_group the same across the two conventions.
+#: ``Correlation`` is left out: it is also cp_measure's colocalization group, which stays its own group.
+_CP_MEASURE_TEXTURE = frozenset(
+    {
+        "AngularSecondMoment", "Contrast", "DifferenceEntropy", "DifferenceVariance", "Entropy",
+        "InfoMeas1", "InfoMeas2", "InverseDifferenceMoment", "SumAverage", "SumEntropy", "SumVariance", "Variance",
+    }
+)  # fmt: skip
+
+#: cp_measure names a moment or centroid feature as the leading token, where CellProfiler writes ``AreaShape_<feat>``.
+#: Centroid and bounding-box tokens land in :data:`_POSITIONAL_AREASHAPE` and are read as location, not features.
+_CP_MEASURE_SHAPE = frozenset(
+    {
+        "BoundingBoxMaximum", "BoundingBoxMinimum", "Center", "CentralMoment", "HuMoment",
+        "InertiaTensor", "InertiaTensorEigenvalues", "NormalizedMoment", "SpatialMoment",
+    }
+)  # fmt: skip
+
 _RADIAL_BIN_RE = re.compile(r"^\d+of\d+$")
 _NUMERIC_RE = re.compile(r"^-?\d+(\.\d+)?$")
 
@@ -243,6 +262,12 @@ def _parse_cp_measure(name: str) -> dict:
         return row
 
     group, rest = tokens[0], tokens[1:]
+    # cp_measure writes a texture or shape statistic as the leading token; put it back under the CellProfiler
+    # group so its feature_group matches, instead of being read as an unknown group and kept as an embedding.
+    if group in _CP_MEASURE_TEXTURE:
+        group, rest = "Texture", [group, *rest]
+    elif group in _CP_MEASURE_SHAPE:
+        group, rest = "AreaShape", [group, *rest]
     row["feature_group"] = group
     if group in NON_FEATURE_GROUPS or (group == "AreaShape" and rest[0] in _POSITIONAL_AREASHAPE):
         return row
