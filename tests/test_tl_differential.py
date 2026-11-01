@@ -218,25 +218,11 @@ def test_the_cell_shuffle_verdict_tracks_the_two_rates():
 
 
 @pytest.mark.network
-@pytest.mark.slow
-def test_the_diagnostic_holds_on_a_real_pooled_screen():
-    """The inflation direction holds on cp_posh's real well edge effects, not only on synthetic gradients.
-
-    cp_posh is well-normalized single cells, so no preprocessing is needed; the controls are the
-    non-targeting and intergenic guides. Both are bounded to a handful of wells and cells for speed.
-    """
+def test_diagnose_testing_refuses_a_pooled_screen_with_too_few_wells():
+    """cp_posh is optical pooled screening: its perturbations are pooled into three physical wells, so the
+    whole screen has only three control wells. The well-block FPR null needs at least six reference wells
+    (four for the null, two for the pseudo-treatment), so diagnose_testing refuses it with a clear message
+    rather than reporting a rate it cannot found. The well is not the exchangeable unit for pooled data."""
     adata = mt.ds.cp_posh()
-    rng = np.random.default_rng(0)
-    wells = adata.obs["Metadata_Well"].astype(str).to_numpy()
-    control_wells = np.unique(wells[adata.obs["Metadata_Control"].to_numpy()])
-    keep = np.isin(wells, rng.choice(control_wells, size=min(16, control_wells.size), replace=False))
-    subset = adata[keep].copy()
-    if subset.n_obs > 6000:
-        subset = subset[np.sort(rng.choice(subset.n_obs, size=6000, replace=False))].copy()
-
-    report = mt.metrics.diagnose_testing(subset, n_draws=6, n_permutations=30)
-    verdict = report.set_index("check")["verdict"]
-    counts = _null_rate_counts(report)
-    for caller in ("hit_calling", "edistance"):
-        assert verdict[f"{caller} well-block null rate"] != "FAIL"
-        assert counts[f"{caller} cell-shuffle null rate"] >= counts[f"{caller} well-block null rate"]
+    with pytest.raises(ValueError, match="at least six reference wells"):
+        mt.metrics.diagnose_testing(adata, n_draws=6, n_permutations=30)
