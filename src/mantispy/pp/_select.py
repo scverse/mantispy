@@ -385,6 +385,24 @@ def feature_select(
             stacklevel=3,
         )
 
+    # A feature kept with NaN in fewer than na_cutoff of its rows still carries those missing values, which
+    # pp.sphere and sc.pp.pca cannot take. Warn with the lever to remove them here, rather than let the matrix
+    # fail several steps later with an error that does not point back to feature selection.
+    kept = np.flatnonzero(keep)
+    with_nan = kept[np.isnan(full[:, kept]).any(axis=0)] if kept.size else kept
+    if with_nan.size:
+        lever = (
+            "lower na_cutoff to 0.0"
+            if "drop_na_columns" in operations
+            else "add the drop_na_columns operation with na_cutoff=0.0"
+        )
+        warnings.warn(
+            f"{with_nan.size} selected feature(s) still hold NaN in some rows, which pp.sphere and PCA cannot "
+            f"take. {lever[0].upper()}{lever[1:]} to drop them, or impute before those steps.",
+            UserWarning,
+            stacklevel=3,
+        )
+
     adata.var[key_added] = keep
     adata.uns.setdefault("mantispy", {})["feature_select"] = removed
     get_logger().info(
