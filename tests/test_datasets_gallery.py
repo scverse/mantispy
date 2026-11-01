@@ -46,8 +46,8 @@ def test_rohban_loads_with_genes_controls_and_counts(rohban):
 @pytest.mark.network
 def test_rohban_feature_selected_variant_is_the_well_level_selected_block():
     adata = mt.ds.rohban(feature_selected=True)
-    # The hosted selected block carries 574 features. A fresh pp.feature_select on the base keeps ~770, so the
-    # hosted artifact predates the current pipeline and is worth rebuilding; it still loads and validates.
+    # 574 features: feature selection on the unnormalized base, as the staged builder runs it (normalization
+    # is a notebook step, not baked in). The old 751 predates a rebuild; the hosted block matches the builder.
     assert adata.shape == (1918, 574)
     assert mt.io.validate(adata).ok, mt.io.validate(adata).errors
 
