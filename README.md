@@ -75,11 +75,16 @@ Choose from the options below to install mantispy:
    pip install git+https://github.com/scverse/mantispy.git  # (or `uv add`)
    ```
 
-Reading images needs the `spatial` extra:
+Optional extras add features: `spatial` (reading images as `SpatialData`), `map` (copairs
+retrieval metrics), `harmony` and `integration` (batch correction and its scoring), and
+`interactive` (plotly plots). Install the ones you need, for example:
 
 ```bash
-pip install 'mantispy[spatial]'
+pip install 'mantispy[spatial,map]'
 ```
+
+The [installation guide](https://mantispy.readthedocs.io/en/latest/installation.html) says what
+each extra pulls in.
 
 ## Release notes
 

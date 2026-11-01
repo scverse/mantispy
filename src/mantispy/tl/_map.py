@@ -275,6 +275,9 @@ def map(
         ImportError: copairs is not installed; it is an optional extra.
         ValueError: ``mode`` was passed together with explicit pair arguments or neither was passed, ``mode`` is not one of ``MODES``, ``mode="consistency"`` came without ``annotation_key``, ``mode="activity"`` found no controls, no profile has a negative pair to be ranked against, the profiles hold missing values, which cannot be ranked, a label column mixes list-valued and scalar entries, or more than one positive-pair column is list-valued.
         KeyError: ``obs`` is missing a column the pair definitions or ``reference`` name.
+
+    Notes:
+        An explicit pair query that pairs across a high-cardinality column (a large ``pos_diffby`` or ``neg_diffby`` fan-out, such as every compound against every other) materializes a pair set that grows with the product of the group sizes and can reach tens of gigabytes on a few thousand wells, separately from ``batch_size``, which only caps the distance step. Run such a query on consensus profiles (one row per perturbation, via :func:`~mantispy.tl.consensus`) rather than on every well, and set ``batch_size`` to cap the distance memory.
     """
     try:
         from copairs import map as _  # noqa: F401 - the scoring imports it again; this is the friendly early guard

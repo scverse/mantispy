@@ -288,6 +288,7 @@ def diagnose_testing(
         seed: Seed for choosing which control wells stand in for a treatment.
             The two hit callers' permutation nulls are seeded by the draw index instead, so they are identical across calls that differ only in ``seed``.
         n_permutations: Null size for the two hit callers; smaller is faster and coarser.
+            The run time scales with ``n_draws`` times ``n_permutations`` times the rows and features, so the full default takes several minutes on a large cell-resolution object (around ten minutes for twenty thousand cells). Drop both for a quick first pass, then raise them once the checks look sensible.
         method: Keyword-only. The :func:`~mantispy.tl.hit_calling` method the cell-resolution checks measure, ``"ks"`` by default because the diagnostic is about pseudoreplication.
             ``"mahalanobis"`` whitens the distances, which divides out the between-well signal the cell-shuffle null exists to expose, so it cannot show that inflation.
             It is not used at well resolution, which keeps each caller's own default.
