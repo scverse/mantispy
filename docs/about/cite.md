@@ -1,4 +1,4 @@
-# Citing mantispy
+# Citation
 
 A preprint describing mantispy is in preparation.
 Until then, please cite the [repository](https://github.com/scverse/mantispy) directly.

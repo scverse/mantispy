@@ -65,28 +65,16 @@ Found a bug? Interested in improving mantispy? Check out our GitHub for the late
 ```
 
 ```{toctree}
-:caption: General
+:caption: Getting started
 :hidden: true
 :maxdepth: 2
 
 installation
-api
-contributing
-references
+tutorials/overview
 ```
 
 ```{toctree}
-:caption: Data model
-:hidden: true
-:maxdepth: 1
-
-data_model/index
-data_model/stamp_reference
-data_model/schema_spec
-```
-
-```{toctree}
-:caption: Tutorials
+:caption: Guides
 :hidden: true
 :maxdepth: 2
 
@@ -94,24 +82,30 @@ tutorials/general
 tutorials/compound_screens
 tutorials/genetic_screens
 tutorials/single_cells
-```
-
-```{toctree}
-:caption: Case studies
-:hidden: true
-:maxdepth: 1
-
 case_studies/index
 ```
 
 ```{toctree}
-:caption: About
+:caption: Reference
 :hidden: true
 :maxdepth: 2
 
-about/background
-about/cite
+api
+data_model/index
+data_model/stamp_reference
+data_model/schema_spec
 about/known_limitations
+about/background
+```
+
+```{toctree}
+:caption: Project
+:hidden: true
+:maxdepth: 2
+
+contributing
+about/cite
+references
 GitHub <https://github.com/scverse/mantispy>
 Discourse <https://discourse.scverse.org/>
 ```
