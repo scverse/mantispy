@@ -8,8 +8,6 @@ from mantispy.tl._cyclic import (
     _wrap,
     circular_correlation,
     circular_neighbor_error,
-    cyclic_shift,
-    feature_cycle_association,
     orient_cycle,
 )
 
@@ -61,7 +59,7 @@ def test_feature_cycle_association_recovers_a_planted_cycle_feature():
         np.c_[cycling, flat],
         _object_obs({"Metadata_Plate": ["P"] * n, "Metadata_Well": ["A01"] * n, "theta": theta}, n),
     )
-    out = feature_cycle_association(adata, angle_key="theta").set_index("feature")
+    out = mt.tl.feature_cycle_association(adata, angle_key="theta").set_index("feature")
     assert out.loc["embedding_0", "r2"] > 0.6
     assert out.loc["embedding_1", "r2"] < 0.1
     assert abs(_wrap(out.loc["embedding_0", "peak_angle"] - 0.5)) < 0.2
@@ -79,8 +77,30 @@ def test_cyclic_shift_is_near_zero_for_the_reference_and_flags_a_shift():
         600,
     )
     adata = mt.io.from_embedding(rng.normal(size=(600, 2)), obs)
-    out = cyclic_shift(
+    out = mt.tl.cyclic_shift(
         adata, angle_key="theta", by="Metadata_Perturbation", reference="NTC", block="Metadata_Well"
     ).set_index("group")
     assert abs(out.loc["NTC", "shift"]) < 1e-6
     assert out.loc["KO", "shift"] > 0.5
+
+
+def test_feature_cycle_association_handles_missing_values():
+    """A NaN angle (one cell) or a NaN feature value must be dropped, not crash or silently zero the feature."""
+    rng = np.random.default_rng(5)
+    n = 800
+    theta = rng.uniform(-np.pi, np.pi, size=n)
+    cycling = np.cos(theta - 0.5) + 0.3 * rng.normal(size=n)
+    noise = rng.normal(size=n)
+    adata = mt.io.from_embedding(
+        np.c_[cycling, noise],
+        _object_obs({"Metadata_Plate": ["P"] * n, "Metadata_Well": ["A01"] * n, "theta": theta}, n),
+    )
+    # One cell has no angle, a different cell has no value for the cycling feature.
+    adata.X = adata.X.copy()
+    adata.X[1, 0] = np.nan
+    adata.obs.loc[adata.obs_names[0], "theta"] = np.nan
+
+    out = mt.tl.feature_cycle_association(adata, angle_key="theta").set_index("feature")
+    assert np.isfinite(out.loc["embedding_0", "r2"])
+    assert out.loc["embedding_0", "r2"] > 0.5  # a few missing cells do not hide a strongly cyclic feature
+    assert out.loc["embedding_1", "r2"] < 0.1

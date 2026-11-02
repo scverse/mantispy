@@ -103,7 +103,11 @@ def circular_neighbor_error(theta: np.ndarray, neighbors: np.ndarray) -> float:
 
 
 def _reference_mask(obs: pd.DataFrame, by: str, reference: object) -> np.ndarray:
-    """Rows that are the reference: a value of the ``by`` column, a boolean ``obs`` column, or a mask."""
+    """Rows that are the reference: a value of the ``by`` column, a boolean ``obs`` column, or a mask.
+
+    Deliberately not :func:`mantispy._core.masks.reference_mask`: here the reference is usually one value
+    of ``by`` (``"NTC"``) compared against another, which that control-class contract does not express.
+    """
     if isinstance(reference, str):
         if reference in set(obs[by]):
             return (obs[by] == reference).to_numpy()
@@ -182,11 +186,17 @@ def cyclic_shift(
     return pd.DataFrame(rows, columns=["group", "shift", "pvalue", "n_blocks"])
 
 
-def _ss_residual(design: np.ndarray, values: np.ndarray) -> np.ndarray:
-    """Residual sum of squares per column of ``values`` after a least-squares fit on ``design``."""
-    coefficients, *_ = np.linalg.lstsq(design, values, rcond=None)
+def _fit_residual(design: np.ndarray, values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Per-column residual sum of squares of a least-squares fit, and the coefficients, NaN-aware.
+
+    A column's missing cells are imputed with its mean for the fit and ignored when scoring, so a feature
+    with a few missing values drops only those cells rather than poisoning the whole column.
+    """
+    column_mean = np.nanmean(values, axis=0)
+    filled = np.nan_to_num(np.where(np.isfinite(values), values, column_mean), nan=0.0)
+    coefficients, *_ = np.linalg.lstsq(design, filled, rcond=None)
     residual = values - design @ coefficients
-    return np.sum(residual**2, axis=0)
+    return np.nansum(residual**2, axis=0), coefficients
 
 
 def feature_cycle_association(
@@ -225,22 +235,26 @@ def feature_cycle_association(
     for _, rows in _group_masks(obs, by, adata.n_obs):
         angle = theta[rows]
         values = matrix[rows]
+        block = nuisance[rows] if nuisance is not None else None
+        # A cell with no angle cannot be placed on the cycle, so it is dropped for the whole group.
+        finite = np.isfinite(angle)
+        angle, values = angle[finite], values[finite]
+        if block is not None:
+            block = block[finite]
         sin, cos, ones = np.sin(angle), np.cos(angle), np.ones(angle.size)
         cycle_design = np.column_stack([ones, sin, cos])
         if angle.size <= cycle_design.shape[1]:
             continue
-        total = np.sum((values - values.mean(axis=0)) ** 2, axis=0)
+        total = np.nansum((values - np.nanmean(values, axis=0)) ** 2, axis=0)
         safe = total > 0
-        coefficients = np.linalg.lstsq(cycle_design, values, rcond=None)[0]
-        residual = np.sum((values - cycle_design @ coefficients) ** 2, axis=0)
+        residual, coefficients = _fit_residual(cycle_design, values)
         r2 = np.where(safe, 1.0 - residual / np.where(safe, total, 1.0), 0.0)
         peak = np.arctan2(coefficients[1], coefficients[2])
-        if nuisance is None:
+        if block is None:
             r2_adjusted = r2
         else:
-            block = nuisance[rows]
-            reduced = _ss_residual(np.column_stack([ones, block]), values)
-            full = _ss_residual(np.column_stack([ones, block, sin, cos]), values)
+            reduced, _ = _fit_residual(np.column_stack([ones, block]), values)
+            full, _ = _fit_residual(np.column_stack([ones, block, sin, cos]), values)
             r2_adjusted = np.where(safe, (reduced - full) / np.where(safe, total, 1.0), 0.0)
         r2_groups.append(r2)
         r2_adjusted_groups.append(r2_adjusted)
