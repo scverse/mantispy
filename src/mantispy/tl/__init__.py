@@ -3,6 +3,7 @@
 from mantispy.tl._aggregate import aggregate
 from mantispy.tl._cluster import cluster
 from mantispy.tl._consensus import consensus
+from mantispy.tl._cyclic import circular_correlation, circular_neighbor_error, orient_cycle
 from mantispy.tl._design import cytotoxicity, replicate_saturation
 from mantispy.tl._differential import differential_features
 from mantispy.tl._distance import edistance
@@ -32,6 +33,8 @@ __all__ = [
     "aggregate",
     "aggregate_guides",
     "cell_cycle_phase",
+    "circular_correlation",
+    "circular_neighbor_error",
     "cluster",
     "cluster_composition",
     "consensus",
@@ -58,6 +61,7 @@ __all__ = [
     "network_enrichment",
     "nn_moa_classify",
     "ora",
+    "orient_cycle",
     "pathway_coherence",
     "percent_replicating",
     "rank_features",
