@@ -89,6 +89,38 @@ def test_cell_cycle_refuses_normalized_values(clustered):
         mt.tl.cell_cycle_phase(clustered, dna_feature=clustered.var_names[0])
 
 
+def _dna_object(values):
+    """A minimal object-resolution adata carrying one raw integrated-DNA feature."""
+    n = len(values)
+    adata = ad.AnnData(
+        X=np.asarray(values, dtype=np.float32).reshape(n, 1),
+        obs=pd.DataFrame({"Metadata_Plate": ["P"] * n}, index=[str(i) for i in range(n)]),
+    )
+    adata.var_names = ["Nuclei_Intensity_IntegratedIntensity_DNA"]
+    stamp(adata, resolution="object")
+    return adata
+
+
+def test_cell_cycle_phase_warns_when_the_dna_has_one_peak():
+    """One narrow peak, no G2M shoulder: two Gaussians fit no better than one, so it warns rather than splitting."""
+    values = np.exp(np.random.default_rng(0).normal(0.0, 0.1, size=400))
+    adata = _dna_object(values)
+    with pytest.warns(UserWarning, match="one peak"):
+        mt.tl.cell_cycle_phase(adata, dna_feature=adata.var_names[0])
+
+
+def test_cell_cycle_phase_position_orders_the_cycle():
+    """With two peaks a factor of two apart, the continuous position rises from G1 to G2M."""
+    rng = np.random.default_rng(0)
+    low = np.exp(rng.normal(0.0, 0.08, size=300))
+    high = np.exp(rng.normal(np.log(2.0), 0.08, size=300))
+    adata = _dna_object(np.r_[low, high])
+    mt.tl.cell_cycle_phase(adata, dna_feature=adata.var_names[0], position=True)
+    pos = adata.obs["Metadata_CellCyclePosition"].to_numpy()
+    assert np.nanmean(pos[300:]) > np.nanmean(pos[:300])
+    assert np.isnan(pos).sum() == 0
+
+
 def test_local_density_is_computed_within_a_field(clustered):
     clustered = clustered.copy()  # module-scoped fixture; this test writes obs coordinates and density
     rng = np.random.default_rng(0)
