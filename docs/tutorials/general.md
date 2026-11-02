@@ -6,7 +6,6 @@ This section holds the steps they share: loading data, quality control, normaliz
 ```{toctree}
 :maxdepth: 1
 
-overview
 data/bring_your_own
 profiles/quality_control
 profiles/normalize_and_select
