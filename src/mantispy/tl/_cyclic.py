@@ -6,7 +6,17 @@ sine and cosine, never a linear regression on radians, which folds at the wrap f
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from typing import TYPE_CHECKING
+
 import numpy as np
+import pandas as pd
+
+from mantispy._core._reduce import get_matrix
+from mantispy._core.frames import as_frame
+
+if TYPE_CHECKING:
+    from anndata import AnnData
 
 _TWO_PI = 2.0 * np.pi
 
@@ -90,3 +100,158 @@ def circular_neighbor_error(theta: np.ndarray, neighbors: np.ndarray) -> float:
         np.nanmean(np.sin(neighbour_angles), axis=1), np.nanmean(np.cos(neighbour_angles), axis=1)
     )
     return float(np.nanmedian(np.abs(_wrap(theta - mean_direction))))
+
+
+def _reference_mask(obs: pd.DataFrame, by: str, reference: object) -> np.ndarray:
+    """Rows that are the reference: a value of the ``by`` column, a boolean ``obs`` column, or a mask."""
+    if isinstance(reference, str):
+        if reference in set(obs[by]):
+            return (obs[by] == reference).to_numpy()
+        if reference in obs.columns:
+            return obs[reference].to_numpy().astype(bool)
+        raise ValueError(f"reference {reference!r} is neither a value of {by!r} nor a column of obs")
+    return np.asarray(reference, dtype=bool)
+
+
+def _group_masks(obs: pd.DataFrame, by: str | None, n: int) -> list[tuple[object, np.ndarray]]:
+    """One (label, boolean mask) per group, or a single all-rows group when ``by`` is None."""
+    if by is None:
+        return [(None, np.ones(n, dtype=bool))]
+    values = obs[by].to_numpy()
+    return [(value, values == value) for value in pd.unique(values)]
+
+
+def _paired_pvalue(shifts: np.ndarray) -> float:
+    """Wilcoxon signed-rank p-value of the per-block shifts against zero; NaN when it cannot be computed."""
+    from scipy.stats import wilcoxon
+
+    if np.count_nonzero(np.abs(shifts) > 1e-12) < 1:
+        return float("nan")
+    try:
+        return float(wilcoxon(shifts).pvalue)
+    except ValueError:
+        return float("nan")
+
+
+def cyclic_shift(
+    adata: AnnData,
+    angle_key: str,
+    by: str,
+    reference: object,
+    block: str | None = None,
+) -> pd.DataFrame:
+    """Circular-mean shift of each group's cycle angle against a reference, within and across blocks.
+
+    For each group of ``by``, the angle is compared with the ``reference`` group inside each ``block``
+    (a well), and the per-block shifts are combined across blocks with a paired test. A knockout that
+    pushes cells around the cycle shows up as a non-zero shift; the reference against itself is zero.
+
+    Args:
+        adata: Object carrying the cycle angle in ``obs[angle_key]``.
+        angle_key: ``obs`` column holding the angle in radians.
+        by: ``obs`` column naming the groups to score, one row of the result each.
+        reference: The reference group: a value of ``by``, a boolean ``obs`` column name, or a mask.
+        block: ``obs`` column the comparison is paired within, normally the well; ``None`` pools all rows.
+
+    Returns:
+        A frame with one row per group: ``group``, the circular-mean ``shift`` in radians, the paired
+        ``pvalue`` over blocks, and ``n_blocks`` that contributed both the group and the reference.
+    """
+    obs = as_frame(adata.obs)
+    theta = obs[angle_key].to_numpy(dtype=float)
+    reference_rows = _reference_mask(obs, by, reference)
+    blocks = obs[block].to_numpy() if block is not None else np.zeros(adata.n_obs, dtype=int)
+
+    rows = []
+    for group, group_rows in _group_masks(obs, by, adata.n_obs):
+        shifts = []
+        for value in pd.unique(blocks):
+            in_block = blocks == value
+            group_angles = theta[group_rows & in_block]
+            reference_angles = theta[reference_rows & in_block]
+            group_angles = group_angles[np.isfinite(group_angles)]
+            reference_angles = reference_angles[np.isfinite(reference_angles)]
+            if group_angles.size == 0 or reference_angles.size == 0:
+                continue
+            shifts.append(_wrap(_circular_mean(group_angles) - _circular_mean(reference_angles)))
+        if not shifts:
+            rows.append((group, float("nan"), float("nan"), 0))
+            continue
+        shifts = np.asarray(shifts)
+        rows.append((group, _circular_mean(shifts), _paired_pvalue(shifts), shifts.size))
+    return pd.DataFrame(rows, columns=["group", "shift", "pvalue", "n_blocks"])
+
+
+def _ss_residual(design: np.ndarray, values: np.ndarray) -> np.ndarray:
+    """Residual sum of squares per column of ``values`` after a least-squares fit on ``design``."""
+    coefficients, *_ = np.linalg.lstsq(design, values, rcond=None)
+    residual = values - design @ coefficients
+    return np.sum(residual**2, axis=0)
+
+
+def feature_cycle_association(
+    adata: AnnData,
+    angle_key: str,
+    covariates: Sequence[str] = (),
+    by: str | None = None,
+    layer: str | None = None,
+) -> pd.DataFrame:
+    """How strongly each feature follows the cycle, as a sinusoid fitted within groups.
+
+    Each feature is regressed on ``[sin(angle), cos(angle)]``, giving the share of its variance the cycle
+    explains and the angle at which it peaks. Regressing nuisance ``covariates`` out as well gives the
+    share the cycle explains beyond them, which separates a real cycle feature from one that only tracks
+    cell size or sequencing depth.
+
+    Args:
+        adata: Object with the features in ``X`` (or ``layer``) and the angle in ``obs[angle_key]``.
+        angle_key: ``obs`` column holding the angle in radians.
+        covariates: Numeric ``obs`` columns to regress out before scoring the cycle's extra contribution.
+        by: Fit within each group of this ``obs`` column and average, or ``None`` to fit over all rows.
+        layer: Read this layer instead of ``X``.
+
+    Returns:
+        A frame with one row per feature: ``feature``, ``r2``, ``r2_adjusted`` (after the covariates),
+        and ``peak_angle`` in radians.
+    """
+    obs = as_frame(adata.obs)
+    theta = obs[angle_key].to_numpy(dtype=float)
+    matrix = np.asarray(get_matrix(adata, layer), dtype=float)
+    nuisance = (
+        np.column_stack([obs[column].to_numpy(dtype=float) for column in covariates]) if len(covariates) else None
+    )
+
+    r2_groups, r2_adjusted_groups, peak_groups = [], [], []
+    for _, rows in _group_masks(obs, by, adata.n_obs):
+        angle = theta[rows]
+        values = matrix[rows]
+        sin, cos, ones = np.sin(angle), np.cos(angle), np.ones(angle.size)
+        cycle_design = np.column_stack([ones, sin, cos])
+        if angle.size <= cycle_design.shape[1]:
+            continue
+        total = np.sum((values - values.mean(axis=0)) ** 2, axis=0)
+        safe = total > 0
+        coefficients = np.linalg.lstsq(cycle_design, values, rcond=None)[0]
+        residual = np.sum((values - cycle_design @ coefficients) ** 2, axis=0)
+        r2 = np.where(safe, 1.0 - residual / np.where(safe, total, 1.0), 0.0)
+        peak = np.arctan2(coefficients[1], coefficients[2])
+        if nuisance is None:
+            r2_adjusted = r2
+        else:
+            block = nuisance[rows]
+            reduced = _ss_residual(np.column_stack([ones, block]), values)
+            full = _ss_residual(np.column_stack([ones, block, sin, cos]), values)
+            r2_adjusted = np.where(safe, (reduced - full) / np.where(safe, total, 1.0), 0.0)
+        r2_groups.append(r2)
+        r2_adjusted_groups.append(r2_adjusted)
+        peak_groups.append(peak)
+
+    peaks = np.array(peak_groups)
+    return pd.DataFrame(
+        {
+            "feature": list(adata.var_names),
+            "r2": np.mean(r2_groups, axis=0),
+            "r2_adjusted": np.mean(r2_adjusted_groups, axis=0),
+            "peak_angle": np.arctan2(np.mean(np.sin(peaks), axis=0), np.mean(np.cos(peaks), axis=0)),
+        }
+    )
