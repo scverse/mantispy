@@ -11,6 +11,7 @@ learned_embeddings
 cross_laboratory
 optical_pooled_screens
 crispr
+cytos_multiomics_cell_cycle
 empirical_fdr
 gene_aggregation
 plate_position
