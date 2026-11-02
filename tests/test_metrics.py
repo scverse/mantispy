@@ -145,6 +145,23 @@ def test_batch_variance_explained_covers_every_key():
     assert len(frame) == 2
 
 
+def test_batch_variance_explained_scores_a_circular_covariate_as_one_row():
+    """A cycle angle enters as one row, not two: the share of PC variance the whole angle explains."""
+    import anndata as ad
+
+    rng = np.random.default_rng(3)
+    theta = rng.uniform(-np.pi, np.pi, size=400)
+    pcs = np.c_[np.cos(theta), np.sin(theta), 0.1 * rng.normal(size=400)]
+    obs = pd.DataFrame({"theta": theta}, index=[str(index) for index in range(400)])
+    adata = ad.AnnData(X=rng.normal(size=(400, 3)).astype(np.float32), obs=obs)
+    adata.obsm["X_pca"] = pcs
+
+    frame = mt.metrics.batch_variance_explained(adata, keys=[], circular=["theta"])
+    assert (frame["key"] == "theta").sum() == 1
+    assert (frame["metric"] == "pc_regression").all()
+    assert frame.set_index("key").loc["theta", "value"] > 0.5
+
+
 def _scib_ready(n=120, seed=0):
     """A small object scib-metrics can benchmark: labels separable, two batches, an X_pca baseline."""
     import anndata as ad
