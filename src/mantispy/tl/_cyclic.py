@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 _TWO_PI = 2.0 * np.pi
 
 
-def _wrap(angle: np.ndarray) -> np.ndarray:
+def _wrap(angle: np.ndarray | float) -> np.ndarray:
     """Wrap an angle, or an array of angles, into ``[-pi, pi)``."""
     return (np.asarray(angle, dtype=float) + np.pi) % _TWO_PI - np.pi
 
@@ -173,12 +173,12 @@ def cyclic_shift(
             reference_angles = reference_angles[np.isfinite(reference_angles)]
             if group_angles.size == 0 or reference_angles.size == 0:
                 continue
-            shifts.append(_wrap(_circular_mean(group_angles) - _circular_mean(reference_angles)))
+            shifts.append(float(_wrap(_circular_mean(group_angles) - _circular_mean(reference_angles))))
         if not shifts:
             rows.append((group, float("nan"), float("nan"), 0))
             continue
-        shifts = np.asarray(shifts)
-        rows.append((group, _circular_mean(shifts), _paired_pvalue(shifts), shifts.size))
+        per_block = np.asarray(shifts)
+        rows.append((group, _circular_mean(per_block), _paired_pvalue(per_block), per_block.size))
     return pd.DataFrame(rows, columns=["group", "shift", "pvalue", "n_blocks"])
 
 
