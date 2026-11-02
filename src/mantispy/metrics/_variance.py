@@ -157,7 +157,39 @@ def pc_regression(adata: AnnData, key: str, use_rep: str = "X_pca", n_comps: int
     return tidy("pc_regression", use_rep, key, float(np.sum(weights * explained)))
 
 
-def batch_variance_explained(adata: AnnData, keys: Sequence[str], use_rep: str = "X_pca") -> pd.DataFrame:
+def circular_pc_regression(adata: AnnData, key: str, use_rep: str = "X_pca") -> pd.DataFrame:
+    """Variance-weighted R^2 of the principal components on a circular covariate.
+
+    A cycle angle is not a scalar, so each component is regressed on the two-column design
+    ``[sin(angle), cos(angle)]`` jointly, and the per-component multiple R^2 is weighted by that
+    component's share of the total variance. One angle is one row, the share of total variance it explains.
+
+    Args:
+        adata: Object with the embedding to measure in.
+        key: ``obs`` column holding the angle in radians.
+        use_rep: ``obsm`` key of the embedding.
+
+    Returns:
+        A one-row tidy frame holding ``pc_regression`` for ``key``.
+
+    Raises:
+        KeyError: ``obsm`` holds nothing under ``use_rep``.
+    """
+    values = np.ascontiguousarray(embedding(adata, use_rep))
+    angle = as_frame(adata.obs)[key].to_numpy(dtype=np.float64)
+    design = np.column_stack([np.ones(angle.size), np.sin(angle), np.cos(angle)])
+    coefficients, *_ = np.linalg.lstsq(design, values, rcond=None)
+    ss_residual = np.sum((values - design @ coefficients) ** 2, axis=0)
+    ss_total = np.sum((values - values.mean(axis=0)) ** 2, axis=0)
+    explained = np.where(ss_total > 0, 1.0 - ss_residual / np.where(ss_total > 0, ss_total, 1.0), 0.0)
+    variances = values.var(axis=0, ddof=1)
+    weights = variances / variances.sum()
+    return tidy("pc_regression", use_rep, key, float(np.sum(weights * explained)))
+
+
+def batch_variance_explained(
+    adata: AnnData, keys: Sequence[str], use_rep: str = "X_pca", circular: Sequence[str] = ()
+) -> pd.DataFrame:
     """:func:`~mantispy.metrics.pc_regression` for several covariates, stacked into one frame.
 
     Args:
@@ -165,14 +197,18 @@ def batch_variance_explained(adata: AnnData, keys: Sequence[str], use_rep: str =
         keys: ``obs`` columns to score, one row of the result each. Any column works, numeric or categorical,
             not only the batch: a plate position, a cell count or a treatment label are all valid covariates.
         use_rep: ``obsm`` key of the embedding.
+        circular: ``obs`` columns holding an angle in radians, scored by :func:`circular_pc_regression`,
+            one row each, so a cell-cycle clock enters as a single covariate rather than two.
 
     Returns:
-        A tidy frame holding one ``pc_regression`` row per entry of ``keys``.
+        A tidy frame holding one ``pc_regression`` row per entry of ``keys`` and ``circular``.
 
     Raises:
         KeyError: ``obsm`` holds nothing under ``use_rep``.
     """
-    return pd.concat([pc_regression(adata, key, use_rep) for key in keys], ignore_index=True)
+    rows = [pc_regression(adata, key, use_rep) for key in keys]
+    rows += [circular_pc_regression(adata, key, use_rep) for key in circular]
+    return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
 
 
 def variance_carried(
