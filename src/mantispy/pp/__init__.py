@@ -8,6 +8,7 @@ from mantispy.pp._batch import (
     harmony,
     regress_out,
 )
+from mantispy.pp._center import center_within
 from mantispy.pp._chatterjee import feature_select_chatterjee
 from mantispy.pp._feature_qc import feature_batch_sensitivity, feature_reproducibility
 from mantispy.pp._image_qc import filter_images, image_qc
@@ -32,6 +33,7 @@ __all__ = [
     "annotate_controls",
     "annotate_jump",
     "calculate_qc_metrics",
+    "center_within",
     "correct_chromosome_arm",
     "correct_plate_position",
     "decorr_threshold_sweep",
