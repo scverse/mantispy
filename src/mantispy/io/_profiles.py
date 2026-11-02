@@ -599,6 +599,44 @@ def write(
             tmp.unlink(missing_ok=True)
 
 
+def from_embedding(
+    X: np.ndarray,
+    obs: pd.DataFrame,
+    *,
+    resolution: str = "object",
+    feature_kind: str = "embedding",
+    object_type: str = "cell",
+    var_names: Sequence[str] | None = None,
+) -> ad.AnnData:
+    """Build a tool-ready :class:`~anndata.AnnData` from a matrix of learned embeddings.
+
+    A model's embedding is a plain matrix, one row per object and one column per latent dimension, with
+    the metadata that names each row alongside. Wrapping it so that :func:`~mantispy.tl.aggregate`,
+    :func:`~mantispy.tl.map` and :func:`~mantispy.tl.edistance` accept it is the same few lines every time:
+    build the object, name the columns, cast to the stored ``float32``, and stamp it. This does that.
+
+    Args:
+        X: The embedding, observations by latent dimensions. Cast to ``float32``.
+        obs: Per-row metadata, carrying the columns ``resolution`` requires.
+        resolution: What one row is, passed to :func:`stamp`: ``"object"`` for single cells, ``"well"`` or ``"aggregate"``.
+        feature_kind: The representation the columns carry; an embedding is ``"embedding"``.
+        object_type: For object resolution, the ``Metadata_ObjectType`` written when ``obs`` carries none.
+        var_names: Names for the latent dimensions, or ``None`` for ``embedding_0 … embedding_{k-1}``.
+
+    Returns:
+        A stamped, validated object with the embedding in ``X`` and the feature annotation in ``var``.
+
+    Raises:
+        ValueError: ``obs`` lacks a column ``resolution`` requires, raised by :func:`stamp`'s validation.
+    """
+    matrix = np.asarray(X, dtype=np.float32)
+    names = list(var_names) if var_names is not None else [f"embedding_{i}" for i in range(matrix.shape[1])]
+    adata = ad.AnnData(X=matrix, obs=obs.copy())
+    adata.var_names = names
+    stamp(adata, resolution=resolution, feature_kind=feature_kind, object_type=object_type)
+    return adata
+
+
 def stamp(
     adata: ad.AnnData,
     resolution: str | None = None,
