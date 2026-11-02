@@ -119,7 +119,7 @@ test = [
 doc = [
   "ipython",                       # conf.py enables IPython.sphinxext.ipython_console_highlighting
   "mantispy[spatial]",             # autodoc imports io._plate
-  "scverse-doc[full]>=0.3",
+  "scverse-doc[full]>=0.4",
   "scverse-misc[sphinx]>=0.1.6",   # scverse_misc.sphinx_ext documents the Settings object
   "sphinx>=8.1",
   "sphinx-autodoc-typehints<3.14", # 3.14 stringifies class bases, which breaks scverse-doc's _skip_private_bases
