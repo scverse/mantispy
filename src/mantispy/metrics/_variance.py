@@ -167,6 +167,11 @@ def circular_pc_regression(adata: AnnData, key: str, use_rep: str = "X_pca") -> 
     """
     values = np.ascontiguousarray(embedding(adata, use_rep))
     angle = as_frame(adata.obs)[key].to_numpy(dtype=np.float64)
+    if np.isnan(angle).any():
+        raise ValueError(
+            f"the circular covariate obs[{key!r}] has missing values, which cannot be regressed; "
+            "subset to the cells with a finite angle first."
+        )
     design = np.column_stack([np.ones(angle.size), np.sin(angle), np.cos(angle)])
     coefficients, *_ = np.linalg.lstsq(design, values, rcond=None)
     ss_residual = np.sum((values - design @ coefficients) ** 2, axis=0)

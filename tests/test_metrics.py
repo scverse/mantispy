@@ -162,6 +162,21 @@ def test_batch_variance_explained_scores_a_circular_covariate_as_one_row():
     assert frame.set_index("key").loc["theta", "value"] > 0.5
 
 
+def test_circular_pc_regression_refuses_a_nan_angle():
+    """A missing angle cannot be regressed, so it raises clearly rather than crashing in lstsq."""
+    import anndata as ad
+
+    rng = np.random.default_rng(3)
+    theta = rng.uniform(-np.pi, np.pi, size=60)
+    theta[0] = np.nan
+    obs = pd.DataFrame({"theta": theta}, index=[str(index) for index in range(60)])
+    adata = ad.AnnData(X=rng.normal(size=(60, 3)).astype(np.float32), obs=obs)
+    adata.obsm["X_pca"] = rng.normal(size=(60, 4))
+
+    with pytest.raises(ValueError, match="missing"):
+        mt.metrics.batch_variance_explained(adata, keys=[], circular=["theta"])
+
+
 def _scib_ready(n=120, seed=0):
     """A small object scib-metrics can benchmark: labels separable, two batches, an X_pca baseline."""
     import anndata as ad

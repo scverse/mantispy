@@ -3,7 +3,13 @@
 from mantispy.tl._aggregate import aggregate
 from mantispy.tl._cluster import cluster
 from mantispy.tl._consensus import consensus
-from mantispy.tl._cyclic import circular_correlation, circular_neighbor_error, orient_cycle
+from mantispy.tl._cyclic import (
+    circular_correlation,
+    circular_neighbor_error,
+    cyclic_shift,
+    feature_cycle_association,
+    orient_cycle,
+)
 from mantispy.tl._design import cytotoxicity, replicate_saturation
 from mantispy.tl._differential import differential_features
 from mantispy.tl._distance import edistance
@@ -38,6 +44,7 @@ __all__ = [
     "cluster",
     "cluster_composition",
     "consensus",
+    "cyclic_shift",
     "cytotoxicity",
     "dose_direction",
     "dose_features",
@@ -49,6 +56,7 @@ __all__ = [
     "empirical_fdr",
     "enrich",
     "enrich_hits",
+    "feature_cycle_association",
     "feature_sets",
     "feature_signature",
     "gene_set_network",
