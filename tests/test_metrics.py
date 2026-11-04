@@ -22,6 +22,28 @@ def _value(frame, metric):
     return float(frame.loc[frame["metric"] == metric, "value"].iloc[0])
 
 
+def lstsq_r_squared(component: np.ndarray, covariate: pd.Series) -> float:
+    """R^2 of one component regressed on one covariate, numeric or categorical.
+
+    Args:
+        component: One column of an embedding, one value per observation.
+        covariate: The covariate to regress it on; a categorical one is expanded into dummy columns, a numeric one enters as it is.
+
+    Returns:
+        The share of the component's variance the covariate explains, and ``0.0`` for a constant component, where that share is undefined.
+    """
+    if isinstance(covariate.dtype, pd.CategoricalDtype) or not pd.api.types.is_numeric_dtype(covariate):
+        dummies = pd.get_dummies(covariate, drop_first=True, dtype=float).to_numpy()
+        design = np.column_stack([np.ones(component.size), dummies])
+    else:
+        design = np.column_stack([np.ones(component.size), covariate.to_numpy(dtype=float)])
+
+    coefficients, *_ = np.linalg.lstsq(design, component, rcond=None)
+    residual = component - design @ coefficients
+    total = float(np.sum((component - component.mean()) ** 2))
+    return 0.0 if total == 0 else float(1.0 - np.sum(residual**2) / total)
+
+
 def _pc_regression_pair(seed=0):
     """An embedding with a categorical and a numeric covariate, needing no optional dependency."""
     import anndata as ad
@@ -43,15 +65,13 @@ def _pc_regression_pair(seed=0):
 
 def test_pc_regression_matches_a_plain_numpy_reference():
     """The numba kernels agree with a plain-numpy variance-weighted R^2 to 1e-6 for both a categorical and a numeric covariate."""
-    from mantispy.metrics._common import r_squared
-
     adata, values = _pc_regression_pair()
 
     def reference(key):
         covariate = adata.obs[key]
         variances = values.var(axis=0, ddof=1)
         weights = variances / variances.sum()
-        explained = np.array([r_squared(values[:, index], covariate) for index in range(values.shape[1])])
+        explained = np.array([lstsq_r_squared(values[:, index], covariate) for index in range(values.shape[1])])
         return float(np.sum(weights * explained))
 
     for key in ("cat", "num"):
@@ -98,8 +118,6 @@ def test_pc_regression_folds_a_categorical_nan_into_the_baseline_like_the_old_r_
     """A missing categorical value folds into the baseline level rather than forming its own group, matching the plain-numpy r_squared."""
     import anndata as ad
 
-    from mantispy.metrics._common import r_squared
-
     rng = np.random.default_rng(3)
     n = 120
     values = rng.normal(size=(n, 5))
@@ -112,7 +130,7 @@ def test_pc_regression_folds_a_categorical_nan_into_the_baseline_like_the_old_r_
 
     variances = values.var(axis=0, ddof=1)
     weights = variances / variances.sum()
-    explained = np.array([r_squared(values[:, index], obs["cat"]) for index in range(values.shape[1])])
+    explained = np.array([lstsq_r_squared(values[:, index], obs["cat"]) for index in range(values.shape[1])])
     expected = float(np.sum(weights * explained))
 
     got = float(mt.metrics.pc_regression(adata, "cat")["value"].iloc[0])
@@ -562,3 +580,26 @@ def test_variance_carried_survives_an_inf_target():
     frame = mt.metrics.variance_carried(adata, reference, use_rep="X_emb", groupby=None)
     carried = frame.set_index("feature")["variance_carried"]
     assert carried["F0"] > 0.7
+
+
+def test_batch_variance_plot_matches_a_least_squares_fit_per_component():
+    """The plotted R^2 per component equals a least-squares fit on the dummies, for a many-level categorical with a missing value and for a numeric covariate."""
+    import anndata as ad
+
+    rng = np.random.default_rng(4)
+    n = 300
+    levels = [f"g{index % 40}" for index in range(n)]
+    levels[7] = None
+    obs = pd.DataFrame(
+        {"cat": pd.Categorical(levels), "num": rng.normal(size=n)}, index=[str(index) for index in range(n)]
+    )
+    values = rng.normal(size=(n, 6))
+    adata = ad.AnnData(X=rng.normal(size=(n, 3)).astype(np.float32), obs=obs)
+    adata.obsm["X_pca"] = values
+
+    fig, ax = plt.subplots()
+    mt.pl.batch_variance(adata, keys=["cat", "num"], ax=ax)
+    for line, key in zip(ax.lines, ["cat", "num"], strict=True):
+        expected = [lstsq_r_squared(values[:, index], obs[key]) for index in range(values.shape[1])]
+        np.testing.assert_allclose(line.get_ydata(), expected, atol=1e-9)
+    plt.close(fig)

@@ -91,6 +91,31 @@ def _pearson_r2(values: np.ndarray, covariate: np.ndarray) -> np.ndarray:
     return out
 
 
+def component_r2(values: np.ndarray, covariate: pd.Series, key: str) -> np.ndarray:
+    """R^2 of each column of ``values`` regressed on ``covariate`` on its own.
+
+    A categorical covariate goes through a one-way ANOVA, which equals a least-squares fit on its dummy columns, and a numeric one through the squared Pearson correlation.
+    A missing categorical value folds into the baseline level, as ``pd.get_dummies(drop_first=True)`` did, rather than forming its own group.
+
+    Raises:
+        ValueError: ``covariate`` is numeric and has missing values, which cannot be regressed.
+    """
+    values = np.ascontiguousarray(values)
+    if is_categorical(covariate):
+        codes = covariate.astype("category").cat.remove_unused_categories().cat.codes.to_numpy().copy()
+        codes[codes == -1] = 0
+        codes = codes.astype(np.int64)
+        return _anova_r2(values, codes, int(codes.max()) + 1)
+    numeric = covariate.to_numpy(dtype=np.float64)
+    missing = int(np.isnan(numeric).sum())
+    if missing:
+        raise ValueError(
+            f"PC-regression over obs[{key!r}] has {missing} missing value(s) in a numeric covariate, which "
+            "cannot be regressed. Drop those rows or fill the column first."
+        )
+    return _pearson_r2(values, numeric)
+
+
 def pc_regression(adata: AnnData, key: str, use_rep: str = "X_pca", n_comps: int | None = None) -> pd.DataFrame:
     """Variance-weighted R^2 of the principal components on ``key``.
 
@@ -128,22 +153,7 @@ def pc_regression(adata: AnnData, key: str, use_rep: str = "X_pca", n_comps: int
 
     variances = values.var(axis=0, ddof=1)
     weights = variances / variances.sum()
-    if is_categorical(covariate):
-        codes = covariate.astype("category").cat.remove_unused_categories().cat.codes.to_numpy().copy()
-        # Fold a missing value into the baseline level, as the old pd.get_dummies(drop_first=True) did, rather than
-        # letting it form its own ANOVA group, which would read as a phantom batch.
-        codes[codes == -1] = 0
-        codes = codes.astype(np.int64)
-        explained = _anova_r2(values, codes, int(codes.max()) + 1)
-    else:
-        numeric = covariate.to_numpy(dtype=np.float64)
-        missing = int(np.isnan(numeric).sum())
-        if missing:
-            raise ValueError(
-                f"PC-regression over obs[{key!r}] has {missing} missing value(s) in a numeric covariate, which "
-                "cannot be regressed. Drop those rows or fill the column first."
-            )
-        explained = _pearson_r2(values, numeric)
+    explained = component_r2(values, covariate, key)
     return tidy("pc_regression", use_rep, key, float(np.sum(weights * explained)))
 
 

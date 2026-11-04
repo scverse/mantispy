@@ -47,25 +47,3 @@ def tidy(metric: str, use_rep: str, key: str, value: float) -> pd.DataFrame:
 def is_categorical(covariate: pd.Series) -> bool:
     """Whether a covariate is treated as categorical (one-hot encoded) rather than entering as a number."""
     return isinstance(covariate.dtype, pd.CategoricalDtype) or not pd.api.types.is_numeric_dtype(covariate)
-
-
-def r_squared(component: np.ndarray, covariate: pd.Series) -> float:
-    """R^2 of one component regressed on one covariate, numeric or categorical.
-
-    Args:
-        component: One column of an embedding, one value per observation.
-        covariate: The covariate to regress it on; a categorical one is expanded into dummy columns, a numeric one enters as it is.
-
-    Returns:
-        The share of the component's variance the covariate explains, and ``0.0`` for a constant component, where that share is undefined.
-    """
-    if is_categorical(covariate):
-        dummies = pd.get_dummies(covariate, drop_first=True, dtype=float).to_numpy()
-        design = np.column_stack([np.ones(component.size), dummies])
-    else:
-        design = np.column_stack([np.ones(component.size), covariate.to_numpy(dtype=float)])
-
-    coefficients, *_ = np.linalg.lstsq(design, component, rcond=None)
-    residual = component - design @ coefficients
-    total = float(np.sum((component - component.mean()) ** 2))
-    return 0.0 if total == 0 else float(1.0 - np.sum(residual**2) / total)
