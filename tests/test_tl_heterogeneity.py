@@ -105,7 +105,7 @@ def test_cell_cycle_phase_warns_when_the_dna_has_one_peak():
     """One narrow peak, no G2M shoulder: two Gaussians fit no better than one, so it warns rather than splitting."""
     values = np.exp(np.random.default_rng(0).normal(0.0, 0.1, size=400))
     adata = _dna_object(values)
-    with pytest.warns(UserWarning, match="one peak"):
+    with pytest.warns(UserWarning, match="one DNA peak"):
         mt.tl.cell_cycle_phase(adata, dna_feature=adata.var_names[0])
 
 
