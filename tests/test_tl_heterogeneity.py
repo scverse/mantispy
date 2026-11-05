@@ -89,6 +89,55 @@ def test_cell_cycle_refuses_normalized_values(clustered):
         mt.tl.cell_cycle_phase(clustered, dna_feature=clustered.var_names[0])
 
 
+def _dna_object(values):
+    """A minimal object-resolution adata carrying one raw integrated-DNA feature."""
+    n = len(values)
+    adata = ad.AnnData(
+        X=np.asarray(values, dtype=np.float32).reshape(n, 1),
+        obs=pd.DataFrame({"Metadata_Plate": ["P"] * n}, index=[str(i) for i in range(n)]),
+    )
+    adata.var_names = ["Nuclei_Intensity_IntegratedIntensity_DNA"]
+    stamp(adata, resolution="object")
+    return adata
+
+
+def test_cell_cycle_phase_warns_when_the_dna_has_one_peak():
+    """One narrow peak, no G2M shoulder: two Gaussians fit no better than one, so it warns rather than splitting."""
+    values = np.exp(np.random.default_rng(0).normal(0.0, 0.1, size=400))
+    adata = _dna_object(values)
+    with pytest.warns(UserWarning, match="one DNA peak"):
+        mt.tl.cell_cycle_phase(adata, dna_feature=adata.var_names[0])
+
+
+def test_cell_cycle_phase_warns_on_a_shoulder_however_many_cells():
+    """One peak with an S shoulder clears any fixed BIC margin at large n; the peak separation does not."""
+    rng = np.random.default_rng(1)
+    values = np.exp(np.r_[rng.normal(0.0, 0.12, size=40_000), rng.normal(0.35, 0.12, size=15_000)])
+    adata = _dna_object(values)
+    with pytest.warns(UserWarning, match="one DNA peak"):
+        mt.tl.cell_cycle_phase(adata, dna_feature=adata.var_names[0])
+
+
+def test_cell_cycle_phase_two_peaks_a_doubling_apart_do_not_warn():
+    rng = np.random.default_rng(0)
+    values = np.exp(np.r_[rng.normal(0.0, 0.08, size=300), rng.normal(np.log(2.0), 0.08, size=300)])
+    adata = _dna_object(values)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        mt.tl.cell_cycle_phase(adata, dna_feature=adata.var_names[0])
+    assert set(adata.obs["Metadata_CellCyclePhase"].astype(str)) >= {"G1", "G2M"}
+
+
+def test_cell_cycle_phase_warns_once_for_every_one_peak_group():
+    rng = np.random.default_rng(2)
+    adata = _dna_object(np.exp(rng.normal(0.0, 0.1, size=1200)))
+    adata.obs["Metadata_Well"] = np.repeat([f"W{i}" for i in range(6)], 200)
+    with pytest.warns(UserWarning, match="one DNA peak") as caught:
+        mt.tl.cell_cycle_phase(adata, dna_feature=adata.var_names[0], by="Metadata_Well")
+    assert sum("one DNA peak" in str(w.message) for w in caught) == 1
+    assert "6 of 6 group(s)" in str(next(w.message for w in caught if "one DNA peak" in str(w.message)))
+
+
 def test_local_density_is_computed_within_a_field(clustered):
     clustered = clustered.copy()  # module-scoped fixture; this test writes obs coordinates and density
     rng = np.random.default_rng(0)

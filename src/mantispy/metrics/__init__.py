@@ -10,10 +10,16 @@ Batch metrics and biological-signal metrics trade off against each other, so rea
 from mantispy.metrics._diagnose import diagnose_testing
 from mantispy.metrics._evaluate import evaluate_integration
 from mantispy.metrics._relationships import known_relationships
-from mantispy.metrics._variance import batch_variance_explained, pc_regression, variance_carried
+from mantispy.metrics._variance import (
+    batch_variance_explained,
+    circular_pc_regression,
+    pc_regression,
+    variance_carried,
+)
 
 __all__ = [
     "batch_variance_explained",
+    "circular_pc_regression",
     "diagnose_testing",
     "evaluate_integration",
     "known_relationships",

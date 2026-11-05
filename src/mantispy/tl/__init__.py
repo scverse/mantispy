@@ -1,6 +1,13 @@
 """Tools."""
 
 from mantispy.tl._aggregate import aggregate
+from mantispy.tl._circular import (
+    circular_correlation,
+    circular_neighbor_error,
+    circular_shift,
+    feature_cycle_association,
+    orient_cycle,
+)
 from mantispy.tl._cluster import cluster
 from mantispy.tl._consensus import consensus
 from mantispy.tl._design import cytotoxicity, replicate_saturation
@@ -32,6 +39,9 @@ __all__ = [
     "aggregate",
     "aggregate_guides",
     "cell_cycle_phase",
+    "circular_correlation",
+    "circular_neighbor_error",
+    "circular_shift",
     "cluster",
     "cluster_composition",
     "consensus",
@@ -46,6 +56,7 @@ __all__ = [
     "empirical_fdr",
     "enrich",
     "enrich_hits",
+    "feature_cycle_association",
     "feature_sets",
     "feature_signature",
     "gene_set_network",
@@ -58,6 +69,7 @@ __all__ = [
     "network_enrichment",
     "nn_moa_classify",
     "ora",
+    "orient_cycle",
     "pathway_coherence",
     "percent_replicating",
     "rank_features",
