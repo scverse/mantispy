@@ -109,16 +109,33 @@ def test_cell_cycle_phase_warns_when_the_dna_has_one_peak():
         mt.tl.cell_cycle_phase(adata, dna_feature=adata.var_names[0])
 
 
-def test_cell_cycle_phase_position_orders_the_cycle():
-    """With two peaks a factor of two apart, the continuous position rises from G1 to G2M."""
+def test_cell_cycle_phase_warns_on_a_shoulder_however_many_cells():
+    """One peak with an S shoulder clears any fixed BIC margin at large n; the peak separation does not."""
+    rng = np.random.default_rng(1)
+    values = np.exp(np.r_[rng.normal(0.0, 0.12, size=40_000), rng.normal(0.35, 0.12, size=15_000)])
+    adata = _dna_object(values)
+    with pytest.warns(UserWarning, match="one DNA peak"):
+        mt.tl.cell_cycle_phase(adata, dna_feature=adata.var_names[0])
+
+
+def test_cell_cycle_phase_two_peaks_a_doubling_apart_do_not_warn():
     rng = np.random.default_rng(0)
-    low = np.exp(rng.normal(0.0, 0.08, size=300))
-    high = np.exp(rng.normal(np.log(2.0), 0.08, size=300))
-    adata = _dna_object(np.r_[low, high])
-    mt.tl.cell_cycle_phase(adata, dna_feature=adata.var_names[0], position=True)
-    pos = adata.obs["Metadata_CellCyclePosition"].to_numpy()
-    assert np.nanmean(pos[300:]) > np.nanmean(pos[:300])
-    assert np.isnan(pos).sum() == 0
+    values = np.exp(np.r_[rng.normal(0.0, 0.08, size=300), rng.normal(np.log(2.0), 0.08, size=300)])
+    adata = _dna_object(values)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        mt.tl.cell_cycle_phase(adata, dna_feature=adata.var_names[0])
+    assert set(adata.obs["Metadata_CellCyclePhase"].astype(str)) >= {"G1", "G2M"}
+
+
+def test_cell_cycle_phase_warns_once_for_every_one_peak_group():
+    rng = np.random.default_rng(2)
+    adata = _dna_object(np.exp(rng.normal(0.0, 0.1, size=1200)))
+    adata.obs["Metadata_Well"] = np.repeat([f"W{i}" for i in range(6)], 200)
+    with pytest.warns(UserWarning, match="one DNA peak") as caught:
+        mt.tl.cell_cycle_phase(adata, dna_feature=adata.var_names[0], by="Metadata_Well")
+    assert sum("one DNA peak" in str(w.message) for w in caught) == 1
+    assert "6 of 6 group(s)" in str(next(w.message for w in caught if "one DNA peak" in str(w.message)))
 
 
 def test_local_density_is_computed_within_a_field(clustered):

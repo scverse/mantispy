@@ -40,6 +40,7 @@ from mantispy._core.schema import (
     _legacy_controls,
     ensure_object_identity,
     migrate,
+    recorded_resolution,
     validate,
 )
 from mantispy._core.schema import stamp as _record
@@ -601,9 +602,10 @@ def write(
 
 def from_embedding(
     X: np.ndarray,
-    obs: pd.DataFrame,
+    obs: pd.DataFrame | None = None,
     *,
-    resolution: str = "object",
+    like: ad.AnnData | None = None,
+    resolution: str | None = None,
     feature_kind: str = "embedding",
     object_type: str = "cell",
     var_names: Sequence[str] | None = None,
@@ -617,8 +619,12 @@ def from_embedding(
 
     Args:
         X: The embedding, observations by latent dimensions. Cast to ``float32``.
-        obs: Per-row metadata, carrying the columns ``resolution`` requires.
-        resolution: What one row is, passed to :func:`stamp`: ``"object"`` for single cells, ``"well"`` or ``"aggregate"``.
+        obs: Per-row metadata, carrying the columns ``resolution`` requires. Defaults to ``like.obs``.
+        like: An object whose rows the embedding describes, usually the cells it was computed from. Its
+            ``obs``, its resolution and its perturbation record carry over, so the embedding is analysed
+            with the same metadata as the features it replaces.
+        resolution: What one row is, passed to :func:`stamp`: ``"object"`` for single cells, ``"well"`` or
+            ``"aggregate"``. Defaults to the resolution ``like`` records, else ``"object"``.
         feature_kind: The representation the columns carry; an embedding is ``"embedding"``.
         object_type: For object resolution, the ``Metadata_ObjectType`` written when ``obs`` carries none.
         var_names: Names for the latent dimensions, or ``None`` for ``embedding_0 … embedding_{k-1}``.
@@ -627,13 +633,25 @@ def from_embedding(
         A stamped, validated object with the embedding in ``X`` and the feature annotation in ``var``.
 
     Raises:
-        ValueError: ``obs`` lacks a column ``resolution`` requires, raised by :func:`stamp`'s validation.
+        ValueError: Neither ``obs`` nor ``like`` is given, the row counts do not match, or ``obs`` lacks a
+            column ``resolution`` requires, raised by :func:`stamp`'s validation.
     """
     matrix = np.asarray(X, dtype=np.float32)
+    if obs is None:
+        if like is None:
+            raise ValueError("pass obs= or like=, the object whose rows the embedding describes")
+        obs = as_frame(like.obs)
+    if matrix.shape[0] != len(obs):
+        raise ValueError(f"the embedding has {matrix.shape[0]} rows but the metadata has {len(obs)}")
+    if resolution is None:
+        resolution = (recorded_resolution(like) if like is not None else None) or "object"
     names = list(var_names) if var_names is not None else [f"embedding_{i}" for i in range(matrix.shape[1])]
     adata = ad.AnnData(X=matrix, obs=obs.copy())
     adata.var_names = names
     stamp(adata, resolution=resolution, feature_kind=feature_kind, object_type=object_type)
+    record = like.uns.get("mantispy", {}).get("perturbation") if like is not None else None
+    if record is not None:
+        adata.uns["mantispy"]["perturbation"] = dict(record)
     return adata
 
 

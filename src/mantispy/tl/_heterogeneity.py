@@ -33,8 +33,12 @@ PHASES = ("G1", "S", "G2M")
 
 _DISPERSION_MIN_CONTROLS = 8
 
-#: How much lower a two-component BIC must be than a one-component BIC for the DNA to count as two peaks.
-_ONE_PEAK_BIC_MARGIN = 10.0
+#: G2M nuclei hold twice the DNA of G1 nuclei, one doubling apart. A single peak with an S-phase shoulder
+#: still fits two Gaussians, about two thirds of a doubling apart, so peaks closer than this (in log2 units)
+#: count as one peak rather than G1 and G2M.
+_MIN_PEAK_SEPARATION = 0.75
+#: BIC gain per cell below which two Gaussians fit no better than one. Per cell, so it does not fade with n.
+_MIN_BIC_GAIN_PER_CELL = 0.01
 
 
 def _cluster_labels(obs: pd.DataFrame, cluster_key: str) -> tuple[pd.Series, np.ndarray]:
@@ -242,16 +246,16 @@ def cell_cycle_phase(
     by: str | None = "Metadata_Plate",
     layer: str | None = None,
     key_added: str = "Metadata_CellCyclePhase",
-    position: bool = False,
     copy: bool = False,
 ) -> AnnData | None:
-    """Assign G1, S or G2M from integrated DNA intensity, and optionally a continuous position.
+    """Assign G1, S or G2M from integrated DNA intensity.
 
     A two-component Gaussian mixture is fitted to log DNA intensity within each ``by`` group.
     The lower component is G1 and the upper is G2M.
     Cells that neither component claims with probability above 0.9 are called S.
-    The fit assumes two separated peaks a factor of two apart; when a group's DNA has only one peak the
-    split means little, so a warning is emitted rather than a silent call.
+    The fit assumes two separated peaks a factor of two apart. When a group's two fitted peaks sit less than
+    three quarters of a doubling apart, or two Gaussians fit barely better than one, the split means little, so one
+    warning names every such group rather than calling them silently.
 
     Args:
         adata: Single-cell object holding raw, unnormalized intensities.
@@ -260,14 +264,11 @@ def cell_cycle_phase(
         by: Fit separately within each group, normally the plate, since staining intensity does not carry across plates.
         layer: Read this layer instead of ``X``, for example ``"raw"`` after ``normalize(keep_raw=True)``.
         key_added: ``obs`` column written.
-        position: Also write a continuous ``obs["Metadata_CellCyclePosition"]`` running from G1 at zero to
-            G2M at one, the posterior probability of the upper component, for a group that was fitted.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
         ``None``, or the modified copy.
-        Writes ``obs[key_added]`` as a categorical over ``PHASES``, and ``obs["Metadata_CellCyclePosition"]``
-        when ``position`` is set (NaN for a group too small to fit).
+        Writes ``obs[key_added]`` as a categorical over ``PHASES``.
 
     Raises:
         KeyError: ``dna_feature`` was not given and no integrated DNA intensity feature could be found.
@@ -307,7 +308,7 @@ def cell_cycle_phase(
 
     codes, keys = group_codes(adata, by)
     phases = np.full(adata.n_obs, "S", dtype=object)
-    cycle_position = np.full(adata.n_obs, np.nan)
+    one_peak_groups: list[str] = []
 
     for index in range(len(keys)):
         rows = np.flatnonzero(codes == index)
@@ -319,23 +320,25 @@ def cell_cycle_phase(
         log_intensity = np.log(values[usable]).reshape(-1, 1)
         one_peak = GaussianMixture(n_components=1, random_state=0).fit(log_intensity)
         mixture = GaussianMixture(n_components=2, random_state=0).fit(log_intensity)
-        if one_peak.bic(log_intensity) - mixture.bic(log_intensity) < _ONE_PEAK_BIC_MARGIN:
-            warnings.warn(
-                f"cell_cycle_phase: the DNA intensity of {keys[index]!r} has one peak, so two Gaussians fit "
-                "no better than one and the G1/G2M split is unreliable. Check the distribution before trusting it.",
-                UserWarning,
-                stacklevel=3,
-            )
+        gain = (one_peak.bic(log_intensity) - mixture.bic(log_intensity)) / usable.size
+        separation = float(np.ptp(mixture.means_.ravel())) / np.log(2.0)
+        if gain < _MIN_BIC_GAIN_PER_CELL or separation < _MIN_PEAK_SEPARATION:
+            one_peak_groups.append(f"{keys[index]} ({separation:.2f})")
 
         probability = mixture.predict_proba(log_intensity)
         lower = int(np.argmin(mixture.means_.ravel()))
         assignment = np.where(probability.argmax(axis=1) == lower, "G1", "G2M")
         phases[usable] = np.where(probability.max(axis=1) > 0.9, assignment, "S")
-        cycle_position[usable] = probability[:, 1 - lower]
 
+    if one_peak_groups:
+        warnings.warn(
+            f"cell_cycle_phase: {len(one_peak_groups)} of {len(keys)} group(s) show one DNA peak rather than "
+            "a G1 and a G2M peak one doubling apart, so their G1/G2M split is unreliable. Peak separation in "
+            f"doublings: {', '.join(one_peak_groups[:8])}. Check the distribution before trusting the calls.",
+            UserWarning,
+            stacklevel=3,
+        )
     adata.obs[key_added] = pd.Categorical(phases, categories=list(PHASES))
-    if position:
-        adata.obs["Metadata_CellCyclePosition"] = cycle_position
     counted = pd.Series(phases).value_counts()
     get_logger().info("cell_cycle_phase: %s", counted.to_dict())
     return None
