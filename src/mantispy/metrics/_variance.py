@@ -231,7 +231,7 @@ def batch_variance_explained(
         keys: ``obs`` columns to score, one row of the result each. Any column works, numeric or categorical,
             not only the batch: a plate position, a cell count or a treatment label are all valid covariates.
         use_rep: ``obsm`` key of the embedding.
-        circular: ``obs`` columns holding an angle, scored by :func:`circular_pc_regression`, one row each,
+        circular: ``obs`` columns holding an angle, scored by :func:`~mantispy.metrics.circular_pc_regression`, one row each,
             so a cell-cycle clock enters as a single covariate rather than two.
         period: The length of one full turn of the ``circular`` angles: ``2 * np.pi`` for radians, ``360``
             for degrees, ``1`` for turns.

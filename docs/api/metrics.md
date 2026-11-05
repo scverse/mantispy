@@ -17,5 +17,6 @@ Most return a tidy frame with `metric`, `representation`, `key` and `value`, so 
     metrics.diagnose_testing
     metrics.pc_regression
     metrics.batch_variance_explained
+    metrics.circular_pc_regression
     metrics.variance_carried
 ```
