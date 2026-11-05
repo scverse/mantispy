@@ -108,3 +108,18 @@ Aggregate profiles and ask what the perturbations did.
     tl.cell_cycle_phase
     tl.neighbors_local_density
 ```
+
+## Circular covariates
+
+A cell-cycle clock is an angle, so its statistics are circular. Every function takes `period=`, the length of one turn in the units the angle is stored in.
+
+```{eval-rst}
+.. autosummary::
+    :toctree: generated
+
+    tl.circular_correlation
+    tl.circular_neighbor_error
+    tl.circular_shift
+    tl.orient_cycle
+    tl.feature_cycle_association
+```
