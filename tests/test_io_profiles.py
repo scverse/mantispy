@@ -374,7 +374,8 @@ def test_stamp_leaves_an_annotation_that_is_already_there_alone():
         assert obj.var[column].equals(var[column]), f"{column} kept what the parser found"
 
 
-def test_stamp_mints_object_identity_for_an_external_object():
+@pytest.mark.parametrize("resolution", ["object", "cell"])
+def test_stamp_mints_object_identity_for_an_external_object(resolution):
     """mt.io.stamp(resolution="object") must accept an externally built object, minting its identity."""
     obj = ad.AnnData(
         np.ones((4, 2), dtype=np.float32),
@@ -384,7 +385,8 @@ def test_stamp_mints_object_identity_for_an_external_object():
         ),
         var=parse_feature_names(["Cells_AreaShape_Area", "Cells_Intensity_MeanIntensity_DNA"], channels=["DNA"]),
     )
-    mt.io.stamp(obj, resolution="object")
+    mt.io.stamp(obj, resolution=resolution)
+    assert obj.uns["mantispy"]["resolution"] == "object"
     assert {"Metadata_ImageID", "Metadata_ObjectType", "Metadata_ObjectNumber"} <= set(obj.obs.columns)
     assert not obj.obs[["Metadata_ImageID", "Metadata_ObjectNumber"]].duplicated().any()
     assert mt.io.validate(obj).ok, mt.io.validate(obj).errors
@@ -795,3 +797,28 @@ def test_cp_measure_table_leaves_the_cellprofiler_default_alone():
     adata = from_dataframe(df)
     assert list(adata.var_names) == ["Cells_AreaShape_Area"]
     assert adata.var.loc["Cells_AreaShape_Area", "object"] == "Cells"
+
+
+def test_stamp_accepts_perturbation_resolution_alias():
+    frame = pd.DataFrame(
+        {
+            "Metadata_Perturbation": ["a", "b"],
+            "Cells_AreaShape_Area": [1.0, 2.0],
+            "Cells_Intensity_MeanIntensity_DNA": [0.1, 0.2],
+        }
+    )
+    obj = from_dataframe(
+        frame,
+        channels=["DNA"],
+        resolution="aggregate",
+        grouped_by=["Metadata_Perturbation"],
+    )
+
+    mt.io.stamp(
+        obj,
+        resolution="perturbation",
+        grouped_by=["Metadata_Perturbation"],
+    )
+
+    assert obj.uns["mantispy"]["resolution"] == "aggregate"
+    assert mt.io.validate(obj).ok
