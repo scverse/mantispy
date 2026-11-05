@@ -144,7 +144,7 @@ def _shift_object(n_wells, shift, cells_per_guide=40, guides=4, seed=2):
                 # Each guide has its own small offset, so the guide, not the cell, is the replicate.
                 offset = rng.normal(0.0, 0.1)
                 for angle in rng.vonmises(centre + offset, 4.0, cells_per_guide):
-                    rows.append((f"W{well}", gene, f"{gene}_g{guide}", angle))
+                    rows.append((f"A{well + 1:02d}", gene, f"{gene}_g{guide}", angle))
     frame = pd.DataFrame(rows, columns=["Metadata_Well", "Metadata_Perturbation", "Metadata_Guide", "theta"])
     obs = _object_obs(frame.to_dict("list"), len(frame))
     return mt.io.from_embedding(np.zeros((len(frame), 1)), obs)
