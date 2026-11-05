@@ -665,6 +665,7 @@ def stamp(
             f"no resolution to stamp; pass resolution=... (one of {RESOLUTIONS}). mt.io.stamp does not "
             "assume one, so it cannot silently mislabel an object."
         )
+    resolution = RESOLUTION_RENAMES.get(resolution, resolution)
     if resolution not in RESOLUTIONS:
         raise ValueError(f"resolution must be one of {RESOLUTIONS}, got {resolution!r}")
 
