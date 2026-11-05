@@ -178,7 +178,7 @@ def circular_pc_regression(
     A cycle angle is not a scalar, so each component is regressed on ``sin(k * angle)`` and
     ``cos(k * angle)`` for ``k`` up to ``n_harmonics`` jointly. The value is the variance the fit explains,
     summed over components, as a share of the variance it could explain, so each component counts by its
-    variance as in :func:`pc_regression`. With ``by`` the fit is within each group, a field of view or a
+    variance as in :func:`~mantispy.metrics.pc_regression`. With ``by`` the fit is within each group, a field of view or a
     well, and the share is of the variance left within the groups, so differences between groups do not
     count for or against the angle. Cells with no angle are left out, with a warning.
 
