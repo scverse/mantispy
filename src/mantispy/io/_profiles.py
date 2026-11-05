@@ -623,7 +623,7 @@ def from_embedding(
         like: An object whose rows the embedding describes, usually the cells it was computed from. Its
             ``obs``, its resolution and its perturbation record carry over, so the embedding is analysed
             with the same metadata as the features it replaces.
-        resolution: What one row is, passed to :func:`stamp`: ``"object"`` for single cells, ``"well"`` or
+        resolution: What one row is, passed to :func:`~mantispy.io.stamp`: ``"object"`` for single cells, ``"well"`` or
             ``"aggregate"``. Defaults to the resolution ``like`` records, else ``"object"``.
         feature_kind: The representation the columns carry; an embedding is ``"embedding"``.
         object_type: For object resolution, the ``Metadata_ObjectType`` written when ``obs`` carries none.
@@ -634,7 +634,7 @@ def from_embedding(
 
     Raises:
         ValueError: Neither ``obs`` nor ``like`` is given, the row counts do not match, or ``obs`` lacks a
-            column ``resolution`` requires, raised by :func:`stamp`'s validation.
+            column ``resolution`` requires, raised by :func:`~mantispy.io.stamp`'s validation.
     """
     matrix = np.asarray(X, dtype=np.float32)
     if obs is None:
