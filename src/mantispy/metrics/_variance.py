@@ -147,43 +147,82 @@ def pc_regression(adata: AnnData, key: str, use_rep: str = "X_pca", n_comps: int
     return tidy("pc_regression", use_rep, key, float(np.sum(weights * explained)))
 
 
-def circular_pc_regression(adata: AnnData, key: str, use_rep: str = "X_pca") -> pd.DataFrame:
-    """Variance-weighted R^2 of the principal components on a circular covariate.
+def _within(values: np.ndarray, codes: np.ndarray) -> np.ndarray:
+    """``values`` with each group's column means subtracted, the residual of a fit on group indicators."""
+    counts = np.bincount(codes)
+    sums = np.zeros((counts.size, values.shape[1]))
+    np.add.at(sums, codes, values)
+    return values - (sums / counts[:, None])[codes]
 
-    A cycle angle is not a scalar, so each component is regressed on the two-column design
-    ``[sin(angle), cos(angle)]`` jointly, and the per-component multiple R^2 is weighted by that
-    component's share of the total variance. One angle is one row, the share of total variance it explains.
+
+def circular_pc_regression(
+    adata: AnnData,
+    key: str,
+    use_rep: str = "X_pca",
+    by: str | None = None,
+    n_harmonics: int = 1,
+    period: float = 2 * np.pi,
+) -> pd.DataFrame:
+    """Share of the embedding's variance a circular covariate explains, from a periodic fit per component.
+
+    A cycle angle is not a scalar, so each component is regressed on ``sin(k * angle)`` and
+    ``cos(k * angle)`` for ``k`` up to ``n_harmonics`` jointly. The value is the variance the fit explains,
+    summed over components, as a share of the variance it could explain, so each component counts by its
+    variance as in :func:`pc_regression`. With ``by`` the fit is within each group, a field of view or a
+    well, and the share is of the variance left within the groups, so differences between groups do not
+    count for or against the angle. Cells with no angle are left out, with a warning.
 
     Args:
         adata: Object with the embedding to measure in.
-        key: ``obs`` column holding the angle in radians.
+        key: ``obs`` column holding the angle, in units of ``period``.
         use_rep: ``obsm`` key of the embedding.
+        by: ``obs`` column to fit within, or ``None`` for the share of the total variance.
+        n_harmonics: Harmonics in the fitted curve.
+        period: The length of one full turn: ``2 * np.pi`` for radians, ``360`` for degrees, ``1`` for turns.
 
     Returns:
         A one-row tidy frame holding ``pc_regression`` for ``key``.
 
     Raises:
         KeyError: ``obsm`` holds nothing under ``use_rep``.
+        ValueError: ``n_harmonics`` is below one, or no cell has a finite angle.
     """
-    values = np.ascontiguousarray(embedding(adata, use_rep))
-    angle = as_frame(adata.obs)[key].to_numpy(dtype=np.float64)
-    if np.isnan(angle).any():
-        raise ValueError(
-            f"the circular covariate obs[{key!r}] has missing values, which cannot be regressed; "
-            "subset to the cells with a finite angle first."
+    from mantispy.tl._circular import harmonic_design
+
+    if n_harmonics < 1:
+        raise ValueError(f"n_harmonics must be at least 1, got {n_harmonics}")
+    values = np.asarray(embedding(adata, use_rep), dtype=np.float64)
+    obs = as_frame(adata.obs)
+    angle = obs[key].to_numpy(dtype=np.float64) * (2 * np.pi / period)
+    finite = np.isfinite(angle)
+    if not finite.any():
+        raise ValueError(f"obs[{key!r}] has no finite angle to regress on")
+    if not finite.all():
+        warnings.warn(
+            f"circular_pc_regression: {int((~finite).sum())} of {angle.size} cells have no angle in "
+            f"obs[{key!r}] and are left out.",
+            UserWarning,
+            stacklevel=2,
         )
-    design = np.column_stack([np.ones(angle.size), np.sin(angle), np.cos(angle)])
-    coefficients, *_ = np.linalg.lstsq(design, values, rcond=None)
-    ss_residual = np.sum((values - design @ coefficients) ** 2, axis=0)
-    ss_total = np.sum((values - values.mean(axis=0)) ** 2, axis=0)
-    explained = np.where(ss_total > 0, 1.0 - ss_residual / np.where(ss_total > 0, ss_total, 1.0), 0.0)
-    variances = values.var(axis=0, ddof=1)
-    weights = variances / variances.sum()
-    return tidy("pc_regression", use_rep, key, float(np.sum(weights * explained)))
+    values, angle = values[finite], angle[finite]
+    codes = pd.factorize(obs.loc[finite, by])[0] if by is not None else np.zeros(angle.size, dtype=np.int64)
+    # Fitting on group indicators plus the harmonics is the same as fitting the within-group residuals
+    # of the components on the within-group residuals of the harmonics.
+    residual_values = _within(values, codes)
+    residual_design = _within(harmonic_design(angle, n_harmonics), codes)
+    coefficients, *_ = np.linalg.lstsq(residual_design, residual_values, rcond=None)
+    available = np.sum(residual_values**2)
+    unexplained = np.sum((residual_values - residual_design @ coefficients) ** 2)
+    value = 0.0 if available == 0 else float(1.0 - unexplained / available)
+    return tidy("pc_regression", use_rep, key, value)
 
 
 def batch_variance_explained(
-    adata: AnnData, keys: Sequence[str], use_rep: str = "X_pca", circular: Sequence[str] = ()
+    adata: AnnData,
+    keys: Sequence[str],
+    use_rep: str = "X_pca",
+    circular: Sequence[str] = (),
+    period: float = 2 * np.pi,
 ) -> pd.DataFrame:
     """:func:`~mantispy.metrics.pc_regression` for several covariates, stacked into one frame.
 
@@ -192,8 +231,10 @@ def batch_variance_explained(
         keys: ``obs`` columns to score, one row of the result each. Any column works, numeric or categorical,
             not only the batch: a plate position, a cell count or a treatment label are all valid covariates.
         use_rep: ``obsm`` key of the embedding.
-        circular: ``obs`` columns holding an angle in radians, scored by :func:`circular_pc_regression`,
-            one row each, so a cell-cycle clock enters as a single covariate rather than two.
+        circular: ``obs`` columns holding an angle, scored by :func:`circular_pc_regression`, one row each,
+            so a cell-cycle clock enters as a single covariate rather than two.
+        period: The length of one full turn of the ``circular`` angles: ``2 * np.pi`` for radians, ``360``
+            for degrees, ``1`` for turns.
 
     Returns:
         A tidy frame holding one ``pc_regression`` row per entry of ``keys`` and ``circular``.
@@ -202,7 +243,7 @@ def batch_variance_explained(
         KeyError: ``obsm`` holds nothing under ``use_rep``.
     """
     rows = [pc_regression(adata, key, use_rep) for key in keys]
-    rows += [circular_pc_regression(adata, key, use_rep) for key in circular]
+    rows += [circular_pc_regression(adata, key, use_rep, period=period) for key in circular]
     return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
 
 

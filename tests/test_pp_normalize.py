@@ -10,7 +10,7 @@ def adata():
     return synthetic_plate(n_plates=2, n_wells=24, n_cells=10, n_features=12, seed=0)
 
 
-@pytest.mark.parametrize("method", ["standardize", "robustize", "mad_robustize"])
+@pytest.mark.parametrize("method", ["standardize", "robustize", "mad_robustize", "center"])
 def test_constant_feature_yields_zero_not_inf(adata, method):
     """An unguarded zero scale would make the whole column inf or NaN."""
     values = adata.X.copy()
@@ -63,7 +63,7 @@ def test_string_true_false_survives_a_round_trip(adata):
     np.testing.assert_allclose(np.nanmedian(controls, axis=0), 0.0, atol=1e-5)
 
 
-@pytest.mark.parametrize("method", ["mad_robustize", "standardize", "robustize"])
+@pytest.mark.parametrize("method", ["mad_robustize", "standardize", "robustize", "center"])
 def test_a_feature_unmeasured_among_one_groups_controls_keeps_its_measured_values(adata, method):
     """Repairing the zero scale to 1.0 but leaving the centre NaN turns every measured value in that group into NaN: the first plate's treated wells went from [-0.62, -0.22, -0.54] to all-NaN, 6 of 6 rows on that plate against 0 of 6 on the other."""
     plate = adata.obs["Metadata_Plate"].astype(str).to_numpy()
@@ -100,3 +100,21 @@ def test_normalize_reads_the_recorded_control_column():
     adata.obs["Metadata_Control"] = False
     mt.io.stamp(adata, perturbation={"column": "Metadata_Perturbation", "control_column": "Ctl"})
     assert np.allclose(mt.pp.normalize(adata, reference="negcon", copy=True).X, expected, equal_nan=True)
+
+
+def test_center_subtracts_the_reference_median_and_keeps_the_units(adata):
+    """method="center" removes each group's control median and leaves the spread as it was."""
+    before = np.asarray(adata.X).copy()
+    mt.pp.normalize(adata, method="center", by="Metadata_Plate", reference="negcon")
+    plate = adata.obs["Metadata_Plate"].astype(str).to_numpy()
+    control = adata.obs["Metadata_Control_Type"].astype(str).to_numpy() == "negcon"
+    for value in np.unique(plate):
+        rows = plate == value
+        np.testing.assert_allclose(np.median(np.asarray(adata.X)[rows & control], axis=0), 0.0, atol=1e-5)
+        np.testing.assert_allclose(np.asarray(adata.X)[rows].std(axis=0), before[rows].std(axis=0), rtol=1e-4)
+
+
+def test_normalizing_within_groups_that_each_hold_one_treatment_warns(adata):
+    """Each well holds one perturbation, so normalizing per well removes the perturbation effect."""
+    with pytest.warns(UserWarning, match="Metadata_Perturbation.*constant within every group"):
+        mt.pp.normalize(adata, method="center", by="Metadata_Well", reference=None)

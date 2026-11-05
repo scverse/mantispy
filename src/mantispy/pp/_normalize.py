@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import warnings
 from typing import Any
 
@@ -11,10 +12,13 @@ from mantispy._core._numba import IQR, MEAN, STD, grouped_median_spread
 from mantispy._core._numba import MAD as MAD_STAT
 from mantispy._core._reduce import get_matrix, group_codes, group_offsets, reduce_grouped, transform_grouped
 from mantispy._core._stats import MAD_TO_SIGMA
+from mantispy._core.frames import as_frame
 from mantispy._core.masks import reference_mask
 from mantispy._core.mutation import inplace_or_copy
 
-METHODS = ("mad_robustize", "standardize", "robustize")
+METHODS = ("mad_robustize", "standardize", "robustize", "center")
+#: obs columns whose name says they carry the treatment, which normalizing within a group must not erase.
+_TREATMENT_COLUMN = re.compile(r"perturbation|compound|treatment|condition|concentration|dose|moa|gene", re.IGNORECASE)
 
 
 def _median_and_spread(
@@ -65,6 +69,10 @@ def _center_and_scale(
     elif method == "mad_robustize":
         centre, mad = _median_and_spread(adata, MAD_STAT, codes, keys, layer, mask)
         scale = MAD_TO_SIGMA * mad + epsilon
+    elif method == "center":
+        centre, _ = _median_and_spread(adata, MAD_STAT, codes, keys, layer, mask)
+        # Centring only: a feature with no spread is still centred correctly, so nothing is degenerate on scale.
+        return _centre_only(centre)
     else:  # robustize: median and interquartile range, as sklearn's RobustScaler
         centre, scale = _median_and_spread(adata, IQR, codes, keys, layer, mask)
 
@@ -75,6 +83,33 @@ def _center_and_scale(
     centre = np.where(np.isfinite(centre), centre, 0.0)
     scale = np.where((scale == 0) | ~np.isfinite(scale), 1.0, scale)
     return centre.astype(np.float32), scale.astype(np.float32), no_spread, uncentred
+
+
+def _centre_only(centre: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """The ``_center_and_scale`` result for ``method="center"``: the median, a unit scale, no spread flags."""
+    uncentred = ~np.isfinite(centre).all(axis=0)
+    centre = np.where(np.isfinite(centre), centre, 0.0)
+    return centre.astype(np.float32), np.ones_like(centre, dtype=np.float32), np.zeros(centre.shape[1], bool), uncentred
+
+
+def _erased_treatments(adata: AnnData, by: str | list[str] | None) -> list[str]:
+    """Treatment-like obs columns that vary across groups of ``by`` but are constant within every group.
+
+    Normalizing within such groups subtracts each group's own centre, and with it the treatment effect.
+    """
+    if by is None:
+        return []
+    keys = [by] if isinstance(by, str) else list(by)
+    obs = as_frame(adata.obs)
+    erased = []
+    for column in obs.columns:
+        if column in keys or not _TREATMENT_COLUMN.search(column):
+            continue
+        if obs[column].nunique(dropna=True) < 2:
+            continue
+        if (obs.groupby(keys, observed=True)[column].nunique(dropna=True) <= 1).all():
+            erased.append(column)
+    return erased
 
 
 @inplace_or_copy()
@@ -93,7 +128,8 @@ def normalize(
 
     Args:
         adata: Object to normalize.
-        method: ``"mad_robustize"`` computes ``(x - median) / (1.4826 * MAD + epsilon)``, ``"standardize"`` computes ``(x - mean) / sd``, and ``"robustize"`` computes ``(x - median) / IQR``.
+        method: ``"mad_robustize"`` computes ``(x - median) / (1.4826 * MAD + epsilon)``, ``"standardize"`` computes ``(x - mean) / sd``, ``"robustize"`` computes ``(x - median) / IQR``, and ``"center"`` computes ``x - median``, which removes group offsets such as well-to-well shifts and keeps the units.
+            Normalizing within groups that each hold one treatment removes the treatment effect along with the offset, so a treatment-like ``obs`` column that is constant within every group raises a warning.
         by: Column(s) defining the groups statistics are computed within, usually the plate.
             ``None`` fits one set of statistics globally.
         reference: Rows to fit on: ``"negcon"`` (the default) for the rows whose ``Metadata_Control_Type`` is ``"negcon"``, ``None`` for all rows, or the name of a boolean ``obs`` column.
@@ -128,6 +164,15 @@ def normalize(
         empty = [str(keys[int(index)]) for index in np.flatnonzero(present == 0)]
         raise ValueError(f"no reference rows in group(s): {empty[:5]}")
 
+    erased = _erased_treatments(adata, by)
+    if erased:
+        warnings.warn(
+            f"normalize: {erased} is constant within every group of {by!r}, so normalizing within those groups "
+            "subtracts each group's own centre and removes the differences between them. Normalize by a "
+            "coarser grouping (the plate) if those columns are what you want to compare.",
+            UserWarning,
+            stacklevel=3,
+        )
     centre, scale, no_spread, uncentred = _center_and_scale(adata, method, by, codes, keys, layer, mask, epsilon)
     degenerate = no_spread | uncentred
     # One flag column per output matrix, so a call writing another layer does not reset the flags describing the first.

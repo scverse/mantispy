@@ -1,15 +1,15 @@
 """Tools."""
 
 from mantispy.tl._aggregate import aggregate
-from mantispy.tl._cluster import cluster
-from mantispy.tl._consensus import consensus
-from mantispy.tl._cyclic import (
+from mantispy.tl._circular import (
     circular_correlation,
     circular_neighbor_error,
-    cyclic_shift,
+    circular_shift,
     feature_cycle_association,
     orient_cycle,
 )
+from mantispy.tl._cluster import cluster
+from mantispy.tl._consensus import consensus
 from mantispy.tl._design import cytotoxicity, replicate_saturation
 from mantispy.tl._differential import differential_features
 from mantispy.tl._distance import edistance
@@ -41,10 +41,10 @@ __all__ = [
     "cell_cycle_phase",
     "circular_correlation",
     "circular_neighbor_error",
+    "circular_shift",
     "cluster",
     "cluster_composition",
     "consensus",
-    "cyclic_shift",
     "cytotoxicity",
     "dose_direction",
     "dose_features",

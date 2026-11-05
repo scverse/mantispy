@@ -822,3 +822,15 @@ def test_from_embedding_is_ready_for_tools():
     assert mt.io.validate(adata).ok, mt.io.validate(adata).errors
     wells = mt.tl.aggregate(adata, by=("Metadata_Plate", "Metadata_Well"), min_cells=0)
     assert wells.n_obs == 3
+
+
+def test_from_embedding_like_inherits_metadata_and_the_perturbation_record():
+    rng = np.random.default_rng(1)
+    cells = mt.io.from_embedding(rng.normal(size=(12, 3)), _embedding_obs(12, Metadata_Gene=["KO"] * 12))
+    cells.uns["mantispy"]["perturbation"] = {"column": "Metadata_Gene", "control_column": "Metadata_Control"}
+    latent = mt.io.from_embedding(rng.normal(size=(12, 2)), like=cells)
+    pd.testing.assert_frame_equal(latent.obs, cells.obs)
+    assert latent.uns["mantispy"]["perturbation"]["column"] == "Metadata_Gene"
+    assert latent.uns["mantispy"]["resolution"] == "object"
+    with pytest.raises(ValueError, match="rows"):
+        mt.io.from_embedding(rng.normal(size=(5, 2)), like=cells)
