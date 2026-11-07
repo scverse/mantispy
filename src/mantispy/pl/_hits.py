@@ -129,7 +129,7 @@ def _effects(adata: AnnData, group: str, key: str) -> tuple[pd.DataFrame, pd.Ser
     table = _table(adata, key, "mt.tl.effect_size")
     selected = _rows_for(table, "group", group, key)
     var = as_frame(adata.var)
-    families = var["feature_group"].astype(str) if "feature_group" in var else None
+    families = var["feature_group"].astype("string").fillna("unknown") if "feature_group" in var else None
     return selected, families
 
 
