@@ -331,10 +331,11 @@ def cell_cycle_phase(
         phases[usable] = np.where(probability.max(axis=1) > 0.9, assignment, "S")
 
     if one_peak_groups:
+        more = f", and {len(one_peak_groups) - 8} more" if len(one_peak_groups) > 8 else ""
         warnings.warn(
             f"cell_cycle_phase: {len(one_peak_groups)} of {len(keys)} group(s) show one DNA peak rather than "
             "a G1 and a G2M peak one doubling apart, so their G1/G2M split is unreliable. Peak separation in "
-            f"doublings: {', '.join(one_peak_groups[:8])}. Check the distribution before trusting the calls.",
+            f"doublings: {', '.join(one_peak_groups[:8])}{more}. Check the distribution before trusting the calls.",
             UserWarning,
             stacklevel=3,
         )

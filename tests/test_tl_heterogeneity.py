@@ -130,12 +130,14 @@ def test_cell_cycle_phase_two_peaks_a_doubling_apart_do_not_warn():
 
 def test_cell_cycle_phase_warns_once_for_every_one_peak_group():
     rng = np.random.default_rng(2)
-    adata = _dna_object(np.exp(rng.normal(0.0, 0.1, size=1200)))
-    adata.obs["Metadata_Well"] = np.repeat([f"W{i}" for i in range(6)], 200)
+    adata = _dna_object(np.exp(rng.normal(0.0, 0.1, size=2000)))
+    adata.obs["Metadata_Well"] = np.repeat([f"W{i}" for i in range(10)], 200)
     with pytest.warns(UserWarning, match="one DNA peak") as caught:
         mt.tl.cell_cycle_phase(adata, dna_feature=adata.var_names[0], by="Metadata_Well")
     assert sum("one DNA peak" in str(w.message) for w in caught) == 1
-    assert "6 of 6 group(s)" in str(next(w.message for w in caught if "one DNA peak" in str(w.message)))
+    message = str(next(w.message for w in caught if "one DNA peak" in str(w.message)))
+    assert "10 of 10 group(s)" in message
+    assert "and 2 more" in message
 
 
 def test_local_density_is_computed_within_a_field(clustered):
