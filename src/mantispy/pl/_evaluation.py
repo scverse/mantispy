@@ -165,6 +165,7 @@ def batch_variance(
 
     Raises:
         KeyError: ``obsm`` holds nothing under ``use_rep``, or ``obs`` has no column for one of ``keys``.
+        ValueError: A numeric covariate in ``keys`` has missing values, which cannot be regressed.
     """
     values = embedding(adata, use_rep)
     if n_comps is not None:

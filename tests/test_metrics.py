@@ -582,6 +582,18 @@ def test_variance_carried_survives_an_inf_target():
     assert carried["F0"] > 0.7
 
 
+def test_batch_variance_refuses_a_numeric_covariate_with_missing_values():
+    import anndata as ad
+
+    rng = np.random.default_rng(5)
+    obs = pd.DataFrame({"num": rng.normal(size=50)}, index=[str(index) for index in range(50)])
+    obs.iloc[3, 0] = np.nan
+    adata = ad.AnnData(X=rng.normal(size=(50, 3)).astype(np.float32), obs=obs)
+    adata.obsm["X_pca"] = rng.normal(size=(50, 4))
+    with pytest.raises(ValueError, match="missing value"):
+        mt.pl.batch_variance(adata, keys=["num"])
+
+
 def test_batch_variance_plot_matches_a_least_squares_fit_per_component():
     """The plotted R^2 per component equals a least-squares fit on the dummies, for a many-level categorical with a missing value and for a numeric covariate."""
     import anndata as ad
