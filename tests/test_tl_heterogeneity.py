@@ -89,6 +89,86 @@ def test_cell_cycle_refuses_normalized_values(clustered):
         mt.tl.cell_cycle_phase(clustered, dna_feature=clustered.var_names[0])
 
 
+_DNA = "Nuclei_Intensity_IntegratedIntensity_DNA"
+
+
+def _cycling_wells(shares, scales, n_cells=2000, seed=0):
+    """Cells with known 2N, S and 4N shares per well, each well stained at its own intensity."""
+    rng = np.random.default_rng(seed)
+    values, wells, states = [], [], []
+    for well, (share, scale) in enumerate(zip(shares, scales, strict=True)):
+        counts = np.round(np.asarray(share) * n_cells).astype(int)
+        fold = np.concatenate(
+            [
+                2 ** rng.normal(0, 0.05, counts[0]),
+                rng.uniform(1.35, 1.65, counts[1]),
+                2 ** rng.normal(1, 0.05, counts[2]),
+            ]
+        )
+        values.append(scale * fold)
+        wells += [f"W{well}"] * counts.sum()
+        states += [state for state, count in zip(("2N", "S", "4N"), counts, strict=True) for _ in range(count)]
+    values = np.concatenate(values)
+    obs = pd.DataFrame(
+        {"Metadata_Plate": "P1", "Metadata_Well": wells, "state": states},
+        index=[str(row) for row in range(values.size)],
+    )
+    return ad.AnnData(X=values[:, None].astype(np.float32), obs=obs, var=pd.DataFrame(index=[_DNA]))
+
+
+def test_dna_content_and_state_recover_known_shares_across_staining_scales():
+    """The G1 peak lands on 0 and G2 on 1 in every well, including one arrested mostly in G2."""
+    shares = [(0.6, 0.2, 0.2), (0.4, 0.3, 0.3), (0.25, 0.15, 0.6)]
+    scales = [300.0, 1000.0, 5000.0]
+    cells = _cycling_wells(shares, scales)
+    mt.tl.dna_content(cells, dna_feature=_DNA)
+    mt.tl.dna_state(cells)
+
+    obs = cells.obs
+    for well, share in enumerate(shares):
+        in_well = obs["Metadata_Well"] == f"W{well}"
+        content = obs.loc[in_well, "Metadata_DNAContent"]
+        assert abs(content[obs["state"] == "2N"].median()) < 0.05
+        assert abs(content[obs["state"] == "4N"].median() - 1) < 0.05
+        called = obs.loc[in_well, "Metadata_DNAState"].value_counts(normalize=True)
+        np.testing.assert_allclose(called[["2N", "S", "4N"]].to_numpy(), share, atol=0.02)
+
+    peaks = cells.uns["mantispy"]["dna_content"]
+    assert list(peaks["Metadata_Well"]) == ["W0", "W1", "W2"]
+    np.testing.assert_allclose(peaks["g1_peak"], np.log2(scales), atol=0.05)
+    assert cells.uns["mantispy"]["dna_state"]["key"] == "Metadata_DNAContent"
+    np.testing.assert_array_equal(cells.uns["mantispy"]["dna_state"]["cutoffs"], [1.25, 1.75])
+
+
+def test_dna_state_records_custom_cutoffs_and_refuses_bad_ones():
+    cells = _cycling_wells([(0.5, 0.2, 0.3)], [1000.0])
+    mt.tl.dna_content(cells, dna_feature=_DNA)
+    mt.tl.dna_state(cells, cutoffs=(1.2, 1.8))
+    np.testing.assert_array_equal(cells.uns["mantispy"]["dna_state"]["cutoffs"], [1.2, 1.8])
+    with pytest.raises(ValueError, match="increasing"):
+        mt.tl.dna_state(cells, cutoffs=(1.75, 1.25))
+    with pytest.raises(KeyError, match="dna_content"):
+        mt.tl.dna_state(cells, key="Metadata_Missing")
+
+
+def test_dna_content_leaves_unusable_intensities_and_small_wells_unassigned(caplog):
+    """A missing, zero or negative intensity has no log2, and a well of a few cells has no G1 peak to measure from."""
+    cells = _cycling_wells([(0.5, 0.2, 0.3), (0.5, 0.2, 0.3)], [1000.0, 1000.0])
+    cells.X[:3, 0] = [np.nan, 0.0, -5.0]
+    cells = cells[np.r_[0 : cells.n_obs - 1990]].copy()  # the second well keeps 10 cells
+    with caplog.at_level(logging.WARNING, logger="mantispy"):
+        mt.tl.dna_content(cells, dna_feature=_DNA)
+    mt.tl.dna_state(cells)
+
+    content, state = cells.obs["Metadata_DNAContent"], cells.obs["Metadata_DNAState"]
+    small = (cells.obs["Metadata_Well"] == "W1").to_numpy()
+    assert content.iloc[:3].isna().all() and state.iloc[:3].isna().all()
+    assert content[small].isna().all() and state[small].isna().all()
+    assert content[~small].iloc[3:].notna().all() and state[~small].iloc[3:].notna().all()
+    assert np.isnan(cells.uns["mantispy"]["dna_content"]["g1_peak"].iloc[1])
+    assert any("too few to place a G1 peak" in record.getMessage() for record in caplog.records)
+
+
 def test_local_density_is_computed_within_a_field(clustered):
     clustered = clustered.copy()  # module-scoped fixture; this test writes obs coordinates and density
     rng = np.random.default_rng(0)
