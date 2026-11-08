@@ -61,6 +61,19 @@ def test_every_plot_draws_and_changes_nothing(scored, draw):
     plt.close(ax.figure)
 
 
+@pytest.mark.parametrize("plot", [mt.pl.effect_sizes, mt.pl.feature_volcano], ids=["effects", "volcano"])
+def test_features_without_a_family_are_labelled_unknown_not_nan(scored, plot):
+    adata = scored.copy()
+    adata.var["feature_group"] = adata.var["feature_group"].astype(object)
+    adata.var.loc[adata.var_names, "feature_group"] = np.nan
+    _, ax = plt.subplots()
+    plot(adata, group="pert00", ax=ax)
+    labels = {text.get_text() for text in ax.get_legend().get_texts()}
+    plt.close(ax.figure)
+    assert "unknown" in labels
+    assert "nan" not in labels
+
+
 def test_the_hits_plot_draws_the_threshold_that_colored_the_points():
     """Reading the threshold under the table key rather than the function name drew a run called at q < 0.25 against a line labelled q = 0.05, with a point colored as a hit below it."""
     # 96 wells over 3 perturbations leaves 24 controls; fewer let the over-calling of #60 pass as the effect.
