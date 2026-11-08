@@ -268,7 +268,7 @@ def _phase_object(n_wells, ko_g1, guides=4, ntc_guides=4, cells_per_guide=60, gu
             share = np.clip((0.4 if gene == "NTC" else ko_g1) + offset, 0.0, 1.0)
             phases = rng.choice(["G1", "S", "G2M"], size=cells_per_guide, p=[share, (1 - share) / 2, (1 - share) / 2])
             rows += [(f"A{well + 1:02d}", gene, f"{gene}_g{guide}", phase) for phase in phases]
-    frame = pd.DataFrame(rows, columns=["Metadata_Well", "Metadata_Perturbation", "Metadata_Guide", "phase"])
+    frame = pd.DataFrame(rows, columns=["Metadata_Well", "Metadata_Perturbation", "Metadata_sgRNA", "phase"])
     frame["is_ntc"] = frame["Metadata_Perturbation"].eq("NTC")
     frame["Metadata_ImageID"], frame["Metadata_ObjectType"] = "img", "Cells"
     frame["Metadata_ObjectNumber"] = np.arange(len(frame))
@@ -316,11 +316,11 @@ def test_composition_shift_reports_the_floor_of_a_small_design():
 
 def test_composition_shift_scores_each_guide_against_the_reference_guides():
     adata = _phase_object(3, ko_g1=0.7)
-    table = _composition(adata, groupby="Metadata_Guide", unit="Metadata_Guide")
+    table = _composition(adata, groupby="Metadata_sgRNA", replicate="Metadata_sgRNA")
     assert sorted(table.index) == [f"KO_g{guide}" for guide in range(4)]
     assert (table["G1"] > 0.2).all()
 
 
 def test_composition_shift_warns_when_cells_are_the_unit():
     with pytest.warns(UserWarning, match="single cells"):
-        _composition(_phase_object(2, ko_g1=0.4), unit=None, n_permutations=9)
+        _composition(_phase_object(2, ko_g1=0.4), replicate=None, n_permutations=9)

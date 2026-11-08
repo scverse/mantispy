@@ -488,7 +488,7 @@ def composition_shift(
     groupby: str = "Metadata_Perturbation",
     reference: str = "negcon",
     block: str | None = "Metadata_Well",
-    unit: str | None = "Metadata_Guide",
+    replicate: str | None = "Metadata_sgRNA",
     n_permutations: int = 999,
     seed: int = 0,
     key_added: str = "composition_shift",
@@ -501,9 +501,9 @@ def composition_shift(
     averaged over blocks. The distance is the total variation distance of that average, half the sum of its
     absolute values: 0 when the group's composition matches the reference, 1 when they share no category.
 
-    The p-value comes from relabelling ``unit`` (the guide) as group or reference, one relabelling per
+    The p-value comes from relabelling ``replicate`` (the guide) as group or reference, one relabelling per
     permutation applied in every block, so the guide is the replicate even though every well of a pooled
-    screen holds every guide. For one row per guide, pass the guide column as both ``groupby`` and ``unit``:
+    screen holds every guide. For one row per guide, pass the guide column as both ``groupby`` and ``replicate``:
     each guide is then compared with the reference guides.
 
     Args:
@@ -513,9 +513,9 @@ def composition_shift(
         reference: The rows to compare against: ``"negcon"`` for the negative controls, or the name of a
             boolean ``obs`` column. The reference has no row of its own.
         block: ``obs`` column the comparison is paired within, normally the well; ``None`` pools all rows.
-        unit: ``obs`` column naming the replicate unit the permutation relabels, normally the guide.
+        replicate: ``obs`` column naming the independent replicate the permutation relabels, normally the guide.
             ``None`` relabels single cells, which treats every cell as independent and warns.
-            Each unit must belong to one group.
+            Each replicate must belong to one group.
         n_permutations: Permutations for the null.
         seed: Seed for the permutations.
         key_added: Key the table is written under in ``uns["mantispy"]``.
@@ -529,7 +529,7 @@ def composition_shift(
         the group's share minus the reference's.
 
     Raises:
-        ValueError: ``n_permutations`` is not positive, ``reference`` selects no cells, or a ``unit`` spans
+        ValueError: ``n_permutations`` is not positive, ``reference`` selects no cells, or a ``replicate`` spans
             more than one group.
     """
     if n_permutations < 1:
@@ -545,19 +545,21 @@ def composition_shift(
     if not reference_rows.any():
         raise ValueError(f"reference={reference!r} selects no cells to compare against")
     blocks = obs[block].to_numpy() if block is not None else np.zeros(adata.n_obs, dtype=int)
-    if unit is None:
+    if replicate is None:
         warnings.warn(
-            "composition_shift: unit=None relabels single cells, which treats every cell as an independent "
-            "replicate and gives p-values that are far too small when guides or wells differ. Pass unit=, the guide.",
+            "composition_shift: replicate=None relabels single cells, which treats every cell as an independent "
+            "replicate and gives p-values that are far too small when guides or wells differ. Pass replicate=, the guide.",
             UserWarning,
             stacklevel=3,
         )
         units = np.arange(adata.n_obs).astype(str)
     else:
-        spans = obs.groupby(unit, observed=True)[groupby].nunique()
+        spans = obs.groupby(replicate, observed=True)[groupby].nunique()
         if (spans > 1).any():
-            raise ValueError(f"{int((spans > 1).sum())} values of {unit!r} span more than one group of {groupby!r}")
-        units = obs[unit].astype(str).to_numpy()
+            raise ValueError(
+                f"{int((spans > 1).sum())} values of {replicate!r} span more than one group of {groupby!r}"
+            )
+        units = obs[replicate].astype(str).to_numpy()
     rng = np.random.default_rng(seed)
 
     def mean_difference(sums: list[tuple[np.ndarray, np.ndarray]]) -> np.ndarray:
