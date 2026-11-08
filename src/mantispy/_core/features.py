@@ -136,7 +136,9 @@ _POSITIONAL_AREASHAPE = frozenset({"Center", "BoundingBoxMinimum", "BoundingBoxM
 
 #: cp_measure names a Haralick texture statistic as the leading token, where CellProfiler writes ``Texture_<stat>``.
 #: Mapping the stat onto the ``Texture`` group keeps its feature_group the same across the two conventions.
-#: ``Correlation`` is left out: it is also cp_measure's colocalization group, which stays its own group.
+#: ``Correlation`` is also cp_measure's colocalization group, so it is mapped only when the rest of the name is the
+#: numeric ``<scale>_<angle>_<gray levels>`` of a texture statistic (``Correlation_3_00_256``); a colocalization
+#: feature always names its method (``Correlation_Pearson``, ``Correlation_Manders_1``) and stays its own group.
 _CP_MEASURE_TEXTURE = frozenset(
     {
         "AngularSecondMoment", "Contrast", "DifferenceEntropy", "DifferenceVariance", "Entropy",
@@ -264,7 +266,7 @@ def _parse_cp_measure(name: str) -> dict:
     group, rest = tokens[0], tokens[1:]
     # cp_measure writes a texture or shape statistic as the leading token; put it back under the CellProfiler
     # group so its feature_group matches, instead of being read as an unknown group and kept as an embedding.
-    if group in _CP_MEASURE_TEXTURE:
+    if group in _CP_MEASURE_TEXTURE or (group == "Correlation" and rest and all(map(_is_numeric, rest))):
         group, rest = "Texture", [group, *rest]
     elif group in _CP_MEASURE_SHAPE:
         group, rest = "AreaShape", [group, *rest]

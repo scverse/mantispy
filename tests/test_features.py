@@ -134,3 +134,27 @@ def test_inference_keeps_a_known_stain_beside_an_underscored_channel():
 )
 def test_non_features_flagged(name):
     assert not _row(name)["is_feature"]
+
+
+@pytest.mark.parametrize("angle", ["00", "01", "02", "03"])
+def test_cp_measure_haralick_correlation_is_texture_like_cellprofiler(angle):
+    """cp_measure writes Haralick Correlation as Correlation_<scale>_<angle>_<levels>, the colocalization group's name."""
+    cpm = parse_feature_names([f"Correlation_3_{angle}_256__DNA"], convention="cp_measure").iloc[0]
+    cp = _row(f"Cells_Texture_Correlation_DNA_3_{angle}_256")
+    for key in ("feature_group", "feature", "channel", "scale", "angle", "gray_levels", "params"):
+        assert cpm[key] == cp[key], key
+
+
+@pytest.mark.parametrize(
+    ("name", "feature"),
+    [
+        ("Correlation_Pearson__DNA__RNA", "Pearson"),
+        ("Correlation_Slope__DNA__RNA", "Slope"),
+        ("Correlation_Manders_1__DNA__RNA", "Manders"),
+        ("Correlation_RWC_2__DNA__RNA", "RWC"),
+        ("Correlation_Costes_1__DNA__RNA", "Costes"),
+    ],
+)
+def test_cp_measure_colocalization_stays_in_the_correlation_group(name, feature):
+    row = parse_feature_names([name], convention="cp_measure").iloc[0]
+    assert (row["feature_group"], row["feature"], row["channel"]) == ("Correlation", feature, "DNA|RNA")
