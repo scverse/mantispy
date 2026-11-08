@@ -9,7 +9,8 @@ import numpy as np
 import pandas as pd
 
 from mantispy._core.frames import as_frame
-from mantispy.metrics._common import embedding, r_squared
+from mantispy.metrics._common import embedding
+from mantispy.metrics._variance import component_r2
 from mantispy.pl._common import axes as _axes
 from mantispy.pl._common import maybe_interactive as _maybe_interactive
 from mantispy.pl._common import returned as _returned
@@ -164,6 +165,7 @@ def batch_variance(
 
     Raises:
         KeyError: ``obsm`` holds nothing under ``use_rep``, or ``obs`` has no column for one of ``keys``.
+        ValueError: A numeric covariate in ``keys`` has missing values, which cannot be regressed.
     """
     values = embedding(adata, use_rep)
     if n_comps is not None:
@@ -174,7 +176,7 @@ def batch_variance(
     records = []
     for key in keys:
         covariate = as_frame(adata.obs)[key]
-        explained = [r_squared(values[:, index], covariate) for index in range(values.shape[1])]
+        explained = component_r2(values, covariate, key)
         ax.plot(components, explained, marker="o", ms=3, label=key)
         records.append(
             pd.DataFrame({"principal component": components, "variance explained (R²)": explained, "covariate": key})
