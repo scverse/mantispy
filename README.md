@@ -56,7 +56,7 @@ Please refer to the [documentation][], in particular the [API documentation][].
 
 ## Installation
 
-You need to have Python 3.12 or newer installed on your system.
+You need to have Python 3.13 or newer installed on your system.
 If you don't have Python installed, we recommend installing [uv][].
 
 We recommend managing dependencies in project-specific virtual environments to avoid dependency conflicts.

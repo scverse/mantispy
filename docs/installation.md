@@ -1,6 +1,6 @@
 # Installation
 
-You need Python 3.12 or newer.
+You need Python 3.13 or newer.
 If you don't have Python installed, we recommend [uv](https://github.com/astral-sh/uv).
 
 ## Alpha release
