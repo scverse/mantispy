@@ -25,7 +25,7 @@ maintainers = [
 authors = [
   { name = "scverse" },
 ]
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Framework :: Jupyter",
@@ -36,7 +36,6 @@ classifiers = [
   "Operating System :: MacOS :: MacOS X",
   "Operating System :: POSIX :: Linux",
   "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
   "Programming Language :: Python :: 3.15",
@@ -58,14 +57,13 @@ dependencies = [
   # pynndescent 0.7.0 hands scanpy a scipy csr_array, whose dropped getnnz breaks
   # scanpy.pp.neighbors; drop this pin once scanpy or pynndescent fixes it upstream.
   "pynndescent<0.7",
-  "scanpy>=1.12",
+  "scanpy>=1.13.0b1",
   "scikit-learn>=1.4",
   "scipy>=1.11",
   "scverse-misc[datasets]>=0.1.6",
   # for debug logging (referenced from the issue template)
   "session-info2",
 ]
-optional-dependencies.harmony = [ "harmonypy>=2" ]
 # The integration benchmark (mt.metrics.evaluate_integration) delegates iLISI/cLISI, the
 # silhouettes and kBET to scib-metrics, the ecosystem standard for them.
 optional-dependencies.integration = [ "scib-metrics>=0.5.1" ]
@@ -99,8 +97,6 @@ test = [
   # Reference implementations, used only to assert equivalence. Never imported from src/.
   "copairs>=0.6",
   "coverage>=7.10",
-  # pp.harmony; harmonypy has no Python 3.14 wheel yet and its source build fails on Linux
-  "harmonypy>=2; python_version<'3.14'",
   # sc.tl.leiden needs both.
   "igraph",
   # pl interactive gate returns True only when both are importable
@@ -113,8 +109,8 @@ test = [
   "pycytominer==1.7.1",
   "pyod>=2",
   "pytest",
-  "pytest-cov",                          # For VS Code’s coverage functionality
-  "scmorph>=0.1",                        # Chatterjee/XIM parity
+  "pytest-cov",            # For VS Code’s coverage functionality
+  "scmorph>=0.1",          # Chatterjee/XIM parity
 ]
 doc = [
   "ipython",                       # conf.py enables IPython.sphinxext.ipython_console_highlighting
@@ -125,13 +121,11 @@ doc = [
   "sphinx-autodoc-typehints<3.14", # 3.14 stringifies class bases, which breaks scverse-doc's _skip_private_bases
   "sphinxcontrib-bibtex>=1",
 ]
-# Executing the notebooks needs what they call. Pinned below Python 3.14 because harmonypy ships no
-# 3.14 wheel yet; the docs build itself renders committed outputs and runs on any version.
+# Executing the notebooks needs what they call. The docs build itself renders committed outputs.
 tutorials = [
   { include-group = "doc" },
   "boto3",
   "copairs>=0.6",
-  "harmonypy>=2",
   "igraph",
   "ipykernel",
   "leidenalg",
@@ -170,7 +164,7 @@ envs.hatch-check-types.scripts.check = [ "mypy" ]
 envs.hatch-check-types.dependency-groups = [ "typecheck", "test" ]
 envs.hatch-test.matrix = [
   # Test the lowest and highest supported Python versions with normal deps
-  { deps = [ "stable" ], python = [ "3.12", "3.14" ] },
+  { deps = [ "stable" ], python = [ "3.13", "3.14" ] },
   # Test the newest supported Python version also with pre-release deps
   { deps = [ "pre" ], python = [ "3.14" ] },
 ]
@@ -180,8 +174,7 @@ envs.hatch-test.overrides.matrix.deps.env-vars = [
   { value = "allow", key = "UV_PRERELEASE", if = [ "pre" ] },
 ]
 envs.hatch-test.dependency-groups = [ "dev", "test" ]
-# CI executes every tutorial here, which keeps their committed outputs honest. Pinned to 3.13 (harmonypy
-# has no 3.14 wheel yet).
+# CI executes every tutorial here, which keeps their committed outputs honest.
 envs.tutorials.python = "3.13"
 envs.tutorials.scripts.case-studies = "jupyter nbconvert --to notebook --execute --inplace docs/case_studies/*.ipynb"
 envs.tutorials.scripts.run = "sphinx-build -M html docs docs/_build -W -D nb_execution_mode=cache {args}"
@@ -235,7 +228,6 @@ overrides = [
     "decoupler.*",
     "geopandas.*",
     "h5py.*",
-    "harmonypy.*",
     "imageio.*",
     "numba.*",
     "plotly.*",

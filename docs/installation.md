@@ -1,6 +1,6 @@
 # Installation
 
-You need Python 3.12 or newer.
+You need Python 3.13 or newer.
 If you don't have Python installed, we recommend [uv](https://github.com/astral-sh/uv).
 
 ## Alpha release
@@ -30,14 +30,6 @@ pip install git+https://github.com/scverse/mantispy.git
 
 ```console
 pip install 'mantispy[spatial]'
-```
-
-### Harmony
-
-{func}`~mantispy.pp.harmony` needs harmonypy:
-
-```console
-pip install 'mantispy[harmony]'
 ```
 
 ### Mean average precision
@@ -75,5 +67,5 @@ pip install igraph
 To run every tutorial and case study, install all of the above at once:
 
 ```console
-pip install 'mantispy[map,harmony,integration,interactive]' igraph
+pip install 'mantispy[map,integration,interactive]' igraph
 ```
