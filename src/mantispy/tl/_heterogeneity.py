@@ -19,6 +19,7 @@ from mantispy._core._stats import (
     benjamini_hochberg,
     permutation_pvalue,
     split_reference,
+    unit_permutation_pvalue,
 )
 from mantispy._core.features import annotation
 from mantispy._core.frames import as_frame
@@ -476,6 +477,123 @@ def subpopulation_hits(
             stacklevel=3,
         )
     table["qvalue"] = benjamini_hochberg(table["pvalue"].to_numpy()) if len(table) else []
+    adata.uns.setdefault("mantispy", {})[key_added] = table
+    return None
+
+
+@inplace_or_copy(expects="object")
+def composition_shift(
+    adata: AnnData,
+    key: str,
+    groupby: str = "Metadata_Perturbation",
+    reference: str = "negcon",
+    block: str | None = "Metadata_Well",
+    unit: str | None = "Metadata_Guide",
+    n_permutations: int = 999,
+    seed: int = 0,
+    key_added: str = "composition_shift",
+    copy: bool = False,
+) -> AnnData | None:
+    """Change in each group's share of cells per category against the reference, compared within blocks.
+
+    The category is a label per cell, such as a cell-cycle state or a cluster. Within each ``block`` (a well),
+    the group's share of cells in every category is compared with the reference's, and the differences are
+    averaged over blocks. The distance is the total variation distance of that average, half the sum of its
+    absolute values: 0 when the group's composition matches the reference, 1 when they share no category.
+
+    The p-value comes from relabelling ``unit`` (the guide) as group or reference, one relabelling per
+    permutation applied in every block, so the guide is the replicate even though every well of a pooled
+    screen holds every guide. For one row per guide, pass the guide column as both ``groupby`` and ``unit``:
+    each guide is then compared with the reference guides.
+
+    Args:
+        adata: Object-resolution object carrying the category in ``obs[key]``.
+        key: ``obs`` column holding a label per cell. A cell without a value is left out.
+        groupby: ``obs`` column naming the groups to score, one row of the result each.
+        reference: The rows to compare against: ``"negcon"`` for the negative controls, or the name of a
+            boolean ``obs`` column. The reference has no row of its own.
+        block: ``obs`` column the comparison is paired within, normally the well; ``None`` pools all rows.
+        unit: ``obs`` column naming the replicate unit the permutation relabels, normally the guide.
+            ``None`` relabels single cells, which treats every cell as independent and warns.
+            Each unit must belong to one group.
+        n_permutations: Permutations for the null.
+        seed: Seed for the permutations.
+        key_added: Key the table is written under in ``uns["mantispy"]``.
+        copy: Return a modified copy instead of mutating in place.
+
+    Returns:
+        ``None``, or the modified copy.
+        Writes ``uns["mantispy"][key_added]`` with one row per group: ``group``, the ``distance``, ``n_blocks``
+        that held both the group and the reference, ``pvalue``, the Benjamini-Hochberg ``qvalue`` over the
+        groups, ``min_pvalue``, the smallest p-value the design could reach, and one column per category with
+        the group's share minus the reference's.
+
+    Raises:
+        ValueError: ``n_permutations`` is not positive, ``reference`` selects no cells, or a ``unit`` spans
+            more than one group.
+    """
+    if n_permutations < 1:
+        raise ValueError(f"n_permutations must be positive, got {n_permutations}")
+    obs = as_frame(adata.obs)
+    category = obs[key].astype(object).where(obs[key].notna())
+    labels = sorted(category.dropna().unique(), key=str)
+    known = category.notna().to_numpy()
+    onehot = np.full((adata.n_obs, len(labels)), np.nan)
+    onehot[known] = (category[known].to_numpy()[:, None] == np.asarray(labels, dtype=object)[None, :]).astype(float)
+
+    reference_rows = reference_mask(adata, reference)
+    if not reference_rows.any():
+        raise ValueError(f"reference={reference!r} selects no cells to compare against")
+    blocks = obs[block].to_numpy() if block is not None else np.zeros(adata.n_obs, dtype=int)
+    if unit is None:
+        warnings.warn(
+            "composition_shift: unit=None relabels single cells, which treats every cell as an independent "
+            "replicate and gives p-values that are far too small when guides or wells differ. Pass unit=, the guide.",
+            UserWarning,
+            stacklevel=3,
+        )
+        units = np.arange(adata.n_obs).astype(str)
+    else:
+        spans = obs.groupby(unit, observed=True)[groupby].nunique()
+        if (spans > 1).any():
+            raise ValueError(f"{int((spans > 1).sum())} values of {unit!r} span more than one group of {groupby!r}")
+        units = obs[unit].astype(str).to_numpy()
+    rng = np.random.default_rng(seed)
+
+    def mean_difference(sums: list[tuple[np.ndarray, np.ndarray]]) -> np.ndarray:
+        return np.mean([group / group.sum() - reference / reference.sum() for group, reference in sums], axis=0)
+
+    def distance(sums: list[tuple[np.ndarray, np.ndarray]]) -> float:
+        return 0.5 * float(np.abs(mean_difference(sums)).sum())
+
+    values = obs[groupby].to_numpy()
+    rows = []
+    for group in pd.unique(values[~reference_rows]):
+        group_rows = (values == group) & ~reference_rows
+        observed = [
+            (onehot[group_rows & in_block & known].sum(axis=0), onehot[reference_rows & in_block & known].sum(axis=0))
+            for in_block in (blocks == value for value in pd.unique(blocks))
+        ]
+        observed = [(g, r) for g, r in observed if g.sum() > 0 and r.sum() > 0]
+        if not observed:
+            rows.append({"group": group, "distance": np.nan, "n_blocks": 0, "pvalue": np.nan, "min_pvalue": np.nan})
+            continue
+        pvalue, floor = unit_permutation_pvalue(
+            onehot, group_rows, reference_rows, blocks, units, distance, n_permutations, rng
+        )
+        rows.append(
+            {
+                "group": group,
+                "distance": distance(observed),
+                "n_blocks": len(observed),
+                "pvalue": pvalue,
+                "min_pvalue": floor,
+                **dict(zip(labels, mean_difference(observed), strict=True)),
+            }
+        )
+
+    table = pd.DataFrame(rows, columns=["group", "distance", "n_blocks", "pvalue", "min_pvalue", *labels])
+    table.insert(4, "qvalue", benjamini_hochberg(table["pvalue"].to_numpy()))
     adata.uns.setdefault("mantispy", {})[key_added] = table
     return None
 

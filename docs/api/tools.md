@@ -104,6 +104,7 @@ Aggregate profiles and ask what the perturbations did.
     :toctree: generated
 
     tl.cluster_composition
+    tl.composition_shift
     tl.subpopulation_hits
     tl.cell_cycle_phase
     tl.neighbors_local_density
