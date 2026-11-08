@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pytest
 
@@ -10,7 +12,7 @@ def adata():
     return synthetic_plate(n_plates=2, n_wells=24, n_cells=10, n_features=12, seed=0)
 
 
-@pytest.mark.parametrize("method", ["standardize", "robustize", "mad_robustize"])
+@pytest.mark.parametrize("method", ["standardize", "robustize", "mad_robustize", "center"])
 def test_constant_feature_yields_zero_not_inf(adata, method):
     """An unguarded zero scale would make the whole column inf or NaN."""
     values = adata.X.copy()
@@ -63,7 +65,7 @@ def test_string_true_false_survives_a_round_trip(adata):
     np.testing.assert_allclose(np.nanmedian(controls, axis=0), 0.0, atol=1e-5)
 
 
-@pytest.mark.parametrize("method", ["mad_robustize", "standardize", "robustize"])
+@pytest.mark.parametrize("method", ["mad_robustize", "standardize", "robustize", "center"])
 def test_a_feature_unmeasured_among_one_groups_controls_keeps_its_measured_values(adata, method):
     """Repairing the zero scale to 1.0 but leaving the centre NaN turns every measured value in that group into NaN: the first plate's treated wells went from [-0.62, -0.22, -0.54] to all-NaN, 6 of 6 rows on that plate against 0 of 6 on the other."""
     plate = adata.obs["Metadata_Plate"].astype(str).to_numpy()
@@ -112,3 +114,56 @@ def test_normalize_writes_its_result_in_the_dtype_of_x(adata, dtype):
     expected = (values - values.mean(axis=0)) / values.std(axis=0)
     tolerance = 1e-12 if dtype is np.float64 else 1e-5
     np.testing.assert_allclose(adata.X, expected, rtol=tolerance, atol=tolerance)
+
+
+def test_center_subtracts_the_reference_median_and_keeps_the_units(adata):
+    """method="center" removes each group's control median and leaves the spread as it was."""
+    before = np.asarray(adata.X).copy()
+    mt.pp.normalize(adata, method="center", by="Metadata_Plate", reference="negcon")
+    plate = adata.obs["Metadata_Plate"].astype(str).to_numpy()
+    control = adata.obs["Metadata_Control_Type"].astype(str).to_numpy() == "negcon"
+    for value in np.unique(plate):
+        rows = plate == value
+        np.testing.assert_allclose(np.median(np.asarray(adata.X)[rows & control], axis=0), 0.0, atol=1e-5)
+        np.testing.assert_allclose(np.asarray(adata.X)[rows].std(axis=0), before[rows].std(axis=0), rtol=1e-4)
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64], ids=["float32", "float64"])
+def test_center_keeps_the_dtype_of_x(adata, dtype):
+    adata.X = adata.X.astype(dtype)
+    mt.pp.normalize(adata, method="center", by="Metadata_Plate", reference="negcon")
+    assert adata.X.dtype == dtype
+
+
+def test_normalizing_within_groups_that_each_hold_one_treatment_warns(adata):
+    """Each well holds one perturbation, so normalizing per well removes the perturbation effect."""
+    with pytest.warns(UserWarning, match="Metadata_Perturbation.*constant within every group"):
+        mt.pp.normalize(adata, method="center", by="Metadata_Well", reference=None)
+
+
+def test_the_treatment_warning_reads_the_recorded_perturbation_column(adata):
+    """A perturbation column whose name no heuristic knows is still found through the perturbation record."""
+    adata.obs["Metadata_Drug"] = adata.obs["Metadata_Perturbation"].astype(str)
+    mt.io.stamp(adata, perturbation={"column": "Metadata_Drug"})
+    with pytest.warns(UserWarning, match="Metadata_Drug.*constant within every group"):
+        mt.pp.normalize(adata, by="Metadata_Well", reference=None, copy=True)
+
+
+@pytest.mark.parametrize("column", ["Metadata_pert_iname", "Metadata_JCP2022", "Metadata_mmoles_per_liter"])
+def test_the_treatment_warning_knows_the_jump_column_names(adata, column):
+    adata.obs[column] = adata.obs["Metadata_Perturbation"].astype(str)
+    with pytest.warns(UserWarning, match=f"{column}.*constant within every group"):
+        mt.pp.normalize(adata, by="Metadata_Well", reference=None, copy=True)
+
+
+def test_per_plate_normalization_with_plate_level_labels_does_not_warn(adata):
+    """A plate-level column whose name merely contains a treatment word is not taken for the treatment, and a
+    concentration shared by a plate's treated wells but left empty on its controls is not constant there."""
+    plate = adata.obs["Metadata_Plate"].astype(str)
+    adata.obs["Metadata_growth_condition"] = plate
+    concentration = plate.map({value: float(i + 1) for i, value in enumerate(sorted(plate.unique()))})
+    adata.obs["Metadata_Concentration"] = concentration.where(~adata.obs["Metadata_Control"].astype(bool))
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        mt.pp.normalize(adata, by="Metadata_Plate", copy=True)
+    assert not [w for w in caught if "constant within every group" in str(w.message)]
