@@ -40,6 +40,7 @@ from mantispy._core.schema import (
     _legacy_controls,
     ensure_object_identity,
     migrate,
+    recorded_resolution,
     validate,
 )
 from mantispy._core.schema import stamp as _record
@@ -616,6 +617,71 @@ def write(
             shutil.rmtree(tmp, ignore_errors=True)
         else:
             tmp.unlink(missing_ok=True)
+
+
+def from_embedding(
+    X: np.ndarray,
+    obs: pd.DataFrame | None = None,
+    *,
+    like: ad.AnnData | None = None,
+    resolution: str | None = None,
+    feature_kind: str = "embedding",
+    object_type: str = "Object",
+    var_names: Sequence[str] | None = None,
+) -> ad.AnnData:
+    """Build a tool-ready :class:`~anndata.AnnData` from a matrix of image-model embeddings.
+
+    A deep-learning model run on the images, such as DINO or another self-supervised encoder, gives a plain
+    matrix, one row per object (or crop, or well) and one column per embedding dimension, with the metadata
+    that names each row alongside. Wrapping it so that :func:`~mantispy.tl.aggregate`,
+    :func:`~mantispy.tl.map` and :func:`~mantispy.tl.edistance` accept it is the same few lines every time:
+    build the object, name the columns, cast to the stored ``float32``, and stamp it. This does that.
+
+    Args:
+        X: The embedding, observations by embedding dimensions. Cast to ``float32``.
+            Row ``i`` must describe the same object as row ``i`` of ``obs`` (or ``like.obs``). Only the row
+            counts are checked, so an embedding written in a different order is silently mislabelled.
+        obs: Per-row metadata, carrying the columns ``resolution`` requires. Defaults to ``like.obs``.
+        like: An object whose rows the embedding describes, usually the cells it was computed from. Its
+            ``obs``, its resolution and its perturbation record carry over, so the embedding is analysed
+            with the same metadata as the features it replaces.
+        resolution: What one row is, passed to :func:`~mantispy.io.stamp`: ``"object"`` for single cells, ``"well"`` or
+            ``"aggregate"``. Defaults to the resolution ``like`` records, else ``"object"``.
+        feature_kind: The representation the columns carry; an embedding is ``"embedding"``.
+        object_type: For object resolution, the ``Metadata_ObjectType`` written when ``obs`` carries none.
+        var_names: Names for the embedding dimensions, or ``None`` for ``embedding_0 … embedding_{k-1}``.
+
+    Returns:
+        A stamped, validated object with the embedding in ``X`` and the feature annotation in ``var``.
+
+    Raises:
+        ValueError: Neither ``obs`` nor ``like`` is given, the row counts do not match, or ``obs`` lacks a
+            column ``resolution`` requires, raised by :func:`~mantispy.io.stamp`'s validation.
+
+    Examples:
+        Wrapping DINO features computed on single-cell crops, in the row order of the cells they came from:
+
+        >>> import mantispy as mt
+        >>> dino = mt.io.from_embedding(features, like=cells)  # doctest: +SKIP
+        >>> wells = mt.tl.aggregate(dino, by=("Metadata_Plate", "Metadata_Well"))  # doctest: +SKIP
+    """
+    matrix = np.asarray(X, dtype=np.float32)
+    if obs is None:
+        if like is None:
+            raise ValueError("pass obs= or like=, the object whose rows the embedding describes")
+        obs = as_frame(like.obs)
+    if matrix.shape[0] != len(obs):
+        raise ValueError(f"the embedding has {matrix.shape[0]} rows but the metadata has {len(obs)}")
+    if resolution is None:
+        resolution = (recorded_resolution(like) if like is not None else None) or "object"
+    names = list(var_names) if var_names is not None else [f"embedding_{i}" for i in range(matrix.shape[1])]
+    adata = ad.AnnData(X=matrix, obs=obs.copy())
+    adata.var_names = names
+    stamp(adata, resolution=resolution, feature_kind=feature_kind, object_type=object_type)
+    record = like.uns.get("mantispy", {}).get("perturbation") if like is not None else None
+    if record is not None:
+        adata.uns["mantispy"]["perturbation"] = dict(record)
+    return adata
 
 
 def stamp(

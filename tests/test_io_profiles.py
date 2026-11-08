@@ -841,3 +841,43 @@ def test_cp_measure_table_leaves_the_cellprofiler_default_alone():
     adata = from_dataframe(df)
     assert list(adata.var_names) == ["Cells_AreaShape_Area"]
     assert adata.var.loc["Cells_AreaShape_Area", "object"] == "Cells"
+
+
+def _embedding_obs(n, **extra):
+    """Single-cell (object-resolution) metadata for an embedding: carries the ids object resolution requires."""
+    base = {
+        "Metadata_Plate": ["P1"] * n,
+        "Metadata_Well": [f"A{i % 3 + 1:02d}" for i in range(n)],
+        "Metadata_ImageID": [f"P1_A{i % 3 + 1:02d}" for i in range(n)],
+        "Metadata_ObjectNumber": list(range(n)),
+    }
+    base.update(extra)
+    return pd.DataFrame(base, index=[str(i) for i in range(n)])
+
+
+def test_from_embedding_is_ready_for_tools():
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(12, 4))
+    obs = _embedding_obs(12, Metadata_Perturbation=["NTC"] * 6 + ["KO"] * 6)
+    adata = mt.io.from_embedding(X, obs)
+    assert adata.shape == (12, 4)
+    assert list(adata.var_names) == [f"embedding_{i}" for i in range(4)]
+    assert adata.uns["mantispy"]["resolution"] == "object"
+    assert (adata.var["feature_kind"] == "embedding").all()
+    assert adata.X.dtype == np.float32
+    assert (adata.obs["Metadata_ObjectType"] == "Object").all()
+    assert mt.io.validate(adata).ok, mt.io.validate(adata).errors
+    wells = mt.tl.aggregate(adata, by=("Metadata_Plate", "Metadata_Well"), min_cells=0)
+    assert wells.n_obs == 3
+
+
+def test_from_embedding_like_inherits_metadata_and_the_perturbation_record():
+    rng = np.random.default_rng(1)
+    cells = mt.io.from_embedding(rng.normal(size=(12, 3)), _embedding_obs(12, Metadata_Gene=["KO"] * 12))
+    cells.uns["mantispy"]["perturbation"] = {"column": "Metadata_Gene", "control_column": "Metadata_Control"}
+    latent = mt.io.from_embedding(rng.normal(size=(12, 2)), like=cells)
+    pd.testing.assert_frame_equal(latent.obs, cells.obs)
+    assert latent.uns["mantispy"]["perturbation"]["column"] == "Metadata_Gene"
+    assert latent.uns["mantispy"]["resolution"] == "object"
+    with pytest.raises(ValueError, match="rows"):
+        mt.io.from_embedding(rng.normal(size=(5, 2)), like=cells)
