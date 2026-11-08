@@ -370,6 +370,21 @@ def test_map_n_jobs_and_batch_size_do_not_change_the_result(profiles):
 
 
 @requires_copairs
+def test_map_warns_before_a_pair_query_that_fans_out(profiles):
+    """Every profile against every other, on 15,000 profiles, is over a hundred million pairs; say so before copairs builds them."""
+    n = 15_000
+    obs = pd.DataFrame({"Metadata_Perturbation": [f"p{i}" for i in range(n)]}, index=[str(i) for i in range(n)])
+    wide = ad.AnnData(np.random.default_rng(0).normal(size=(n, 2)).astype(np.float32), obs=obs)
+    # Every perturbation is a singleton, so copairs gives up on the positive pairs before it builds the negative ones.
+    with pytest.warns(UserWarning, match="pairs over 15000 profiles"), pytest.raises(Exception, match="positive pairs"):
+        mt.tl.map(wide, pos_sameby=["Metadata_Perturbation"], neg_diffby=["Metadata_Perturbation"])
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", message=".*pairs over")
+        mt.tl.map(profiles, mode="activity", null_size=200)
+
+
+@requires_copairs
 def test_map_argument_errors(profiles):
     with pytest.raises(ValueError, match="not both"):
         mt.tl.map(profiles, mode="activity", pos_sameby=["Metadata_Perturbation"])
