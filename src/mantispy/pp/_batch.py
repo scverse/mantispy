@@ -641,7 +641,7 @@ def harmony(
         max_iter: Harmony iterations.
         seed: Seed, passed through as ``rng``.
         copy: Return a modified copy instead of writing in place.
-        harmony_kwargs: Passed to :func:`scanpy.pp.harmony_integrate`, for example ``theta``, ``n_clusters`` or ``sigma``.
+        harmony_kwargs: Passed to ``scanpy.pp.harmony_integrate``, for example ``theta``, ``n_clusters`` or ``sigma``.
 
     Returns:
         ``None``, or the modified copy.
@@ -652,7 +652,7 @@ def harmony(
         ValueError: If ``batch_key`` has a single level, leaving nothing to correct for.
 
     Notes:
-        Runs scanpy's own Harmony, :func:`scanpy.pp.harmony_integrate`, with its default Harmony 2 algorithm.
+        Runs scanpy's own Harmony, ``scanpy.pp.harmony_integrate``, with its default Harmony 2 algorithm.
 
         Harmony can return the embedding unchanged; this wrapper warns when it does.
         What decides this is separability rather than size: it corrects the embedding of JUMP TARGET2 wells across imaging sites, and returns the input untouched when the batches occupy disjoint regions of the embedding, because every soft cluster then holds a single batch.
