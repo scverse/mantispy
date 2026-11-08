@@ -36,6 +36,16 @@ def test_activity_scores_treatments_against_the_controls(profiles):
 
 
 @requires_copairs
+def test_map_keeps_the_copied_null_unless_told_otherwise(profiles):
+    """copairs 0.6 made the permutation null its default; mantispy keeps the copied null and lets the caller switch."""
+    default = mt.tl.map(profiles, mode="activity", null_size=200, copy=True).uns["mantispy"]["map"]
+    copied = mt.tl.map(profiles, mode="activity", null_size=200, null="copied", copy=True).uns["mantispy"]["map"]
+    permuted = mt.tl.map(profiles, mode="activity", null_size=200, null="permutation", copy=True).uns["mantispy"]["map"]
+    pd.testing.assert_frame_equal(default, copied)
+    np.testing.assert_allclose(permuted["score"], copied["score"])
+
+
+@requires_copairs
 def test_map_accepts_a_label_column_without_the_metadata_prefix(profiles):
     """A user column without the Metadata_ prefix must reach copairs, not trip its matcher (audit A2)."""
     profiles.obs["perturbation"] = profiles.obs["Metadata_Perturbation"].astype(str).to_numpy()
