@@ -72,7 +72,7 @@ optional-dependencies.integration = [ "scib-metrics>=0.5.1" ]
 optional-dependencies.interactive = [ "plotly>=5" ]
 # copairs powers mt.tl.map; kept optional because it is a niche feature that pulls in duckdb and
 # statsmodels. 0.5.5 dropped its <3.13 requires-python cap, so it installs on every supported Python.
-optional-dependencies.map = [ "copairs>=0.5.5" ]
+optional-dependencies.map = [ "copairs>=0.6" ]
 optional-dependencies.spatial = [
   "dask>=2024.4",
   "geopandas>=1",
@@ -97,7 +97,7 @@ dev = [
 ]
 test = [
   # Reference implementations, used only to assert equivalence. Never imported from src/.
-  "copairs>=0.5.5",
+  "copairs>=0.6",
   "coverage>=7.10",
   # pp.harmony; harmonypy has no Python 3.14 wheel yet and its source build fails on Linux
   "harmonypy>=2; python_version<'3.14'",
@@ -130,7 +130,7 @@ doc = [
 tutorials = [
   { include-group = "doc" },
   "boto3",
-  "copairs>=0.5.5",
+  "copairs>=0.6",
   "harmonypy>=2",
   "igraph",
   "ipykernel",
