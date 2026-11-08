@@ -125,11 +125,10 @@ def test_regress_out_handles_categorical_keys_and_missing_columns(gradient_cells
 
 
 def test_harmony_says_so_when_it_corrects_nothing(cells):
-    """harmonypy reports convergence and returns the input unchanged when the batches are perfectly separated in the embedding, because every soft cluster is then single-batch.
+    """Harmony returns the input unchanged when the batches are perfectly separated in the embedding, because every soft cluster is then single-batch.
 
     The wrapper warns in that case.
     """
-    pytest.importorskip("harmonypy")
     import scanpy as sc
 
     wells = mt.tl.aggregate(cells, min_cells=0)
@@ -144,8 +143,24 @@ def test_harmony_says_so_when_it_corrects_nothing(cells):
     np.testing.assert_array_equal(wells.obsm["X_harmony"], wells.obsm["X_pca"])
 
 
+def test_harmony_pulls_overlapping_batches_together(wells):
+    import scanpy as sc
+
+    sc.pp.pca(wells, n_comps=5)
+    north = (wells.obs["Metadata_Plate"].astype(str) == "Plate01").to_numpy()
+    wells.obsm["X_pca"][north] += wells.obsm["X_pca"].std(axis=0)
+
+    def gap(embedding):
+        return float(np.linalg.norm(embedding[north].mean(0) - embedding[~north].mean(0)))
+
+    mt.pp.harmony(wells, batch_key="Metadata_Plate", seed=1)
+    again = mt.pp.harmony(wells, batch_key="Metadata_Plate", seed=1, copy=True)
+
+    assert gap(wells.obsm["X_harmony"]) < 0.5 * gap(wells.obsm["X_pca"])
+    np.testing.assert_array_equal(again.obsm["X_harmony"], wells.obsm["X_harmony"])
+
+
 def test_harmony_needs_something_to_correct(cells):
-    pytest.importorskip("harmonypy")
     import scanpy as sc
 
     wells = mt.tl.aggregate(cells, min_cells=0)

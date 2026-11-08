@@ -32,14 +32,6 @@ pip install git+https://github.com/scverse/mantispy.git
 pip install 'mantispy[spatial]'
 ```
 
-### Harmony
-
-{func}`~mantispy.pp.harmony` needs harmonypy:
-
-```console
-pip install 'mantispy[harmony]'
-```
-
 ### Mean average precision
 
 {func}`~mantispy.tl.map` runs copairs, an optional extra:
@@ -75,5 +67,5 @@ pip install igraph
 To run every tutorial and case study, install all of the above at once:
 
 ```console
-pip install 'mantispy[map,harmony,integration,interactive]' igraph
+pip install 'mantispy[map,integration,interactive]' igraph
 ```

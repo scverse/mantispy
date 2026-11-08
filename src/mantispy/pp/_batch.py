@@ -639,35 +639,30 @@ def harmony(
         use_rep: Embedding to correct, normally the output of :func:`scanpy.pp.pca`.
         key_added: ``obsm`` key for the corrected embedding.
         max_iter: Harmony iterations.
-        seed: Seed, passed through as ``random_state``.
+        seed: Seed, passed through as ``rng``.
         copy: Return a modified copy instead of writing in place.
-        harmony_kwargs: Passed to ``harmonypy.run_harmony``, for example ``theta``, ``nclust`` or ``sigma``.
+        harmony_kwargs: Passed to :func:`scanpy.pp.harmony_integrate`, for example ``theta``, ``n_clusters`` or ``sigma``.
 
     Returns:
         ``None``, or the modified copy.
         Writes ``obsm[key_added]``.
 
     Raises:
-        ImportError: If ``harmonypy`` is not installed.
         KeyError: If ``use_rep`` is not in ``obsm``, or ``batch_key`` is not an ``obs`` column.
         ValueError: If ``batch_key`` has a single level, leaving nothing to correct for.
 
     Notes:
-        Requires ``harmonypy``: ``pip install 'mantispy[harmony]'``.
+        Runs scanpy's own Harmony, :func:`scanpy.pp.harmony_integrate`, with its default Harmony 2 algorithm.
 
-        harmonypy can report convergence and return the embedding unchanged; this wrapper warns when it does.
+        Harmony can return the embedding unchanged; this wrapper warns when it does.
         What decides this is separability rather than size: it corrects the embedding of JUMP TARGET2 wells across imaging sites, and returns the input untouched when the batches occupy disjoint regions of the embedding, because every soft cluster then holds a single batch.
 
         Check the result with more than one metric.
         On those JUMP wells Harmony moved the site centroids closer together but lowered iLISI, so the sites moved together globally while neighborhoods stayed site-pure.
         Batch metrics often disagree like this, which is why :func:`~mantispy.metrics.evaluate_integration` reports the whole scib-metrics panel rather than one number.
     """
-    try:
-        import harmonypy
-    except ImportError as error:  # pragma: no cover - exercised only without the extra
-        raise ImportError(
-            "Harmony needs harmonypy, which is an optional dependency: pip install 'mantispy[harmony]'"
-        ) from error
+    import scanpy as sc
+    from anndata.acc import A
 
     if use_rep not in adata.obsm:
         raise KeyError(f"obsm has no {use_rep!r}; compute it first, e.g. sc.pp.pca(adata, n_comps=50)")
@@ -677,23 +672,19 @@ def harmony(
         raise ValueError(f"{batch_key!r} has one level, so there is nothing to correct for")
 
     values = np.asarray(adata.obsm[use_rep], dtype=np.float64)
-    result = harmonypy.run_harmony(
-        values,
-        as_frame(adata.obs)[[batch_key]],
-        [batch_key],
+    corrected = sc.pp.harmony_integrate(
+        adata,
+        A.obs[batch_key],
+        use=A.obsm[use_rep],
+        out=True,
         max_iter_harmony=max_iter,
-        random_state=seed,
-        verbose=False,
+        rng=seed,
         **harmony_kwargs,
     )
-    # harmonypy returned Z_corr as (dims, rows) up to 0.0.10 and as (rows, dims) from 0.1.0, the change scanpy's sce.pp.harmony_integrate still does not handle (scverse/scanpy#3940).
-    corrected = np.asarray(result.Z_corr)
-    if corrected.shape[0] != adata.n_obs:
-        corrected = corrected.T
 
     if np.array_equal(corrected, values):
         warnings.warn(
-            f"harmony reported convergence but corrected nothing and returned {use_rep!r} unchanged. "
+            f"harmony corrected nothing and returned {use_rep!r} unchanged. "
             "This happens when the batches are fully separated in the embedding, so every soft cluster "
             "holds a single batch. Check that the batches overlap, for example with mt.pl.metrics or an "
             f"embedding colored by {batch_key!r}.",
