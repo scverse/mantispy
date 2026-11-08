@@ -211,9 +211,9 @@ def bbbc021(
 #: The (aggregated, feature_selected) combination each rehosted rohban variant answers to.
 _ROHBAN_VARIANTS = {
     (False, False): "rohban.h5ad",  # 1918 x 3616, well level, all features
-    (False, True): "rohban_selected.h5ad",  # 1918 x 751, well level
+    (False, True): "rohban_selected.h5ad",  # 1918 x 574, well level
     (True, False): "rohban_gene.h5ad",  # 190 x 3616, gene level, full features
-    (True, True): "rohban_gene_selected.h5ad",  # 190 x 751, gene level, feature selected
+    (True, True): "rohban_gene_selected.h5ad",  # 190 x 574, gene level, feature selected
 }
 
 
@@ -275,12 +275,12 @@ def rohban(
 
     ``cpg0017-rohban-pathways``: U2OS cells, one ORF construct overexpressed per well, roughly ten replicate wells per construct over five plates.
 
-    The base and its variants are pre-built by ``scripts/build_staged_datasets.py`` from the five raw plate tables and rehosted on ``scverse-exampledata``, so the loader fetches a single h5ad rather than reassembling the base on every call. The two flags select the variant, which the variants build from per-plate ``mad_robustize`` normalization against the untreated wells:
+    The base and its variants are pre-built by ``scripts/build_staged_datasets.py`` from the five raw plate tables and rehosted on ``scverse-exampledata``, so the loader fetches a single h5ad rather than reassembling the base on every call. The two flags select the variant. Every variant is built from the raw wells without normalization, which is left to the analysis:
 
     - both ``False``: the raw wells with every feature, 1,918 wells by 3,616 features.
-    - ``feature_selected=True``: the well-level block after pycytominer-default feature selection, 1,918 wells by 751 features.
+    - ``feature_selected=True``: the well-level block after pycytominer-default feature selection, 1,918 wells by 574 features.
     - ``aggregated=True``: one ``modz`` consensus (Spearman, ``min_replicates=2``) per ``Metadata_Gene`` over the screened wells (untreated and transfection controls dropped), 190 genes by 3,616 features.
-    - ``aggregated=True, feature_selected=True``: that same gene consensus on the feature-selected block, 190 genes by 751 features.
+    - ``aggregated=True, feature_selected=True``: that same gene consensus on the feature-selected block, 190 genes by 574 features.
 
     Args:
         plates: Plate barcodes to load, all five when omitted.
