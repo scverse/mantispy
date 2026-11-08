@@ -390,6 +390,9 @@ def dna_content(
         Subtract it before calling this if your pipeline measured it.
 
         A cell whose intensity is missing, zero or negative gets ``NaN``, as does every cell of a group below ``min_cells``.
+
+        A stain that does not resolve a 4N peak from the 2N one gives a single broad peak, and its mode is not a G1 peak.
+        The content then still ranks cells by DNA, but :func:`~mantispy.tl.dna_state` gates do not mean 2N, S and 4N; look at the histogram first.
     """
     values = _dna_intensity(adata, dna_feature, layer, "dna_content")
     positive = np.isfinite(values) & (values > 0)
