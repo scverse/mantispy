@@ -518,12 +518,12 @@ def test_hit_calling_block_null_fixes_cell_resolution_pseudoreplication():
     """Regression for #68: cells within a well are pseudoreplicates, not independent draws.
 
     A null that shuffles cells gives the group median far too little spread, since the shrink goes as the cell count rather than the well count, so pure-null pseudo-treatments are called well above nominal.
-    Resampling whole wells (block="Metadata_Well") matches the null's exchangeable unit to the design and brings the rate back to nominal.
+    Resampling whole wells (replicate="Metadata_Well") matches the null's exchangeable unit to the design and brings the rate back to nominal.
     """
     block_hits = block_total = cell_hits = cell_total = 0
     for seed in range(12):
         adata = _well_effect_cells(seed=seed)
-        mt.tl.hit_calling(adata, block="Metadata_Well", n_permutations=400, seed=seed, key_added="block")
+        mt.tl.hit_calling(adata, replicate="Metadata_Well", n_permutations=400, seed=seed, key_added="block")
 
         # Drop the well column so the cell-shuffle null (the bug) runs on the same feature matrix.
         buggy = adata.copy()
@@ -548,7 +548,7 @@ def test_hit_calling_block_null_fixes_cell_resolution_pseudoreplication():
 def test_hit_calling_defaults_to_the_well_block_at_cell_resolution():
     adata = _well_effect_cells(seed=0)
     default = mt.tl.hit_calling(adata, n_permutations=200, seed=0, copy=True)
-    explicit = mt.tl.hit_calling(adata, block="Metadata_Well", n_permutations=200, seed=0, copy=True)
+    explicit = mt.tl.hit_calling(adata, replicate="Metadata_Well", n_permutations=200, seed=0, copy=True)
     pd.testing.assert_frame_equal(default.uns["mantispy"]["hits"], explicit.uns["mantispy"]["hits"])
 
 
@@ -615,9 +615,9 @@ def test_hit_calling_blocks_on_the_physical_well_across_plates():
         warnings.simplefilter("ignore", UserWarning)
         default = mt.tl.hit_calling(adata, n_permutations=200, seed=0, copy=True)
         physical_block = mt.tl.hit_calling(
-            adata, block=["Metadata_Plate", "Metadata_Well"], n_permutations=200, seed=0, copy=True
+            adata, replicate=["Metadata_Plate", "Metadata_Well"], n_permutations=200, seed=0, copy=True
         )
-        by_name_block = mt.tl.hit_calling(adata, block="Metadata_Well", n_permutations=200, seed=0, copy=True)
+        by_name_block = mt.tl.hit_calling(adata, replicate="Metadata_Well", n_permutations=200, seed=0, copy=True)
 
     pd.testing.assert_frame_equal(default.uns["mantispy"]["hits"], physical_block.uns["mantispy"]["hits"])
     assert not default.uns["mantispy"]["hits"].equals(by_name_block.uns["mantispy"]["hits"]), (
@@ -649,7 +649,9 @@ def test_ks_hit_calling_block_null_fixes_cell_resolution_pseudoreplication():
     block_hits = block_total = cell_hits = cell_total = 0
     for seed in range(10):
         adata = _well_effect_cells(seed=seed)
-        mt.tl.hit_calling(adata, method="ks", block="Metadata_Well", n_permutations=300, seed=seed, key_added="block")
+        mt.tl.hit_calling(
+            adata, method="ks", replicate="Metadata_Well", n_permutations=300, seed=seed, key_added="block"
+        )
 
         buggy = adata.copy()
         del buggy.obs["Metadata_Well"]  # no well column, so the pooled-cell ks_2samp (the bug) runs
@@ -683,7 +685,7 @@ def test_edistance_block_null_fixes_cell_resolution_pseudoreplication():
     block_hits = block_total = cell_hits = cell_total = 0
     for seed in range(10):
         adata = _small_well_effect_cells(seed=seed)
-        mt.tl.edistance(adata, block="Metadata_Well", n_permutations=100, seed=seed, key_added="block")
+        mt.tl.edistance(adata, replicate="Metadata_Well", n_permutations=100, seed=seed, key_added="block")
 
         buggy = adata.copy()
         del buggy.obs["Metadata_Well"]  # no well column, so the cell-shuffle null (the bug) runs
@@ -716,3 +718,46 @@ def test_edistance_block_null_reference_group_is_not_falsely_called_under_subsam
     row = adata.uns["mantispy"]["edistance"].set_index("group").loc["DMSO"]
     assert np.isfinite(row["pvalue"]), "the reference group's null degenerated to all-NaN"
     assert not bool(row["is_hit"]), "the reference group was falsely called a hit"
+
+
+def _pooled_cells(effect=2.0, n_wells=3, guides_per_gene=4, cells_per_guide=30, n_features=6, seed=0):
+    """A pooled screen: every well holds every guide, four NTC guides and four guides of one gene, ``G``.
+
+    Each guide carries a small offset shared by its cells in every well, so the guide is the design's unit, and ``G``'s cells are shifted by ``effect``.
+    """
+    rng = np.random.default_rng(seed)
+    guides = [(f"NTC_{g}", "NTC") for g in range(guides_per_gene)] + [(f"G_{g}", "G") for g in range(guides_per_gene)]
+    values, plate, well, perturbation, control, sgrna = [], [], [], [], [], []
+    for guide, gene in guides:
+        offset = rng.normal(0.0, 0.2, size=n_features) + (effect if gene == "G" else 0.0)
+        for w in range(n_wells):
+            values.append(offset + rng.normal(0.0, 1.0, size=(cells_per_guide, n_features)))
+            plate += ["P1"] * cells_per_guide
+            well += [f"A{w + 1:02d}"] * cells_per_guide
+            perturbation += [gene] * cells_per_guide
+            control += [gene == "NTC"] * cells_per_guide
+            sgrna += [guide] * cells_per_guide
+    adata = _cell_adata(values, plate, well, perturbation, control, n_features)
+    adata.obs["Metadata_sgRNA"] = sgrna
+    return adata
+
+
+@pytest.mark.parametrize("call", [mt.tl.hit_calling, mt.tl.edistance])
+def test_a_pooled_design_needs_an_explicit_replicate(call):
+    """Every well holds every guide, so a whole-well null cannot separate a gene from the controls; refuse to guess."""
+    with pytest.raises(ValueError, match="pooled screen.*Metadata_sgRNA"):
+        call(_pooled_cells(), n_permutations=50, seed=0)
+
+
+def test_edistance_finds_a_pooled_effect_with_a_guide_replicate():
+    adata = _pooled_cells()
+    mt.tl.edistance(adata, replicate="Metadata_sgRNA", n_permutations=1000, seed=0)
+    table = adata.uns["mantispy"]["edistance"].set_index("group")
+    assert table.loc["G", "pvalue"] < 0.05
+    assert table.loc["NTC", "pvalue"] > 0.05
+
+
+def test_an_explicit_well_replicate_keeps_the_well_null_on_a_pooled_design():
+    adata = _pooled_cells()
+    mt.tl.edistance(adata, replicate=["Metadata_Plate", "Metadata_Well"], n_permutations=50, seed=0)
+    assert "edistance" in adata.uns["mantispy"]
