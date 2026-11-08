@@ -137,6 +137,7 @@ tutorials = [
   "leidenalg",
   "mantispy[integration]",
   "mantispy[interactive]",
+  "mudata",                  # the cytos case study reads an h5mu
 ]
 typecheck = [
   "mypy",
