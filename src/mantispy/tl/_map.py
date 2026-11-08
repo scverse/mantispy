@@ -97,6 +97,7 @@ def _score_map(
     threshold: float,
     seed: int,
     distance: str = "cosine",
+    null: str = "copied",
     drop_positions: np.ndarray | None = None,
     multilabel_col: str | None = None,
     warn: bool = True,
@@ -182,6 +183,7 @@ def _score_map(
             progress_bar=False,
             cache_dir=cache,
             max_workers=n_jobs,
+            null=null,
         ).drop(columns=list(_UNWRITABLE), errors="ignore")
     # Canonical schema names (§15.1): copairs' score/p-value/decision columns → score/pvalue/qvalue/is_significant.
     # below_p (the raw-p decision) stays as a tool-specific column beside the canonical is_significant.
@@ -214,6 +216,7 @@ def map(
     threshold: float = 0.05,
     seed: int = 0,
     distance: str = "cosine",
+    null: str = "copied",
     n_jobs: int | None = None,
     batch_size: int | None = None,
     key_added: str = "map",
@@ -258,6 +261,9 @@ def map(
         threshold: Significance threshold passed to copairs.
         seed: Seed for the permutation null.
         distance: Distance copairs ranks by.
+        null: The null model of the group mAP, passed to copairs: ``"copied"``, ``"permutation"`` or ``"joint"``.
+            ``"copied"`` is the model of :cite:t:`Kalinin_2025` and copairs before 0.6.
+            ``"permutation"`` relabels profiles and recomputes the mAP from their similarities. It needs every profile holding a label in the scored table, so it fails on a multilabel annotation where a profile has no negative pair.
         n_jobs: Threads for the null permutations (copairs' ``max_workers``).
             ``None`` lets copairs size its own pool from ``os.cpu_count()``, which over-subscribes a job allocated only a few CPUs; set it to the cores you were given.
         batch_size: Pair-distance batch size copairs scores at, which caps peak memory.
@@ -381,6 +387,7 @@ def map(
         threshold=threshold,
         seed=seed,
         distance=distance,
+        null=null,
         drop_positions=drop_positions,
         multilabel_col=multilabel_col,
         n_jobs=n_jobs,
