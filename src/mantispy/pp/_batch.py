@@ -671,7 +671,6 @@ def harmony(
     if as_frame(adata.obs)[batch_key].nunique() < 2:
         raise ValueError(f"{batch_key!r} has one level, so there is nothing to correct for")
 
-    values = np.asarray(adata.obsm[use_rep], dtype=np.float64)
     corrected = sc.pp.harmony_integrate(
         adata,
         A.obs[batch_key],
@@ -682,7 +681,9 @@ def harmony(
         **harmony_kwargs,
     )
 
-    if np.array_equal(corrected, values):
+    # Harmony leaves float64 rounding noise on an embedding it does not move, so compare at the stored precision.
+    corrected = corrected.astype(np.float32)
+    if np.array_equal(corrected, np.asarray(adata.obsm[use_rep], dtype=np.float32)):
         warnings.warn(
             f"harmony corrected nothing and returned {use_rep!r} unchanged. "
             "This happens when the batches are fully separated in the embedding, so every soft cluster "
@@ -692,6 +693,6 @@ def harmony(
             stacklevel=3,
         )
 
-    adata.obsm[key_added] = corrected.astype(np.float32)
+    adata.obsm[key_added] = corrected
     get_logger().info("harmony corrected %s for %s into %s", use_rep, batch_key, key_added)
     return None
