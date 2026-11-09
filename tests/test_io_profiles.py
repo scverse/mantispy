@@ -864,7 +864,9 @@ def test_from_embedding_is_ready_for_tools():
     assert list(adata.var_names) == [f"embedding_{i}" for i in range(4)]
     assert adata.uns["mantispy"]["resolution"] == "object"
     assert (adata.var["feature_kind"] == "embedding").all()
-    assert adata.X.dtype == np.float32
+    # The values are stored as given: no cast, no copy into another dtype.
+    assert adata.X.dtype == X.dtype
+    np.testing.assert_array_equal(adata.X, X)
     assert (adata.obs["Metadata_ObjectType"] == "Object").all()
     assert mt.io.validate(adata).ok, mt.io.validate(adata).errors
     wells = mt.tl.aggregate(adata, by=("Metadata_Plate", "Metadata_Well"), min_cells=0)
