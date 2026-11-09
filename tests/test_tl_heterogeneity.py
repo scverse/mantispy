@@ -344,3 +344,78 @@ def test_the_drop_is_reported_only_when_something_is_dropped(clustered, caplog):
     with caplog.at_level(logging.INFO, logger="mantispy"), pytest.raises(ValueError, match="no cell"):
         mt.tl.cluster_composition(clustered)
     assert not [record for record in caplog.records if "left out of the fractions" in record.getMessage()]
+
+
+def _phase_object(n_wells, ko_g1, guides=4, ntc_guides=4, cells_per_guide=60, guide_sd=0.03, seed=0):
+    """NTC and KO guides in every well; NTC cells are 40% G1, KO cells ``ko_g1``.
+
+    Each guide carries its own G1 offset into every well, as an off-target or clonal effect would.
+    """
+    rng = np.random.default_rng(seed)
+    offsets = {
+        (gene, guide): rng.normal(0.0, guide_sd)
+        for gene, n in (("NTC", ntc_guides), ("KO", guides))
+        for guide in range(n)
+    }
+    rows = []
+    for well in range(n_wells):
+        for (gene, guide), offset in offsets.items():
+            share = np.clip((0.4 if gene == "NTC" else ko_g1) + offset, 0.0, 1.0)
+            phases = rng.choice(["G1", "S", "G2M"], size=cells_per_guide, p=[share, (1 - share) / 2, (1 - share) / 2])
+            rows += [(f"A{well + 1:02d}", gene, f"{gene}_g{guide}", phase) for phase in phases]
+    frame = pd.DataFrame(rows, columns=["Metadata_Well", "Metadata_Perturbation", "Metadata_sgRNA", "phase"])
+    frame["is_ntc"] = frame["Metadata_Perturbation"].eq("NTC")
+    frame["Metadata_ImageID"], frame["Metadata_ObjectType"] = "img", "Cells"
+    frame["Metadata_ObjectNumber"] = np.arange(len(frame))
+    frame.index = frame.index.astype(str)
+    return _object_from_obs(frame)
+
+
+def _object_from_obs(frame):
+    adata = ad.AnnData(X=np.zeros((len(frame), 1), dtype=np.float32), obs=frame)
+    stamp(adata, resolution="object")
+    return adata
+
+
+def _composition(adata, **kwargs):
+    mt.tl.composition_shift(adata, **{"key": "phase", "reference": "is_ntc", "n_permutations": 199, **kwargs})
+    return adata.uns["mantispy"]["composition_shift"].set_index("group")
+
+
+def test_composition_shift_finds_a_g1_gain_with_three_wells_and_the_guide_as_unit():
+    moved = _composition(_phase_object(3, ko_g1=0.7))
+    assert moved.loc["KO", "G1"] == pytest.approx(0.3, abs=0.05)
+    assert moved.loc["KO", "distance"] == pytest.approx(0.3, abs=0.05)
+    assert moved.loc["KO", "pvalue"] < 0.05
+    assert "NTC" not in moved.index
+
+
+def test_composition_shift_null_is_calibrated_when_guide_effects_repeat_across_wells():
+    """Relabelling guides separately in each well would call about a third of these; one relabelling must not."""
+    calls = [
+        _composition(_phase_object(3, ko_g1=0.4, ntc_guides=8, guide_sd=0.08, seed=seed), n_permutations=99).loc[
+            "KO", "pvalue"
+        ]
+        < 0.05
+        for seed in range(60)
+    ]
+    assert np.mean(calls) <= 0.12
+
+
+def test_composition_shift_reports_the_floor_of_a_small_design():
+    """One guide per side has two relabellings, so no p-value can go below 1/2."""
+    table = _composition(_phase_object(3, ko_g1=0.9, guides=1, ntc_guides=1))
+    assert table.loc["KO", "min_pvalue"] == pytest.approx(0.5)
+    assert table.loc["KO", "pvalue"] >= 0.5
+
+
+def test_composition_shift_scores_each_guide_against_the_reference_guides():
+    adata = _phase_object(3, ko_g1=0.7)
+    table = _composition(adata, groupby="Metadata_sgRNA", replicate="Metadata_sgRNA")
+    assert sorted(table.index) == [f"KO_g{guide}" for guide in range(4)]
+    assert (table["G1"] > 0.2).all()
+
+
+def test_composition_shift_warns_when_cells_are_the_unit():
+    with pytest.warns(UserWarning, match="single cells"):
+        _composition(_phase_object(2, ko_g1=0.4), replicate=None, n_permutations=9)

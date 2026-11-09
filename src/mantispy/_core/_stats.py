@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 import numpy as np
+import pandas as pd
 from anndata import AnnData
 
 from mantispy._core._corr import _blockwise
@@ -107,6 +108,64 @@ def permutation_pvalue(observed: np.ndarray, null: np.ndarray) -> np.ndarray:
     # `nan >= x` is False, so an unmeasured observation, or one with no computable null, would otherwise get the smallest p-value the permutations can express.
     unmeasured = np.isnan(observed) | ~np.isfinite(null).any(axis=1)
     return np.where(unmeasured, np.nan, pvalues)
+
+
+def unit_permutation_pvalue(
+    values: np.ndarray,
+    group_rows: np.ndarray,
+    reference_rows: np.ndarray,
+    blocks: np.ndarray,
+    units: np.ndarray,
+    statistic: Callable[[list[tuple[np.ndarray, np.ndarray]]], float],
+    n_permutations: int,
+    rng: np.random.Generator,
+) -> tuple[float, float]:
+    """Right-tailed p-value of ``statistic``, relabelling whole units as group or reference.
+
+    A unit (a guide, say) keeps its label in every block it appears in, and each permutation draws one
+    relabelling of the units and applies it in all blocks. Relabelling each block on its own would break a
+    guide's identity across wells, so an effect a guide carries into every well would look like signal.
+    A row of ``values`` with a missing entry is left out. ``statistic`` receives, per block that holds both
+    sides, the summed ``values`` of the group's units and of the reference's units.
+
+    Returns:
+        The p-value, ``(count + 1) / (n_permutations + 1)``, and the smallest p-value the design can reach:
+        one over the number of distinct relabellings, or the permutation floor if that is larger.
+        Both are NaN when no block holds both sides.
+    """
+    from math import comb
+
+    rows = np.isfinite(values).all(axis=1) & (group_rows | reference_rows)
+    codes, names = pd.factorize(units[rows])
+    is_group = np.zeros(len(names), dtype=bool)
+    is_group[np.unique(codes[group_rows[rows]])] = True
+    per_block = []
+    block_of = blocks[rows]
+    for value in pd.unique(block_of):
+        in_block = block_of == value
+        present, local = np.unique(codes[in_block], return_inverse=True)
+        sums = np.zeros((present.size, values.shape[1]))
+        np.add.at(sums, local, values[rows][in_block])
+        per_block.append((present, sums))
+
+    def total(labels: np.ndarray) -> float:
+        pairs = [
+            (sums[labels[present]].sum(axis=0), sums[~labels[present]].sum(axis=0))
+            for present, sums in per_block
+            if labels[present].any() and not labels[present].all()
+        ]
+        return statistic(pairs) if pairs else float("nan")
+
+    observed = total(is_group)
+    if not np.isfinite(observed):
+        return float("nan"), float("nan")
+    # A relabelling that leaves no block with both sides has no statistic; counting it as at least as extreme
+    # keeps the p-value conservative.
+    exceed = sum(
+        not (value < observed - 1e-12) for value in (total(rng.permutation(is_group)) for _ in range(n_permutations))
+    )
+    distinct = float(comb(is_group.size, int(is_group.sum())))
+    return (exceed + 1) / (n_permutations + 1), max(1.0 / distinct, 1.0 / (n_permutations + 1))
 
 
 def robust_zscore(values: np.ndarray, axis: int = 0) -> np.ndarray:

@@ -15,6 +15,7 @@ from mantispy.tl._guide_activity import guide_activity
 from mantispy.tl._heterogeneity import (
     cell_cycle_phase,
     cluster_composition,
+    composition_shift,
     dna_content,
     dna_state,
     neighbors_local_density,
@@ -36,6 +37,7 @@ __all__ = [
     "cell_cycle_phase",
     "cluster",
     "cluster_composition",
+    "composition_shift",
     "consensus",
     "cytotoxicity",
     "dose_direction",
