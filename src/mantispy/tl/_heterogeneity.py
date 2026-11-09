@@ -135,7 +135,7 @@ def cluster_composition(
         pd.Index(labels), object="Cluster", feature_group="Composition", feature=labels, feature_kind="derived"
     )
 
-    result = ad.AnnData(X=fractions.astype(np.float32), obs=obs, var=var)
+    result = ad.AnnData(X=fractions, obs=obs, var=var)
     stamp(result, resolution="well", grouped_by=columns)
     test, dispersion = _composition_test(result, counts, reference)
     result.uns["mantispy"]["composition_test"] = test

@@ -12,7 +12,7 @@ import pandas as pd
 from anndata import AnnData
 
 from mantispy._core._numba import MEDIAN, _polish_planes, grouped_stat
-from mantispy._core._reduce import get_matrix, group_codes
+from mantispy._core._reduce import get_matrix, group_codes, matrix_dtype
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy._core.masks import reference_mask
@@ -99,7 +99,7 @@ def correct_plate_position(
         if unknown:
             raise ValueError(f"plates not found in {by!r}: {sorted(unknown)}")
     # Promote one plate at a time: float64 copies of the input and output would take four times the matrix in memory.
-    out = np.array(X, dtype=np.float32)
+    out = X.copy()
     effects: dict[str, dict[str, list]] = {}
 
     for group, key in enumerate(keys):
@@ -133,7 +133,7 @@ def correct_plate_position(
             # Leave such a feature as the median-polish residual rather than wiping it to NaN.
             level = np.where(np.isfinite(level), level, 0.0)
             corrected = (corrected - level) / np.where(scale > 0, scale, 1.0)
-        out[selected] = corrected.astype(np.float32)
+        out[selected] = corrected
         effects[str(key)] = {"row": row_effect.T.tolist(), "col": column_effect.T.tolist()}
 
     if key_added is None:
@@ -209,7 +209,7 @@ def correct_chromosome_arm(
     genes = gene_symbols.to_numpy()
 
     X = get_matrix(adata)
-    out = np.array(X, dtype=np.float32)
+    out = X.copy()
     corrected: dict[str, int] = {}
 
     for key in pd.unique(arms[arms.notna()]):
@@ -222,7 +222,7 @@ def correct_chromosome_arm(
             warnings.simplefilter("ignore", RuntimeWarning)
             background = np.nanmean(X[unexpressed_on_arm].astype(np.float64), axis=0)
         background = np.where(np.isfinite(background), background, 0.0)
-        out[on_arm] = (X[on_arm].astype(np.float64) - background).astype(np.float32)
+        out[on_arm] = X[on_arm].astype(np.float64) - background
         corrected[str(key)] = int(n_genes)
 
     get_logger().info("chromosome-arm correction: corrected %d arm(s)", len(corrected))
@@ -460,7 +460,7 @@ def regress_out(
 
     X = get_matrix(adata)
     codes, keys_index = group_codes(adata, by)
-    out = np.array(X, dtype=np.float32)
+    out = X.copy()
 
     design_all, is_numeric, sources = _design_matrix(adata, keys)
     fitted_on = reference_mask(adata, reference)
@@ -531,7 +531,7 @@ def regress_out(
             values = block[:, clean]
             coefficients, *_ = np.linalg.lstsq(design[fit], values[fit], rcond=None)
             residual = values - applied @ coefficients
-            out[np.ix_(rows, clean)] = (residual + anchor @ coefficients).astype(np.float32)
+            out[np.ix_(rows, clean)] = residual + anchor @ coefficients
 
         for feature in np.flatnonzero(gaps):
             values = block[:, feature]
@@ -545,7 +545,7 @@ def regress_out(
             )
             if reference is not None:
                 gap_anchor = design[observed & fit].mean(axis=0)
-            out[rows[observed], feature] = (residual + gap_anchor @ coefficients).astype(np.float32)
+            out[rows[observed], feature] = residual + gap_anchor @ coefficients
 
     if extrapolated:
         warnings.warn(
@@ -681,9 +681,10 @@ def harmony(
         **harmony_kwargs,
     )
 
-    # Harmony leaves float64 rounding noise on an embedding it does not move, so compare at the stored precision.
-    corrected = corrected.astype(np.float32)
-    if np.array_equal(corrected, np.asarray(adata.obsm[use_rep], dtype=np.float32)):
+    # Written in the dtype of the embedding it corrects; scanpy hands back float64 either way.
+    corrected = corrected.astype(matrix_dtype(adata, use_rep=use_rep))
+    # Harmony leaves float64 rounding noise on an embedding it does not move, so the check compares at float32 precision.
+    if np.array_equal(corrected.astype(np.float32), np.asarray(adata.obsm[use_rep], dtype=np.float32)):
         warnings.warn(
             f"harmony corrected nothing and returned {use_rep!r} unchanged. "
             "This happens when the batches are fully separated in the embedding, so every soft cluster "

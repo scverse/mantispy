@@ -70,8 +70,8 @@ A mantispy AnnData object MUST follow the rules below.
 
 Requirements:
 
-- `X` MUST be numeric.
-- `X` MUST use `float32` in mantispy-written objects.
+- `X` MUST be numeric: an integer or floating-point dtype. Boolean, complex and object dtypes are not.
+- mantispy MUST NOT change the dtype of `X` it is given. Readers keep the dtype of the source; a reader that has to combine columns of different dtypes uses their common dtype, and one that has to represent a missing value in integer columns uses `float64`. A tool that rewrites `X`, a layer or an embedding writes its result in the dtype of its input, with integers written as `float64`.
 - Metadata, identifiers, counts, coordinates, labels, and result columns MUST NOT be stored in `X`.
 - CellProfiler measurements, learned embeddings, and derived feature matrices may all live in `X`, but `var["feature_kind"]` MUST distinguish their type.
 

@@ -2,7 +2,7 @@
 
 The row permutation is passed as an index array and applied inside the kernel, never materialized as ``X[order]``.
 Scratch buffers are allocated once per group, because allocating inside a ``prange`` body serializes the loop on numba's allocator lock.
-Input stays ``float32``; accumulation is in ``float64`` scalars.
+Input stays ``float32`` or ``float64`` as given, and any other dtype is read as ``float64``; accumulation is in ``float64`` scalars.
 """
 
 from __future__ import annotations
@@ -131,6 +131,12 @@ def _grouped(
     return out
 
 
+def _kernel_input(X: np.ndarray) -> np.ndarray:
+    """``X`` as a C-contiguous array the kernels compile for, without rounding a ``float64`` matrix to ``float32``."""
+    X = np.asarray(X)
+    return np.ascontiguousarray(X, dtype=X.dtype if X.dtype in (np.float32, np.float64) else np.float64)
+
+
 def grouped_stat(
     X: np.ndarray,
     codes: np.ndarray,
@@ -143,7 +149,7 @@ def grouped_stat(
 
     Empty groups and all-NaN columns yield ``NaN`` rather than raising.
     """
-    X = np.ascontiguousarray(X, dtype=np.float32)
+    X = _kernel_input(X)
     order, offsets = group_offsets(codes, n_groups)
     return _grouped(X, order, offsets, n_groups, stat, float(q), int(ddof))
 
@@ -193,7 +199,7 @@ def grouped_median_spread(
     Sorting is nearly the whole cost of a robust normalization at screen scale, so this nearly halves ``mad_robustize`` and cuts ``robustize`` to a third.
 
     Args:
-        X: ``(n_obs, n_vars)`` matrix, read as ``float32``.
+        X: ``(n_obs, n_vars)`` matrix, read in its own dtype if that is ``float32`` or ``float64`` and as ``float64`` otherwise.
         codes: Per-row group code in ``[0, n_groups)``.
         n_groups: Number of groups, so that a group with no rows still gets its row of ``NaN`` instead of being dropped.
         spread: :data:`MAD` for the unscaled median absolute deviation, or :data:`IQR` for the interquartile range.
@@ -206,7 +212,7 @@ def grouped_median_spread(
     """
     if spread not in (MAD, IQR):
         raise ValueError(f"spread must be MAD or IQR, got {spread!r}")
-    X = np.ascontiguousarray(X, dtype=np.float32)
+    X = _kernel_input(X)
     order, offsets = group_offsets(codes, n_groups)
     return _grouped_median_spread(X, order, offsets, n_groups, int(spread))
 

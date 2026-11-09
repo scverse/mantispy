@@ -9,7 +9,14 @@ from anndata import AnnData
 
 from mantispy._core._numba import IQR, MEAN, STD, grouped_median_spread
 from mantispy._core._numba import MAD as MAD_STAT
-from mantispy._core._reduce import get_matrix, group_codes, group_offsets, reduce_grouped, transform_grouped
+from mantispy._core._reduce import (
+    get_matrix,
+    group_codes,
+    group_offsets,
+    matrix_dtype,
+    reduce_grouped,
+    transform_grouped,
+)
 from mantispy._core._stats import MAD_TO_SIGMA
 from mantispy._core.masks import reference_mask
 from mantispy._core.mutation import inplace_or_copy
@@ -54,7 +61,7 @@ def _center_and_scale(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Per-group center and scale, plus the features that cannot be normalized somewhere.
 
-    Returned as ``(center, scale, no_spread, uncentred)``, the first two ``(n_groups, n_vars)`` float32 and the last two boolean masks over features.
+    Returned as ``(center, scale, no_spread, uncentred)``, the first two ``(n_groups, n_vars)`` in the dtype the matrix is read as and the last two boolean masks over features.
     ``no_spread`` flags a spread of zero in some group and ``uncentred`` a group whose reference rows hold no usable centre or spread at all.
     The two overlap: a feature can be constant in one group and unmeasured in another, and both facts have to reach the caller.
     """
@@ -74,7 +81,9 @@ def _center_and_scale(
     uncentred = ~(np.isfinite(centre) & np.isfinite(scale)).all(axis=0)
     centre = np.where(np.isfinite(centre), centre, 0.0)
     scale = np.where((scale == 0) | ~np.isfinite(scale), 1.0, scale)
-    return centre.astype(np.float32), scale.astype(np.float32), no_spread, uncentred
+    # In the matrix's own dtype, so rescaling a float32 block makes no full-size float64 temporary.
+    dtype = matrix_dtype(adata, layer)
+    return centre.astype(dtype), scale.astype(dtype), no_spread, uncentred
 
 
 @inplace_or_copy()

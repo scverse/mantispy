@@ -9,7 +9,7 @@ import numpy as np
 from anndata import AnnData
 
 from mantispy._core._numba import group_offsets
-from mantispy._core._reduce import get_matrix, group_codes, representation
+from mantispy._core._reduce import get_matrix, group_codes, matrix_dtype, representation
 from mantispy._core.masks import CONTROL_CLASSES, reference_mask
 from mantispy._core.mutation import inplace_or_copy
 
@@ -335,7 +335,7 @@ def sphere(
         centre, scale, W = _fit(X[fit_rows], method, epsilon)
         out[rows] = ((X[rows] - centre) / scale) @ W
 
-    result = out.astype(np.float32)
+    result = out.astype(matrix_dtype(adata))
     if key_added is None:
         adata.X = result
     else:
@@ -503,5 +503,5 @@ def tvn(
         source = _regularized_covariance(values[rows[controls[rows]]], epsilon)
         values[rows] = values[rows] @ _symmetric_power(source, -0.5) @ target
 
-    adata.obsm[key_added] = values.astype(np.float32)
+    adata.obsm[key_added] = values.astype(matrix_dtype(adata, use_rep=use_rep))
     return None

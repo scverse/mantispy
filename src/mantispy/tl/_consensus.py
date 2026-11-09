@@ -11,7 +11,7 @@ import pandas as pd
 from anndata import AnnData
 
 from mantispy._core._numba import MEDIAN
-from mantispy._core._reduce import get_matrix, group_codes, group_offsets, reduce_grouped, reduced_var
+from mantispy._core._reduce import get_matrix, group_codes, group_offsets, matrix_dtype, reduce_grouped, reduced_var
 from mantispy._core.logging import report_drop
 from mantispy._core.provenance import record_params
 from mantispy._core.schema import resolve_perturbation_column, stamp
@@ -136,7 +136,7 @@ def consensus(
 
     var = reduced_var(adata, use_rep, values.shape[1])
     result = ad.AnnData(
-        X=values[keep].astype(np.float32),
+        X=values[keep].astype(matrix_dtype(adata, use_rep=use_rep)),
         obs=obs.loc[keep].reset_index(drop=True).set_axis(pd.Index([str(i) for i in range(int(keep.sum()))])),
         var=var,
     )

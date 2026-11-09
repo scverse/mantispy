@@ -113,6 +113,23 @@ def _stack(files: list[Path], on_column_mismatch: str) -> tuple[pd.DataFrame, li
     return frame, [len(f) for f in frames], files
 
 
+def _feature_matrix(features: pd.DataFrame, *, missing_possible: bool = False) -> np.ndarray:
+    """The feature columns as one matrix in their common dtype, so every value is kept as it was.
+
+    The common dtype is what :func:`numpy.result_type` finds: all-``float32`` columns stay ``float32``, all-integer columns stay integer, and ``float32`` next to a ``float64`` or ``int64`` column becomes ``float64``.
+    Integer columns that hold a missing value, or that sentinels will be replaced in, become ``float64``, which keeps every integer up to 2**53 and can represent ``NaN``.
+    """
+    # A nullable or Arrow-backed column carries the numpy dtype of its values as numpy_dtype.
+    extension = [isinstance(column, pd.api.extensions.ExtensionDtype) for column in features.dtypes]
+    dtype = np.result_type(*{np.dtype(getattr(column, "numpy_dtype", column)) for column in features.dtypes})
+    if dtype.kind != "f" and (missing_possible or features.isna().to_numpy().any()):
+        dtype = np.dtype(np.float64)
+    # Only an extension column holds pd.NA, which needs a float target to become NaN.
+    if dtype.kind == "f" and any(extension):
+        return features.to_numpy(dtype=dtype, na_value=np.nan)
+    return features.to_numpy(dtype=dtype)
+
+
 def from_dataframe(
     df: pd.DataFrame,
     metadata_prefixes: Sequence[str] = METADATA_PREFIXES,
@@ -129,6 +146,8 @@ def from_dataframe(
     """Build an AnnData from a wide profile table.
 
     Numeric columns that parse as features become ``X``; text and ``Metadata_`` columns become ``obs``.
+    ``X`` keeps the dtype of the feature columns: ``float32`` columns give a ``float32`` matrix and ``float64`` columns a ``float64`` one.
+    Columns of different dtypes are combined in their common dtype, and integer columns holding a missing value are read as ``float64``.
     Numeric columns that follow no CellProfiler naming (a learned embedding, a proprietary feature table) are kept as features with ``feature_kind="embedding"``.
     Numeric columns that parse as non-features (object numbers, parent links, centroids) are dropped and logged by default, because published profile tables often carry dozens of them and they mean nothing at well level.
 
@@ -258,11 +277,11 @@ def from_dataframe(
             var[column] = var[column].astype("category")
         feature_names = var.index.tolist()
 
-    X = df[feature_names].to_numpy(dtype=np.float32)
+    X = _feature_matrix(df[feature_names], missing_possible=sentinels is not None)
     if sentinels is not None:
         # to_numpy can hand back a read-only view of a single-dtype block.
         values = [sentinels] if isinstance(sentinels, int | float) else list(sentinels)
-        X = np.where(np.isin(X, np.asarray(values, dtype=X.dtype)), np.float32(np.nan), X)
+        X = np.where(np.isin(X, np.asarray(values, dtype=X.dtype)), X.dtype.type(np.nan), X)
 
     obs = df[meta_columns].rename(columns=lambda c: _strip_prefix(c, prefixes)).reset_index(drop=True)
     if obs.columns.has_duplicates:
@@ -637,7 +656,7 @@ def stamp(
 
     Notes:
         Stamping runs the full :func:`validate` contract (spec 16.1), so a stamped object is a valid mantispy object or the stamp is rejected; the check runs on a copy first, so a rejected stamp leaves the caller's object untouched. ``validate`` still returns the warnings it does not block on.
-        That includes ``X``: the package stores features as ``float32``, and a matrix that came out of scikit-learn or :func:`numpy.load` is ``float64``, so an embedding wants ``adata.X = adata.X.astype("float32")`` before it is stamped.
+        ``X`` may hold any integer or floating-point dtype and is stored as given, so a ``float64`` matrix from scikit-learn or :func:`numpy.load` stamps as it is.
 
         Any of the feature-annotation columns the schema requires that ``var`` does not already have are added empty, and columns already present are left as they are.
         They are not filled by parsing the feature names: the parser finds structure in names that have none (it reads ``openphenom_nahualX_17`` as the ``nahualX`` group of an ``openphenom`` object), and an embedding would then carry feature families named after the model's own tensors.

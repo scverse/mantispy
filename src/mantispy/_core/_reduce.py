@@ -27,11 +27,13 @@ __all__ = [
     "MEDIAN",
     "QUANTILE",
     "STD",
+    "float_dtype",
     "get_matrix",
     "group_codes",
     "group_offsets",
     "group_rows",
     "iter_groups",
+    "matrix_dtype",
     "reduce_grouped",
     "reduced_var",
     "representation",
@@ -68,10 +70,37 @@ def reduced_var(adata: AnnData, use_rep: str | None, n_cols: int) -> pd.DataFram
     return as_frame(adata.var).copy()
 
 
+def float_dtype(dtype: Any) -> np.dtype:
+    """The dtype a matrix of ``dtype`` is read and written back as.
+
+    A floating dtype is kept, so ``float32`` stays ``float32`` and ``float64`` stays ``float64``.
+    Any other numeric dtype becomes ``float64``, which holds every integer up to 2**53 exactly and can represent the ``NaN`` a computation may produce.
+    """
+    dtype = np.dtype(dtype)
+    return dtype if dtype.kind == "f" else np.dtype(np.float64)
+
+
+def _source(adata: AnnData, layer: str | None, use_rep: str | None) -> Any:
+    """The matrix :func:`get_matrix` reads: ``obsm[use_rep]``, a layer, or ``X``."""
+    if use_rep is not None:
+        return _obsm_source(adata, use_rep, layer)
+    matrix = adata.X if layer is None else adata.layers[layer]
+    if matrix is None:
+        raise ValueError("adata has no matrix to read" if layer is None else f"no layer {layer!r}")
+    return matrix
+
+
+def matrix_dtype(adata: AnnData, layer: str | None = None, *, use_rep: str | None = None) -> np.dtype:
+    """The dtype :func:`get_matrix` returns for this matrix, read off the matrix without loading it."""
+    return float_dtype(_source(adata, layer, use_rep).dtype)
+
+
 def get_matrix(
     adata: AnnData, layer: str | None = None, rows: np.ndarray | None = None, *, use_rep: str | None = None
 ) -> np.ndarray:
-    """Return the requested matrix as a dense ``float32`` array.
+    """Return the requested matrix as a dense floating array, in the dtype :func:`float_dtype` gives it.
+
+    A ``float32`` or ``float64`` matrix comes back in its own dtype, so a tool that writes its result in that dtype leaves the precision the caller chose untouched.
 
     ``rows`` reads only those rows, so a backed object holds one group in memory instead of the whole screen.
     h5py accepts a fancy index only in increasing order, so rows asked for in any other order are sorted for the read and the requested order restored afterwards.
@@ -79,13 +108,7 @@ def get_matrix(
 
     ``use_rep`` reads ``adata.obsm[use_rep]`` instead of ``X`` or a layer; it must be a 2-D representation and cannot be combined with ``layer``.
     """
-    matrix: Any
-    if use_rep is not None:
-        matrix = _obsm_source(adata, use_rep, layer)
-    else:
-        matrix = adata.X if layer is None else adata.layers[layer]
-        if matrix is None:
-            raise ValueError("adata has no matrix to read" if layer is None else f"no layer {layer!r}")
+    matrix = _source(adata, layer, use_rep)
 
     if rows is not None:
         wanted = np.asarray(rows)
@@ -116,7 +139,7 @@ def get_matrix(
 
     if hasattr(matrix, "toarray"):
         matrix = matrix.toarray()
-    return np.asarray(matrix, dtype=np.float32)
+    return np.asarray(matrix, dtype=float_dtype(matrix.dtype))
 
 
 def _warn_if_not_streamable(matrix: Any) -> None:
@@ -267,12 +290,13 @@ def transform_grouped(
 ) -> np.ndarray:
     """Rewrite the matrix one group at a time.
 
-    ``func(key, block)`` receives a group's rows as ``float32`` and returns the replacement block.
-    The output is written into one preallocated ``float32`` array, so the peak cost is the input plus the output, with no full-size ``float64`` temporaries.
+    ``func(key, block)`` receives a group's rows as :func:`get_matrix` reads them and returns the replacement block.
+    The output is written into one preallocated array of that same dtype, so the peak cost is the input plus the output, with no full-size temporaries in a wider dtype.
     """
     # Shaped from the object, not read off the matrix: get_matrix with no rows reads all of it.
-    out = np.empty(adata.shape, dtype=np.float32)
+    dtype = matrix_dtype(adata, layer)
+    out = np.empty(adata.shape, dtype=dtype)
     for key, rows, block in iter_groups(adata, by, layer=layer):
         if rows.size:
-            out[rows] = func(key, block).astype(np.float32, copy=False)
+            out[rows] = func(key, block).astype(dtype, copy=False)
     return out

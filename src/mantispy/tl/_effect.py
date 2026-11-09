@@ -163,7 +163,7 @@ def effect_size(
 
     Returns:
         ``None``, or the modified copy.
-        Writes ``varm[key_added]``, a ``(n_vars, n_groups)`` float32 array with columns in the order of ``uns["mantispy"][key_added + "_groups"]``, and ``uns["mantispy"][key_added]``, a tidy frame with ``group``, ``feature``, ``effect``, ``pvalue`` (Mann-Whitney U, two-sided, ``NaN`` when ``pvalues=False``) and ``qvalue`` (Benjamini-Hochberg over the whole table, since it is one family of tests).
+        Writes ``varm[key_added]``, a ``(n_vars, n_groups)`` array in the dtype of ``X`` (``float64`` for an integer ``X``) with columns in the order of ``uns["mantispy"][key_added + "_groups"]``, and ``uns["mantispy"][key_added]``, a tidy frame with ``group``, ``feature``, ``effect``, ``pvalue`` (Mann-Whitney U, two-sided, ``NaN`` when ``pvalues=False``) and ``qvalue`` (Benjamini-Hochberg over the whole table, since it is one family of tests).
 
     Raises:
         ValueError: ``method`` is not one of ``METHODS``, ``exact`` is not ``True``, ``False`` or ``"auto"``, or ``reference`` selects fewer than two rows.
@@ -220,7 +220,7 @@ def effect_size(
     table["pvalue"] = significance.T.ravel()
     table["qvalue"] = benjamini_hochberg(table["pvalue"].to_numpy())
 
-    adata.varm[key_added] = effects.astype(np.float32)
+    adata.varm[key_added] = effects.astype(X.dtype)
     store = adata.uns.setdefault("mantispy", {})
     store[key_added] = table
     store[f"{key_added}_groups"] = [str(key) for key in keys]
@@ -278,7 +278,7 @@ def wasserstein_features(
             block = np.ascontiguousarray(np.asarray(treated[:, usable], dtype=np.float64).T)
             distances[usable, index] = _wasserstein_against(block, ranked[usable], counts[usable])
 
-    adata.varm[key_added] = distances.astype(np.float32)
+    adata.varm[key_added] = distances.astype(X.dtype)
     store = adata.uns.setdefault("mantispy", {})
     store[key_added] = _tidy(keys, adata.var_names.to_numpy(), distances, "distance")
     store[f"{key_added}_groups"] = [str(key) for key in keys]
