@@ -80,3 +80,29 @@ def test_density_plot_draws_and_says_what_to_run_first(clustered):
     mt.tl.neighbors_local_density(clustered, k=5)
     _, ax = plt.subplots()
     assert isinstance(mt.pl.density(clustered, feature=clustered.var_names[0], ax=ax), matplotlib.axes.Axes)
+
+
+@pytest.fixture(scope="module")
+def placed():
+    from test_tl_heterogeneity import _clock, _cycle_cells
+
+    cells = _cycle_cells(n_cells=2000)
+    cells.obs["Metadata_Perturbation"] = np.where(np.arange(cells.n_obs) % 2, "NTC", "KO")
+    return _clock(cells)
+
+
+def test_cell_cycle_plot_colours_the_projected_phases(placed):
+    assert mt.pl.cell_cycle(placed, dna_feature="Metadata_DNAContent", key="cell_cycle_phase", by=None) is None
+    (panel,) = plt.gcf().axes
+    assert {"G1", "S", "G2", "M"} <= {text.get_text() for text in panel.get_legend().get_texts()}
+    assert panel.get_xlabel() == "Metadata_DNAContent"
+
+
+def test_cell_cycle_plot_draws_one_occupancy_curve_per_group(placed):
+    assert mt.pl.cell_cycle(placed, position="cell_cycle", by="Metadata_Perturbation") is None
+    (panel,) = plt.gcf().axes
+    assert sorted(text.get_text() for text in panel.get_legend().get_texts()) == ["KO", "NTC"]
+    with pytest.raises(KeyError, match="project_cell_cycle"):
+        mt.pl.cell_cycle(placed, position="missing")
+    with pytest.raises(ValueError, match="dna_feature= .* position="):
+        mt.pl.cell_cycle(placed)

@@ -18,7 +18,14 @@ if TYPE_CHECKING:
     from anndata import AnnData
     from matplotlib.axes import Axes
 
-PHASE_COLOURS = {"G1": "tab:blue", "S": "tab:grey", "G2M": "tab:red"}
+PHASE_COLOURS = {
+    "G1": "tab:blue",
+    "S": "tab:grey",
+    "G2M": "tab:red",
+    "G2": "tab:orange",
+    "M": "tab:red",
+    "off-cycle": "black",
+}
 
 
 def cluster_composition(
@@ -70,53 +77,116 @@ def cluster_composition(
 
 def cell_cycle(
     adata: AnnData,
-    dna_feature: str,
+    dna_feature: str | None = None,
     by: str | None = "Metadata_Plate",
     key: str = "Metadata_CellCyclePhase",
     layer: str | None = None,
+    position: str | None = None,
+    seed: int = 0,
 ) -> np.ndarray | None:
-    """Log DNA intensity per group, colored by assigned phase.
+    """DNA per group colored by phase, or how cells occupy the cycle.
 
-    Two separated peaks with the phases split between them indicate a working assignment; a single broad distribution indicates a failed one.
+    With ``dna_feature``, one panel per group of ``by`` shows the DNA distribution colored by phase. Two separated
+    peaks with the phases split between them indicate a working assignment; a single broad distribution indicates a
+    failed one.
+
+    With ``position``, one panel shows how the cells of each group of ``by`` occupy the cycle placed by
+    :func:`~mantispy.tl.project_cell_cycle`. Each cell contributes one position drawn from its own interval, so a
+    cell in a plateau spreads over that plateau instead of piling onto its median, and an arrest shows as a group's
+    curve rising above the others at one position.
 
     Args:
-        adata: Single-cell object :func:`~mantispy.tl.cell_cycle_phase` has run on.
-        dna_feature: The DNA intensity feature the phases were assigned from.
-        by: ``obs`` column whose groups become panels, or ``None`` for a single panel over every row.
-        key: ``obs`` column holding the assigned phase, whose values are matched against ``PHASE_COLOURS``, so a phase named anything else is not drawn.
+        adata: Single-cell object :func:`~mantispy.tl.cell_cycle_phase` or :func:`~mantispy.tl.project_cell_cycle`
+            has run on.
+        dna_feature: The DNA intensity feature the phases were assigned from, drawn on a log scale, or an ``obs``
+            column such as the :func:`~mantispy.tl.dna_content` output, drawn as it is.
+        by: ``obs`` column whose groups become panels, or lines when ``position`` is given; ``None`` for one group
+            over every row.
+        key: ``obs`` column holding the assigned phase, whose values are matched against ``PHASE_COLOURS``, so a phase
+            named anything else is not drawn. Pass ``"cell_cycle_phase"`` for the phases of
+            :func:`~mantispy.tl.project_cell_cycle`.
         layer: Layer to read the intensity from, or ``None`` for ``X``.
             Only positive values are drawn, since the plot takes their logarithm.
+        position: The ``key_added`` prefix :func:`~mantispy.tl.project_cell_cycle` wrote, which switches to the
+            occupancy plot.
+        seed: Seed for the positions drawn from each cell's interval.
 
     Returns:
-        ``None``; this plot always creates its own figure, a ``(1, n_groups)`` row of panels sharing an x axis, one per group of ``by``, each holding one filled histogram per phase.
+        ``None``; this plot always creates its own figure. With ``dna_feature`` it is a ``(1, n_groups)`` row of
+        panels sharing an x axis, one per group of ``by``, each holding one filled histogram per phase. With
+        ``position`` it is one panel holding one density curve per group of ``by``.
 
     Raises:
-        KeyError: ``obs`` has no ``key`` column, or ``dna_feature`` is not one of ``var_names``.
-        ValueError: The object has no layer named ``layer``.
+        KeyError: ``obs`` has no ``key`` column, ``dna_feature`` is neither a feature nor an ``obs`` column, or the
+            ``position`` outputs are missing.
+        ValueError: Neither ``dna_feature`` nor ``position`` is given, or the object has no layer named ``layer``.
     """
     import matplotlib.pyplot as plt
 
+    if position is not None:
+        _cycle_occupancy(adata, position, by, seed)
+        return None
+    if dna_feature is None:
+        raise ValueError("pass dna_feature= for the DNA histogram or position= for the cycle occupancy")
     if key not in adata.obs:
-        raise KeyError(f"obs has no column {key!r}; run mt.tl.cell_cycle_phase first")
+        raise KeyError(f"obs has no column {key!r}; run mt.tl.cell_cycle_phase or mt.tl.project_cell_cycle first")
 
-    values = get_matrix(adata, layer)[:, adata.var_names.get_loc(dna_feature)].astype(float)
-    positive = np.isfinite(values) & (values > 0)
+    if dna_feature in adata.obs:
+        values = as_frame(adata.obs)[dna_feature].to_numpy(dtype=float)
+        shown, label = np.isfinite(values), str(dna_feature)
+    else:
+        intensity = get_matrix(adata, layer)[:, adata.var_names.get_loc(dna_feature)].astype(float)
+        shown = np.isfinite(intensity) & (intensity > 0)
+        values, label = np.log(np.where(shown, intensity, 1.0)), "log DNA intensity"
     phases = as_frame(adata.obs)[key].astype(str).to_numpy()
     codes, keys = group_codes(adata, by)
 
     figure, axes = plt.subplots(1, len(keys), figsize=(3.2 * len(keys), 3), squeeze=False, sharex=True)
     for index, name in enumerate(keys):
         axis = axes[0, index]
-        rows = np.flatnonzero((codes == index) & positive)
+        rows = np.flatnonzero((codes == index) & shown)
         for phase, colour in PHASE_COLOURS.items():
             selected = values[rows[phases[rows] == phase]]
             if selected.size:
-                axis.hist(np.log(selected), bins=40, histtype="stepfilled", alpha=0.6, color=colour, label=phase)
+                axis.hist(selected, bins=40, histtype="stepfilled", alpha=0.6, color=colour, label=phase)
         axis.set_title(str(name), fontsize=8)
-        axis.set_xlabel("log DNA intensity")
+        axis.set_xlabel(label)
     axes[0, 0].legend(fontsize=6)
     figure.tight_layout()
     return _returned(axes, owned=True)
+
+
+def _cycle_occupancy(adata: AnnData, position: str, by: str | None, seed: int) -> None:
+    """One density curve of drawn cycle positions per group."""
+    import matplotlib.pyplot as plt
+
+    from mantispy.tl._cell_cycle import QUANTILES
+
+    name = f"{position}_quantiles"
+    if name not in adata.obsm:
+        raise KeyError(f"obsm has no {name!r}; run mt.tl.project_cell_cycle first")
+    quantiles = np.asarray(adata.obsm[name], dtype=float)
+    placed = np.isfinite(quantiles).all(axis=1)
+    levels = np.asarray(QUANTILES)
+    rng = np.random.default_rng(seed)
+    draw = rng.random(adata.n_obs)
+    upper = np.clip(np.searchsorted(levels, draw), 1, levels.size - 1)
+    fraction = np.clip((draw - levels[upper - 1]) / (levels[upper] - levels[upper - 1]), 0, 1)
+    rows = np.arange(adata.n_obs)
+    low, high = quantiles[rows, upper - 1], quantiles[rows, upper]
+    drawn = low + fraction * (high - low)
+
+    codes, keys = group_codes(adata, by)
+    figure, axis = plt.subplots(figsize=(5, 3))
+    bins = list(np.linspace(0, 1, 41))
+    for index, group in enumerate(keys):
+        selected = drawn[(codes == index) & placed]
+        if selected.size:
+            axis.hist(selected, bins=bins, density=True, histtype="step", label=str(group))
+    axis.set_xlabel("cycle position (0 = start of G1, 1 = division)")
+    axis.set_ylabel("density")
+    axis.legend(fontsize=6, bbox_to_anchor=(1.01, 1), loc="upper left")
+    figure.tight_layout()
 
 
 def subpopulation_hits(
