@@ -94,7 +94,7 @@ def placed():
 def test_cell_cycle_plot_colours_the_projected_phases(placed):
     assert mt.pl.cell_cycle(placed, dna_feature="Metadata_DNAContent", key="cell_cycle_phase", by=None) is None
     (panel,) = plt.gcf().axes
-    assert {"G1", "S", "G2", "M"} <= {text.get_text() for text in panel.get_legend().get_texts()}
+    assert {"G1", "S", "G2M"} <= {text.get_text() for text in panel.get_legend().get_texts()}
     assert panel.get_xlabel() == "Metadata_DNAContent"
 
 

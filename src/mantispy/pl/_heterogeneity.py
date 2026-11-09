@@ -18,14 +18,7 @@ if TYPE_CHECKING:
     from anndata import AnnData
     from matplotlib.axes import Axes
 
-PHASE_COLOURS = {
-    "G1": "tab:blue",
-    "S": "tab:grey",
-    "G2M": "tab:red",
-    "G2": "tab:orange",
-    "M": "tab:red",
-    "off-cycle": "black",
-}
+PHASE_COLOURS = {"G1": "tab:blue", "S": "tab:grey", "G2M": "tab:red", "off-cycle": "black"}
 
 
 def cluster_composition(

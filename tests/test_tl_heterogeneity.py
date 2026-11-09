@@ -433,14 +433,11 @@ def test_composition_shift_warns_when_cells_are_the_unit():
         _composition(_phase_object(2, ko_g1=0.4), replicate=None, n_permutations=9)
 
 
-_MEAN, _AREA = "Nuclei_Intensity_MeanIntensity_DNA", "Nuclei_AreaShape_Area"
-
-
 def _cycle_cells(n_cells=4000, kind="cycle", seed=0):
     """Cells of an exponentially growing population: G1, then S with DNA rising linearly, then G2 and M.
 
-    Mitotic nuclei and newborn daughters are smaller and brighter than their neighbours. ``kind`` replaces the DNA
-    content with a population that does not cycle: a narrow line from 2N, a single 2N blob, or 2N and 4N clusters.
+    ``kind`` replaces the DNA content with a population that does not cycle: a narrow line from 2N, a single 2N blob,
+    or 2N and 4N clusters.
     """
     rng = np.random.default_rng(seed)
     age = -np.log2(1 - rng.random(n_cells) / 2)
@@ -452,15 +449,8 @@ def _cycle_cells(n_cells=4000, kind="cycle", seed=0):
     elif kind == "two":
         content = (rng.random(n_cells) < 0.4).astype(float)
     content = content + rng.normal(0, 0.05, n_cells)
-    mitotic, daughter = age > 0.95, age < 0.03
-    area = (
-        100
-        * 2 ** (0.8 * age)
-        * np.where(mitotic, 0.5, np.where(daughter, 0.6, 1.0))
-        * 2 ** rng.normal(0, 0.05, n_cells)
-    )
     integrated = 1000 * 2**content
-    phase = np.where(age < 0.45, "G1", np.where(age < 0.75, "S", np.where(mitotic, "M", "G2")))
+    phase = np.where(age < 0.45, "G1", np.where(age < 0.75, "S", "G2M"))
     obs = pd.DataFrame(
         {
             "Metadata_Plate": "P1",
@@ -469,18 +459,16 @@ def _cycle_cells(n_cells=4000, kind="cycle", seed=0):
             "Metadata_Perturbation": "NTC",
             "age": age,
             "true_phase": phase,
-            "daughter": daughter,
         },
         index=[str(row) for row in range(n_cells)],
     )
-    X = np.column_stack([integrated, integrated / area, area]).astype(np.float32)
-    cells = ad.AnnData(X=X, obs=obs, var=pd.DataFrame(index=[_DNA, _MEAN, _AREA]))
+    cells = ad.AnnData(X=integrated[:, None].astype(np.float32), obs=obs, var=pd.DataFrame(index=[_DNA]))
     mt.tl.dna_content(cells, dna_feature=_DNA)
     return cells
 
 
 def _clock(cells, **kwargs):
-    mt.tl.fit_cell_cycle(cells, mitosis_features=(_MEAN, _AREA), **kwargs)
+    mt.tl.fit_cell_cycle(cells, **kwargs)
     mt.tl.project_cell_cycle(cells)
     return cells
 
@@ -502,16 +490,46 @@ def test_cell_cycle_places_cells_with_calibrated_intervals():
     assert width[called == "G1"].mean() > 3 * width[called == "S"].mean()
 
 
-def test_cell_cycle_flags_mitotic_nuclei_and_daughters():
-    cells = _clock(_cycle_cells())
-    obs = cells.obs
-    mitotic = (obs["true_phase"] == "M").to_numpy()
-    assert (obs.loc[mitotic, "cell_cycle_phase"] == "M").mean() > 0.5
-    assert obs.loc[mitotic, "cell_cycle_mitotic"].mean() > 0.5
-    daughter = obs["daughter"].to_numpy()
-    assert obs.loc[daughter, "cell_cycle_mitotic"].mean() > 0.5
-    assert (obs.loc[daughter, "cell_cycle_phase"] == "G1").all()
-    assert obs.loc[~mitotic & ~daughter, "cell_cycle_mitotic"].mean() < 0.05
+def _stained(shift, well="W3", **kwargs):
+    """Cycling cells whose ``well`` reads its DNA stain ``shift`` doublings off, set against the plate's controls."""
+    cells = _cycle_cells(**kwargs)
+    off = (cells.obs["Metadata_Well"] == well).to_numpy()
+    cells.X[off] *= 2**shift
+    mt.tl.dna_content(cells, dna_feature=_DNA, by="Metadata_Plate", reference="negcon")
+    return cells, off
+
+
+def test_cell_cycle_warns_about_a_well_whose_peaks_both_sit_off_the_reference(caplog):
+    cells, off = _stained(-0.3)
+    content = cells.obs["Metadata_DNAContent"].copy()
+    with caplog.at_level(logging.WARNING, logger="mantispy"):
+        _clock(cells)
+    shift = cells.obs["cell_cycle_well_shift"].to_numpy()
+    assert np.allclose(shift[off], shift[off][0])
+    assert -0.4 < shift[off][0] < -0.2
+    assert (np.abs(shift[~off]) < cells.uns["mantispy"]["cell_cycle"]["sd"]).all()
+    warned = [record.getMessage() for record in caplog.records if "peaks off the reference" in record.getMessage()]
+    assert len(warned) == 1 and "W3" in warned[0] and "W0" not in warned[0]
+    pd.testing.assert_series_equal(cells.obs["Metadata_DNAContent"], content)
+
+
+def test_cell_cycle_leaves_a_well_unchecked_without_both_peaks(caplog):
+    """An arrested well has one peak, so a shifted stain and a shifted population look alike; it is not judged."""
+    cells, _ = _stained(0.0)
+    arrested = ((cells.obs["Metadata_Well"] == "W3") & (cells.obs["true_phase"] != "G2M")).to_numpy()
+    cells = cells[~arrested].copy()
+    in_w2 = (cells.obs["Metadata_Well"] == "W2").to_numpy()
+    cells = cells[~(in_w2 & (np.cumsum(in_w2) > 30))].copy()
+    with caplog.at_level(logging.WARNING, logger="mantispy"):
+        _clock(cells)
+    shift = cells.obs.groupby("Metadata_Well", observed=True)["cell_cycle_well_shift"].first()
+    assert np.isnan(shift["W3"]) and np.isnan(shift["W2"])
+    assert shift[["W0", "W1"]].abs().max() < cells.uns["mantispy"]["cell_cycle"]["sd"]
+    assert not any("peaks off the reference" in record.getMessage() for record in caplog.records)
+    mt.tl.project_cell_cycle(cells, by=None)
+    assert cells.obs["cell_cycle_well_shift"].isna().all()
+    with pytest.raises(KeyError, match="Metadata_Missing"):
+        mt.tl.project_cell_cycle(cells, by="Metadata_Missing")
 
 
 @pytest.mark.parametrize("kind", ["line", "blob", "two"])
@@ -553,7 +571,7 @@ def test_cell_cycle_projects_perturbed_cells_through_the_reference_model():
     """Cells arrested in G2 are placed on the reference's cycle and do not change the model fitted on it."""
     control = _cycle_cells(seed=1)
     arrested = _cycle_cells(seed=2)
-    arrested = arrested[(arrested.obs["true_phase"] == "G2").to_numpy()].copy()
+    arrested = arrested[(arrested.obs["true_phase"] == "G2M").to_numpy()].copy()
     arrested.obs["Metadata_Control_Type"], arrested.obs["Metadata_Perturbation"] = "trt", "KO"
     arrested.obs_names = [f"ko{name}" for name in arrested.obs_names]
     cells = ad.concat([control, arrested], merge="same")
@@ -562,7 +580,7 @@ def test_cell_cycle_projects_perturbed_cells_through_the_reference_model():
     for name in ("sd", "off_cycle", "fractions", "g4"):
         np.testing.assert_allclose(cells.uns["mantispy"]["cell_cycle"][name], alone.uns["mantispy"]["cell_cycle"][name])
     ko = (cells.obs["Metadata_Perturbation"] == "KO").to_numpy()
-    assert (cells.obs.loc[ko, "cell_cycle_phase"] == "G2").mean() > 0.9
+    assert (cells.obs.loc[ko, "cell_cycle_phase"] == "G2M").mean() > 0.9
     assert cells.obs.loc[ko, "cell_cycle_position"].median() > cells.obs.loc[~ko, "cell_cycle_position"].quantile(0.75)
 
 

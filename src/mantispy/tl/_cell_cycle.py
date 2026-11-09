@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import numpy as np
 import pandas as pd
 from anndata import AnnData
 
-from mantispy._core._reduce import get_matrix
+from mantispy._core._reduce import group_codes, group_offsets
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy._core.masks import reference_mask
 from mantispy._core.mutation import inplace_or_copy
 
-CYCLE_PHASES = ("G1", "S", "G2", "M", "off-cycle")
+CYCLE_PHASES = ("G1", "S", "G2M", "off-cycle")
 QUANTILES = (0.05, 0.25, 0.5, 0.75, 0.95)
 _GATES = np.log2([1.25, 1.75])  # the dna_state defaults: 2N below the first, 4N from the second
 _GRID = (np.arange(400) + 0.5) / 400
@@ -62,33 +64,34 @@ def _gate(content: np.ndarray) -> dict:
     return report
 
 
-def _condensation(adata: AnnData, features: tuple[str, str], layer: str | None) -> tuple[np.ndarray, np.ndarray]:
-    """Log mean DNA intensity and log nuclear area; a condensed nucleus is bright and small."""
-    matrix = get_matrix(adata[:, list(features)], layer)
-    intensity, area = (matrix[:, index].astype(np.float64) for index in range(2))
-    with np.errstate(divide="ignore", invalid="ignore"):
-        return np.log(np.where(intensity > 0, intensity, np.nan)), np.log(np.where(area > 0, area, np.nan))
+def _peak_shift(content: np.ndarray, g4: float, sd: float) -> float:
+    """How far a group's 2N and 4N peaks both sit from the reference's 0 and ``g4``.
 
+    ``NaN`` when the group lacks either peak, as an arrested well does, or when the two peaks move apart, since only a
+    shift they share is a property of the measurement rather than of the cells.
+    """
+    from scipy.stats import gaussian_kde
 
-def _flag_model(log_intensity: np.ndarray, log_area: np.ndarray, rows: np.ndarray) -> dict | None:
-    """Centre and scale of both terms among ``rows``, and a cutoff three robust deviations above the median score."""
-    rows = rows & np.isfinite(log_intensity) & np.isfinite(log_area)
-    if rows.sum() < 20:
-        return None
-    centre_i, scale_i = _robust_scale(log_intensity[rows])
-    centre_a, scale_a = _robust_scale(log_area[rows])
-    score = (log_intensity[rows] - centre_i) / scale_i - (log_area[rows] - centre_a) / scale_a
-    median = float(np.nanmedian(score))
-    cutoff = median + 3 * 1.4826 * float(np.nanmedian(np.abs(score - median)))
-    return {"centre": [centre_i, centre_a], "scale": [scale_i, scale_a], "cutoff": cutoff}
-
-
-def _flagged(log_intensity: np.ndarray, log_area: np.ndarray, flag: dict | None) -> np.ndarray:
-    if flag is None:
-        return np.zeros(log_intensity.shape, dtype=bool)
-    (ci, ca), (si, sa) = flag["centre"], flag["scale"]
-    with np.errstate(invalid="ignore"):
-        return ((log_intensity - ci) / si - (log_area - ca) / sa) > flag["cutoff"]
+    values = content[np.isfinite(content) & (content > -1.5) & (content < 2.5)]
+    if values.size < _MIN_REFERENCE or values.std() == 0:
+        return float("nan")
+    grid = np.linspace(-1, 2.5, 701)
+    density = gaussian_kde(values, bw_method=0.5 * sd / values.std())(grid)
+    reach = max(int(sd / (grid[1] - grid[0])), 1)
+    shifts = []
+    for centre in (0.0, g4):
+        window = np.flatnonzero(np.abs(grid - centre) <= 0.45)
+        top = window[np.argmax(density[window])]
+        is_peak = (
+            window[0] < top < window[-1]
+            and density[top] >= density[top - reach]
+            and density[top] >= density[min(top + reach, grid.size - 1)]
+            and density[top] >= 0.1 * density.max()
+        )
+        if not is_peak:
+            return float("nan")
+        shifts.append(grid[top] - centre)
+    return float(np.mean(shifts)) if abs(shifts[0] - shifts[1]) <= sd else float("nan")
 
 
 @inplace_or_copy(expects="object")
@@ -96,14 +99,12 @@ def fit_cell_cycle(
     adata: AnnData,
     key: str = "Metadata_DNAContent",
     reference: str | None = "negcon",
-    mitosis_features: tuple[str, str] | None = None,
-    layer: str | None = None,
     key_added: str = "cell_cycle",
     copy: bool = False,
 ) -> AnnData | None:
     """Fit a cell-cycle clock on the reference cells' DNA content.
 
-    The reference cells are ordered G1, S, G2 and M by DNA content, and their cumulative fraction is turned into a
+    The reference cells are ordered G1, S and G2M by DNA content, and their cumulative fraction is turned into a
     position in the cycle with the age distribution of an exponentially growing population (ergodic rate analysis,
     Kafri et al. 2013). Position 0 is the start of G1 and 1 is division. Inside S, DNA content places a cell
     precisely; inside the 2N and 4N plateaus it does not, and :func:`~mantispy.tl.project_cell_cycle` reports the
@@ -118,11 +119,6 @@ def fit_cell_cycle(
         key: ``obs`` column holding the DNA content, in doublings of the G1 peak.
         reference: The cells to fit on: ``"negcon"`` for the negative controls, the name of a boolean ``obs``
             column, or ``None`` for every cell.
-        mitosis_features: The mean DNA intensity and nuclear area features, as a pair. With them, a 4N nucleus
-            that is much brighter and smaller than the other 4N nuclei is called mitotic, and so is a 2N nucleus
-            that stands out the same way among 2N nuclei, a daughter just out of division. ``None`` calls no
-            mitosis.
-        layer: Layer to read ``mitosis_features`` from, or ``None`` for ``X``. They need positive values.
         key_added: Key the model is written under in ``uns["mantispy"]``.
         copy: Return a modified copy instead of mutating in place.
 
@@ -130,8 +126,8 @@ def fit_cell_cycle(
         ``None``, or the modified copy.
         Writes ``uns["mantispy"][key_added]``: the DNA ``key``, the ``gate`` report (``passed``, the 4N peak position,
         the 4N to 2N peak height ratio, the valley and S-floor ratios to the 4N peak, and the share of cells in S),
-        the 2N peak width ``sd``, the ``off_cycle`` DNA bounds, the reference ``fractions`` in G1, S, G2 and M,
-        the 4N level ``g4``, and the ``mitosis`` flag model when ``mitosis_features`` is given.
+        the 2N peak width ``sd``, the ``off_cycle`` DNA bounds, the reference ``fractions`` in G1, S and G2M,
+        and the 4N level ``g4``.
 
     Raises:
         KeyError: ``obs`` has no column ``key``; run :func:`~mantispy.tl.dna_content` first.
@@ -139,7 +135,8 @@ def fit_cell_cycle(
 
     Notes:
         The model assumes the reference grows in steady state, with every phase taking a fixed share of the cycle.
-        It cannot tell G0 from G1. A cell beyond the off-cycle bounds, below 2N or above 4N, is left off the cycle.
+        It cannot tell G0 from G1, nor mitosis from G2, since both pairs share a DNA content. A cell beyond the
+        off-cycle bounds, below 2N or above 4N, is left off the cycle.
     """
     if key not in adata.obs:
         raise KeyError(f"obs has no column {key!r}; run mt.tl.dna_content first")
@@ -159,19 +156,8 @@ def fit_cell_cycle(
     phase = np.digitize(values, _GATES)
 
     model = {"key": key, "gate": gate, "sd": sd, "off_cycle": off_cycle}
-    mitotic = np.zeros(values.size, dtype=bool)
-    if mitosis_features is not None:
-        log_intensity, log_area = (term[reference_rows] for term in _condensation(adata, mitosis_features, layer))
-        flags = {
-            name: _flag_model(log_intensity, log_area, on & (phase == index)) for name, index in (("4n", 2), ("2n", 0))
-        }
-        model["mitosis"] = {"features": list(mitosis_features)} | {
-            name: f for name, f in flags.items() if f is not None
-        }
-        mitotic = (phase == 2) & _flagged(log_intensity, log_area, flags["4n"])
-    phase[mitotic] = 3
-    model["fractions"] = [float(np.mean(phase[on] == index)) for index in range(4)]
-    model["g4"] = float(np.median(values[on & (phase >= 2)])) if (on & (phase >= 2)).any() else 1.0
+    model["fractions"] = [float(np.mean(phase[on] == index)) for index in range(3)]
+    model["g4"] = float(np.median(values[on & (phase == 2)])) if (on & (phase == 2)).any() else 1.0
     if not gate["passed"]:
         get_logger().warning(
             "fit_cell_cycle: the reference does not show separate 2N and 4N peaks with S cells between them %s; "
@@ -183,7 +169,7 @@ def fit_cell_cycle(
 
 
 def _template(model: dict) -> tuple[np.ndarray, np.ndarray]:
-    """Expected DNA content along the cycle, and the cycle positions where G1, S, G2 and M begin and end.
+    """Expected DNA content along the cycle, and the cycle positions where G1, S and G2M begin and end.
 
     DNA is replicated at a constant rate, so it rises linearly between 2N and the 4N level; the S gates sit at the
     positions the reference fractions give them, and the ramp is extended through them to 2N and to 4N.
@@ -202,7 +188,7 @@ def _template(model: dict) -> tuple[np.ndarray, np.ndarray]:
 def project_cell_cycle(
     adata: AnnData,
     model: str = "cell_cycle",
-    layer: str | None = None,
+    by: Sequence[str] | str | None = ("Metadata_Plate", "Metadata_Well"),
     key_added: str = "cell_cycle",
     copy: bool = False,
 ) -> AnnData | None:
@@ -213,11 +199,16 @@ def project_cell_cycle(
     plateau, since DNA content does not order cells within it. Perturbed cells are placed on the reference's cycle,
     so an arrest shows up as cells piling up at one position.
 
+    Each ``by`` group, normally a well, is also checked against the reference: when its 2N and 4N peaks both sit off
+    the reference's by more than the 2N peak width, the well reads its DNA stain differently, every position in it is
+    biased by that shift, and a warning names it. The positions are not corrected, since a well with only one of the two
+    peaks, such as an arrested one, cannot tell a shifted stain from a shifted population.
+
     Args:
         adata: Object-resolution object carrying the model in ``uns["mantispy"][model]`` and the DNA content column
             it was fitted on. To project another object, copy the model entry into its ``uns["mantispy"]`` first.
         model: Key of the model in ``uns["mantispy"]``.
-        layer: Layer to read the model's ``mitosis_features`` from, or ``None`` for ``X``.
+        by: The ``obs`` columns of a well, to check each well's peaks against the reference; ``None`` skips the check.
         key_added: Prefix of the columns written.
         copy: Return a modified copy instead of mutating in place.
 
@@ -226,12 +217,14 @@ def project_cell_cycle(
         ``obs[key_added + "_position"]``, the posterior median in [0, 1), 0 being the start of G1;
         ``obsm[key_added + "_quantiles"]``, the 5%, 25%, 50%, 75% and 95% posterior quantiles as columns;
         ``obs[key_added + "_phase"]``, a categorical over ``CYCLE_PHASES``; and
-        ``obs[key_added + "_mitotic"]``, true for a cell flagged as a mitotic 4N nucleus or a 2N daughter.
+        ``obs[key_added + "_well_shift"]``, the shift its ``by`` group's 2N and 4N peaks share against the reference,
+        in doublings, ``NaN`` when the group lacks either peak or the check is skipped.
         A cell without a DNA content gets ``NaN`` throughout, as does every cell when the model failed its gate.
         An off-cycle cell gets the phase ``"off-cycle"`` and ``NaN`` positions.
 
     Raises:
-        KeyError: ``uns["mantispy"]`` has no entry ``model``, or ``obs`` lacks the DNA content column it was fitted on.
+        KeyError: ``uns["mantispy"]`` has no entry ``model``, or ``obs`` lacks the DNA content column it was fitted on
+            or a ``by`` column.
     """
     fitted = adata.uns.get("mantispy", {}).get(model)
     if fitted is None:
@@ -245,31 +238,17 @@ def project_cell_cycle(
     on = known & (content >= low) & (content <= high)
 
     phase = np.digitize(content, _GATES).astype(int)
-    mitotic = np.zeros(adata.n_obs, dtype=bool)
-    flags = fitted.get("mitosis")
-    if flags is not None:
-        first, second = flags["features"]
-        log_intensity, log_area = _condensation(adata, (str(first), str(second)), layer)
-        four = on & (phase == 2) & _flagged(log_intensity, log_area, flags.get("4n"))
-        two = on & (phase == 0) & _flagged(log_intensity, log_area, flags.get("2n"))
-        phase[four] = 3
-        mitotic = four | two
+    codes, keys = group_codes(adata, by)
 
     quantiles = np.full((adata.n_obs, len(QUANTILES)), np.nan)
     passed = bool(fitted["gate"]["passed"])
     if passed and on.any():
-        expected, edges = _template(fitted)
+        expected, _ = _template(fitted)
         log_prior = np.log(2 * np.log(2)) - _GRID * np.log(2)
-        in_m = _GRID >= edges[3]
         rows = np.flatnonzero(on)
         for start in range(0, rows.size, 8192):
             chunk = rows[start : start + 8192]
             log_post = log_prior[None] - 0.5 * ((content[chunk, None] - expected[None]) / fitted["sd"]) ** 2
-            if flags is not None:
-                # A flagged nucleus sits in M; an unflagged one may still be mitotic, since the flag misses many.
-                log_post += np.where(
-                    phase[chunk, None] == 3, np.where(in_m, 0.0, np.log(0.02)), np.where(in_m, np.log(0.3), 0.0)
-                )
             post = np.exp(log_post - log_post.max(axis=1, keepdims=True))
             cdf = np.cumsum(post, axis=1)
             cdf /= cdf[:, -1:]
@@ -279,12 +258,29 @@ def project_cell_cycle(
     elif not passed:
         get_logger().warning("project_cell_cycle: model %r failed its gate; every position is NaN", model)
 
-    labels = np.asarray(CYCLE_PHASES, dtype=object)[np.where(on, phase, 4)]
+    shift = np.full(adata.n_obs, np.nan)
+    if passed and by is not None:
+        order, offsets = group_offsets(codes, len(keys))
+        for index in range(len(keys)):
+            rows = order[offsets[index] : offsets[index + 1]]
+            shift[rows] = _peak_shift(content[rows], fitted["g4"], fitted["sd"])
+        off = np.abs(shift) > fitted["sd"]
+        if off.any():
+            shifted = {keys[code]: round(float(shift[codes == code][0]), 2) for code in np.unique(codes[off])}
+            get_logger().warning(
+                "project_cell_cycle: %d %s group(s) have both their 2N and 4N peaks off the reference's, so their DNA "
+                "stain reads differently and their positions carry the shift given, in doublings: %s",
+                len(shifted),
+                by,
+                dict(list(shifted.items())[:5]),
+            )
+
+    labels = np.asarray(CYCLE_PHASES, dtype=object)[np.where(on, phase, 3)]
     labels[~known] = np.nan
     if not passed:
         labels[:] = np.nan
     adata.obs[f"{key_added}_position"] = quantiles[:, 2]
     adata.obsm[f"{key_added}_quantiles"] = quantiles
     adata.obs[f"{key_added}_phase"] = pd.Categorical(labels, categories=list(CYCLE_PHASES))
-    adata.obs[f"{key_added}_mitotic"] = mitotic
+    adata.obs[f"{key_added}_well_shift"] = shift
     return None
