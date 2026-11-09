@@ -15,6 +15,8 @@ from mantispy.tl._guide_activity import guide_activity
 from mantispy.tl._heterogeneity import (
     cell_cycle_phase,
     cluster_composition,
+    dna_content,
+    dna_state,
     neighbors_local_density,
     subpopulation_hits,
 )
@@ -41,6 +43,8 @@ __all__ = [
     "dose_response",
     "dose_trajectory",
     "differential_features",
+    "dna_content",
+    "dna_state",
     "edistance",
     "effect_size",
     "empirical_fdr",

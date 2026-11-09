@@ -30,6 +30,7 @@ from mantispy.tl._aggregate import _group_obs
 from mantispy.tl._hits import _ks_replicate_null, ks_statistic
 
 PHASES = ("G1", "S", "G2M")
+DNA_STATES = ("2N", "S", "4N")
 
 _DISPERSION_MIN_CONTROLS = 8
 
@@ -232,6 +233,34 @@ def _composition_test(composition: AnnData, counts: np.ndarray, reference: str |
     return table, dispersion
 
 
+def _dna_intensity(adata: AnnData, dna_feature: str | None, layer: str | None, caller: str) -> np.ndarray:
+    """The integrated DNA intensity of every cell, refusing values that are mostly not positive."""
+    var = as_frame(adata.var)
+    if dna_feature is None:
+        candidates = [
+            name
+            for name in adata.var_names
+            if "IntegratedIntensity" in name and "DNA" in str(var.loc[name].get("channel"))
+        ]
+        if not candidates:
+            raise KeyError(
+                "could not find an integrated DNA intensity feature; pass dna_feature= explicitly "
+                "(the usual name is Nuclei_Intensity_IntegratedIntensity_DNA)"
+            )
+        dna_feature = candidates[0]
+        get_logger().info("%s using %s", caller, dna_feature)
+
+    values = get_matrix(adata, layer)[:, adata.var_names.get_loc(dna_feature)].astype(np.float64)
+    positive = np.isfinite(values) & (values > 0)
+    if positive.sum() < 0.95 * adata.n_obs:
+        raise ValueError(
+            f"{int((~positive).sum())} of {adata.n_obs} values of {dna_feature!r} are not positive, so their "
+            f"log cannot be fitted. {caller} needs the raw intensities; run it before mt.pp.normalize, "
+            "or keep them with normalize(keep_raw=True) and pass layer='raw'."
+        )
+    return values
+
+
 @inplace_or_copy(expects="object")
 def cell_cycle_phase(
     adata: AnnData,
@@ -269,32 +298,12 @@ def cell_cycle_phase(
         It needs a well-resolved DNA stain and enough cells per group (a group with fewer than 20 usable cells is left as S), and it cannot tell G0 from G1.
         It also needs raw intensities, because after :func:`~mantispy.pp.normalize` the values are z-scores and about half are negative.
         Check the result before relying on it.
+        :func:`~mantispy.tl.dna_content` and :func:`~mantispy.tl.dna_state` give a DNA content per cell and fixed gates on it instead.
     """
     from sklearn.mixture import GaussianMixture
 
-    var = as_frame(adata.var)
-    if dna_feature is None:
-        candidates = [
-            name
-            for name in adata.var_names
-            if "IntegratedIntensity" in name and "DNA" in str(var.loc[name].get("channel"))
-        ]
-        if not candidates:
-            raise KeyError(
-                "could not find an integrated DNA intensity feature; pass dna_feature= explicitly "
-                "(the usual name is Nuclei_Intensity_IntegratedIntensity_DNA)"
-            )
-        dna_feature = candidates[0]
-        get_logger().info("cell_cycle_phase using %s", dna_feature)
-
-    values = get_matrix(adata, layer)[:, adata.var_names.get_loc(dna_feature)].astype(np.float64)
+    values = _dna_intensity(adata, dna_feature, layer, "cell_cycle_phase")
     positive = np.isfinite(values) & (values > 0)
-    if positive.sum() < 0.95 * adata.n_obs:
-        raise ValueError(
-            f"{int((~positive).sum())} of {adata.n_obs} values of {dna_feature!r} are not positive, so their "
-            "log cannot be fitted. cell_cycle_phase needs the raw intensities; run it before mt.pp.normalize, "
-            "or keep them with normalize(keep_raw=True) and pass layer='raw'."
-        )
 
     codes, keys = group_codes(adata, by)
     phases = np.full(adata.n_obs, "S", dtype=object)
@@ -316,6 +325,163 @@ def cell_cycle_phase(
     adata.obs[key_added] = pd.Categorical(phases, categories=list(PHASES))
     counted = pd.Series(phases).value_counts()
     get_logger().info("cell_cycle_phase: %s", counted.to_dict())
+    return None
+
+
+def _g1_peak(log_values: np.ndarray) -> float:
+    """Where one group's G1 cells sit on a log2 DNA axis: its highest density peak, or the peak one doubling below that."""
+    from scipy.stats import gaussian_kde
+
+    low, high = np.percentile(log_values, [0.5, 99.5])
+    if high <= low:
+        return float(np.median(log_values))
+    grid = np.linspace(low, high, 512)
+    density = gaussian_kde(log_values)(grid)
+    top = int(np.argmax(density))
+    # A well arrested in G2 has its highest peak at 4N; a substantial peak one doubling below it is then the G1 peak.
+    peaks = np.flatnonzero((density[1:-1] > density[:-2]) & (density[1:-1] >= density[2:])) + 1
+    below = peaks[(np.abs(grid[peaks] - grid[top] + 1) <= 0.25) & (density[peaks] >= 0.1 * density[top])]
+    if below.size:
+        top = int(below[np.argmax(density[below])])
+    return float(grid[top])
+
+
+@inplace_or_copy(expects="object")
+def dna_content(
+    adata: AnnData,
+    dna_feature: str | None = None,
+    by: Sequence[str] | str | None = ("Metadata_Plate", "Metadata_Well"),
+    layer: str | None = None,
+    min_cells: int = 50,
+    key_added: str = "Metadata_DNAContent",
+    copy: bool = False,
+) -> AnnData | None:
+    """DNA content of each cell, in doublings of the G1 peak of its group.
+
+    The integrated DNA intensity is log2-transformed, and the G1 (2N) peak of each ``by`` group is subtracted.
+    A cell with a 2N genome then sits near 0 and a cell with a 4N genome near 1, whatever the staining intensity of its well.
+
+    Args:
+        adata: Single-cell object holding raw, unnormalized intensities.
+        dna_feature: The integrated DNA intensity feature.
+            Found from the feature names and ``var["channel"]`` when omitted.
+        by: Find the G1 peak separately within each group, normally the well, since staining intensity does not carry across wells.
+        layer: Read this layer instead of ``X``, for example ``"raw"`` after ``normalize(keep_raw=True)``.
+        min_cells: A group with fewer usable cells than this gets no G1 peak, and its cells get ``NaN``.
+        key_added: ``obs`` column written.
+        copy: Return a modified copy instead of mutating in place.
+
+    Returns:
+        ``None``, or the modified copy.
+        Writes ``obs[key_added]``, and ``uns["mantispy"]["dna_content"]`` with one row per group: the ``by`` columns, ``n_cells`` (the usable cells) and ``g1_peak`` (log2 of the integrated intensity at the G1 peak, ``NaN`` for a group below ``min_cells``).
+
+    Raises:
+        KeyError: ``dna_feature`` was not given and no integrated DNA intensity feature could be found.
+        ValueError: More than 5% of the feature's values are not positive, so their log cannot be taken.
+
+    Notes:
+        The G1 peak is the highest peak of a Gaussian kernel density estimate of the group's log2 intensities.
+        In a population mostly in G2, such as a well arrested in mitosis, the highest peak is the 4N one.
+        So when a second peak lies one doubling below the highest, within a quarter of a doubling, and is at least a tenth as high, that lower peak is taken as G1.
+        A sub-G1 peak of fragmented nuclei at half the G1 intensity would be mistaken for G1 by the same rule; check ``g1_peak`` across wells.
+
+        The intensity is used as measured.
+        CellProfiler's integrated intensity carries no background subtraction, so a strong background lowers the ratio between the 4N and 2N peaks below two.
+        Subtract it before calling this if your pipeline measured it.
+
+        A cell whose intensity is missing, zero or negative gets ``NaN``, as does every cell of a group below ``min_cells``.
+
+        A stain that does not resolve a 4N peak from the 2N one gives a single broad peak, and its mode is not a G1 peak.
+        The content then still ranks cells by DNA, but :func:`~mantispy.tl.dna_state` gates do not mean 2N, S and 4N; look at the histogram first.
+    """
+    values = _dna_intensity(adata, dna_feature, layer, "dna_content")
+    positive = np.isfinite(values) & (values > 0)
+    report_drop(
+        "cell(s)",
+        int((~positive).sum()),
+        adata.n_obs,
+        remedy="their DNA intensity is missing or not positive, so their DNA content is NaN",
+    )
+    log_values = np.full(adata.n_obs, np.nan)
+    log_values[positive] = np.log2(values[positive])
+
+    codes, keys = group_codes(adata, by)
+    order, offsets = group_offsets(codes, len(keys))
+    content = np.full(adata.n_obs, np.nan)
+    peaks = np.full(len(keys), np.nan)
+    counts = np.zeros(len(keys), dtype=int)
+    for index in range(len(keys)):
+        rows = order[offsets[index] : offsets[index + 1]]
+        usable = rows[positive[rows]]
+        counts[index] = usable.size
+        if usable.size < min_cells:
+            continue
+        peaks[index] = _g1_peak(log_values[usable])
+        content[usable] = log_values[usable] - peaks[index]
+
+    small = counts < min_cells
+    if small.any():
+        get_logger().warning(
+            "dna_content: %d of %d group(s) have fewer than %d usable cells, too few to place a G1 peak; "
+            "their cells are left as NaN: %s",
+            int(small.sum()),
+            len(keys),
+            min_cells,
+            list(keys[small])[:5],
+        )
+
+    columns = ["group"] if by is None else ([by] if isinstance(by, str) else list(by))
+    table = pd.DataFrame([key if isinstance(key, tuple) else (key,) for key in keys], columns=columns)
+    table["n_cells"] = counts
+    table["g1_peak"] = peaks
+    adata.obs[key_added] = content
+    adata.uns.setdefault("mantispy", {})["dna_content"] = table
+    return None
+
+
+@inplace_or_copy(expects="object")
+def dna_state(
+    adata: AnnData,
+    key: str = "Metadata_DNAContent",
+    cutoffs: tuple[float, float] = (1.25, 1.75),
+    key_added: str = "Metadata_DNAState",
+    copy: bool = False,
+) -> AnnData | None:
+    """Call each cell 2N, S or 4N from fixed gates on its DNA content.
+
+    Args:
+        adata: Single-cell object carrying the output of :func:`~mantispy.tl.dna_content`.
+        key: ``obs`` column holding the DNA content, in doublings of the G1 peak.
+        cutoffs: The lower and upper gate, in multiples of the G1 peak intensity.
+            A cell below the lower gate is 2N, at or above the upper gate 4N, and in between S.
+            The defaults sit a quarter of the way from each peak towards the other, the usual gates on a DNA content histogram.
+        key_added: ``obs`` column written.
+        copy: Return a modified copy instead of mutating in place.
+
+    Returns:
+        ``None``, or the modified copy.
+        Writes ``obs[key_added]`` as a categorical over ``DNA_STATES``, ``NaN`` where the DNA content is ``NaN``.
+        Writes ``uns["mantispy"]["dna_state"]`` with the ``key`` read and the ``cutoffs`` applied, so the call can be reproduced.
+
+    Raises:
+        KeyError: ``obs`` has no column ``key``.
+        ValueError: ``cutoffs`` is not two finite, positive, increasing values.
+
+    Notes:
+        Fixed gates cannot tell G0 from G1, or a late-S cell from a G2 cell whose stain is a little dim.
+        A cell above 4N, from polyploidy or a doublet, is called 4N.
+    """
+    if key not in adata.obs:
+        raise KeyError(f"obs has no column {key!r}; run mt.tl.dna_content first")
+    gates = np.asarray(cutoffs, dtype=float)
+    if gates.shape != (2,) or not np.isfinite(gates).all() or gates[0] <= 0 or gates[0] >= gates[1]:
+        raise ValueError(f"cutoffs must be two finite, positive, increasing values, got {cutoffs!r}")
+
+    content = as_frame(adata.obs)[key].to_numpy(dtype=float)
+    codes = np.digitize(content, np.log2(gates))
+    codes[np.isnan(content)] = -1
+    adata.obs[key_added] = pd.Categorical.from_codes(codes, categories=pd.Index(DNA_STATES))
+    adata.uns.setdefault("mantispy", {})["dna_state"] = {"key": key, "cutoffs": gates}
     return None
 
 

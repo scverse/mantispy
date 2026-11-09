@@ -106,5 +106,7 @@ Aggregate profiles and ask what the perturbations did.
     tl.cluster_composition
     tl.subpopulation_hits
     tl.cell_cycle_phase
+    tl.dna_content
+    tl.dna_state
     tl.neighbors_local_density
 ```
