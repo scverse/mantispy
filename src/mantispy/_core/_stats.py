@@ -25,19 +25,25 @@ def _is_object_resolution(adata: AnnData) -> bool:
     return recorded_resolution(adata) == "object"
 
 
-def _default_well_block(adata: AnnData, *, block: str | Sequence[str] | None = None) -> np.ndarray | None:
-    """Per-row codes of the design's exchangeable unit, the well, or ``None`` when there is none to draw.
+def _default_replicate(
+    adata: AnnData, *, replicate: str | Sequence[str] | None = None, reference: np.ndarray | None = None
+) -> np.ndarray | None:
+    """Per-row codes of the design's replicate, the unit a permutation null draws whole, or ``None`` when there is none.
 
-    A permutation null at object resolution must resample whole wells rather than objects, since objects within a
+    A permutation null at object resolution must resample whole replicates rather than objects, since objects within a
     well share the well and are not independent replicates. This centralizes the choice of that unit:
 
-    - ``block`` given: its groups, whatever they are.
+    - ``replicate`` given: its groups, whatever they are.
     - otherwise, on an object stamped ``object`` resolution that carries a complete ``(Metadata_Plate, Metadata_Well)``
       with more than one object in some well, the physical well.
     - otherwise ``None``, so the caller can warn and fall back to an object-level null.
+
+    Raises:
+        ValueError: ``replicate`` is not given, the object is stamped ``object`` resolution, and some well holds both
+            ``reference`` rows and tested rows, a pooled design on which a null drawing whole wells is degenerate.
     """
-    if block is not None:
-        return group_codes(adata, block)[0]
+    if replicate is not None:
+        return group_codes(adata, replicate)[0]
     if not _is_object_resolution(adata):
         return None
     # The exchangeable unit is the physical well (plate + well), not the per-object identity.
@@ -47,13 +53,21 @@ def _default_well_block(adata: AnnData, *, block: str | Sequence[str] | None = N
         # group_codes rejects gaps, so a well column with any missing value is unusable.
         return None
     codes = group_codes(adata, well)[0]
+    if reference is not None and bool(np.intersect1d(codes[reference], codes[~reference]).size):
+        raise ValueError(
+            "this looks like a pooled screen: some wells hold both reference and tested cells, so a null that "
+            "draws whole wells cannot separate a group from the reference (every well holds every perturbation) "
+            "and is degenerate. Pass replicate= the unit to draw whole instead, e.g. replicate='Metadata_sgRNA' "
+            "for a guide-level null, or replicate=['Metadata_Plate', 'Metadata_Well'] to keep the well null "
+            "knowingly."
+        )
     return codes if np.bincount(codes).max() > 1 else None
 
 
 def _split_wells(codes: np.ndarray, generator: np.random.Generator) -> np.ndarray:
     """Boolean mask over ``codes`` selecting the rows of a random half of the wells they name.
 
-    The block-aware sibling of :func:`split_reference`: it halves by whole wells, so a reference group's own row draws a strict subset of the wells like any other group rather than folding cells across the split.
+    The replicate-aware sibling of :func:`split_reference`: it halves by whole wells, so a reference group's own row draws a strict subset of the wells like any other group rather than folding cells across the split.
     """
     wells = np.unique(codes)
     return np.isin(codes, generator.permutation(wells)[: wells.size // 2])

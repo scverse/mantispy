@@ -10,7 +10,7 @@ from anndata import AnnData
 from mantispy._core._distance import energy_distance, pairwise_sqeuclidean
 from mantispy._core._reduce import group_codes, group_offsets, representation
 from mantispy._core._stats import (
-    _default_well_block,
+    _default_replicate,
     _is_object_resolution,
     _split_wells,
     benjamini_hochberg,
@@ -35,44 +35,44 @@ def _energy_from_membership(membership: np.ndarray, distances: np.ndarray, size:
     return 2.0 * cross - within - rest
 
 
-def _edistance_block_null(
+def _edistance_replicate_null(
     values: np.ndarray,
-    block_codes: np.ndarray,
+    replicate_codes: np.ndarray,
     group_rows: np.ndarray,
     against_rows: np.ndarray,
     n_permutations: int,
     generator: np.random.Generator,
 ) -> np.ndarray:
-    """Well-block permutation null for the energy distance.
+    """Replicate permutation null for the energy distance.
 
-    Each permutation draws as many whole wells as the group spans from the pool of the group and the reference wells, and takes the energy distance between the drawn rows and the rest, so the resampling unit is the well rather than the cell.
+    Each permutation draws as many whole replicates as the group spans from the pool of the group and the reference replicates, and takes the energy distance between the drawn rows and the rest, so the resampling unit is the replicate (normally the well) rather than the cell.
     """
     pool = np.concatenate([group_rows, against_rows])
-    pool_blocks = block_codes[pool]
-    uniq = np.unique(pool_blocks)
+    pool_replicates = replicate_codes[pool]
+    uniq = np.unique(pool_replicates)
     if uniq.size < 2:
         return np.full(n_permutations, np.nan)
-    # Cap the draw so the complement always keeps at least one well; a group spanning the whole pool (a reference
-    # group compared with a fresh subsample of its own wells) would otherwise leave an empty side and an all-NaN null.
-    n_draw = min(int(np.unique(block_codes[group_rows]).size), uniq.size - 1)
+    # Cap the draw so the complement always keeps at least one replicate; a group spanning the whole pool (a reference
+    # group compared with a fresh subsample of its own replicates) would otherwise leave an empty side and an all-NaN null.
+    n_draw = min(int(np.unique(replicate_codes[group_rows]).size), uniq.size - 1)
     pool_values = values[pool]
     null = np.empty(n_permutations)
     for permutation in range(n_permutations):
-        drawn = np.isin(pool_blocks, uniq[generator.choice(uniq.size, size=n_draw, replace=False)])
+        drawn = np.isin(pool_replicates, uniq[generator.choice(uniq.size, size=n_draw, replace=False)])
         null[permutation] = energy_distance(pool_values[drawn], pool_values[~drawn])
     return null
 
 
 def _split_reference_wells(
-    rows: np.ndarray, block_codes: np.ndarray | None, generator: np.random.Generator
+    rows: np.ndarray, replicate_codes: np.ndarray | None, generator: np.random.Generator
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Halve a reference group's rows, by whole wells when a block is in use, else by row.
+    """Halve a reference group's rows, by whole replicates when one is in use, else by row.
 
-    Splitting by well keeps every well complete so the block null draws a strict subset of the pool's wells rather than nearly all of them, the same halving :func:`~mantispy.tl.hit_calling` uses for its reference group.
+    Splitting by replicate keeps every replicate complete so the replicate null draws a strict subset of the pool's replicates rather than nearly all of them, the same halving :func:`~mantispy.tl.hit_calling` uses for its reference group.
     """
-    if block_codes is None:
+    if replicate_codes is None:
         return split_reference(rows, generator)
-    in_left = _split_wells(block_codes[rows], generator)
+    in_left = _split_wells(replicate_codes[rows], generator)
     return np.sort(rows[in_left]), np.sort(rows[~in_left])
 
 
@@ -89,7 +89,7 @@ def edistance(
     key_added: str = "edistance",
     copy: bool = False,
     *,
-    block: str | Sequence[str] | None = None,
+    replicate: str | Sequence[str] | None = None,
 ) -> AnnData | None:
     """Energy distance between each group and the controls, or between every pair.
 
@@ -113,9 +113,9 @@ def edistance(
         seed: Seed for the subsampling and the permutations.
         key_added: Name for the outputs.
         copy: Return a modified copy instead of mutating in place.
-        block: ``obs`` column, or sequence of columns, whose groups are the design's exchangeable unit, normally the well.
-            The permutation null then draws whole wells rather than cells, since cells within a well are not independent replicates (see Notes).
-            Left ``None``, it defaults to the physical well on an object stamped cell resolution with replicated wells; it warns and permutes cells when no complete well column is present.
+        replicate: ``obs`` column, or sequence of columns, whose groups are the design's exchangeable unit: the well in an arrayed screen, the guide (``"Metadata_sgRNA"``) in a pooled one.
+            The permutation null then draws whole replicates rather than cells, since cells within a well are not independent replicates (see Notes).
+            Left ``None``, it defaults to the physical well on an object stamped cell resolution with replicated wells; it warns and permutes cells when no complete well column is present, and raises on a pooled design, where some well holds both reference and tested cells.
 
     Returns:
         ``None``, or the modified copy.
@@ -123,13 +123,14 @@ def edistance(
         With ``reference=None``, writes only the square, group-labeled matrix at ``uns["mantispy"][key_added + "_pairwise"]``.
 
     Raises:
-        ValueError: ``reference`` selects fewer than two rows, or the profiles hold missing values, which cannot be scored.
+        ValueError: ``reference`` selects fewer than two rows, the profiles hold missing values, which cannot be scored, or ``replicate`` is not given on a pooled design at cell resolution.
 
     Notes:
         The null permutes the group and reference labels over the pooled rows and recomputes the statistic, the standard permutation test for a two-sample quantity.
-        At cell resolution the exchangeable unit is the well, not the cell, so ``block`` draws whole wells for the pseudo-group instead; without a usable well column it warns and permutes cells, which is anti-conservative.
+        At cell resolution the exchangeable unit is the well, not the cell, so ``replicate`` draws whole wells for the pseudo-group instead; without a usable well column it warns and permutes cells, which is anti-conservative.
+        In a pooled screen every well holds every perturbation, so drawing whole wells cannot separate a group from the reference; the exchangeable unit is the guide, and the call raises until ``replicate`` names it.
 
-        A group that is the reference itself is scored by splitting its rows in half, by whole wells when a block is in use.
+        A group that is the reference itself is scored by splitting its rows in half, by whole replicates when one is in use.
         A group with fewer than two rows on either side, or a reference group with fewer than four rows, gets a NaN p-value and a warning.
 
         Check the false positive rate on your own screen with :func:`~mantispy.metrics.diagnose_testing`, which relabels control wells as pseudo-treatments of the same size and reports the fraction that are called.
@@ -184,12 +185,12 @@ def edistance(
         get_logger().info("edistance sampled %d of %d reference rows for the null", max_reference, control_rows.size)
         control_rows = np.sort(generator.choice(control_rows, size=max_reference, replace=False))
 
-    block_codes = _default_well_block(adata, block=block)
-    if block_codes is None and block is None and _is_object_resolution(adata):
+    replicate_codes = _default_replicate(adata, replicate=replicate, reference=is_control)
+    if replicate_codes is None and replicate is None and _is_object_resolution(adata):
         warnings.warn(
-            "edistance is at cell resolution and no usable block was given, so the null permutes single cells. "
+            "edistance is at cell resolution and no usable replicate was given, so the null permutes single cells. "
             "Cells within a well are not independent replicates (they share the well, its plate position, seeding "
-            "and focus), so the null is anti-conservative. Pass block= a well column, add a complete "
+            "and focus), so the null is anti-conservative. Pass replicate= a well column, add a complete "
             "Metadata_Well, or aggregate to wells with mt.tl.aggregate.",
             UserWarning,
             stacklevel=3,
@@ -214,7 +215,7 @@ def edistance(
             if rows.size < 4:
                 unscorable_reference.append(str(keys[index]))
                 continue
-            rows, against = _split_reference_wells(rows, block_codes, generator)
+            rows, against = _split_reference_wells(rows, replicate_codes, generator)
             sizes[index] = rows.size
 
         size = rows.size
@@ -222,9 +223,9 @@ def edistance(
             unscorable_size.append(str(keys[index]))
             continue
 
-        if block_codes is not None:
+        if replicate_codes is not None:
             observed[index] = energy_distance(values[rows], values[against])
-            null[index] = _edistance_block_null(values, block_codes, rows, against, n_permutations, generator)
+            null[index] = _edistance_replicate_null(values, replicate_codes, rows, against, n_permutations, generator)
             continue
 
         pooled = np.vstack([values[rows], values[against]])
