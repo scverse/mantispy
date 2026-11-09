@@ -1,6 +1,7 @@
 """Tools."""
 
 from mantispy.tl._aggregate import aggregate
+from mantispy.tl._cell_cycle import fit_cell_cycle, project_cell_cycle
 from mantispy.tl._cluster import cluster
 from mantispy.tl._consensus import consensus
 from mantispy.tl._design import cytotoxicity, replicate_saturation
@@ -54,6 +55,7 @@ __all__ = [
     "enrich_hits",
     "feature_sets",
     "feature_signature",
+    "fit_cell_cycle",
     "gene_set_network",
     "grit",
     "guide_activity",
@@ -66,6 +68,7 @@ __all__ = [
     "ora",
     "pathway_coherence",
     "percent_replicating",
+    "project_cell_cycle",
     "rank_features",
     "rank_sets",
     "replicate_saturation",
