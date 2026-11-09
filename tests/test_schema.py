@@ -421,7 +421,7 @@ def _set_wells(values):
         (lambda a: setattr(a, "var", a.var.drop(columns="feature_group")), "feature_group"),
         (lambda a: a.uns.pop("mantispy"), "schema_version"),
         (lambda a: a.uns["mantispy"].update(schema_version="99.0"), "99.0"),
-        (lambda a: setattr(a, "X", a.X.astype(np.float64)), "float32"),
+        (lambda a: setattr(a, "X", a.X.astype(bool)), "integer or floating-point"),
         (_set_wells(["A01", "A01", "nope", "A02"]), "Metadata_Well"),
     ],
     ids=[
@@ -430,7 +430,7 @@ def _set_wells(values):
         "no_var_column",
         "no_uns",
         "wrong_version",
-        "float64_X",
+        "boolean_X",
         "bad_well_name",
     ],
 )
@@ -540,7 +540,7 @@ def test_published_spec_matches_the_constants():
     assert spec["optional_var"] == list(s.OPTIONAL_VAR)
     assert spec["uns_results"] == list(s.UNS_RESULTS)
     assert spec["migrates_from"] == list(s.SUPPORTED_VERSIONS)
-    assert spec["x_dtype"] == "float32"
+    assert spec["x_dtype"] == "numeric"
 
 
 def test_an_unregistered_result_key_is_flagged(adata):

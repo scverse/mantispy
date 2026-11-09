@@ -761,8 +761,10 @@ def validate(adata: AnnData, *, raise_on_error: bool = False) -> ValidationRepor
             report.errors.append(f"var is missing required column {column!r}")
     _check_feature_kind(adata, report)
 
-    if adata.X is not None and getattr(adata.X, "dtype", None) != np.float32:
-        report.errors.append(f"X must be float32, got {getattr(adata.X, 'dtype', None)}")
+    # Any integer or floating dtype is valid and kept as given; booleans, complex numbers and objects are not measurements.
+    dtype = getattr(adata.X, "dtype", None)
+    if adata.X is not None and (dtype is None or np.dtype(dtype).kind not in "iuf"):
+        report.errors.append(f"X must hold integer or floating-point values, got {dtype}")
 
     if "Metadata_Well" in adata.obs:
         wells = pd.Series(adata.obs["Metadata_Well"])

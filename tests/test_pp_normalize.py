@@ -100,3 +100,15 @@ def test_normalize_reads_the_recorded_control_column():
     adata.obs["Metadata_Control"] = False
     mt.io.stamp(adata, perturbation={"column": "Metadata_Perturbation", "control_column": "Ctl"})
     assert np.allclose(mt.pp.normalize(adata, reference="negcon", copy=True).X, expected, equal_nan=True)
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64], ids=["float32", "float64"])
+def test_normalize_writes_its_result_in_the_dtype_of_x(adata, dtype):
+    """float32 in is float32 out and float64 in is float64 out, with no float32 rounding on the float64 path."""
+    adata.X = adata.X.astype(dtype)
+    values = adata.X.astype(np.float64)
+    mt.pp.normalize(adata, method="standardize", by=None, reference=None)
+    assert adata.X.dtype == dtype
+    expected = (values - values.mean(axis=0)) / values.std(axis=0)
+    tolerance = 1e-12 if dtype is np.float64 else 1e-5
+    np.testing.assert_allclose(adata.X, expected, rtol=tolerance, atol=tolerance)

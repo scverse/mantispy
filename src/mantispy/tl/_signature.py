@@ -96,7 +96,7 @@ def feature_signature(
     )
 
     signature = ad.AnnData(
-        X=wide.to_numpy(dtype=np.float32),
+        X=wide.to_numpy(dtype=np.float64),
         # rename, not pd.Index(..., name=None), which pandas reads as "keep the name".
         obs=pd.DataFrame(index=wide.index.astype(str).rename(None)),
         var=var,

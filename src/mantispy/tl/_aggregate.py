@@ -12,7 +12,7 @@ import pandas as pd
 from anndata import AnnData
 
 from mantispy._core._numba import MEAN, MEDIAN
-from mantispy._core._reduce import group_codes, reduce_grouped, reduced_var
+from mantispy._core._reduce import group_codes, matrix_dtype, reduce_grouped, reduced_var
 from mantispy._core.frames import as_frame, categorize_metadata
 from mantispy._core.logging import get_logger
 from mantispy._core.provenance import record_params
@@ -95,7 +95,7 @@ def aggregate(
     obs.index = pd.Index([str(index) for index in range(len(obs))])
 
     var = reduced_var(adata, use_rep, values.shape[1])
-    result = ad.AnnData(X=values[keep].astype(np.float32), obs=obs, var=var)
+    result = ad.AnnData(X=values[keep].astype(matrix_dtype(adata, layer, use_rep=use_rep)), obs=obs, var=var)
     store = adata.uns.get("mantispy", {})
     resolution = resolution_for(columns)
     stamp(result, resolution=resolution, grouped_by=columns)

@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from anndata import AnnData
 
-from mantispy._core._reduce import get_matrix, group_rows
+from mantispy._core._reduce import get_matrix, group_rows, matrix_dtype
 from mantispy._core._stats import MAD_TO_SIGMA, benjamini_hochberg
 from mantispy._core.features import annotation
 from mantispy._core.frames import as_frame
@@ -1029,8 +1029,9 @@ def dose_trajectory(
             "var_names. Ask for fewer positions."
         )
     var = annotation(index, feature=np.tile(labelled, n_positions), position=position, feature_kind="derived")
+    dtype = matrix_dtype(adata)
     result = ad.AnnData(
-        X=np.array(paths, dtype=np.float32) if paths else np.empty((0, var.shape[0]), dtype=np.float32),
+        X=np.array(paths, dtype=dtype) if paths else np.empty((0, var.shape[0]), dtype=dtype),
         obs=pd.DataFrame(records, columns=[compound_key, "n_doses", "window_low", "window_high"]).set_axis(
             pd.RangeIndex(len(records)).astype(str)
         ),

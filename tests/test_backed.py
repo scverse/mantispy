@@ -139,9 +139,9 @@ def test_rows_already_in_order_are_read_without_a_second_copy(dtype):
     np.testing.assert_array_equal(block, values[[1, 4, 7]])
     assert len(dataset.asked) == 1, "the rows were read more than once"
     np.testing.assert_array_equal(dataset.asked[0], [1, 4, 7])
-    if dtype is np.float32:
-        # Only a float32 file makes the closing float32 cast in get_matrix the identity.
-        assert block is dataset.given[0], "the block the dataset returned was copied again"
+    # get_matrix keeps a float file's dtype, so its closing cast is the identity for either precision.
+    assert block.dtype == dtype
+    assert block is dataset.given[0], "the block the dataset returned was copied again"
 
 
 def test_rows_out_of_order_still_come_back_in_the_order_asked_for():
@@ -173,7 +173,7 @@ def backed_sparse(tmp_path):
 
 @pytest.mark.parametrize("fmt", ["csr", "csc"])
 def test_a_sparse_matrix_on_disk_can_be_read_whole(backed_sparse, fmt):
-    """anndata's sparse datasets have no ``__array__``, so the float32 read that ends get_matrix saw a sequence of sparse rows and raised `setting an array element with a sequence`.
+    """anndata's sparse datasets have no ``__array__``, so the dense read that ends get_matrix saw a sequence of sparse rows and raised `setting an array element with a sequence`.
 
     Every caller that reads the matrix without naming rows took that path, `pp.calculate_qc_metrics` among them.
     """

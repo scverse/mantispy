@@ -59,11 +59,11 @@ mt.io.stamp(adata, resolution="well", feature_kind="measurement")
 mt.io.stamp(adata, resolution="aggregate", grouped_by=["Metadata_Perturbation"], feature_kind="measurement")
 
 # learned embeddings
-adata.X = adata.X.astype("float32")
 mt.io.stamp(adata, resolution="well", feature_kind="embedding")
 ```
 
-`X` is stored as `float32`, so convert a `float64` matrix before stamping.
+`X` is stored in the dtype you give it, `float32`, `float64` or an integer type, and mantispy's tools write their results in that dtype too.
+`float32` takes half the memory of `float64`, so convert with `adata.X = adata.X.astype("float32")` if a large matrix does not fit.
 
 ## Build one from a DataFrame
 

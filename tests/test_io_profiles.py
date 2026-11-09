@@ -126,7 +126,7 @@ def test_empty_file_does_not_poison_dtypes(tmp_path):
     _frame().to_csv(full, index=False)
     _frame().iloc[:0].to_csv(empty, index=False)
     adata = mt.io.read_profiles([full, empty], channels=["DNA"])
-    assert adata.n_obs == 4 and adata.X.dtype == np.float32
+    assert adata.n_obs == 4 and adata.X.dtype == np.float64
 
 
 def test_path_columns_read_metadata_out_of_the_directory_name(tmp_path):
@@ -342,12 +342,12 @@ def test_stamp_refuses_what_the_resolution_needs_and_obs_lacks():
 
 
 def test_stamp_is_atomic_when_full_validation_fails():
-    """A float64 matrix fails the schema; stamp must raise and leave the object unstamped, not half-written."""
+    """A boolean matrix fails the schema; stamp must raise and leave the object unstamped, not half-written."""
     adata = ad.AnnData(
-        np.ones((2, 3), dtype=np.float64),  # float64, which the 2.0 contract rejects
+        np.ones((2, 3), dtype=bool),  # not a measurement dtype, which the 2.0 contract rejects
         obs=pd.DataFrame({"Metadata_Plate": ["P1", "P1"], "Metadata_Well": ["A01", "A02"]}, index=["0", "1"]),
     )
-    with pytest.raises(ValueError, match="float32"):
+    with pytest.raises(ValueError, match="integer or floating-point"):
         mt.io.stamp(adata, resolution="well", feature_kind="measurement")
     assert "mantispy" not in adata.uns  # descriptors were not written
     assert "feature_kind" not in adata.var  # var was not touched
@@ -404,6 +404,52 @@ def test_from_dataframe_is_public():
     assert mt.io.from_dataframe is not None
 
 
+@pytest.mark.parametrize(
+    ("columns", "expected"),
+    [
+        ({"Cells_AreaShape_Area": "float32", "Cells_Intensity_MeanIntensity_DNA": "float32"}, np.float32),
+        ({"Cells_AreaShape_Area": "float64", "Cells_Intensity_MeanIntensity_DNA": "float64"}, np.float64),
+        ({"Cells_AreaShape_Area": "int64", "Cells_Intensity_MeanIntensity_DNA": "float32"}, np.float64),
+        ({"Cells_AreaShape_Area": "int64", "Cells_Intensity_MeanIntensity_DNA": "int64"}, np.int64),
+    ],
+    ids=["float32", "float64", "int64_and_float32", "int64"],
+)
+def test_from_dataframe_keeps_the_values_and_dtype_it_is_given(columns, expected):
+    """X takes the columns' common dtype, so no value is rounded on the way in, and the object validates."""
+    frame = _frame()
+    frame["Cells_AreaShape_Area"] = [3, 5, 7, 2**40 + 1]  # 2**40 + 1 has no float32 representation
+    frame = frame.astype(columns)
+    adata = from_dataframe(frame, channels=["DNA"])
+    assert adata.X.dtype == expected
+    np.testing.assert_array_equal(adata[:, list(columns)].X, frame[list(columns)].to_numpy(dtype=expected))
+    assert mt.io.validate(adata).ok, mt.io.validate(adata).errors
+
+
+def test_from_dataframe_reads_integer_columns_with_a_gap_as_float64():
+    """An integer column cannot hold NaN, so a missing value, or a sentinel to replace, reads the matrix as float64."""
+    frame = _frame()
+    frame["Cells_AreaShape_Area"] = pd.array([3, None, 7, 2**40 + 1], dtype="Int64")
+    frame["Cells_Intensity_MeanIntensity_DNA"] = [1, 2, -999, 4]
+    adata = from_dataframe(frame, channels=["DNA"], sentinels=-999)
+    assert adata.X.dtype == np.float64
+    np.testing.assert_array_equal(adata[:, "Cells_AreaShape_Area"].X.ravel(), [3.0, np.nan, 7.0, 2.0**40 + 1])
+    np.testing.assert_array_equal(adata[:, "Cells_Intensity_MeanIntensity_DNA"].X.ravel(), [1.0, 2.0, np.nan, 4.0])
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64, np.int64])
+def test_stamp_stores_x_as_given(dtype):
+    """Stamping validates X without converting it: the values and the dtype the caller chose survive."""
+    values = np.array([[1, 2, 3], [4, 5, 2**40 + 1]]).astype(dtype)
+    adata = ad.AnnData(
+        values.copy(),
+        obs=pd.DataFrame({"Metadata_Plate": ["P1", "P1"], "Metadata_Well": ["A01", "A02"]}, index=["0", "1"]),
+    )
+    mt.io.stamp(adata, resolution="well", feature_kind="embedding")
+    assert mt.io.validate(adata).ok, mt.io.validate(adata).errors
+    assert adata.X.dtype == dtype
+    np.testing.assert_array_equal(adata.X, values)
+
+
 @pytest.mark.parametrize("resolution", ["aggregate", "perturbation"])
 def test_an_aggregate_profile_table_can_be_read_with_its_grouping(resolution):
     """A consensus table has no plate or well; the reader takes the grouping, and the 1.0 name still reads."""
@@ -438,8 +484,8 @@ def test_write_migrates_an_older_object_instead_of_relabelling_it(tmp_path):
 def test_a_failed_write_never_relabels_an_older_object_without_migrating_it(tmp_path):
     """A rejected write must not leave a 1.0 object stamped 2.0 with its 1.0 control model, which migrate then skips."""
     adata = _a_1_0_well_object()
-    adata.X = adata.X.astype("float64")  # fails validation
-    with pytest.raises(ValueError, match="float32"):
+    adata.X = adata.X.astype(bool)  # fails validation
+    with pytest.raises(ValueError, match="integer or floating-point"):
         mt.io.write(adata, tmp_path / "out.h5ad")
     if adata.uns["mantispy"]["schema_version"] == "2.0":
         assert list(adata.obs["Metadata_Control_Type"]) == ["negcon", "treatment", "treatment", "treatment"]
@@ -447,9 +493,9 @@ def test_a_failed_write_never_relabels_an_older_object_without_migrating_it(tmp_
 
 def test_a_failed_write_leaves_the_schema_stamp_untouched(tmp_path):
     adata = from_dataframe(_frame(), channels=["DNA"])
-    adata.X = adata.X.astype("float64")  # fails validation
+    adata.X = adata.X.astype(bool)  # fails validation
     before = dict(adata.uns["mantispy"])
-    with pytest.raises(ValueError, match="float32"):
+    with pytest.raises(ValueError, match="integer or floating-point"):
         mt.io.write(adata, tmp_path / "out.h5ad")
     assert adata.uns["mantispy"] == before
 
