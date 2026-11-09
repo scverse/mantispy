@@ -66,8 +66,10 @@ def test_more_features_than_controls_warns_and_names_the_way_out(scored):
     is_control = np.arange(few.n_obs) < 5
     few.obs["Metadata_Control"] = is_control
     few.obs["Metadata_Control_Type"] = np.where(is_control, "negcon", "treatment")
+    # The first five cells share wells with treated cells, so name the well as the replicate: the pooled-design
+    # check would otherwise stop the call before the warning this test is about.
     with pytest.warns(UserWarning, match="use_rep"):
-        mt.tl.hit_calling(few, n_permutations=50)
+        mt.tl.hit_calling(few, n_permutations=50, replicate=["Metadata_Plate", "Metadata_Well"])
 
 
 def test_the_vectorised_ks_matches_scipy():
