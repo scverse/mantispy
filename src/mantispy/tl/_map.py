@@ -56,6 +56,27 @@ _UNWRITABLE = ("indices",)
 #: Types that mark an annotation cell as a list of labels rather than one scalar label.
 _LIST_LIKE = (list, tuple, set, np.ndarray)
 
+#: Above this many positive plus negative pairs, :func:`map` warns before handing the query to copairs, which holds
+#: every pair in memory at once.
+MAX_PAIRS = 100_000_000
+
+
+def _count_pairs(meta: pd.DataFrame, sameby: list[str], diffby: list[str]) -> int:
+    """An upper bound on the pairs copairs builds for one ``sameby``/``diffby`` definition, from group sizes alone.
+
+    The pairs sharing ``sameby`` are counted exactly. A pair must also differ in every ``diffby`` column, so the
+    pairs sharing ``sameby`` and any single ``diffby`` column are subtracted, the largest such set, which is exact
+    for one ``diffby`` column.
+    """
+
+    def sharing(columns: list[str]) -> int:
+        if not columns:
+            return len(meta) * (len(meta) - 1) // 2
+        sizes = meta.groupby(columns, observed=True, sort=False).size().to_numpy(dtype=np.int64)
+        return int((sizes * (sizes - 1) // 2).sum())
+
+    return sharing(sameby) - max((sharing([*sameby, column]) for column in diffby), default=0)
+
 
 def _resolve_mode(mode: str, *, label: str, batch: str, annotation: str | None = None) -> dict[str, list[str]]:
     """Substitute the ``__label__``/``__batch__``/``__annotation__`` placeholders in a :data:`MODES` preset."""
@@ -284,6 +305,7 @@ def map(
 
     Notes:
         An explicit pair query that pairs across a high-cardinality column (a large ``pos_diffby`` or ``neg_diffby`` fan-out, such as every compound against every other) materializes a pair set that grows with the product of the group sizes and can reach tens of gigabytes on a few thousand wells, separately from ``batch_size``, which only caps the distance step. Run such a query on consensus profiles (one row per perturbation, via :func:`~mantispy.tl.consensus`) rather than on every well, and set ``batch_size`` to cap the distance memory.
+        Before copairs runs, the pair count is bounded from the group sizes, and a query with too many pairs warns.
     """
     try:
         from copairs import map as _  # noqa: F401 - the scoring imports it again; this is the friendly early guard
@@ -377,6 +399,20 @@ def map(
         # A missing annotation becomes an empty label set: the row joins no class and copairs leaves it unscored.
         meta[multilabel_col] = meta[multilabel_col].map(
             lambda value: list(value) if isinstance(value, _LIST_LIKE) else []
+        )
+
+    # A list-valued column cannot be grouped; leaving it out of the count only loosens the bound.
+    scalar = {key: [c for c in value if c != multilabel_col] for key, value in settings.items()}
+    pairs = _count_pairs(meta, scalar["pos_sameby"], scalar["pos_diffby"]) + _count_pairs(
+        meta, scalar["neg_sameby"], scalar["neg_diffby"]
+    )
+    if pairs > MAX_PAIRS:
+        warnings.warn(
+            f"these pair definitions build up to {pairs:,} pairs over {len(meta)} profiles, and copairs holds all of "
+            "them in memory at once, which can need many gigabytes. Run the query on consensus profiles, one per "
+            "perturbation, from mt.tl.consensus(), and set batch_size= to cap the distance step.",
+            UserWarning,
+            stacklevel=3,
         )
 
     table, group_columns = _score_map(
