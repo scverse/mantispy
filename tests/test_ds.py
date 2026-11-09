@@ -382,19 +382,21 @@ def test_scallops_arv471_maps_controls_and_guides(tmp_path, monkeypatch):
 
 
 def test_scallops_arv471_runs_hit_calling(tmp_path, monkeypatch):
-    import inspect
-
     path = tmp_path / "fig3.pq"
     _write_scallops_fixture(path)
     _patch_files(monkeypatch, path)
 
     adata = _assemble_scallops_arv471()
 
-    kwargs = {"groupby": "Metadata_Gene", "reference": "negcon", "n_permutations": 50, "seed": 0, "copy": True}
-    # block= is the well-block permutation null (#68); pass it once it reaches this build's signature.
-    if "block" in inspect.signature(mt.tl.hit_calling).parameters:
-        kwargs["block"] = "Metadata_sgRNA"
-    result = mt.tl.hit_calling(adata, **kwargs)
+    result = mt.tl.hit_calling(
+        adata,
+        groupby="Metadata_Gene",
+        reference="negcon",
+        replicate="Metadata_sgRNA",
+        n_permutations=50,
+        seed=0,
+        copy=True,
+    )
 
     hits = result.uns["mantispy"]["hits"]
     assert isinstance(hits, pd.DataFrame)
@@ -497,7 +499,16 @@ def test_cp_posh_runs_hit_calling(tmp_path, monkeypatch):
 
     adata = _assemble_cp_posh()
 
-    result = mt.tl.hit_calling(adata, groupby="Metadata_Gene", reference="negcon", n_permutations=50, seed=0, copy=True)
+    # One well holds every guide, a pooled design, so the null draws whole guides.
+    result = mt.tl.hit_calling(
+        adata,
+        groupby="Metadata_Gene",
+        reference="negcon",
+        replicate="Metadata_sgRNA",
+        n_permutations=50,
+        seed=0,
+        copy=True,
+    )
 
     hits = result.uns["mantispy"]["hits"]
     assert isinstance(hits, pd.DataFrame)

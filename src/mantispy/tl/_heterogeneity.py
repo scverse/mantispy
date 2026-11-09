@@ -13,7 +13,7 @@ from anndata import AnnData
 from mantispy._core._distance import pairwise_sqeuclidean
 from mantispy._core._reduce import get_matrix, group_codes, group_offsets, representation
 from mantispy._core._stats import (
-    _default_well_block,
+    _default_replicate,
     _is_object_resolution,
     _split_wells,
     benjamini_hochberg,
@@ -27,7 +27,7 @@ from mantispy._core.masks import control_annotated, reference_mask
 from mantispy._core.mutation import inplace_or_copy
 from mantispy._core.schema import stamp
 from mantispy.tl._aggregate import _group_obs
-from mantispy.tl._hits import _ks_block_null, ks_statistic
+from mantispy.tl._hits import _ks_replicate_null, ks_statistic
 
 PHASES = ("G1", "S", "G2M")
 
@@ -331,7 +331,7 @@ def subpopulation_hits(
     key_added: str = "subpopulation_hits",
     copy: bool = False,
     *,
-    block: str | Sequence[str] | None = None,
+    replicate: str | Sequence[str] | None = None,
     n_permutations: int = 1000,
 ) -> AnnData | None:
     """Test each perturbation against the controls within each cluster.
@@ -351,10 +351,10 @@ def subpopulation_hits(
         seed: Seed for the split of a cluster's controls and the permutation null.
         key_added: Name for the output table.
         copy: Return a modified copy instead of mutating in place.
-        block: ``obs`` column, or sequence of columns, whose groups are the design's exchangeable unit, normally the well.
-            The permutation null then draws whole wells rather than cells, since cells within a well are not independent replicates (see Notes).
-            Left ``None``, it defaults to the physical well on an object stamped cell resolution with replicated wells; it warns and falls back to the analytic KS approximation when no complete well column is present.
-        n_permutations: Size of the well-block permutation null.
+        replicate: ``obs`` column, or sequence of columns, whose groups are the design's exchangeable unit: the well in an arrayed screen, the guide (``"Metadata_sgRNA"``) in a pooled one.
+            The permutation null then draws whole replicates rather than cells, since cells within a well are not independent replicates (see Notes).
+            Left ``None``, it defaults to the physical well on an object stamped cell resolution with replicated wells; it warns and falls back to the analytic KS approximation when no complete well column is present, and raises on a pooled design, where some well holds both reference and tested cells.
+        n_permutations: Size of the replicate permutation null.
             Ignored on the analytic fallback, which has no permutation draw.
 
     Returns:
@@ -363,14 +363,16 @@ def subpopulation_hits(
 
     Raises:
         KeyError: ``obs`` has no column ``cluster_key``.
+        ValueError: ``replicate`` is not given on a pooled design at cell resolution.
 
     Notes:
         Each cell is reduced to its Euclidean distance from the control centroid of its own cluster, and a KS test compares the treated cells' distances with the controls'.
         This is close to ``hit_calling(method="ks")``, restricted to comparable cells.
         A distance is used rather than a single feature so that the test means the same on every dataset.
 
-        Cells within a well are not independent replicates, so the p-value comes from a well-block permutation: whole wells are drawn for the pseudo-treated side and the KS statistic recomputed, the same unit :func:`~mantispy.tl.hit_calling` resamples.
+        Cells within a well are not independent replicates, so the p-value comes from a permutation over whole replicates: whole wells, or whatever ``replicate`` names, are drawn for the pseudo-treated side and the KS statistic recomputed, the same unit :func:`~mantispy.tl.hit_calling` resamples.
         Without a usable well column at cell resolution it warns and falls back to the analytic KS approximation on cell counts, which is anti-conservative for the same reason.
+        In a pooled screen every well holds every perturbation, so drawing whole wells cannot separate a group from the reference; the exchangeable unit is the guide, and the call raises until ``replicate`` names it.
 
         A cluster's controls are split in half, as in :func:`~mantispy.tl.hit_calling`.
         One half places the centroid and the other supplies the distances tested against, so the null is out of sample.
@@ -393,12 +395,12 @@ def subpopulation_hits(
     clusters = named.where(assigned).to_numpy()
     groups = obs[groupby].astype(str).to_numpy()
 
-    block_codes = _default_well_block(adata, block=block)
-    if block_codes is None and block is None and _is_object_resolution(adata):
+    replicate_codes = _default_replicate(adata, replicate=replicate, reference=is_control)
+    if replicate_codes is None and replicate is None and _is_object_resolution(adata):
         warnings.warn(
             "subpopulation_hits is at cell resolution with no usable well column, so its p-values come from the "
             "analytic KS approximation on cell counts. Cells within a well are not independent replicates, so "
-            "that p-value is anti-conservative. Pass block= a well column, add a complete Metadata_Well, or "
+            "that p-value is anti-conservative. Pass replicate= a well column, add a complete Metadata_Well, or "
             "aggregate to wells with mt.tl.aggregate.",
             UserWarning,
             stacklevel=3,
@@ -421,14 +423,14 @@ def subpopulation_hits(
         distance = np.sqrt(pairwise_sqeuclidean(np.nan_to_num(values[in_cluster]), np.nan_to_num(centre))).ravel()
         fitted = np.isin(in_cluster, fit_rows)
         held_out = is_control[in_cluster] & ~fitted
-        cluster_blocks = block_codes[in_cluster] if block_codes is not None else None
+        cluster_replicates = replicate_codes[in_cluster] if replicate_codes is not None else None
 
         for group in pd.unique(groups[in_cluster]):
             in_group = (groups[in_cluster] == group) & ~fitted
             shared = np.flatnonzero(in_group & held_out)
-            if cluster_blocks is not None:
+            if cluster_replicates is not None:
                 # Halve the reference group by whole wells so its null draws a strict subset like any other group.
-                in_group[shared[_split_wells(cluster_blocks[shared], half_generator)]] = False
+                in_group[shared[_split_wells(cluster_replicates[shared], half_generator)]] = False
             else:
                 # The reference group's held-out cells are halved at random because cells are ordered by plate and well.
                 in_group[half_generator.permutation(shared)[: shared.size // 2]] = False
@@ -437,11 +439,11 @@ def subpopulation_hits(
             if treated.size < min_cells or control_distance.size < min_cells:
                 continue
             statistic = float(ks_statistic(treated[None, :], control_distance)[0])
-            if cluster_blocks is not None:
+            if cluster_replicates is not None:
                 pool = np.flatnonzero(in_group | control_mask)
-                null = _ks_block_null(
+                null = _ks_replicate_null(
                     distance,
-                    cluster_blocks,
+                    cluster_replicates,
                     pool,
                     np.flatnonzero(in_group),
                     control_distance,

@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import scanpy as sc
-from test_tl_hits import _well_effect_cells
+from test_tl_hits import _pooled_cells, _well_effect_cells
 
 import mantispy as mt
 from mantispy._core.schema import stamp
@@ -59,7 +59,7 @@ def test_subpopulation_hits_defaults_to_the_well_block_at_cell_resolution():
     adata = _one_cluster(seed=0)
     default = mt.tl.subpopulation_hits(adata, cluster_key="cluster", n_permutations=200, seed=0, copy=True)
     explicit = mt.tl.subpopulation_hits(
-        adata, cluster_key="cluster", block="Metadata_Well", n_permutations=200, seed=0, copy=True
+        adata, cluster_key="cluster", replicate="Metadata_Well", n_permutations=200, seed=0, copy=True
     )
     pd.testing.assert_frame_equal(
         default.uns["mantispy"]["subpopulation_hits"], explicit.uns["mantispy"]["subpopulation_hits"]
@@ -71,6 +71,21 @@ def test_subpopulation_hits_warns_without_a_well_column_at_cell_resolution():
     del adata.obs["Metadata_Well"]
     with pytest.warns(UserWarning, match="not independent replicates"):
         mt.tl.subpopulation_hits(adata, cluster_key="cluster", n_permutations=100, seed=0)
+
+
+def test_subpopulation_hits_needs_an_explicit_replicate_on_a_pooled_design():
+    adata = _pooled_cells()
+    adata.obs["cluster"] = "c0"
+    with pytest.raises(ValueError, match="pooled screen.*Metadata_sgRNA"):
+        mt.tl.subpopulation_hits(adata, cluster_key="cluster", n_permutations=50, seed=0)
+
+
+def test_subpopulation_hits_finds_a_pooled_effect_with_a_guide_replicate():
+    adata = _pooled_cells()
+    adata.obs["cluster"] = "c0"
+    mt.tl.subpopulation_hits(adata, cluster_key="cluster", replicate="Metadata_sgRNA", n_permutations=1000, seed=0)
+    table = adata.uns["mantispy"]["subpopulation_hits"].set_index("group")
+    assert table.loc["G", "pvalue"] < 0.05
 
 
 @pytest.fixture(scope="module")
