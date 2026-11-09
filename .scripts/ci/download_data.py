@@ -31,6 +31,7 @@ def main(args: argparse.Namespace) -> None:
 
     loaders = {
         "bbbc021": mt.ds.bbbc021,
+        "bbbc021_cells": mt.ds.bbbc021_cells,
         "rohban": mt.ds.rohban,
         # The staged rohban variants, so tutorials and tests that load them hit the cache (<7 MB each).
         "rohban_selected": lambda: mt.ds.rohban(feature_selected=True),

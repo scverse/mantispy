@@ -354,6 +354,7 @@ def dna_content(
     by: Sequence[str] | str | None = ("Metadata_Plate", "Metadata_Well"),
     layer: str | None = None,
     min_cells: int = 50,
+    reference: str | None = None,
     key_added: str = "Metadata_DNAContent",
     copy: bool = False,
 ) -> AnnData | None:
@@ -369,12 +370,16 @@ def dna_content(
         by: Find the G1 peak separately within each group, normally the well, since staining intensity does not carry across wells.
         layer: Read this layer instead of ``X``, for example ``"raw"`` after ``normalize(keep_raw=True)``.
         min_cells: A group with fewer usable cells than this gets no G1 peak, and its cells get ``NaN``.
+        reference: Find each group's G1 peak on these cells only, and apply it to every cell of the group:
+            ``"negcon"`` for the negative controls, or the name of a boolean ``obs`` column. ``None`` uses every cell.
+            Pass it when a treatment can arrest whole wells, so their peak is not taken for G1; ``by`` must then
+            group treated and control cells together, normally by plate.
         key_added: ``obs`` column written.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
         ``None``, or the modified copy.
-        Writes ``obs[key_added]``, and ``uns["mantispy"]["dna_content"]`` with one row per group: the ``by`` columns, ``n_cells`` (the usable cells) and ``g1_peak`` (log2 of the integrated intensity at the G1 peak, ``NaN`` for a group below ``min_cells``).
+        Writes ``obs[key_added]``, and ``uns["mantispy"]["dna_content"]`` with one row per group: the ``by`` columns, ``n_cells`` (the usable cells the peak was found on) and ``g1_peak`` (log2 of the integrated intensity at the G1 peak, ``NaN`` for a group below ``min_cells``).
 
     Raises:
         KeyError: ``dna_feature`` was not given and no integrated DNA intensity feature could be found.
@@ -408,16 +413,18 @@ def dna_content(
 
     codes, keys = group_codes(adata, by)
     order, offsets = group_offsets(codes, len(keys))
+    fit_on = reference_mask(adata, reference)
     content = np.full(adata.n_obs, np.nan)
     peaks = np.full(len(keys), np.nan)
     counts = np.zeros(len(keys), dtype=int)
     for index in range(len(keys)):
         rows = order[offsets[index] : offsets[index + 1]]
         usable = rows[positive[rows]]
-        counts[index] = usable.size
-        if usable.size < min_cells:
+        anchors = usable[fit_on[usable]]
+        counts[index] = anchors.size
+        if anchors.size < min_cells:
             continue
-        peaks[index] = _g1_peak(log_values[usable])
+        peaks[index] = _g1_peak(log_values[anchors])
         content[usable] = log_values[usable] - peaks[index]
 
     small = counts < min_cells

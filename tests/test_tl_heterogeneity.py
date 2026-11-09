@@ -155,6 +155,18 @@ def test_dna_content_and_state_recover_known_shares_across_staining_scales():
     np.testing.assert_array_equal(cells.uns["mantispy"]["dna_state"]["cutoffs"], [1.25, 1.75])
 
 
+def test_dna_content_measures_an_arrested_well_against_the_controls_of_its_plate():
+    """A well arrested in 4N has no 2N peak of its own; the controls on its plate supply the G1 peak instead."""
+    cells = _cycling_wells([(0.6, 0.2, 0.2), (0.0, 0.0, 1.0)], [1000.0, 1000.0])
+    cells.obs["Metadata_Control_Type"] = np.where(cells.obs["Metadata_Well"] == "W0", "negcon", "trt")
+    arrested = (cells.obs["Metadata_Well"] == "W1").to_numpy()
+    mt.tl.dna_content(cells, dna_feature=_DNA)
+    assert abs(cells.obs.loc[arrested, "Metadata_DNAContent"].median()) < 0.05  # taken for G1 within its own well
+    mt.tl.dna_content(cells, dna_feature=_DNA, by="Metadata_Plate", reference="negcon")
+    assert abs(cells.obs.loc[arrested, "Metadata_DNAContent"].median() - 1) < 0.05
+    assert cells.uns["mantispy"]["dna_content"]["n_cells"].iloc[0] == (~arrested).sum()
+
+
 def test_dna_state_records_custom_cutoffs_and_refuses_bad_ones():
     cells = _cycling_wells([(0.5, 0.2, 0.3)], [1000.0])
     mt.tl.dna_content(cells, dna_feature=_DNA)

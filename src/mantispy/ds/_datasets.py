@@ -208,6 +208,36 @@ def bbbc021(
     return _fetch_variant("bbbc021", _BBBC021_VARIANTS[aggregated, feature_selected], cache_dir)
 
 
+def bbbc021_cells(cache_dir: str | Path | None = None) -> AnnData:
+    """Single MCF-7 nuclei from BBBC021, picked so that each mechanism of action predicts a place in the cell cycle.
+
+    Fifteen compounds at one concentration each, in all three of their replicate wells, and one DMSO well from every
+    plate they sit on: microtubule destabilizers and stabilizers and Eg5 inhibitors, which stop cells in mitosis;
+    Aurora kinase inhibitors, which let cells skip division and grow past 4N; DNA replication inhibitors and DNA
+    damaging agents; and two cholesterol-lowering statins as a mechanism with no cell-cycle target.
+
+    Each nucleus keeps its shape and DNA (DAPI) measurements as CellProfiler wrote them, unnormalized, so
+    :func:`~mantispy.tl.dna_content` can read the integrated DNA intensity. The object is pre-built by
+    ``scripts/build_staged_datasets.py`` from the per-well ``Nuclei.csv`` tables of ``cpg0010-caie-drugresponse``
+    and rehosted on ``scverse-exampledata``, so the loader fetches a single h5ad.
+
+    Args:
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
+
+    Returns:
+        Nuclei by features at object resolution, read with :func:`mantispy.io.read`, carrying ``Metadata_Plate``,
+        ``Metadata_Well``, ``Metadata_Site``, ``Metadata_Compound``, ``Metadata_Concentration``, ``Metadata_MOA``
+        (``"DMSO"`` for the controls), ``Metadata_Perturbation`` (compound at concentration),
+        ``Metadata_Perturbation_Type`` (``"compound"``) and ``Metadata_Control``.
+
+    References:
+        :cite:t:`Caie_2010`, the image set.
+        :cite:t:`Ljosa_2013`, the CellProfiler measurements.
+    """
+    return _fetch_variant("bbbc021_cells", "bbbc021_cells.h5ad", cache_dir)
+
+
 #: The (aggregated, feature_selected) combination each rehosted rohban variant answers to.
 _ROHBAN_VARIANTS = {
     (False, False): "rohban.h5ad",  # 1918 x 3616, well level, all features
