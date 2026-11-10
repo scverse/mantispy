@@ -15,8 +15,8 @@ from anndata import AnnData
 
 from mantispy._core._corr import _blockwise, correlated_pairs, rank_revealing_subset
 from mantispy._core._reduce import get_matrix, group_codes, group_offsets
-from mantispy._core._stats import nanvar
-from mantispy._core.features import blocklist_hits, feature_kind_of, load_blocklist
+from mantispy._core._stats import nanvar, robust_zscore
+from mantispy._core.features import feature_kind_of, load_blocklist, var_blocklist_hits
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy._core.mutation import inplace_or_copy
@@ -167,12 +167,9 @@ def _op_drop_outliers(X: np.ndarray, outlier_cutoff: float = 500.0) -> np.ndarra
 def _op_blocklist(adata: AnnData, blocklist: str | Sequence[str] = "default") -> np.ndarray:
     """Drop features named in the blocklist.
 
-    Matched against the current names and, like :func:`~mantispy.pp.filter_features`, against ``var["original_name"]``.
+    Matched against the current names and, like :func:`~mantispy.pp.filter_features`, against ``var["original_name"]``, and for names without an object prefix, as cp_measure writes them, on the parsed feature identity.
     """
-    names = [adata.var_names.to_numpy()]
-    if "original_name" in adata.var:
-        names.append(adata.var["original_name"].astype(str).to_numpy())
-    return ~blocklist_hits(names, blocklist)
+    return ~var_blocklist_hits(adata, blocklist)
 
 
 def _op_noise_removal(
@@ -239,6 +236,7 @@ def feature_select(
             Usually well-level profiles.
         operations: Which operations to run, from ``OPERATIONS``.
             The default is pycytominer's own, which omits ``frequency_threshold``, ``drop_outliers`` and ``noise_removal``, plus ``drop_degenerate``, which removes nothing from an object :func:`~mantispy.pp.normalize` did not flag.
+            Without ``drop_outliers``, a warning names the kept features whose values sit more than ``outlier_cutoff`` robust standard deviations from their own median.
         min_variance: ``variance_threshold``: keep features with variance above this.
         freq_cut: ``frequency_threshold``: drop a feature when the count of its second most common value divided by the count of its most common is below this.
             Either this rule or ``unique_cut`` drops a feature.
@@ -264,6 +262,7 @@ def feature_select(
         outlier_cutoff: ``drop_outliers``: drop features whose absolute value exceeds this.
         blocklist: ``blocklist``: ``"default"`` for the bundled list, or explicit names.
             Matched against the current names and against ``var["original_name"]``, so it works either side of :func:`~mantispy.pp.standardize_feature_names`.
+            A name without an object prefix, as cp_measure writes them, is matched on its parsed group, feature, channels and scale, so the default list also applies to cp_measure features.
         noise_removal_perturb_groups: ``noise_removal``: ``obs`` column grouping replicates.
         noise_removal_stdev_cutoff: ``noise_removal``: drop features whose within-group standard deviation, averaged over groups, is above this.
             An absolute threshold on the scale :func:`~mantispy.pp.normalize` left the values on, so it is only meaningful next to the normalization that produced them; pycytominer's default assumes whole-plate standardization.
@@ -404,6 +403,9 @@ def feature_select(
             stacklevel=3,
         )
 
+    if "drop_outliers" not in operations:
+        _warn_extreme(adata, full, kept, outlier_cutoff)
+
     adata.var[key_added] = keep
     adata.uns.setdefault("mantispy", {})["feature_select"] = removed
     get_logger().info(
@@ -415,6 +417,30 @@ def feature_select(
     if subset:
         adata._inplace_subset_var(keep)
     return None
+
+
+def _warn_extreme(adata: AnnData, full: np.ndarray, kept: np.ndarray, cutoff: float) -> None:
+    """Warn when a kept feature holds values far outside its own spread, which the default operations let through.
+
+    Each feature is scaled by its own median and MAD, so the check means the same on raw and on normalized values, and ``outlier_cutoff`` is the bound ``drop_outliers`` would apply to a robustly scaled feature.
+    """
+    extreme: list[int] = []
+    # A few columns at a time, since robust_zscore holds several float64 copies of what it is given.
+    for start in range(0, kept.size, 32):
+        columns = kept[start : start + 32]
+        largest = np.nanmax(np.abs(robust_zscore(full[:, columns], axis=0)), axis=0, initial=0.0)
+        extreme.extend(columns[largest > cutoff])
+    if extreme:
+        names = [str(adata.var_names[index]) for index in extreme]
+        shown = ", ".join(names[:5]) + (f" and {len(names) - 5} more" if len(names) > 5 else "")
+        warnings.warn(
+            f"{len(names)} selected feature(s) hold values more than outlier_cutoff={cutoff:g} robust standard "
+            f"deviations from their own median ({shown}). They can dominate distances and PCA. Add 'drop_outliers' "
+            "to operations to drop them, or check where the extreme values come from; on single cells, before "
+            "aggregation, since a median profile hides a few extreme cells.",
+            UserWarning,
+            stacklevel=3,
+        )
 
 
 def subset_features(adata: AnnData, key: str = "selected") -> AnnData:

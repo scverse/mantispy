@@ -67,6 +67,7 @@ def test_stamp_seeds_no_history(adata):
 def test_mutating_tool_records_params_not_history(adata):
     import mantispy as mt
 
+    adata.X = np.arange(8, dtype=np.float32).reshape(4, 2)  # a constant feature cannot be scaled
     mt.pp.normalize(adata, reference=None)
     assert "normalize" in adata.uns["mantispy"]["params"]
     assert "history" not in adata.uns["mantispy"]

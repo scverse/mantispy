@@ -211,6 +211,22 @@ def test_local_density_is_computed_within_a_field(clustered):
     assert clustered.obs["Metadata_LocalDensity"].isna().all()
 
 
+def test_local_density_is_higher_where_cells_are_crowded(clustered):
+    # A density, not a distance: the tight cluster must score higher than the sparse one (#271).
+    clustered = clustered.copy()
+    n = clustered.n_obs
+    rng = np.random.default_rng(1)
+    tight = np.arange(n) < n // 2
+    spread = np.where(tight, 10.0, 200.0)
+    centre = np.where(tight, 100.0, 2000.0)
+    clustered.obs["Metadata_Center_X"] = centre + rng.normal(0, 1, n) * spread
+    clustered.obs["Metadata_Center_Y"] = centre + rng.normal(0, 1, n) * spread
+    clustered.obs["Metadata_ImageID"] = "field"
+    mt.tl.neighbors_local_density(clustered, k=5)
+    density = clustered.obs["Metadata_LocalDensity"].to_numpy()
+    assert np.median(density[tight]) > 10 * np.median(density[~tight])
+
+
 def test_round_trip(clustered, tmp_path):
     composition = mt.tl.cluster_composition(clustered)
     mt.io.write(composition, tmp_path / "composition.h5ad")

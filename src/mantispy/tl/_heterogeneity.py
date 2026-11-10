@@ -736,14 +736,16 @@ def neighbors_local_density(
     key_added: str = "Metadata_LocalDensity",
     copy: bool = False,
 ) -> AnnData | None:
-    """Mean distance to the ``k`` nearest cells in the same field of view.
+    """Local cell density: how many cells per unit area surround each cell in its field of view.
 
+    The density is the ``k``-nearest-neighbour estimate, ``k`` divided by the area of the disc reaching the ``k``-th nearest cell, in cells per square unit of ``Metadata_Center_X`` and ``Metadata_Center_Y`` (usually pixels).
+    Higher means more crowded.
     Local crowding changes morphology independently of treatment.
     Consider regressing it out with :func:`~mantispy.pp.regress_out` before attributing a change to a perturbation.
 
     Args:
         adata: Single-cell object carrying ``Metadata_Center_X`` and ``Metadata_Center_Y``.
-        k: Number of neighbors averaged over.
+        k: Number of neighbors whose disc sets the density; a field with fewer cells uses all of them.
         by: ``obs`` column identifying the field of view.
             Neighbors are searched within each field only, since coordinates from different images are not comparable.
         key_added: ``obs`` column written.
@@ -751,7 +753,7 @@ def neighbors_local_density(
 
     Returns:
         ``None``, or the modified copy.
-        Writes ``obs[key_added]``, and a cell alone in its field gets ``NaN``.
+        Writes ``obs[key_added]``, and a cell alone in its field, or one sharing its position with all of its neighbours, gets ``NaN``.
 
     Raises:
         KeyError: ``obs`` is missing ``Metadata_Center_X`` or ``Metadata_Center_Y``.
@@ -773,11 +775,15 @@ def neighbors_local_density(
             continue
         neighbours = min(k + 1, rows.size)
         distances, _ = NearestNeighbors(n_neighbors=neighbours).fit(coordinates[rows]).kneighbors(coordinates[rows])
-        density[rows] = distances[:, 1:].mean(axis=1)
+        # k-nearest-neighbour density estimate: the cells counted over the area of the disc that reaches them.
+        reach = distances[:, -1]
+        with np.errstate(divide="ignore"):
+            density[rows] = np.where(reach > 0, (neighbours - 1) / (np.pi * reach**2), np.nan)
 
     adata.obs[key_added] = density
     if np.isnan(density).any():
         get_logger().info(
-            "neighbors_local_density: %d cell(s) alone in their field, left as NaN", int(np.isnan(density).sum())
+            "neighbors_local_density: %d cell(s) have no measurable neighbourhood in their field, left as NaN",
+            int(np.isnan(density).sum()),
         )
     return None

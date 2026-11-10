@@ -353,3 +353,35 @@ def test_feature_select_default_keeps_every_feature():
     assert mt.pp.feature_select(adata, operations=("drop_na_columns",)) is None
     assert adata.n_vars == 4
     assert adata.var["selected"].sum() == 3
+
+
+def test_a_kept_feature_far_outside_its_own_spread_warns():
+    # Hu moments at 1e10 to 1e20 passed every default check without a word (#277).
+    rng = np.random.default_rng(0)
+    values = rng.normal(size=(200, 3))
+    values[0, 2] = 1e12
+    adata = ad.AnnData(values.astype(np.float64), obs=pd.DataFrame(index=[str(i) for i in range(200)]))
+    adata.var_names = ["Cells_AreaShape_Area", "Cells_AreaShape_Perimeter", "Cells_AreaShape_HuMoment_3"]
+    with pytest.warns(UserWarning, match="Cells_AreaShape_HuMoment_3"):
+        mt.pp.feature_select(adata, operations=("variance_threshold",))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        mt.pp.feature_select(adata, operations=("variance_threshold", "drop_outliers"))
+
+
+def test_the_default_blocklist_also_matches_cp_measure_names():
+    # cp_measure writes no object prefix, so the CellProfiler-named list silently dropped nothing (#287).
+    cp = ["Granularity_14__DNA", "Granularity_2__DNA", "Correlation_Manders__AGP__DNA", "Intensity_MeanIntensity__DNA"]
+    cellprofiler = ["Nuclei_Granularity_14_DNA", "Cells_Granularity_14_DNA", "Nuclei_Intensity_MeanIntensity_DNA"]
+    rng = np.random.default_rng(0)
+    for names, convention, blocked in (
+        (cp, "cp_measure", {"Granularity_14__DNA", "Correlation_Manders__AGP__DNA"}),
+        # A name that carries its object is matched by name only, as before: Cells_ is not on the list.
+        (cellprofiler, "cellprofiler", {"Nuclei_Granularity_14_DNA"}),
+    ):
+        frame = pd.DataFrame(rng.normal(size=(6, len(names))), columns=names)
+        frame["Metadata_Plate"], frame["Metadata_Well"], frame["Metadata_ImageID"] = "P", "A01", "i"
+        frame["Metadata_ObjectNumber"] = range(6)
+        adata = mt.io.from_dataframe(frame, resolution="object", object_type="cell", convention=convention)
+        mt.pp.feature_select(adata, operations=("blocklist",))
+        assert set(adata.var_names[~adata.var["selected"]]) == blocked

@@ -98,3 +98,11 @@ def test_consensus_without_a_record_keeps_the_default_column(adata):
 def test_aggregate_writes_no_aggregated_from(adata):
     result = mt.tl.aggregate(adata, by=("Metadata_Plate", "Metadata_Well"))
     assert "aggregated_from" not in result.uns["mantispy"]
+
+
+def test_aggregate_names_rows_by_their_group_keys(adata):
+    # Positional names "0", "1", ... clash when aggregates from two screens are concatenated (#274).
+    wells = mt.tl.aggregate(adata, by=["Metadata_Plate", "Metadata_Well"], min_cells=1)
+    expected = (wells.obs["Metadata_Plate"].astype(str) + "_" + wells.obs["Metadata_Well"].astype(str)).tolist()
+    assert wells.obs_names.tolist() == expected
+    assert wells.obs_names.is_unique

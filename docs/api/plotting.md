@@ -5,7 +5,7 @@
 .. currentmodule:: mantispy
 ```
 
-Plotting functions return Matplotlib axes and do not modify the object.
+Plotting functions do not modify the object. As in scanpy, a plot returns its Matplotlib axes when you pass `ax=`, and `None` when it created the figure itself.
 
 ## Plates and quality control
 

@@ -52,6 +52,17 @@ def test_well_grid_is_filled_on_read():
     assert obs["Metadata_Col"].dtype.kind == "i"
 
 
+def test_from_dataframe_gives_a_writable_matrix():
+    # Under pandas copy-on-write, X came back as a read-only view of the frame's block.
+    frame = pd.DataFrame({"Metadata_Plate": ["P1", "P1"], "Metadata_Well": ["A01", "A02"]})
+    frame["Cells_AreaShape_Area"] = [1.0, 2.0]
+    frame["Cells_AreaShape_Perimeter"] = [3.0, 4.0]
+    adata = mt.io.from_dataframe(frame, resolution="well")
+    adata.X[0, 0] = 10.0
+    assert adata.X[0, 0] == 10.0
+    assert frame["Cells_AreaShape_Area"].iloc[0] == 1.0
+
+
 def test_from_dataframe_accepts_row_column_field_wells():
     """CZI optical-pooled-screen wells (A/1/0) read without manual conversion; the field is dropped."""
     obs = from_dataframe(_frame(well=("A/1/0", "A/2/0", "B/1/1", "H/12/3")), channels=["DNA"]).obs
@@ -339,6 +350,21 @@ def test_stamp_refuses_what_the_resolution_needs_and_obs_lacks():
     with pytest.raises(ValueError, match="resolution must be one of"):
         mt.io.stamp(adata, resolution="plate")
     assert "mantispy" not in adata.uns
+
+
+def test_stamp_takes_the_resolution_aliases_from_dataframe_takes():
+    # from_dataframe(resolution="cell") worked while stamp(resolution="cell") raised (#270).
+    obs = pd.DataFrame(
+        {"Metadata_Plate": ["P1"] * 2, "Metadata_Well": ["A01"] * 2, "Metadata_ImageID": ["i1"] * 2},
+        index=["0", "1"],
+    )
+    obs["Metadata_ObjectNumber"] = [1, 2]
+    adata = ad.AnnData(np.zeros((2, 1), dtype=np.float32), obs=obs)
+    adata.var_names = ["Cells_AreaShape_Area"]
+    mt.io.stamp(adata, resolution="cell", feature_kind="measurement", object_type="cell")
+    assert adata.uns["mantispy"]["resolution"] == "object"
+    with pytest.raises(ValueError, match="one segmented object"):
+        mt.io.stamp(adata, resolution="plate")
 
 
 def test_stamp_is_atomic_when_full_validation_fails():

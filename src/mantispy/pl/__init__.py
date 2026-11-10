@@ -1,6 +1,7 @@
 """Plotting.
 
-Every plot returns Matplotlib axes and does not modify the object it draws.
+No plot modifies the object it draws.
+As in scanpy, a plot returns its Matplotlib axes when you pass ``ax=``, and ``None`` when it created the figure itself, so a bare call at the end of a notebook cell prints nothing beside the figure.
 
 Two plots have no function of their own.
 A plate map of a per-well flag is ``mt.pl.plate(adata, color="qc_well_fail")``, and embeddings side by side are a loop over :func:`scanpy.pl.embedding`.
