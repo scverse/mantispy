@@ -30,7 +30,6 @@ from mantispy._core.schema import stamp
 from mantispy.tl._aggregate import _group_obs
 from mantispy.tl._hits import _ks_replicate_null, ks_statistic
 
-PHASES = ("G1", "S", "G2M")
 DNA_STATES = ("2N", "S", "4N")
 
 _DISPERSION_MIN_CONTROLS = 8
@@ -269,73 +268,6 @@ def _dna_intensity(adata: AnnData, dna_feature: str | None, layer: str | None, c
             "or keep them with normalize(keep_raw=True) and pass layer='raw'."
         )
     return values
-
-
-@inplace_or_copy(expects="object")
-def cell_cycle_phase(
-    adata: AnnData,
-    dna_feature: str | None = None,
-    by: str | None = "Metadata_Plate",
-    layer: str | None = None,
-    key_added: str = "Metadata_CellCyclePhase",
-    copy: bool = False,
-) -> AnnData | None:
-    """Assign G1, S or G2M from integrated DNA intensity.
-
-    A two-component Gaussian mixture is fitted to log DNA intensity within each ``by`` group.
-    The lower component is G1 and the upper is G2M.
-    Cells that neither component claims with probability above 0.9 are called S.
-
-    Args:
-        adata: Single-cell object holding raw, unnormalized intensities.
-        dna_feature: The integrated DNA intensity feature.
-            Found when omitted as an integrated intensity, not its edge, whose name or ``var["channel"]`` names DNA, DAPI or Hoechst, the ``Nuclei_`` one first.
-        by: Fit separately within each group, normally the plate, since staining intensity does not carry across plates.
-        layer: Read this layer instead of ``X``, for example ``"raw"`` after ``normalize(keep_raw=True)``.
-        key_added: ``obs`` column written.
-        copy: Return a modified copy instead of mutating in place.
-
-    Returns:
-        ``None``, or the modified copy.
-        Writes ``obs[key_added]`` as a categorical over ``PHASES``.
-
-    Raises:
-        KeyError: ``dna_feature`` was not given and no integrated DNA intensity feature could be found.
-        ValueError: More than 5% of the feature's values are not positive, so their log cannot be fitted.
-
-    Notes:
-        This is a heuristic.
-        It needs a well-resolved DNA stain and enough cells per group (a group with fewer than 20 usable cells is left as S), and it cannot tell G0 from G1.
-        It also needs raw intensities, because after :func:`~mantispy.pp.normalize` the values are z-scores and about half are negative.
-        Check the result before relying on it.
-        :func:`~mantispy.tl.dna_content` and :func:`~mantispy.tl.dna_state` give a DNA content per cell and fixed gates on it instead.
-    """
-    from sklearn.mixture import GaussianMixture
-
-    values = _dna_intensity(adata, dna_feature, layer, "cell_cycle_phase")
-    positive = np.isfinite(values) & (values > 0)
-
-    codes, keys = group_codes(adata, by)
-    phases = np.full(adata.n_obs, "S", dtype=object)
-
-    for index in range(len(keys)):
-        rows = np.flatnonzero(codes == index)
-        usable = rows[positive[rows]]
-        if usable.size < 20:
-            get_logger().warning("cell_cycle_phase: %s has %d usable cells; left as S", keys[index], usable.size)
-            continue
-
-        log_intensity = np.log(values[usable]).reshape(-1, 1)
-        mixture = GaussianMixture(n_components=2, random_state=0).fit(log_intensity)
-        probability = mixture.predict_proba(log_intensity)
-        lower = int(np.argmin(mixture.means_.ravel()))
-        assignment = np.where(probability.argmax(axis=1) == lower, "G1", "G2M")
-        phases[usable] = np.where(probability.max(axis=1) > 0.9, assignment, "S")
-
-    adata.obs[key_added] = pd.Categorical(phases, categories=list(PHASES))
-    counted = pd.Series(phases).value_counts()
-    get_logger().info("cell_cycle_phase: %s", counted.to_dict())
-    return None
 
 
 def _g1_peak(log_values: np.ndarray) -> float:

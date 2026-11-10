@@ -98,10 +98,10 @@ def clustered():
     return cells
 
 
-def test_cell_cycle_refuses_normalized_values(clustered):
+def test_dna_content_refuses_normalized_values(clustered):
     """After normalize the values are z-scores, and half of them have no logarithm."""
     with pytest.raises(ValueError, match="raw intensities"):
-        mt.tl.cell_cycle_phase(clustered, dna_feature=clustered.var_names[0])
+        mt.tl.dna_content(clustered, dna_feature=clustered.var_names[0])
 
 
 _DNA = "Nuclei_Intensity_IntegratedIntensity_DNA"
