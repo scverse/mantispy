@@ -118,6 +118,11 @@ def test_cell_cycle_clock_returns_axes_and_colours_by_phase(placed):
     assert mt.pl.cell_cycle_clock(placed, ax=ax) is ax
     assert {"G1", "S", "G2M"} <= {text.get_text() for text in ax.get_legend().get_texts()}
     assert ax.get_aspect() == 1.0  # a ring, drawn with equal aspect
+    _, cyclic = plt.subplots()
+    mt.pl.cell_cycle_clock(placed, color="position", ax=cyclic)
+    x, y = cyclic.collections[-1].get_offsets().T
+    turn = (np.arctan2(x, y) % (2 * np.pi)) / (2 * np.pi)
+    assert abs(np.corrcoef(np.hypot(x, y), turn)[0, 1]) < 0.1  # the ring jitter does not follow the position
 
 
 def test_cell_cycle_clock_colours_continuous_and_the_cyclic_position(placed):
@@ -168,3 +173,23 @@ def test_cell_cycle_clock_raises_on_missing_key_and_bad_colour(placed):
     with pytest.raises(ValueError, match="both an obs column and a feature"):
         mt.pl.cell_cycle_clock(placed, color="Nuclei_Intensity_IntegratedIntensity_DNA")
     del placed.obs["Nuclei_Intensity_IntegratedIntensity_DNA"]
+
+
+def test_cell_cycle_clock_places_g2m_cells_by_the_refined_order(placed):
+    from mantispy.tl._cell_cycle import _age
+
+    cells = placed.copy()
+    _, ax = plt.subplots()
+    mt.pl.cell_cycle_clock(cells, color="position", ax=ax)
+    assert "G2M\npopulation prior" in [text.get_text() for text in ax.texts]
+
+    g2m = (cells.obs["cell_cycle_phase"] == "G2M").to_numpy()
+    cells.obs["cell_cycle_g2m_order"] = np.where(g2m, 0.0, np.nan)
+    _, ax = plt.subplots()
+    mt.pl.cell_cycle_clock(cells, color="position", ax=ax)
+    texts = [text.get_text() for text in ax.texts]
+    assert "G2M\nexperimental order" in texts and "G1\npopulation prior" in texts
+    x, y = ax.collections[-1].get_offsets().T
+    turn = (np.arctan2(x, y) % (2 * np.pi)) / (2 * np.pi)
+    start = _age(np.cumsum(cells.uns["mantispy"]["cell_cycle"]["fractions"])[:2])[1]
+    assert np.isclose(turn, start, atol=1e-6).sum() == g2m.sum()  # every G2M cell at order 0, the start of G2M

@@ -53,13 +53,14 @@ def _gate(content: np.ndarray) -> dict:
     is_peak = density[top] >= density[max(top - 20, 0)] and density[top] >= density[min(top + 20, grid.size - 1)]
     valley = density[(grid >= 0.2) & (grid <= grid[top] - 0.1)].min() if grid[top] > 0.35 else density[top]
     floor = density[(grid >= 0.4) & (grid <= 0.7)].min()
-    report: dict[str, Any] = {
-        "peaks": [float(grid[two]), float(grid[top])],
-        "peak_ratio": float(density[top] / density[two]),
-        "valley_ratio": float(valley / density[top]),
-        "s_floor": float(floor / density[top]),
-        "s_share": float(np.mean((content >= _GATES[0]) & (content < _GATES[1]))),
-    }
+    with np.errstate(divide="ignore", invalid="ignore"):  # a population with no 4N peak has zero density there
+        report: dict[str, Any] = {
+            "peaks": [float(grid[two]), float(grid[top])],
+            "peak_ratio": float(density[top] / density[two]),
+            "valley_ratio": float(valley / density[top]),
+            "s_floor": float(floor / density[top]),
+            "s_share": float(np.mean((content >= _GATES[0]) & (content < _GATES[1]))),
+        }
     report["passed"] = bool(
         is_peak
         and report["peak_ratio"] >= 0.05
@@ -358,6 +359,10 @@ def fit_cell_cycle(
 
         The model assumes the reference grows in steady state, with every phase taking a fixed share of the cycle.
         It cannot tell G0 from G1, nor mitosis from G2, since both pairs share a DNA content.
+
+    See Also:
+        :doc:`/tutorials/single_cells/cell_cycle` for a worked example, and
+        :doc:`/tutorials/single_cells/cell_cycle_method` for how the model works, step by step.
     """
     if key not in adata.obs:
         raise KeyError(f"obs has no column {key!r}; run mt.tl.dna_content first")
@@ -455,6 +460,10 @@ def project_cell_cycle(
         KeyError: ``uns["mantispy"]`` has no entry ``model``, or ``obs`` lacks the DNA content column it was fitted on
             or a ``by`` column.
         ValueError: A ``by`` column holds missing values.
+
+    See Also:
+        :doc:`/tutorials/single_cells/cell_cycle` for a worked example, and
+        :doc:`/tutorials/single_cells/cell_cycle_method` for how the model works, step by step.
     """
     fitted = adata.uns.get("mantispy", {}).get(model) if isinstance(model, str) else model
     if fitted is None:

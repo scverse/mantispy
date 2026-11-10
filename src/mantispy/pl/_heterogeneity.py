@@ -253,9 +253,10 @@ def cell_cycle_clock(
     DNA content is flat at 2N through G1 and at 4N through G2M, and the width of either peak is measurement noise, so
     DNA content orders cells only through S. The S arc therefore places each cell from its own DNA, while in the G1
     and G2M arcs the angular spread follows the control age distribution, where a cell is more likely to sit early.
-    Those two arcs are shaded and labelled as the population prior, the S arc as per-cell. Read the clock by where a
-    colour concentrates, with ``color`` set to the phase or a gene, not as a fine order within a wedge. Off-cycle
-    cells have no position and are left out.
+    Those two arcs are shaded and labelled as the population prior, the S arc as per-cell. When
+    ``obs[key + "_g2m_order"]`` holds the experimental order from ``refine_g2m``, G2M cells sit on their wedge by that
+    order instead, and the wedge is labelled so. Read the clock by where a colour concentrates, with ``color`` set to
+    the phase or a gene, not as a fine order within a prior wedge. Off-cycle cells have no position and are left out.
 
     Args:
         adata: Single-cell object :func:`~mantispy.tl.project_cell_cycle` has run on.
@@ -286,6 +287,8 @@ def cell_cycle_clock(
             ``color``, or a name in ``groups`` is not a category of ``color``.
     """
     import matplotlib.pyplot as plt
+    from matplotlib.colors import to_rgba_array
+    from matplotlib.lines import Line2D
     from matplotlib.patches import Wedge
 
     from mantispy.tl._cell_cycle import _age, _draw_positions
@@ -296,6 +299,17 @@ def cell_cycle_clock(
     quantiles = np.asarray(adata.obsm[f"{key}_quantiles"], dtype=float)
     placed = np.isfinite(quantiles).all(axis=1)
     position = _draw_positions(np.nan_to_num(quantiles), seed)
+    model = adata.uns.get("mantispy", {}).get(key)
+    edges = (
+        [0.0, *(_age(np.cumsum(model["fractions"])[:2]).tolist()), 1.0]
+        if isinstance(model, dict) and "fractions" in model
+        else None
+    )
+    refined = np.zeros(adata.n_obs, dtype=bool)
+    if edges is not None and f"{key}_g2m_order" in obs.columns:
+        order = obs[f"{key}_g2m_order"].to_numpy(dtype=float)
+        refined = placed & np.isfinite(order)
+        position = np.where(refined, edges[2] + np.nan_to_num(order) * (edges[3] - edges[2]), position)
     mode, values, label = _clock_colour(adata, color or f"{key}_phase", key)
     text = values.astype(str)
 
@@ -309,10 +323,11 @@ def cell_cycle_clock(
         if unknown:
             raise ValueError(f"groups {unknown} are not categories of {color!r}; have {sorted(present)[:10]}")
 
-    rng = np.random.default_rng(seed)
+    # A stream apart from the position draws, so the ring jitter does not follow the angle.
+    rng = np.random.default_rng([seed, 1])
     angle = 2 * np.pi * position
     if radius is None:
-        reach, inner = 1.0 + rng.uniform(-0.03, 0.03, adata.n_obs), 1.0
+        reach, inner = 1.0 + rng.uniform(-0.06, 0.06, adata.n_obs), 1.0
     else:
         if radius not in obs.columns:
             raise KeyError(f"obs has no column {radius!r}")
@@ -337,39 +352,31 @@ def cell_cycle_clock(
         if radius is not None:
             axis.add_patch(plt.Circle((0, 0), 1.15, fill=False, color="0.9", lw=0.5))
         rows = rng.permutation(np.flatnonzero(placed & panel))
-        drawn = None
+        drawn, handles = None, []
         if mode == "categorical":
+            # One scatter in shuffled order, so no category hides another under it; the legend uses proxies.
+            shown = groups_list if groups_list is not None else categories
+            front = rows
             if groups_list is not None:
                 back = rows[~np.isin(text[rows], groups_list)]
                 axis.scatter(x[back], y[back], s=size * 0.5, c="0.85", alpha=0.5, linewidths=0, rasterized=True)
-                for name in groups_list:
-                    front = rows[text[rows] == name]
-                    axis.scatter(
-                        x[front],
-                        y[front],
-                        s=size * 1.6,
-                        color=palette[name],
-                        alpha=0.9,
-                        linewidths=0,
-                        rasterized=True,
-                        label=name,
-                        **kwargs,
-                    )
-            else:
-                for name in categories:
-                    sub = rows[text[rows] == name]
-                    if sub.size:
-                        axis.scatter(
-                            x[sub],
-                            y[sub],
-                            s=size,
-                            color=palette[name],
-                            alpha=0.7,
-                            linewidths=0,
-                            rasterized=True,
-                            label=name,
-                            **kwargs,
-                        )
+                front = rows[np.isin(text[rows], groups_list)]
+            if front.size:
+                axis.scatter(
+                    x[front],
+                    y[front],
+                    s=size,
+                    c=to_rgba_array([palette[name] for name in text[front]]),
+                    alpha=0.6 if groups_list is not None else 0.7,
+                    linewidths=0,
+                    rasterized=True,
+                    **kwargs,
+                )
+            handles = [
+                Line2D([], [], marker="o", linestyle="", color=palette[name], label=name)
+                for name in shown
+                if (text[rows] == name).any()
+            ]
         else:
             span = (0.0, 1.0) if mode == "cyclic" else tuple(np.nanpercentile(values[rows], [2, 98]))
             drawn = axis.scatter(
@@ -385,19 +392,29 @@ def cell_cycle_clock(
                 rasterized=True,
                 **kwargs,
             )
-        model = adata.uns.get("mantispy", {}).get(key)
-        if isinstance(model, dict) and "fractions" in model:
-            edges = [0.0, *(_age(np.cumsum(model["fractions"])[:2]).tolist()), 1.0]
-            # In G1 and G2M the angle follows the control age prior, not the cell's DNA, so shade and label them so.
-            for (start, end), name in (((edges[0], edges[1]), "G1"), ((edges[2], edges[3]), "G2M")):
-                axis.add_patch(
-                    Wedge((0, 0), rim_radius, 90 - 360 * end, 90 - 360 * start, color="0.6", alpha=0.12, lw=0, zorder=0)
-                )
+        if edges is not None:
+            # Where the angle follows the control age prior rather than the cell's own data, shade and label it so.
+            g2m_note = "experimental order" if refined.any() else "population prior"
+            arcs = [((edges[0], edges[1]), "G1", "population prior"), ((edges[2], edges[3]), "G2M", g2m_note)]
+            for (start, end), name, note in arcs:
+                if note == "population prior":
+                    axis.add_patch(
+                        Wedge(
+                            (0, 0),
+                            rim_radius,
+                            90 - 360 * end,
+                            90 - 360 * start,
+                            color="0.6",
+                            alpha=0.12,
+                            lw=0,
+                            zorder=0,
+                        )
+                    )
                 middle = (start + end) / 2
                 axis.text(
                     0.58 * rim_radius * np.sin(2 * np.pi * middle),
                     0.58 * rim_radius * np.cos(2 * np.pi * middle),
-                    f"{name}\npopulation prior",
+                    f"{name}\n{note}",
                     ha="center",
                     va="center",
                     fontsize=5,
@@ -431,13 +448,13 @@ def cell_cycle_clock(
         axis.set_ylim(-limit, limit)
         axis.set_aspect("equal")
         axis.axis("off")
-        return drawn
+        return drawn, handles
 
     if groupby is None:
         axis = _axes(ax, (4.5, 4.5))
-        drawn = draw(axis, np.ones(adata.n_obs, dtype=bool))
+        drawn, handles = draw(axis, np.ones(adata.n_obs, dtype=bool))
         if mode == "categorical":
-            axis.legend(fontsize=6, markerscale=2, bbox_to_anchor=(1.0, 1.0), loc="upper left", title=label)
+            axis.legend(handles=handles, fontsize=6, bbox_to_anchor=(1.0, 1.0), loc="upper left", title=label)
         elif drawn is not None:
             axis.figure.colorbar(drawn, ax=axis, label=label, fraction=0.046, pad=0.04)
         if radius is not None:
@@ -448,14 +465,15 @@ def cell_cycle_clock(
     columns = min(ncols or len(groups_keys), len(groups_keys))
     rows_count = -(-len(groups_keys) // columns)
     figure, axes = plt.subplots(rows_count, columns, figsize=(3.4 * columns, 3.4 * rows_count), squeeze=False)
-    drawn = None
+    drawn, handles = None, []
     for index, group in enumerate(groups_keys):
-        drawn = draw(axes.flat[index], codes == index) or drawn
+        panel_drawn, panel_handles = draw(axes.flat[index], codes == index)
+        drawn, handles = panel_drawn or drawn, handles or panel_handles
         axes.flat[index].set_title(str(group), fontsize=8)
     for axis in axes.flat[len(groups_keys) :]:
         axis.set_visible(False)
     if mode == "categorical":
-        axes.flat[0].legend(fontsize=6, markerscale=2, bbox_to_anchor=(1.0, 1.0), loc="upper left", title=label)
+        axes.flat[0].legend(handles=handles, fontsize=6, bbox_to_anchor=(1.0, 1.0), loc="upper left", title=label)
     elif drawn is not None:
         figure.colorbar(drawn, ax=list(figure.axes), label=label, fraction=0.046)
     figure.tight_layout()
