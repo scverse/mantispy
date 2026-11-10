@@ -63,25 +63,30 @@ We recommend managing dependencies in project-specific virtual environments to a
 This is most convenient using package managers such as [uv][].
 Choose from the options below to install mantispy:
 
-1. Install the latest release from [PyPI][]. The current release is an alpha pre-release, so pip needs `--pre`:
+1. Install the latest release from [PyPI][], the supported install. While no final release exists, pip and uv both
+   fall back to the newest alpha pre-release, so a plain install works:
 
    ```bash
-   uv add --prerelease allow mantispy  # in a uv project; `uv init` creates one
-   pip install --pre mantispy  # or with pip
+   uv add mantispy  # in a uv project; `uv init` creates one
+   pip install mantispy  # or with pip
    ```
 
 1. Install the latest development version:
 
    ```bash
-   pip install git+https://github.com/scverse/mantispy.git  # (or `uv add`)
+   uv add git+https://github.com/scverse/mantispy  # in a uv project
+   pip install git+https://github.com/scverse/mantispy.git  # or with pip
    ```
+
+   Cloning the repository and running `uv sync` is for contributors, see the [contributing guide](https://mantispy.readthedocs.io/en/latest/contributing.html).
 
 Optional extras add features: `spatial` (reading images as `SpatialData`), `map` (copairs
 retrieval metrics), `harmony` and `integration` (batch correction and its scoring), and
 `interactive` (plotly plots). Install the ones you need, for example:
 
 ```bash
-pip install 'mantispy[spatial,map]'
+uv add 'mantispy[spatial,map]'  # in a uv project
+pip install 'mantispy[spatial,map]'  # or with pip
 ```
 
 The [installation guide](https://mantispy.readthedocs.io/en/latest/installation.html) says what
