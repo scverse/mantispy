@@ -13,6 +13,7 @@ from mantispy.pl._evaluation import batch_variance, map, metrics, replicate_corr
 from mantispy.pl._features import feature_correlation, feature_groups
 from mantispy.pl._heterogeneity import (
     cell_cycle,
+    cell_cycle_clock,
     cell_cycle_occupancy,
     cluster_composition,
     density,
@@ -30,6 +31,7 @@ __all__ = [
     "batch_variance",
     "cell_counts",
     "cell_cycle",
+    "cell_cycle_clock",
     "cell_cycle_occupancy",
     "cluster_composition",
     "control_drift",

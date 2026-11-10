@@ -111,3 +111,60 @@ def test_cell_cycle_occupancy_draws_one_curve_per_group_and_marks_s(placed):
     assert len(panel.get_lines()) == 2
     with pytest.raises(KeyError, match="project_cell_cycle"):
         mt.pl.cell_cycle_occupancy(placed, key="missing")
+
+
+def test_cell_cycle_clock_returns_axes_and_colours_by_phase(placed):
+    _, ax = plt.subplots()
+    assert mt.pl.cell_cycle_clock(placed, ax=ax) is ax
+    assert {"G1", "S", "G2M"} <= {text.get_text() for text in ax.get_legend().get_texts()}
+    assert ax.get_aspect() == 1.0  # a ring, drawn with equal aspect
+
+
+def test_cell_cycle_clock_colours_continuous_and_the_cyclic_position(placed):
+    _, ax = plt.subplots()
+    mt.pl.cell_cycle_clock(placed, color="Metadata_DNAContent", ax=ax)
+    assert ax.get_legend() is None
+    assert ax.collections[-1].get_array() is not None  # a colorbar mappable, not a categorical legend
+    _, cyclic = plt.subplots()
+    mt.pl.cell_cycle_clock(placed, color="position", ax=cyclic)
+    assert cyclic.collections[-1].get_cmap().name == "twilight"
+
+
+def test_cell_cycle_clock_drops_cells_without_a_position(placed):
+    cells = placed.copy()
+    cells.obsm["cell_cycle_quantiles"].iloc[:100] = np.nan
+    _, ax = plt.subplots()
+    mt.pl.cell_cycle_clock(cells, color="Metadata_DNAContent", ax=ax)
+    drawn = ax.collections[-1].get_offsets().shape[0]
+    assert drawn == int(np.isfinite(cells.obsm["cell_cycle_quantiles"].to_numpy()).all(axis=1).sum())
+
+
+def test_cell_cycle_clock_groupby_and_radius(placed):
+    assert mt.pl.cell_cycle_clock(placed, groupby="Metadata_Perturbation") is None
+    assert sum(axis.get_visible() for axis in plt.gcf().axes) == 2
+    _, ax = plt.subplots()
+    mt.pl.cell_cycle_clock(placed, color="Metadata_DNAContent", radius="Metadata_DNAContent", ax=ax)
+    assert ax.get_title() == "radius: Metadata_DNAContent"
+
+
+def test_cell_cycle_clock_highlights_only_the_named_groups(placed):
+    _, ax = plt.subplots()
+    mt.pl.cell_cycle_clock(placed, color="Metadata_Perturbation", groups="KO", ax=ax)
+    assert [text.get_text() for text in ax.get_legend().get_texts()] == ["KO"]
+    greys = [c for c in ax.collections if np.allclose(c.get_facecolor()[0][:3], 0.85, atol=0.01)]
+    assert len(greys) == 1  # the background ring of all other cells
+    with pytest.raises(ValueError, match="not categories"):
+        mt.pl.cell_cycle_clock(placed, color="Metadata_Perturbation", groups=["missing"], ax=ax)
+
+
+def test_cell_cycle_clock_raises_on_missing_key_and_bad_colour(placed):
+    with pytest.raises(KeyError, match="project_cell_cycle"):
+        mt.pl.cell_cycle_clock(placed, key="missing")
+    with pytest.raises(KeyError, match="neither an obs column nor a feature"):
+        mt.pl.cell_cycle_clock(placed, color="nope")
+    with pytest.raises(ValueError, match="needs a categorical"):
+        mt.pl.cell_cycle_clock(placed, color="Metadata_DNAContent", groups=["x"])
+    placed.obs["Nuclei_Intensity_IntegratedIntensity_DNA"] = 1.0
+    with pytest.raises(ValueError, match="both an obs column and a feature"):
+        mt.pl.cell_cycle_clock(placed, color="Nuclei_Intensity_IntegratedIntensity_DNA")
+    del placed.obs["Nuclei_Intensity_IntegratedIntensity_DNA"]
