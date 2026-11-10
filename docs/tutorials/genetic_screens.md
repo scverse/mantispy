@@ -7,6 +7,7 @@ These tutorials aggregate reagents to genes and read the screen as clusters of g
 :maxdepth: 1
 
 genetics/interpreting_a_screen
+genetics/hit_calling_methods
 ```
 
 ## Worked examples
