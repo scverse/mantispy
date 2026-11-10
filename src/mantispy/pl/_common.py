@@ -19,6 +19,26 @@ if TYPE_CHECKING:
 _OWNED = "_mantispy_owned"
 
 
+def obs_or_feature(adata: AnnData, name: str, layer: str | None = None) -> tuple[np.ndarray, bool]:
+    """The values of an ``obs`` column or a feature, and whether they came from ``obs``.
+
+    Raises:
+        KeyError: ``name`` is neither an ``obs`` column nor a feature.
+        ValueError: ``name`` is both.
+    """
+    from mantispy._core._reduce import get_matrix
+    from mantispy._core.frames import as_frame
+
+    in_obs, in_var = name in adata.obs.columns, name in adata.var_names
+    if in_obs and in_var:
+        raise ValueError(f"{name!r} is both an obs column and a feature; rename one of them")
+    if in_obs:
+        return as_frame(adata.obs)[name].to_numpy(), True
+    if in_var:
+        return get_matrix(adata, layer)[:, adata.var_names.get_loc(name)].astype(float), False
+    raise KeyError(f"{name!r} is neither an obs column nor a feature")
+
+
 def axes(ax: Axes | None, figsize: tuple[float, float]) -> Axes:
     """The caller's axes, or a new figure sized for this plot.
 
@@ -197,7 +217,8 @@ def maybe_interactive(
         )
     else:
         raise ValueError(f"unknown interactive kind {kind!r}")
-    figure.show(renderer="notebook_connected")
+    # The default renderer: connected HTML in Jupyter (set on import), plotly's own in VS Code and other frontends.
+    figure.show()
     if ax is not None and getattr(ax.figure, _OWNED, False):
         import matplotlib.pyplot as plt
 

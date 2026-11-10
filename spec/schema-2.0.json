@@ -42,6 +42,8 @@
         "Metadata_Center_Y",
         "Metadata_Control_Type",
         "Metadata_CellCyclePhase",
+        "Metadata_DNAContent",
+        "Metadata_DNAState",
         "Metadata_LocalDensity",
         "Metadata_ReplicateCount",
         "Metadata_JCP2022",
@@ -129,6 +131,13 @@
         "dose_features",
         "dose_direction",
         "cluster",
-        "sphere_epsilon"
+        "sphere_epsilon",
+        "dna_content",
+        "dna_state",
+        "cell_cycle",
+        "cell_cycle_wells",
+        "cell_cycle_G1_order",
+        "cell_cycle_S_order",
+        "cell_cycle_G2M_order"
     ]
 }

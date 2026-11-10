@@ -1,6 +1,7 @@
 """Tools."""
 
 from mantispy.tl._aggregate import aggregate
+from mantispy.tl._cell_cycle import fit_cell_cycle, phase_order, project_cell_cycle
 from mantispy.tl._cluster import cluster
 from mantispy.tl._consensus import consensus
 from mantispy.tl._design import cytotoxicity, replicate_saturation
@@ -15,6 +16,9 @@ from mantispy.tl._guide_activity import guide_activity
 from mantispy.tl._heterogeneity import (
     cell_cycle_phase,
     cluster_composition,
+    composition_shift,
+    dna_content,
+    dna_state,
     neighbors_local_density,
     subpopulation_hits,
 )
@@ -34,6 +38,7 @@ __all__ = [
     "cell_cycle_phase",
     "cluster",
     "cluster_composition",
+    "composition_shift",
     "consensus",
     "cytotoxicity",
     "dose_direction",
@@ -41,6 +46,8 @@ __all__ = [
     "dose_response",
     "dose_trajectory",
     "differential_features",
+    "dna_content",
+    "dna_state",
     "edistance",
     "effect_size",
     "empirical_fdr",
@@ -48,6 +55,7 @@ __all__ = [
     "enrich_hits",
     "feature_sets",
     "feature_signature",
+    "fit_cell_cycle",
     "gene_set_network",
     "grit",
     "guide_activity",
@@ -60,6 +68,8 @@ __all__ = [
     "ora",
     "pathway_coherence",
     "percent_replicating",
+    "phase_order",
+    "project_cell_cycle",
     "rank_features",
     "rank_sets",
     "replicate_saturation",

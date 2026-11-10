@@ -123,6 +123,18 @@ def test_jump_export_is_an_export_directory_that_reads() -> None:
 
 @pytest.mark.network
 @pytest.mark.slow
+def test_aconcagua_cells_holds_eight_genes_and_the_controls_at_cell_resolution() -> None:
+    adata = mt.ds.aconcagua_cells()
+
+    assert adata.shape == (38674, 1483)
+    assert adata.uns["mantispy"]["resolution"] == "object"
+    genes = {"nontargeting", "RRM1", "DTL", "SKA2", "HAUS6", "ITGAV", "TLN1", "PSMB7", "SF3B3"}
+    assert set(adata.obs["Metadata_Gene"].astype(str)) == genes
+    assert adata.obs_names.is_unique
+
+
+@pytest.mark.network
+@pytest.mark.slow
 def test_jump_cells_holds_controls_and_treatments_at_cell_resolution() -> None:
     adata = mt.ds.jump_cells()
 
@@ -382,19 +394,21 @@ def test_scallops_arv471_maps_controls_and_guides(tmp_path, monkeypatch):
 
 
 def test_scallops_arv471_runs_hit_calling(tmp_path, monkeypatch):
-    import inspect
-
     path = tmp_path / "fig3.pq"
     _write_scallops_fixture(path)
     _patch_files(monkeypatch, path)
 
     adata = _assemble_scallops_arv471()
 
-    kwargs = {"groupby": "Metadata_Gene", "reference": "negcon", "n_permutations": 50, "seed": 0, "copy": True}
-    # block= is the well-block permutation null (#68); pass it once it reaches this build's signature.
-    if "block" in inspect.signature(mt.tl.hit_calling).parameters:
-        kwargs["block"] = "Metadata_sgRNA"
-    result = mt.tl.hit_calling(adata, **kwargs)
+    result = mt.tl.hit_calling(
+        adata,
+        groupby="Metadata_Gene",
+        reference="negcon",
+        replicate="Metadata_sgRNA",
+        n_permutations=50,
+        seed=0,
+        copy=True,
+    )
 
     hits = result.uns["mantispy"]["hits"]
     assert isinstance(hits, pd.DataFrame)
@@ -497,7 +511,16 @@ def test_cp_posh_runs_hit_calling(tmp_path, monkeypatch):
 
     adata = _assemble_cp_posh()
 
-    result = mt.tl.hit_calling(adata, groupby="Metadata_Gene", reference="negcon", n_permutations=50, seed=0, copy=True)
+    # One well holds every guide, a pooled design, so the null draws whole guides.
+    result = mt.tl.hit_calling(
+        adata,
+        groupby="Metadata_Gene",
+        reference="negcon",
+        replicate="Metadata_sgRNA",
+        n_permutations=50,
+        seed=0,
+        copy=True,
+    )
 
     hits = result.uns["mantispy"]["hits"]
     assert isinstance(hits, pd.DataFrame)

@@ -13,12 +13,13 @@ from anndata import AnnData
 from mantispy._core._distance import pairwise_sqeuclidean
 from mantispy._core._reduce import get_matrix, group_codes, group_offsets, representation
 from mantispy._core._stats import (
-    _default_well_block,
+    _default_replicate,
     _is_object_resolution,
     _split_wells,
     benjamini_hochberg,
     permutation_pvalue,
     split_reference,
+    unit_permutation_pvalue,
 )
 from mantispy._core.features import annotation
 from mantispy._core.frames import as_frame
@@ -27,11 +28,13 @@ from mantispy._core.masks import control_annotated, reference_mask
 from mantispy._core.mutation import inplace_or_copy
 from mantispy._core.schema import stamp
 from mantispy.tl._aggregate import _group_obs
-from mantispy.tl._hits import _ks_block_null, ks_statistic
+from mantispy.tl._hits import _ks_replicate_null, ks_statistic
 
 PHASES = ("G1", "S", "G2M")
+DNA_STATES = ("2N", "S", "4N")
 
 _DISPERSION_MIN_CONTROLS = 8
+_WELL = ("Metadata_Plate", "Metadata_Well")
 
 
 def _cluster_labels(obs: pd.DataFrame, cluster_key: str) -> tuple[pd.Series, np.ndarray]:
@@ -232,6 +235,42 @@ def _composition_test(composition: AnnData, counts: np.ndarray, reference: str |
     return table, dispersion
 
 
+def _on_dna_stain(adata: AnnData) -> np.ndarray:
+    """Per feature, whether its name or ``var["channel"]`` names a DNA stain: DNA, DAPI or Hoechst."""
+    pattern = "dna|dapi|hoechst"
+    stain = adata.var_names.str.lower().str.contains(pattern)
+    if "channel" in adata.var:
+        stain |= as_frame(adata.var)["channel"].astype(str).str.lower().str.contains(pattern).to_numpy()
+    return np.asarray(stain, dtype=bool)
+
+
+def _dna_intensity(adata: AnnData, dna_feature: str | None, layer: str | None, caller: str) -> np.ndarray:
+    """The integrated DNA intensity of every cell, refusing values that are mostly not positive."""
+    if dna_feature is None:
+        names = adata.var_names
+        candidates = list(
+            names[_on_dna_stain(adata) & names.str.contains("IntegratedIntensity") & ~names.str.contains("Edge")]
+        )
+        if not candidates:
+            raise KeyError(
+                "could not find an integrated DNA intensity feature; pass dna_feature= explicitly "
+                "(the usual name is Nuclei_Intensity_IntegratedIntensity_DNA)"
+            )
+        # The nucleus is where DNA is measured best, so its intensity wins over a whole-cell one.
+        dna_feature = min(candidates, key=lambda name: not name.startswith("Nuclei_"))
+        get_logger().info("%s using %s", caller, dna_feature)
+
+    values = get_matrix(adata, layer)[:, adata.var_names.get_loc(dna_feature)].astype(np.float64)
+    positive = np.isfinite(values) & (values > 0)
+    if positive.sum() < 0.95 * adata.n_obs:
+        raise ValueError(
+            f"{int((~positive).sum())} of {adata.n_obs} values of {dna_feature!r} are not positive, so their "
+            f"log cannot be fitted. {caller} needs the raw intensities; run it before mt.pp.normalize, "
+            "or keep them with normalize(keep_raw=True) and pass layer='raw'."
+        )
+    return values
+
+
 @inplace_or_copy(expects="object")
 def cell_cycle_phase(
     adata: AnnData,
@@ -250,7 +289,7 @@ def cell_cycle_phase(
     Args:
         adata: Single-cell object holding raw, unnormalized intensities.
         dna_feature: The integrated DNA intensity feature.
-            Found from the feature names and ``var["channel"]`` when omitted.
+            Found when omitted as an integrated intensity, not its edge, whose name or ``var["channel"]`` names DNA, DAPI or Hoechst, the ``Nuclei_`` one first.
         by: Fit separately within each group, normally the plate, since staining intensity does not carry across plates.
         layer: Read this layer instead of ``X``, for example ``"raw"`` after ``normalize(keep_raw=True)``.
         key_added: ``obs`` column written.
@@ -269,32 +308,12 @@ def cell_cycle_phase(
         It needs a well-resolved DNA stain and enough cells per group (a group with fewer than 20 usable cells is left as S), and it cannot tell G0 from G1.
         It also needs raw intensities, because after :func:`~mantispy.pp.normalize` the values are z-scores and about half are negative.
         Check the result before relying on it.
+        :func:`~mantispy.tl.dna_content` and :func:`~mantispy.tl.dna_state` give a DNA content per cell and fixed gates on it instead.
     """
     from sklearn.mixture import GaussianMixture
 
-    var = as_frame(adata.var)
-    if dna_feature is None:
-        candidates = [
-            name
-            for name in adata.var_names
-            if "IntegratedIntensity" in name and "DNA" in str(var.loc[name].get("channel"))
-        ]
-        if not candidates:
-            raise KeyError(
-                "could not find an integrated DNA intensity feature; pass dna_feature= explicitly "
-                "(the usual name is Nuclei_Intensity_IntegratedIntensity_DNA)"
-            )
-        dna_feature = candidates[0]
-        get_logger().info("cell_cycle_phase using %s", dna_feature)
-
-    values = get_matrix(adata, layer)[:, adata.var_names.get_loc(dna_feature)].astype(np.float64)
+    values = _dna_intensity(adata, dna_feature, layer, "cell_cycle_phase")
     positive = np.isfinite(values) & (values > 0)
-    if positive.sum() < 0.95 * adata.n_obs:
-        raise ValueError(
-            f"{int((~positive).sum())} of {adata.n_obs} values of {dna_feature!r} are not positive, so their "
-            "log cannot be fitted. cell_cycle_phase needs the raw intensities; run it before mt.pp.normalize, "
-            "or keep them with normalize(keep_raw=True) and pass layer='raw'."
-        )
 
     codes, keys = group_codes(adata, by)
     phases = np.full(adata.n_obs, "S", dtype=object)
@@ -319,6 +338,177 @@ def cell_cycle_phase(
     return None
 
 
+def _g1_peak(log_values: np.ndarray) -> float:
+    """Where one group's G1 cells sit on a log2 DNA axis: its highest density peak, or the peak one doubling below that."""
+    from scipy.stats import gaussian_kde
+
+    low, high = np.percentile(log_values, [0.5, 99.5])
+    if high <= low:
+        return float(np.median(log_values))
+    grid = np.linspace(low, high, 512)
+    density = gaussian_kde(log_values)(grid)
+    top = int(np.argmax(density))
+    # A well arrested in G2 has its highest peak at 4N; a substantial peak one doubling below it is then the G1 peak.
+    peaks = np.flatnonzero((density[1:-1] > density[:-2]) & (density[1:-1] >= density[2:])) + 1
+    below = peaks[(np.abs(grid[peaks] - grid[top] + 1) <= 0.25) & (density[peaks] >= 0.1 * density[top])]
+    if below.size:
+        top = int(below[np.argmax(density[below])])
+    return float(grid[top])
+
+
+@inplace_or_copy(expects="object")
+def dna_content(
+    adata: AnnData,
+    dna_feature: str | None = None,
+    by: Sequence[str] | str | None = ("Metadata_Plate", "Metadata_Well"),
+    layer: str | None = None,
+    min_cells: int = 50,
+    reference: str | None = None,
+    key_added: str = "Metadata_DNAContent",
+    copy: bool = False,
+) -> AnnData | None:
+    """DNA content of each cell, in doublings of the G1 peak of its group.
+
+    The integrated DNA intensity is log2-transformed, and the G1 (2N) peak of each ``by`` group is subtracted.
+    A cell with a 2N genome then sits near 0 and a cell with a 4N genome near 1, whatever the staining intensity of its well.
+
+    Args:
+        adata: Single-cell object holding raw, unnormalized intensities.
+        dna_feature: The integrated DNA intensity feature.
+            Found when omitted as an integrated intensity, not its edge, whose name or ``var["channel"]`` names DNA, DAPI or Hoechst, the ``Nuclei_`` one first.
+        by: Find the G1 peak separately within each group, normally the well, since staining intensity does not carry across wells.
+        layer: Read this layer instead of ``X``, for example ``"raw"`` after ``normalize(keep_raw=True)``.
+        min_cells: A group with fewer usable cells than this, or fewer ``reference`` cells when given, gets no G1
+            peak, and its cells get ``NaN``.
+        reference: Find each group's G1 peak on these cells only, and apply it to every cell of the group:
+            ``"negcon"`` for the negative controls, or the name of a boolean ``obs`` column. ``None`` uses every cell.
+            Pass it when a treatment can arrest whole wells, so their peak is not taken for G1; ``by`` must then
+            group treated and control cells together, normally by plate, or by well in a pooled screen.
+        key_added: ``obs`` column written.
+        copy: Return a modified copy instead of mutating in place.
+
+    Returns:
+        ``None``, or the modified copy.
+        Writes ``obs[key_added]``, and ``uns["mantispy"]["dna_content"]`` with one row per group: the ``by`` columns, ``n_cells`` (the usable cells the peak was found on) and ``g1_peak`` (log2 of the integrated intensity at the G1 peak, ``NaN`` for a group below ``min_cells``).
+
+    Raises:
+        KeyError: ``dna_feature`` was not given and no integrated DNA intensity feature could be found.
+        ValueError: More than 5% of the feature's values are not positive, so their log cannot be taken.
+
+    Notes:
+        The G1 peak is the highest peak of a Gaussian kernel density estimate of the group's log2 intensities.
+        In a population mostly in G2, such as a well arrested in mitosis, the highest peak is the 4N one.
+        So when a second peak lies one doubling below the highest, within a quarter of a doubling, and is at least a tenth as high, that lower peak is taken as G1.
+        A sub-G1 peak of fragmented nuclei at half the G1 intensity would be mistaken for G1 by the same rule; check ``g1_peak`` across wells.
+
+        The intensity is used as measured.
+        CellProfiler's integrated intensity carries no background subtraction, so a strong background lowers the ratio between the 4N and 2N peaks below two.
+        Subtract it before calling this if your pipeline measured it.
+
+        A cell whose intensity is missing, zero or negative gets ``NaN``, as does every cell of a group below ``min_cells``.
+
+        A stain that does not resolve a 4N peak from the 2N one gives a single broad peak, and its mode is not a G1 peak.
+        The content then still ranks cells by DNA, but :func:`~mantispy.tl.dna_state` gates do not mean 2N, S and 4N; look at the histogram first.
+    """
+    values = _dna_intensity(adata, dna_feature, layer, "dna_content")
+    positive = np.isfinite(values) & (values > 0)
+    report_drop(
+        "cell(s)",
+        int((~positive).sum()),
+        adata.n_obs,
+        remedy="their DNA intensity is missing or not positive, so their DNA content is NaN",
+    )
+    log_values = np.full(adata.n_obs, np.nan)
+    log_values[positive] = np.log2(values[positive])
+
+    codes, keys = group_codes(adata, by)
+    order, offsets = group_offsets(codes, len(keys))
+    fit_on = reference_mask(adata, reference)
+    content = np.full(adata.n_obs, np.nan)
+    peaks = np.full(len(keys), np.nan)
+    counts = np.zeros(len(keys), dtype=int)
+    for index in range(len(keys)):
+        rows = order[offsets[index] : offsets[index + 1]]
+        usable = rows[positive[rows]]
+        anchors = usable[fit_on[usable]]
+        counts[index] = anchors.size
+        if anchors.size < min_cells:
+            continue
+        peaks[index] = _g1_peak(log_values[anchors])
+        content[usable] = log_values[usable] - peaks[index]
+
+    small = counts < min_cells
+    if small.any():
+        counted = "usable cells" if reference is None else f"usable {reference!r} reference cells"
+        hint = (
+            "" if reference is None else "; by must group the reference with the other cells, e.g. by='Metadata_Plate'"
+        )
+        get_logger().warning(
+            "dna_content: %d of %d group(s) have fewer than %d %s, too few to place a G1 peak; "
+            "their cells are left as NaN%s: %s",
+            int(small.sum()),
+            len(keys),
+            min_cells,
+            counted,
+            hint,
+            list(keys[small])[:5],
+        )
+
+    columns = ["group"] if by is None else ([by] if isinstance(by, str) else list(by))
+    table = pd.DataFrame([key if isinstance(key, tuple) else (key,) for key in keys], columns=columns)
+    table["n_cells"] = counts
+    table["g1_peak"] = peaks
+    adata.obs[key_added] = content
+    adata.uns.setdefault("mantispy", {})["dna_content"] = table
+    return None
+
+
+@inplace_or_copy(expects="object")
+def dna_state(
+    adata: AnnData,
+    key: str = "Metadata_DNAContent",
+    cutoffs: tuple[float, float] = (1.25, 1.75),
+    key_added: str = "Metadata_DNAState",
+    copy: bool = False,
+) -> AnnData | None:
+    """Call each cell 2N, S or 4N from fixed gates on its DNA content.
+
+    Args:
+        adata: Single-cell object carrying the output of :func:`~mantispy.tl.dna_content`.
+        key: ``obs`` column holding the DNA content, in doublings of the G1 peak.
+        cutoffs: The lower and upper gate, in multiples of the G1 peak intensity.
+            A cell below the lower gate is 2N, at or above the upper gate 4N, and in between S.
+            The defaults sit a quarter of the way from each peak towards the other, the usual gates on a DNA content histogram.
+        key_added: ``obs`` column written.
+        copy: Return a modified copy instead of mutating in place.
+
+    Returns:
+        ``None``, or the modified copy.
+        Writes ``obs[key_added]`` as a categorical over ``DNA_STATES``, ``NaN`` where the DNA content is ``NaN``.
+        Writes ``uns["mantispy"]["dna_state"]`` with the ``key`` read and the ``cutoffs`` applied, so the call can be reproduced.
+
+    Raises:
+        KeyError: ``obs`` has no column ``key``.
+        ValueError: ``cutoffs`` is not two finite, positive, increasing values.
+
+    Notes:
+        Fixed gates cannot tell G0 from G1, or a late-S cell from a G2 cell whose stain is a little dim.
+        A cell above 4N, from polyploidy or a doublet, is called 4N.
+    """
+    if key not in adata.obs:
+        raise KeyError(f"obs has no column {key!r}; run mt.tl.dna_content first")
+    gates = np.asarray(cutoffs, dtype=float)
+    if gates.shape != (2,) or not np.isfinite(gates).all() or gates[0] <= 0 or gates[0] >= gates[1]:
+        raise ValueError(f"cutoffs must be two finite, positive, increasing values, got {cutoffs!r}")
+
+    content = as_frame(adata.obs)[key].to_numpy(dtype=float)
+    codes = np.digitize(content, np.log2(gates))
+    codes[np.isnan(content)] = -1
+    adata.obs[key_added] = pd.Categorical.from_codes(codes, categories=pd.Index(DNA_STATES))
+    adata.uns.setdefault("mantispy", {})["dna_state"] = {"key": key, "cutoffs": gates}
+    return None
+
+
 @inplace_or_copy(expects="object")
 def subpopulation_hits(
     adata: AnnData,
@@ -331,7 +521,7 @@ def subpopulation_hits(
     key_added: str = "subpopulation_hits",
     copy: bool = False,
     *,
-    block: str | Sequence[str] | None = None,
+    replicate: str | Sequence[str] | None = None,
     n_permutations: int = 1000,
 ) -> AnnData | None:
     """Test each perturbation against the controls within each cluster.
@@ -351,10 +541,10 @@ def subpopulation_hits(
         seed: Seed for the split of a cluster's controls and the permutation null.
         key_added: Name for the output table.
         copy: Return a modified copy instead of mutating in place.
-        block: ``obs`` column, or sequence of columns, whose groups are the design's exchangeable unit, normally the well.
-            The permutation null then draws whole wells rather than cells, since cells within a well are not independent replicates (see Notes).
-            Left ``None``, it defaults to the physical well on an object stamped cell resolution with replicated wells; it warns and falls back to the analytic KS approximation when no complete well column is present.
-        n_permutations: Size of the well-block permutation null.
+        replicate: ``obs`` column, or sequence of columns, whose groups are the design's exchangeable unit: the well in an arrayed screen, the guide (``"Metadata_sgRNA"``) in a pooled one.
+            The permutation null then draws whole replicates rather than cells, since cells within a well are not independent replicates (see Notes).
+            Left ``None``, it defaults to the physical well on an object stamped cell resolution with replicated wells; it warns and falls back to the analytic KS approximation when no complete well column is present, and raises on a pooled design, where some well holds both reference and tested cells.
+        n_permutations: Size of the replicate permutation null.
             Ignored on the analytic fallback, which has no permutation draw.
 
     Returns:
@@ -363,14 +553,16 @@ def subpopulation_hits(
 
     Raises:
         KeyError: ``obs`` has no column ``cluster_key``.
+        ValueError: ``replicate`` is not given on a pooled design at cell resolution.
 
     Notes:
         Each cell is reduced to its Euclidean distance from the control centroid of its own cluster, and a KS test compares the treated cells' distances with the controls'.
         This is close to ``hit_calling(method="ks")``, restricted to comparable cells.
         A distance is used rather than a single feature so that the test means the same on every dataset.
 
-        Cells within a well are not independent replicates, so the p-value comes from a well-block permutation: whole wells are drawn for the pseudo-treated side and the KS statistic recomputed, the same unit :func:`~mantispy.tl.hit_calling` resamples.
+        Cells within a well are not independent replicates, so the p-value comes from a permutation over whole replicates: whole wells, or whatever ``replicate`` names, are drawn for the pseudo-treated side and the KS statistic recomputed, the same unit :func:`~mantispy.tl.hit_calling` resamples.
         Without a usable well column at cell resolution it warns and falls back to the analytic KS approximation on cell counts, which is anti-conservative for the same reason.
+        In a pooled screen every well holds every perturbation, so drawing whole wells cannot separate a group from the reference; the exchangeable unit is the guide, and the call raises until ``replicate`` names it.
 
         A cluster's controls are split in half, as in :func:`~mantispy.tl.hit_calling`.
         One half places the centroid and the other supplies the distances tested against, so the null is out of sample.
@@ -393,12 +585,12 @@ def subpopulation_hits(
     clusters = named.where(assigned).to_numpy()
     groups = obs[groupby].astype(str).to_numpy()
 
-    block_codes = _default_well_block(adata, block=block)
-    if block_codes is None and block is None and _is_object_resolution(adata):
+    replicate_codes = _default_replicate(adata, replicate=replicate, reference=is_control)
+    if replicate_codes is None and replicate is None and _is_object_resolution(adata):
         warnings.warn(
             "subpopulation_hits is at cell resolution with no usable well column, so its p-values come from the "
             "analytic KS approximation on cell counts. Cells within a well are not independent replicates, so "
-            "that p-value is anti-conservative. Pass block= a well column, add a complete Metadata_Well, or "
+            "that p-value is anti-conservative. Pass replicate= a well column, add a complete Metadata_Well, or "
             "aggregate to wells with mt.tl.aggregate.",
             UserWarning,
             stacklevel=3,
@@ -421,14 +613,14 @@ def subpopulation_hits(
         distance = np.sqrt(pairwise_sqeuclidean(np.nan_to_num(values[in_cluster]), np.nan_to_num(centre))).ravel()
         fitted = np.isin(in_cluster, fit_rows)
         held_out = is_control[in_cluster] & ~fitted
-        cluster_blocks = block_codes[in_cluster] if block_codes is not None else None
+        cluster_replicates = replicate_codes[in_cluster] if replicate_codes is not None else None
 
         for group in pd.unique(groups[in_cluster]):
             in_group = (groups[in_cluster] == group) & ~fitted
             shared = np.flatnonzero(in_group & held_out)
-            if cluster_blocks is not None:
+            if cluster_replicates is not None:
                 # Halve the reference group by whole wells so its null draws a strict subset like any other group.
-                in_group[shared[_split_wells(cluster_blocks[shared], half_generator)]] = False
+                in_group[shared[_split_wells(cluster_replicates[shared], half_generator)]] = False
             else:
                 # The reference group's held-out cells are halved at random because cells are ordered by plate and well.
                 in_group[half_generator.permutation(shared)[: shared.size // 2]] = False
@@ -437,11 +629,11 @@ def subpopulation_hits(
             if treated.size < min_cells or control_distance.size < min_cells:
                 continue
             statistic = float(ks_statistic(treated[None, :], control_distance)[0])
-            if cluster_blocks is not None:
+            if cluster_replicates is not None:
                 pool = np.flatnonzero(in_group | control_mask)
-                null = _ks_block_null(
+                null = _ks_replicate_null(
                     distance,
-                    cluster_blocks,
+                    cluster_replicates,
                     pool,
                     np.flatnonzero(in_group),
                     control_distance,
@@ -476,6 +668,130 @@ def subpopulation_hits(
             stacklevel=3,
         )
     table["qvalue"] = benjamini_hochberg(table["pvalue"].to_numpy()) if len(table) else []
+    adata.uns.setdefault("mantispy", {})[key_added] = table
+    return None
+
+
+@inplace_or_copy(expects="object")
+def composition_shift(
+    adata: AnnData,
+    key: str,
+    groupby: str = "Metadata_Perturbation",
+    reference: str = "negcon",
+    block: Sequence[str] | str | None = _WELL,
+    replicate: str | None = "Metadata_sgRNA",
+    n_permutations: int = 999,
+    seed: int = 0,
+    key_added: str = "composition_shift",
+    copy: bool = False,
+) -> AnnData | None:
+    """Change in each group's share of cells per category against the reference, compared within blocks.
+
+    The category is a label per cell, such as a cell-cycle state or a cluster. Within each ``block`` (a well on a plate),
+    the group's share of cells in every category is compared with the reference's, and the differences are
+    averaged over blocks. The distance is the total variation distance of that average, half the sum of its
+    absolute values: 0 when the group's composition matches the reference, 1 when they share no category.
+
+    The p-value comes from relabelling ``replicate`` (the guide) as group or reference, one relabelling per
+    permutation applied in every block, so the guide is the replicate even though every well of a pooled
+    screen holds every guide. For one row per guide, pass the guide column as both ``groupby`` and ``replicate``:
+    each guide is then compared with the reference guides.
+
+    Args:
+        adata: Object-resolution object carrying the category in ``obs[key]``.
+        key: ``obs`` column holding a label per cell. A cell without a value is left out.
+        groupby: ``obs`` column naming the groups to score, one row of the result each.
+        reference: The rows to compare against: ``"negcon"`` for the negative controls, or the name of a
+            boolean ``obs`` column. The reference has no row of its own.
+        block: ``obs`` column or columns the comparison is paired within, normally the plate and well, so the same
+            well position on two plates stays two blocks; ``None`` pools all rows. The default uses whichever of the
+            two columns the object has.
+        replicate: ``obs`` column naming the independent replicate the permutation relabels, normally the guide.
+            ``None`` relabels single cells, which treats every cell as independent and warns.
+            Each replicate must belong to one group.
+        n_permutations: Permutations for the null.
+        seed: Seed for the permutations.
+        key_added: Key the table is written under in ``uns["mantispy"]``.
+        copy: Return a modified copy instead of mutating in place.
+
+    Returns:
+        ``None``, or the modified copy.
+        Writes ``uns["mantispy"][key_added]`` with one row per group: ``group``, the ``distance``, ``n_blocks``
+        that held both the group and the reference, ``pvalue``, the Benjamini-Hochberg ``qvalue`` over the
+        groups, ``min_pvalue``, the smallest p-value the design could reach, and one column per category with
+        the group's share minus the reference's.
+
+    Raises:
+        KeyError: ``obs`` lacks a ``block`` column.
+        ValueError: ``n_permutations`` is not positive, ``reference`` selects no cells, a ``block`` column holds
+            missing values, or a ``replicate`` spans more than one group.
+    """
+    if n_permutations < 1:
+        raise ValueError(f"n_permutations must be positive, got {n_permutations}")
+    obs = as_frame(adata.obs)
+    category = obs[key].astype(object).where(obs[key].notna())
+    labels = sorted(category.dropna().unique(), key=str)
+    known = category.notna().to_numpy()
+    onehot = np.full((adata.n_obs, len(labels)), np.nan)
+    onehot[known] = (category[known].to_numpy()[:, None] == np.asarray(labels, dtype=object)[None, :]).astype(float)
+
+    reference_rows = reference_mask(adata, reference)
+    if not reference_rows.any():
+        raise ValueError(f"reference={reference!r} selects no cells to compare against")
+    if block == _WELL:  # an object without plates pairs within wells alone
+        block = [column for column in _WELL if column in obs] or list(_WELL)
+    blocks = group_codes(adata, block)[0]
+    if replicate is None:
+        warnings.warn(
+            "composition_shift: replicate=None relabels single cells, which treats every cell as an independent "
+            "replicate and gives p-values that are far too small when guides or wells differ. Pass replicate=, the guide.",
+            UserWarning,
+            stacklevel=3,
+        )
+        units = np.arange(adata.n_obs).astype(str)
+    else:
+        spans = obs.groupby(replicate, observed=True)[groupby].nunique()
+        if (spans > 1).any():
+            raise ValueError(
+                f"{int((spans > 1).sum())} values of {replicate!r} span more than one group of {groupby!r}"
+            )
+        units = obs[replicate].astype(str).to_numpy()
+    rng = np.random.default_rng(seed)
+
+    def mean_difference(sums: list[tuple[np.ndarray, np.ndarray]]) -> np.ndarray:
+        return np.mean([group / group.sum() - reference / reference.sum() for group, reference in sums], axis=0)
+
+    def distance(sums: list[tuple[np.ndarray, np.ndarray]]) -> float:
+        return 0.5 * float(np.abs(mean_difference(sums)).sum())
+
+    values = obs[groupby].to_numpy()
+    rows = []
+    for group in pd.unique(values[~reference_rows]):
+        group_rows = (values == group) & ~reference_rows
+        observed = [
+            (onehot[group_rows & in_block & known].sum(axis=0), onehot[reference_rows & in_block & known].sum(axis=0))
+            for in_block in (blocks == value for value in pd.unique(blocks))
+        ]
+        observed = [(g, r) for g, r in observed if g.sum() > 0 and r.sum() > 0]
+        if not observed:
+            rows.append({"group": group, "distance": np.nan, "n_blocks": 0, "pvalue": np.nan, "min_pvalue": np.nan})
+            continue
+        pvalue, floor = unit_permutation_pvalue(
+            onehot, group_rows, reference_rows, blocks, units, distance, n_permutations, rng
+        )
+        rows.append(
+            {
+                "group": group,
+                "distance": distance(observed),
+                "n_blocks": len(observed),
+                "pvalue": pvalue,
+                "min_pvalue": floor,
+                **dict(zip(labels, mean_difference(observed), strict=True)),
+            }
+        )
+
+    table = pd.DataFrame(rows, columns=["group", "distance", "n_blocks", "pvalue", "min_pvalue", *labels])
+    table.insert(4, "qvalue", benjamini_hochberg(table["pvalue"].to_numpy()))
     adata.uns.setdefault("mantispy", {})[key_added] = table
     return None
 

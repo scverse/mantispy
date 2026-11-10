@@ -97,6 +97,8 @@ RESERVED_OBS: tuple[str, ...] = (
     "Metadata_Center_Y",
     "Metadata_Control_Type",
     "Metadata_CellCyclePhase",
+    "Metadata_DNAContent",
+    "Metadata_DNAState",
     "Metadata_LocalDensity",
     "Metadata_ReplicateCount",
     # JUMP identifiers, written by pp.annotate_jump
@@ -188,6 +190,13 @@ UNS_RESULTS: tuple[str, ...] = (
     "dose_direction",
     "cluster",
     "sphere_epsilon",
+    "dna_content",
+    "dna_state",
+    "cell_cycle",
+    "cell_cycle_wells",
+    "cell_cycle_G1_order",
+    "cell_cycle_S_order",
+    "cell_cycle_G2M_order",
 )
 
 #: Suffixes of a companion table written beside a result (e.g. ``effect_groups`` beside ``effect``). A key

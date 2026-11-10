@@ -2,11 +2,13 @@
 
 import matplotlib
 import numpy as np
+import pandas as pd
 import pytest
 import scanpy as sc
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.colors import to_rgba
 
 import mantispy as mt
 
@@ -80,3 +82,148 @@ def test_density_plot_draws_and_says_what_to_run_first(clustered):
     mt.tl.neighbors_local_density(clustered, k=5)
     _, ax = plt.subplots()
     assert isinstance(mt.pl.density(clustered, feature=clustered.var_names[0], ax=ax), matplotlib.axes.Axes)
+
+
+@pytest.fixture(scope="module")
+def placed():
+    from test_tl_heterogeneity import _clock, _cycle_cells
+
+    cells = _cycle_cells(n_cells=2000)
+    cells.obs["Metadata_Perturbation"] = np.where(np.arange(cells.n_obs) % 2, "NTC", "KO")
+    return _clock(cells)
+
+
+def test_cell_cycle_plot_colours_the_projected_phases(placed):
+    assert mt.pl.cell_cycle(placed, dna_feature="Metadata_DNAContent", key="cell_cycle_phase", by=None) is None
+    (panel,) = plt.gcf().axes
+    assert {"G1", "S", "G2M"} <= {text.get_text() for text in panel.get_legend().get_texts()}
+    assert panel.get_xlabel() == "Metadata_DNAContent"
+    mt.pl.cell_cycle(placed, dna_feature="Metadata_DNAContent", key="cell_cycle_phase", by="Metadata_Well", ncols=3)
+    axes = plt.gcf().axes
+    visible = [axis for axis in axes if axis.get_visible()]
+    assert len(axes) == 6 and len(visible) == 4
+    assert all(any(label.get_visible() for label in axis.get_xticklabels()) for axis in visible)
+    placed.obs["Nuclei_Intensity_IntegratedIntensity_DNA"] = 1.0
+    with pytest.raises(ValueError, match="both an obs column and a feature"):
+        mt.pl.cell_cycle(placed, dna_feature="Nuclei_Intensity_IntegratedIntensity_DNA", key="cell_cycle_phase")
+    del placed.obs["Nuclei_Intensity_IntegratedIntensity_DNA"]
+
+
+def test_cell_cycle_occupancy_draws_one_curve_per_group_and_marks_s(placed):
+    assert mt.pl.cell_cycle_occupancy(placed, by="Metadata_Perturbation", highlight="NTC") is None
+    (panel,) = plt.gcf().axes
+    assert sorted(text.get_text() for text in panel.get_legend().get_texts()) == ["KO", "NTC"]
+    assert len(panel.get_lines()) == 2
+    _, ax = plt.subplots()
+    assert mt.pl.cell_cycle_occupancy(placed, by=None, ax=ax) is ax
+    with pytest.raises(KeyError, match="project_cell_cycle"):
+        mt.pl.cell_cycle_occupancy(placed, key="missing")
+
+
+def test_cell_cycle_clock_returns_axes_and_colours_by_phase(placed):
+    _, ax = plt.subplots()
+    assert mt.pl.cell_cycle_clock(placed, ax=ax) is ax
+    assert {"G1", "S", "G2M"} <= {text.get_text() for text in ax.get_legend().get_texts()}
+    assert ax.get_aspect() == 1.0  # a ring, drawn with equal aspect
+    _, cyclic = plt.subplots()
+    mt.pl.cell_cycle_clock(placed, color="position", ax=cyclic)
+    x, y = cyclic.collections[-1].get_offsets().T
+    turn = (np.arctan2(x, y) % (2 * np.pi)) / (2 * np.pi)
+    assert abs(np.corrcoef(np.hypot(x, y), turn)[0, 1]) < 0.1  # the ring jitter does not follow the position
+
+
+def test_cell_cycle_clock_colours_continuous_and_the_cyclic_position(placed):
+    _, ax = plt.subplots()
+    mt.pl.cell_cycle_clock(placed, color="Metadata_DNAContent", ax=ax)
+    assert ax.get_legend() is None
+    assert ax.collections[-1].get_array() is not None  # a colorbar mappable, not a categorical legend
+    _, cyclic = plt.subplots()
+    mt.pl.cell_cycle_clock(placed, color="position", ax=cyclic)
+    assert cyclic.collections[-1].get_cmap().name == "twilight"
+
+
+def test_cell_cycle_clock_drops_cells_without_a_position(placed):
+    cells = placed.copy()
+    cells.obsm["cell_cycle_quantiles"].iloc[:100] = np.nan
+    _, ax = plt.subplots()
+    mt.pl.cell_cycle_clock(cells, color="Metadata_DNAContent", ax=ax)
+    drawn = ax.collections[-1].get_offsets().shape[0]
+    assert drawn == int(np.isfinite(cells.obsm["cell_cycle_quantiles"].to_numpy()).all(axis=1).sum())
+
+
+def test_cell_cycle_clock_groupby_and_radius(placed):
+    cells = placed.copy()
+    cells.obs["score"] = np.where(cells.obs["Metadata_Perturbation"] == "KO", 10.0, 100.0)
+    assert mt.pl.cell_cycle_clock(cells, color="score", groupby="Metadata_Perturbation") is None
+    clocks = [axis for axis in plt.gcf().axes if axis.get_title() in ("KO", "NTC")]
+    assert len(clocks) == 2
+    assert {clock.collections[-1].get_clim() for clock in clocks} == {(10.0, 100.0)}  # one scale over both panels
+    g1_only = cells.obs["cell_cycle_phase"].eq("G1").to_numpy() | (cells.obs["Metadata_Perturbation"] == "NTC")
+    mt.pl.cell_cycle_clock(cells[g1_only].copy(), groupby="Metadata_Perturbation")
+    legend = next(axis.get_legend() for axis in plt.gcf().axes if axis.get_legend() is not None)
+    assert {"G1", "S", "G2M"} <= {text.get_text() for text in legend.get_texts()}  # though the first panel is G1 only
+    with pytest.raises(ValueError, match="single clock"):
+        mt.pl.cell_cycle_clock(cells, groupby="Metadata_Perturbation", ax=plt.subplots()[1])
+    _, ax = plt.subplots()
+    mt.pl.cell_cycle_clock(placed, color="Metadata_DNAContent", radius="Metadata_DNAContent", ax=ax)
+    assert ax.get_title() == "radius: Metadata_DNAContent"
+
+
+def test_cell_cycle_clock_highlights_only_the_named_groups(placed):
+    _, ax = plt.subplots()
+    mt.pl.cell_cycle_clock(placed, color="Metadata_Perturbation", groups="KO", ax=ax)
+    assert [text.get_text() for text in ax.get_legend().get_texts()] == ["KO"]
+    greys = [c for c in ax.collections if np.allclose(c.get_facecolor()[0][:3], 0.85, atol=0.01)]
+    assert len(greys) == 1  # the background ring of all other cells
+    with pytest.raises(ValueError, match="not categories"):
+        mt.pl.cell_cycle_clock(placed, color="Metadata_Perturbation", groups=["missing"], ax=ax)
+
+
+def test_cell_cycle_clock_colours_categories_apart_and_takes_scatter_options(placed):
+    cells = placed.copy()
+    guides = np.array([f"c{index:02d}" for index in range(12)])[np.arange(cells.n_obs) % 12]
+    cells.obs["guide"] = pd.Categorical(np.where(np.arange(cells.n_obs) % 50 == 0, None, guides))
+    _, ax = plt.subplots()
+    mt.pl.cell_cycle_clock(cells, color="guide", groups=["c00", "c10"], ax=ax, alpha=0.3, marker="x")
+    handles = ax.get_legend().legend_handles
+    assert [handle.get_label() for handle in handles] == ["c00", "c10"]
+    colours = {tuple(handle.get_color()) for handle in handles}
+    phase_colours = {tuple(to_rgba(colour)[:3]) for colour in ("tab:blue", "tab:red", "tab:grey", "tab:purple")}
+    assert len(colours) == 2 and not {colour[:3] for colour in colours} & phase_colours
+    assert ax.collections[-1].get_alpha() == 0.3
+    with pytest.raises(ValueError, match="not categories"):
+        mt.pl.cell_cycle_clock(cells, color="guide", groups=["nan"], ax=ax)
+    _, ax = plt.subplots()
+    mt.pl.cell_cycle_clock(cells, color="Metadata_DNAContent", ax=ax, vmin=0, vmax=1)
+    assert ax.collections[-1].get_clim() == (0, 1)
+
+
+def test_cell_cycle_clock_raises_on_missing_key_and_bad_colour(placed):
+    with pytest.raises(KeyError, match="project_cell_cycle"):
+        mt.pl.cell_cycle_clock(placed, key="missing")
+    with pytest.raises(KeyError, match="neither an obs column nor a feature"):
+        mt.pl.cell_cycle_clock(placed, color="nope")
+    with pytest.raises(ValueError, match="needs a categorical"):
+        mt.pl.cell_cycle_clock(placed, color="Metadata_DNAContent", groups=["x"])
+    placed.obs["Nuclei_Intensity_IntegratedIntensity_DNA"] = 1.0
+    with pytest.raises(ValueError, match="both an obs column and a feature"):
+        mt.pl.cell_cycle_clock(placed, color="Nuclei_Intensity_IntegratedIntensity_DNA")
+    del placed.obs["Nuclei_Intensity_IntegratedIntensity_DNA"]
+
+
+def test_cell_cycle_clock_places_g2m_cells_by_the_refined_order(placed):
+    cells = placed.copy()
+    _, ax = plt.subplots()
+    mt.pl.cell_cycle_clock(cells, color="position", ax=ax)
+    assert "G2M\npopulation prior" in [text.get_text() for text in ax.texts]
+
+    g2m = (cells.obs["cell_cycle_phase"] == "G2M").to_numpy()
+    cells.obs["cell_cycle_G2M_order"] = 0.0  # a stale order on every cell; only the cells called G2M take it
+    _, ax = plt.subplots()
+    mt.pl.cell_cycle_clock(cells, color="position", ax=ax)
+    texts = [text.get_text() for text in ax.texts]
+    assert "G2M\nexperimental order" in texts and "G1\npopulation prior" in texts
+    x, y = ax.collections[-1].get_offsets().T
+    turn = (np.arctan2(x, y) % (2 * np.pi)) / (2 * np.pi)
+    start = cells.uns["mantispy"]["cell_cycle"]["edges"][2]
+    assert np.isclose(turn, start, atol=1e-6).sum() == g2m.sum()  # every G2M cell at order 0, the start of G2M

@@ -132,7 +132,7 @@ def test_the_well_block_null_is_never_a_silent_cell_fallback():
     anti-conservative cell rate. The pseudo-treatment is capped to keep four references; when even that is
     impossible the call raises. The existing pseudoreplication test sits at eight wells; this covers below.
     """
-    from mantispy._core._stats import _default_well_block
+    from mantispy._core._stats import _default_replicate
 
     plate = mt.ds.synthetic_plate(
         n_plates=2,
@@ -147,7 +147,7 @@ def test_the_well_block_null_is_never_a_silent_cell_fallback():
         seed=0,
     )
     controls = plate[plate.obs["Metadata_Control"].to_numpy()].copy()
-    assert int(np.unique(_default_well_block(controls, block=None)).size) == 6, "the regime is six control wells"
+    assert int(np.unique(_default_replicate(controls)).size) == 6, "the regime is six control wells"
 
     report = mt.metrics.diagnose_testing(plate, n_draws=6, n_permutations=30)
     verdict = report.set_index("check")["verdict"]
@@ -164,9 +164,7 @@ def test_the_well_block_null_is_never_a_silent_cell_fallback():
         n_plates=1, n_wells=49, n_cells=8, n_features=10, n_perturbations=11, effect_size=0.0, seed=0
     )
     too_few_controls = too_few[too_few.obs["Metadata_Control"].to_numpy()].copy()
-    assert int(np.unique(_default_well_block(too_few_controls, block=None)).size) == 5, (
-        "the regime is five control wells"
-    )
+    assert int(np.unique(_default_replicate(too_few_controls)).size) == 5, "the regime is five control wells"
     with pytest.raises(ValueError, match="at least six reference wells"):
         mt.metrics.diagnose_testing(too_few, n_draws=4, n_permutations=20)
 
@@ -218,11 +216,16 @@ def test_the_cell_shuffle_verdict_tracks_the_two_rates():
 
 
 @pytest.mark.network
-def test_diagnose_testing_refuses_a_pooled_screen_with_too_few_wells():
-    """cp_posh is optical pooled screening: its perturbations are pooled into three physical wells, so the
-    whole screen has only three control wells. The well-block FPR null needs at least six reference wells
-    (four for the null, two for the pseudo-treatment), so diagnose_testing refuses it with a clear message
-    rather than reporting a rate it cannot found. The well is not the exchangeable unit for pooled data."""
+def test_diagnose_testing_refuses_a_pooled_screen_without_a_replicate():
+    """cp_posh is optical pooled screening: every well holds every guide, so the well is not the exchangeable
+    unit and diagnose_testing refuses to guess one, as the hit callers it mirrors do."""
     adata = mt.ds.cp_posh()
-    with pytest.raises(ValueError, match="at least six reference wells"):
+    with pytest.raises(ValueError, match="pooled screen"):
         mt.metrics.diagnose_testing(adata, n_draws=6, n_permutations=30)
+
+
+def test_diagnose_testing_refuses_a_pooled_design_without_a_replicate():
+    from test_tl_hits import _pooled_cells
+
+    with pytest.raises(ValueError, match="pooled screen.*Metadata_sgRNA"):
+        mt.metrics.diagnose_testing(_pooled_cells(), n_draws=2, n_permutations=20)

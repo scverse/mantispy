@@ -9,7 +9,8 @@ mantispy is in alpha, and its releases are pre-releases (0.1.0aN).
 While no final release exists, pip and uv both fall back to the newest pre-release, so a plain install works:
 
 ```console
-pip install mantispy
+uv add mantispy  # in a uv project; `uv init` creates one
+pip install mantispy  # or with pip
 ```
 
 Pass `--pre` (`uv pip install --pre mantispy`, or `uv add --prerelease allow mantispy` in a project) to get pre-releases of mantispy's dependencies as well, or to keep getting the newest alpha once a final release is out.
