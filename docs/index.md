@@ -18,7 +18,7 @@ Have your own table? {doc}`Bring your own data <tutorials/data/bring_your_own>` 
 :link: installation
 :link-type: doc
 
-New to *mantispy*? Check out the installation guide.
+New to _mantispy_? Check out the installation guide.
 :::
 
 :::{grid-item-card} {octicon}`rocket;1.5em;sd-mr-1` Quickstart

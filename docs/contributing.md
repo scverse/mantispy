@@ -11,7 +11,7 @@ the [scientific Python tutorials][], or the [scanpy developer guide][].
 [scientific Python tutorials]: https://learn.scientific-python.org/development/tutorials/
 [scanpy developer guide]: https://scanpy.scverse.org/page/dev/
 
-:::{tip} The *hatch* project manager
+:::{tip} The _hatch_ project manager
 
 We highly recommend to familiarize yourself with [`hatch`][hatch].
 Hatch is a Python project manager that
@@ -285,11 +285,11 @@ See scanpy’s {doc}`scanpy:dev/documentation` for more information on how to wr
 
 Documentation pages come in three kinds, and they are held to different standards.
 
-| Kind | Answers | Data | Prose |
-| --- | --- | --- | --- |
-| Tutorial | how do I analyse a screen? | a real screen from `mt.ds` | short, between figures |
-| Example | what does this one function do? | `mt.ds.synthetic_plate` is fine | short |
-| Pitfall | why does this method mislead? | whatever demonstrates it | long by design |
+| Kind     | Answers                         | Data                            | Prose                  |
+| -------- | ------------------------------- | ------------------------------- | ---------------------- |
+| Tutorial | how do I analyse a screen?      | a real screen from `mt.ds`      | short, between figures |
+| Example  | what does this one function do? | `mt.ds.synthetic_plate` is fine | short                  |
+| Pitfall  | why does this method mislead?   | whatever demonstrates it        | long by design         |
 
 A tutorial runs end to end on real data. An example demonstrates a single function in as few
 cells as possible. A pitfall is a method note — why sphering can cost most of a retrieval score,

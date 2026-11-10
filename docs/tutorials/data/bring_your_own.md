@@ -7,11 +7,11 @@ Everything downstream reads the stamp, so an object that carries it works with e
 
 Pick the resolution that matches the table, then make sure `obs` carries the identifier columns it requires.
 
-| `resolution` | One row is | Required `obs` columns | `grouped_by` |
-| --- | --- | --- | --- |
-| `object` | one segmented cell or other object | `Metadata_ImageID`, `Metadata_ObjectType`, `Metadata_ObjectNumber`, plus `Metadata_Plate` and `Metadata_Well` for a plate | defaults |
-| `well` | one well | `Metadata_Plate`, `Metadata_Well` | defaults to plate and well |
-| `aggregate` | one consensus profile, such as a gene or a compound | none | you give it, for example `["Metadata_Perturbation"]` |
+| `resolution` | One row is                                          | Required `obs` columns                                                                                                    | `grouped_by`                                         |
+| ------------ | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| `object`     | one segmented cell or other object                  | `Metadata_ImageID`, `Metadata_ObjectType`, `Metadata_ObjectNumber`, plus `Metadata_Plate` and `Metadata_Well` for a plate | defaults                                             |
+| `well`       | one well                                            | `Metadata_Plate`, `Metadata_Well`                                                                                         | defaults to plate and well                           |
+| `aggregate`  | one consensus profile, such as a gene or a compound | none                                                                                                                      | you give it, for example `["Metadata_Perturbation"]` |
 
 There is no guide level.
 Rows are objects, wells or aggregates, and guides are values in a column.

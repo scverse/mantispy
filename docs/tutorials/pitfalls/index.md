@@ -11,8 +11,8 @@ collects them: what the symptom looks like, and how mantispy lets you detect it.
 pseudoreplication
 ```
 
-- **[Pseudoreplication](pseudoreplication.ipynb).** *Symptom:* a treatment looks highly significant because every cell in a well is counted
-  as an independent replicate, inflating the sample size a hundredfold. *Fix:* aggregate to the well (or plate)
+- **[Pseudoreplication](pseudoreplication.ipynb).** _Symptom:_ a treatment looks highly significant because every cell in a well is counted
+  as an independent replicate, inflating the sample size a hundredfold. _Fix:_ aggregate to the well (or plate)
   first with `tl.aggregate`, and treat wells, not cells, as the unit of replication.
 
 The unit-of-replication and p-value-floor pitfalls are worked through in full in
