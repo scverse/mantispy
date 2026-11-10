@@ -39,19 +39,6 @@ def test_composition_and_subpopulation_plots_draw(clustered):
     assert isinstance(mt.pl.subpopulation_hits(clustered, ax=hits_ax), matplotlib.axes.Axes)
 
 
-def test_cell_cycle_plot_draws_one_panel_per_plate(clustered):
-    # Synthetic features are centred, so give the raw layer a positive bimodal DNA column.
-    rng = np.random.default_rng(0)
-    raw = clustered.layers["raw"].copy()
-    raw[:, 0] = np.where(rng.random(clustered.n_obs) < 0.4, 2.0, 1.0) + rng.normal(0, 0.05, clustered.n_obs)
-    clustered.layers["raw"] = raw
-
-    mt.tl.cell_cycle_phase(clustered, dna_feature=clustered.var_names[0], layer="raw")
-    # cell_cycle has no ax parameter and always owns its figure, so it draws and returns None.
-    assert mt.pl.cell_cycle(clustered, dna_feature=clustered.var_names[0], layer="raw") is None
-    assert len(plt.gcf().axes) == clustered.obs["Metadata_Plate"].nunique()
-
-
 def test_feature_distributions_gains_a_ridge_kind(clustered):
     # feature_distributions has no ax parameter and always owns its figure, so inspect the drawn panels.
     assert mt.pl.feature_distributions(clustered, features=list(clustered.var_names[:2]), kind="ridge") is None
@@ -91,6 +78,16 @@ def placed():
     cells = _cycle_cells(n_cells=2000)
     cells.obs["Metadata_Perturbation"] = np.where(np.arange(cells.n_obs) % 2, "NTC", "KO")
     return _clock(cells)
+
+
+def test_cell_cycle_plot_draws_a_feature_on_a_log_scale_with_the_projected_phases_by_default(placed):
+    # cell_cycle has no ax parameter and always owns its figure, so it draws and returns None.
+    assert (
+        mt.pl.cell_cycle(placed, dna_feature="Nuclei_Intensity_IntegratedIntensity_DNA", by="Metadata_Perturbation")
+        is None
+    )
+    panels = plt.gcf().axes
+    assert len(panels) == 2 and panels[0].get_xlabel() == "log DNA intensity"
 
 
 def test_cell_cycle_plot_colours_the_projected_phases(placed):
@@ -173,8 +170,8 @@ def test_cell_cycle_clock_highlights_only_the_named_groups(placed):
     _, ax = plt.subplots()
     mt.pl.cell_cycle_clock(placed, color="Metadata_Perturbation", groups="KO", ax=ax)
     assert [text.get_text() for text in ax.get_legend().get_texts()] == ["KO"]
-    greys = [c for c in ax.collections if np.allclose(c.get_facecolor()[0][:3], 0.85, atol=0.01)]
-    assert len(greys) == 1  # the background ring of all other cells
+    greys = [c for c in ax.collections if np.allclose(c.get_facecolor()[0][:3], to_rgba("lightgray")[:3])]
+    assert len(greys) == 1  # the background ring of all other cells, in na_color
     with pytest.raises(ValueError, match="not categories"):
         mt.pl.cell_cycle_clock(placed, color="Metadata_Perturbation", groups=["missing"], ax=ax)
 
@@ -227,3 +224,59 @@ def test_cell_cycle_clock_places_g2m_cells_by_the_refined_order(placed):
     turn = (np.arctan2(x, y) % (2 * np.pi)) / (2 * np.pi)
     start = cells.uns["mantispy"]["cell_cycle"]["edges"][2]
     assert np.isclose(turn, start, atol=1e-6).sum() == g2m.sum()  # every G2M cell at order 0, the start of G2M
+
+
+def test_cell_cycle_clock_takes_scanpys_size_alpha_palette_and_scale(placed):
+    _, ax = plt.subplots()
+    mt.pl.cell_cycle_clock(placed, ax=ax)
+    assert np.allclose(ax.collections[-1].get_sizes(), 120_000 / placed.n_obs)  # scanpy's default
+    _, ax = plt.subplots()
+    mt.pl.cell_cycle_clock(placed, palette={"G1": "black"}, alpha=0.2, ax=ax)
+    handles = {handle.get_label(): handle.get_color() for handle in ax.get_legend().legend_handles}
+    assert handles["G1"] == "black" and handles["S"] == "tab:grey" and ax.collections[-1].get_alpha() == 0.2
+    _, ax = plt.subplots()
+    mt.pl.cell_cycle_clock(placed, color="Metadata_Perturbation", palette=["tab:orange", "tab:green"], ax=ax)
+    assert [handle.get_color() for handle in ax.get_legend().legend_handles] == ["tab:orange", "tab:green"]
+    _, ax = plt.subplots()
+    mt.pl.cell_cycle_clock(placed, color="Metadata_DNAContent", vmin="p50", vmax=1.5, ax=ax)
+    assert ax.collections[-1].get_clim() == (np.median(placed.obs["Metadata_DNAContent"][_drawn(placed)]), 1.5)
+    with pytest.raises(ValueError, match="percentile"):
+        mt.pl.cell_cycle_clock(placed, color="Metadata_DNAContent", vmin="half")
+
+
+def _drawn(cells):
+    return np.isfinite(cells.obsm["cell_cycle_quantiles"].to_numpy()).all(axis=1)
+
+
+def test_cell_cycle_clock_width_spreads_the_band_and_na_color_keeps_cells_without_a_value(placed):
+    radii = {}
+    for width in (0.1, 0.5):
+        _, ax = plt.subplots()
+        mt.pl.cell_cycle_clock(placed, width=width, ax=ax)
+        x, y = ax.collections[-1].get_offsets().T
+        radii[width] = np.hypot(x, y)
+    assert np.ptp(radii[0.1]) <= 0.1 + 1e-9 < np.ptp(radii[0.5]) <= 0.5 + 1e-9
+    cells = placed.copy()
+    cells.obs["score"] = np.where(np.arange(cells.n_obs) % 4 == 0, np.nan, 1.0)
+    _, ax = plt.subplots()
+    mt.pl.cell_cycle_clock(cells, color="score", na_color="red", ax=ax)
+    missing = [c for c in ax.collections if np.allclose(c.get_facecolor()[0][:3], to_rgba("red")[:3])]
+    assert len(missing) == 1
+    assert missing[0].get_offsets().shape[0] == int((_drawn(cells) & cells.obs["score"].isna()).sum())
+
+
+def test_cell_cycle_clock_legend_options_and_frame(placed):
+    _, ax = plt.subplots()
+    mt.pl.cell_cycle_clock(placed, legend_loc="on data", legend_fontsize=9, ax=ax)
+    assert ax.get_legend() is None
+    labels = {text.get_text(): text.get_fontsize() for text in ax.texts}
+    assert labels["G1"] == 9 and labels["G2M"] == 9
+    _, ax = plt.subplots()
+    mt.pl.cell_cycle_clock(placed, legend_loc=None, frameon=True, ax=ax)
+    assert ax.get_legend() is None and ax.axison
+    with pytest.raises(ValueError, match="legend_loc"):
+        mt.pl.cell_cycle_clock(placed, legend_loc="upper left")
+    _, ax = plt.subplots()
+    mt.pl.cell_cycle_occupancy(placed, palette=["tab:orange", "tab:green"], legend_loc=None, ax=ax)
+    assert ax.get_legend() is None
+    assert {line.get_edgecolor()[:3] for line in ax.patches} == {to_rgba("tab:orange")[:3], to_rgba("tab:green")[:3]}

@@ -18,6 +18,8 @@ from mantispy.pl._common import returned as _returned
 from mantispy.pl._common import table as _table
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from anndata import AnnData
     from matplotlib.axes import Axes
 
@@ -75,7 +77,7 @@ def cell_cycle(
     adata: AnnData,
     dna_feature: str,
     by: str | None = "Metadata_Plate",
-    key: str = "Metadata_CellCyclePhase",
+    key: str = "cell_cycle_phase",
     layer: str | None = None,
     ncols: int | None = None,
 ) -> np.ndarray | None:
@@ -85,14 +87,12 @@ def cell_cycle(
     split between them indicate a working assignment; a single broad distribution indicates a failed one.
 
     Args:
-        adata: Single-cell object :func:`~mantispy.tl.cell_cycle_phase` or :func:`~mantispy.tl.project_cell_cycle`
-            has run on.
+        adata: Single-cell object :func:`~mantispy.tl.project_cell_cycle` has run on.
         dna_feature: The DNA intensity feature the phases were assigned from, drawn on a log scale, or an ``obs``
             column such as the :func:`~mantispy.tl.dna_content` output, drawn as it is.
         by: ``obs`` column whose groups become panels, or ``None`` for a single panel over every row.
         key: ``obs`` column holding the assigned phase, whose values are matched against ``PHASE_COLOURS``, so a phase
-            named anything else is not drawn. Pass ``"cell_cycle_phase"`` for the phases of
-            :func:`~mantispy.tl.project_cell_cycle`.
+            named anything else is not drawn. The default is the phase :func:`~mantispy.tl.project_cell_cycle` writes.
         layer: Layer to read the intensity from, or ``None`` for ``X``.
             Only positive values are drawn, since the plot takes their logarithm.
         ncols: Panels per row, or ``None`` for one row.
@@ -110,7 +110,7 @@ def cell_cycle(
     from matplotlib.patches import Patch
 
     if key not in adata.obs:
-        raise KeyError(f"obs has no column {key!r}; run mt.tl.cell_cycle_phase or mt.tl.project_cell_cycle first")
+        raise KeyError(f"obs has no column {key!r}; run mt.tl.project_cell_cycle first")
     raw, from_obs = _obs_or_feature(adata, dna_feature, layer)
     if from_obs:
         values = raw.astype(float)
@@ -182,6 +182,9 @@ def cell_cycle_occupancy(
     key: str = "cell_cycle",
     by: str | None = "Metadata_Perturbation",
     highlight: str | None = None,
+    palette: Mapping[str, Any] | Sequence[Any] | str | None = None,
+    legend_loc: str | None = "right margin",
+    legend_fontsize: float = 6,
     seed: int = 0,
     ax: Axes | None = None,
 ) -> Axes | None:
@@ -196,6 +199,10 @@ def cell_cycle_occupancy(
         key: The ``key_added`` prefix :func:`~mantispy.tl.project_cell_cycle` wrote.
         by: ``obs`` column whose groups become curves, or ``None`` for one curve over every row.
         highlight: A group of ``by``, such as the controls, drawn thicker and in black.
+        palette: Colours for the groups, read as in :func:`~mantispy.pl.cell_cycle_clock`; ``None`` for the
+            matplotlib colour cycle.
+        legend_loc: ``"right margin"`` for a legend beside the plot, or ``None`` for no legend.
+        legend_fontsize: Font size of the legend.
         seed: Seed for the positions drawn.
         ax: Axes to draw on, or ``None`` for a new figure.
 
@@ -205,21 +212,28 @@ def cell_cycle_occupancy(
 
     Raises:
         KeyError: ``obsm`` has no ``key + "_quantiles"``.
+        ValueError: ``legend_loc`` is not ``"right margin"`` or ``None``.
     """
+    if legend_loc not in ("right margin", None):
+        raise ValueError(f"legend_loc must be 'right margin' or None, not {legend_loc!r}")
     placed, drawn, edges = _placed(adata, key, seed)
     codes, keys = group_codes(adata, by)
+    colours = _palette([str(group) for group in keys], palette) if palette is not None else {}
     axis = _axes(ax, (5, 3))
     bins = list(np.linspace(0, 1, 41))
     for index, group in enumerate(keys):
         selected = drawn[(codes == index) & placed]
         if selected.size:
-            style: dict[str, Any] = {"color": "black", "linewidth": 2} if str(group) == highlight else {}
+            style: dict[str, Any] = {"color": colours[str(group)]} if colours else {}
+            if str(group) == highlight:
+                style = {"color": "black", "linewidth": 2}
             axis.hist(selected, bins=bins, density=True, histtype="step", label=str(group), **style)
     for edge in [] if edges is None else edges[1:3]:
         axis.axvline(edge, color="grey", linestyle=":", linewidth=1)
     axis.set_xlabel("cycle position (0 = start of G1, 1 = division)")
     axis.set_ylabel("density")
-    axis.legend(fontsize=6, bbox_to_anchor=(1.01, 1), loc="upper left")
+    if legend_loc == "right margin":
+        axis.legend(fontsize=legend_fontsize, bbox_to_anchor=(1.01, 1), loc="upper left")
     if ax is None:
         import matplotlib.pyplot as plt
 
@@ -239,6 +253,29 @@ def _clock_colour(adata: AnnData, color: str, key: str) -> tuple[str, np.ndarray
     return "continuous", values.astype(float), color
 
 
+def _bound(value: float | str | None, values: np.ndarray, default: float) -> float:
+    """A colour-scale end, as scanpy reads it: a number, ``"pN"`` for the N-th percentile, or ``None`` for ``default``."""
+    if isinstance(value, str):
+        if not value.startswith("p"):
+            raise ValueError(f"vmin/vmax {value!r} must be a number or a percentile such as 'p99'")
+        return float(np.percentile(values, float(value[1:])))
+    return float(np.percentile(values, default)) if value is None else float(value)
+
+
+def _palette(shown: list[str], palette: Mapping[str, Any] | Sequence[Any] | str | None) -> dict[str, Any]:
+    """One colour per shown category: ``palette`` first, then the phase colours, then colours the phases do not use."""
+    import matplotlib.pyplot as plt
+
+    if isinstance(palette, str):
+        cmap = plt.get_cmap(palette)
+        palette = list(getattr(cmap, "colors", cmap(np.linspace(0, 1, len(shown)))))
+    if palette is not None and not isinstance(palette, Mapping):
+        palette = dict(zip(shown, cycle(palette), strict=False))
+    others = cycle(plt.get_cmap("tab10")([1, 2, 5, 6, 8, 9]))
+    given = palette or {}
+    return {name: given.get(name) or PHASE_COLOURS.get(name) or next(others) for name in shown}
+
+
 def cell_cycle_clock(
     adata: AnnData,
     key: str = "cell_cycle",
@@ -248,8 +285,17 @@ def cell_cycle_clock(
     groupby: str | None = None,
     ncols: int | None = None,
     ax: Axes | None = None,
-    size: float = 6.0,
+    size: float | None = None,
+    alpha: float | None = None,
+    width: float | None = None,
+    palette: Mapping[str, Any] | Sequence[Any] | str | None = None,
     cmap: str | None = None,
+    vmin: float | str | None = None,
+    vmax: float | str | None = None,
+    na_color: Any = "lightgray",
+    legend_loc: str | None = "right margin",
+    legend_fontsize: float = 6,
+    frameon: bool = False,
     rim: bool = True,
     seed: int = 0,
     **kwargs: Any,
@@ -259,8 +305,8 @@ def cell_cycle_clock(
     The angle is a cycle position drawn from each cell's posterior from :func:`~mantispy.tl.project_cell_cycle`,
     seeded for a stable figure, so the ring fills rather than stacking on the medians. Position 0 is at the top and
     the angle runs clockwise, so G1 starts at twelve o'clock and a cell comes back to the top as it divides. Cells sit
-    on a ring of a fixed radius with a little jitter, or, with ``radius``, on an annulus whose radius follows an
-    ``obs`` column such as the DNA content.
+    in a band around a ring, spread radially at random within ``width``, or, with ``radius``, on an annulus whose
+    radius follows an ``obs`` column such as the DNA content.
 
     DNA content orders cells only through S, since it is flat at 2N through G1 and at 4N through G2M. The S arc
     therefore places each cell from its own DNA, while in the G1 and G2M arcs the angle follows the reference's age
@@ -270,26 +316,41 @@ def cell_cycle_clock(
     Read the clock by where a colour concentrates, not as a fine order within a prior arc. Cells off the cycle have
     no position and are left out.
 
+    The colour and legend parameters follow :func:`scanpy.pl.embedding`.
+
     Args:
         adata: Single-cell object :func:`~mantispy.tl.project_cell_cycle` has run on.
         key: The ``key_added`` prefix :func:`~mantispy.tl.project_cell_cycle` wrote.
         color: What colours the cells: ``None`` for the phase; ``"position"`` or ``key + "_position"`` for the cycle
             position on a cyclic colour map; another ``obs`` column, categorical or numeric; or a feature. Cells
-            without a value are left out.
-        groups: With a categorical ``color``, draw every other cell as a faint grey background and colour only the
-            named categories, each with its own colour and a legend. ``None`` colours every category.
+            with a position but no value are drawn in ``na_color``.
+        groups: With a categorical ``color``, colour only the named categories, each with its own colour and a
+            legend, and draw every other cell in ``na_color`` behind them. ``None`` colours every category.
         radius: An ``obs`` column mapped to the radius, so the ring becomes an annulus, its inner edge the column's
-            2nd percentile and its outer edge the 98th. ``None`` keeps the jittered ring.
+            2nd percentile and its outer edge the 98th. ``None`` keeps the ring.
         groupby: ``obs`` column whose groups each get their own clock on a shared layout, colour scale and legend, or
             ``None`` for one clock.
         ncols: Clocks per row when ``groupby`` is given, or ``None`` for one row.
         ax: Axes to draw a single clock on, or ``None`` for a new figure.
-        size: Marker area.
+        size: Marker area; ``None`` scales it with the number of cells, as scanpy does.
+        alpha: Marker opacity; ``None`` for a default that depends on ``color``.
+        width: Thickness of the band the cells sit in, as a fraction of the ring's radius. A wider band spreads a
+            crowded arc out. ``None`` gives 0.3 for the ring and 0.6 for the ``radius`` annulus.
+        palette: Colours for a categorical ``color``: a mapping from category to colour, a list of colours taken in
+            order, or a colour map name. Categories it leaves out keep the phase colours or a default.
         cmap: Colour map for a numeric or feature ``color``; defaults to twilight for the cyclic position and viridis
             otherwise.
+        vmin: Lower end of a numeric colour scale: a number, or ``"pN"`` for the N-th percentile of the drawn values.
+            ``None`` gives the 2nd percentile.
+        vmax: Upper end, read the same way; ``None`` gives the 98th percentile.
+        na_color: Colour of cells with a position but no value, and of the cells outside ``groups``.
+        legend_loc: ``"right margin"`` for a legend beside the clock, ``"on data"`` to write each category at the
+            angle where its cells concentrate, or ``None`` for no legend.
+        legend_fontsize: Font size of the legend or the labels on the clock.
+        frameon: Draw a frame around each clock.
         rim: Draw the phase arcs outside the ring.
-        seed: Seed for the drawn positions, the ring jitter and the draw order.
-        kwargs: Passed to the scatter, overriding its defaults; ``vmin``, ``vmax`` or ``norm`` set a numeric scale.
+        seed: Seed for the drawn positions, the radial spread and the draw order.
+        kwargs: Passed to the scatter, overriding its defaults; ``norm`` sets a numeric scale.
 
     Returns:
         The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
@@ -297,7 +358,8 @@ def cell_cycle_clock(
     Raises:
         KeyError: ``obsm`` has no ``key + "_quantiles"``, or ``color`` or ``radius`` names nothing.
         ValueError: ``color`` is both an ``obs`` column and a feature, ``groups`` is given without a categorical
-            ``color``, a name in ``groups`` is not a category of ``color``, or ``ax`` is given with ``groupby``.
+            ``color``, a name in ``groups`` is not a category of ``color``, ``ax`` is given with ``groupby``,
+            ``legend_loc`` is not one of its options, or ``vmin`` or ``vmax`` is a string that is not a percentile.
     """
     import matplotlib.pyplot as plt
     from matplotlib.colors import to_rgba_array
@@ -306,6 +368,8 @@ def cell_cycle_clock(
 
     if groupby is not None and ax is not None:
         raise ValueError("ax= draws a single clock; drop it to draw one clock per group of groupby=")
+    if legend_loc not in ("right margin", "on data", None):
+        raise ValueError(f"legend_loc must be 'right margin', 'on data' or None, not {legend_loc!r}")
     obs = as_frame(adata.obs)
     placed, position, edges = _placed(adata, key, seed)
     notes = {"G1": "population prior", "S": "per-cell", "G2M": "population prior"}
@@ -320,61 +384,74 @@ def cell_cycle_clock(
             notes[phase] = "experimental order"
 
     mode, values, label = _clock_colour(adata, color or f"{key}_phase", key)
+    size = 120_000 / max(adata.n_obs, 1) if size is None else size
     style: dict[str, Any] = {"s": size, "linewidths": 0, "rasterized": True}
     if mode == "categorical":
-        placed &= pd.notna(values)
+        valued = pd.notna(values)
         text = values.astype(str)
-        present = set(text[placed])
+        present = set(text[placed & valued])
         if groups is None:
             shown = [p for p in PHASE_COLOURS if p in present] if present <= PHASE_COLOURS.keys() else sorted(present)
         else:
             shown = [groups] if isinstance(groups, str) else list(groups)
         if unknown := [name for name in shown if name not in present]:
             raise ValueError(f"groups {unknown} are not categories of {color!r}; have {sorted(present)[:10]}")
-        # Categories that are not phases take colours the phases do not use.
-        others = cycle(plt.get_cmap("tab10")([1, 2, 5, 6, 8, 9]))
-        palette = {name: PHASE_COLOURS.get(name) or next(others) for name in shown}
-        style["alpha"] = 0.7 if groups is None else 0.6
+        colours_of = _palette(shown, palette)
+        valued &= np.isin(text, shown)
+        style["alpha"] = (0.7 if groups is None else 0.6) if alpha is None else alpha
     elif groups is not None:
         raise ValueError("groups= needs a categorical color=")
     else:
-        placed &= np.isfinite(values)
-        low, high = (0.0, 1.0) if mode == "cyclic" or not placed.any() else np.percentile(values[placed], [2, 98])
-        style |= {"cmap": cmap or ("twilight" if mode == "cyclic" else "viridis"), "alpha": 0.8}
+        valued = np.isfinite(values)
+        drawn_values = values[placed & valued]
+        if mode == "cyclic":
+            low, high = (
+                (0.0 if vmin is None else _bound(vmin, drawn_values, 0)),
+                (1.0 if vmax is None else _bound(vmax, drawn_values, 100)),
+            )
+        elif drawn_values.size:
+            low, high = _bound(vmin, drawn_values, 2), _bound(vmax, drawn_values, 98)
+        else:
+            low, high = 0.0, 1.0
+        style |= {
+            "cmap": cmap or ("twilight" if mode == "cyclic" else "viridis"),
+            "alpha": 0.8 if alpha is None else alpha,
+        }
         if "norm" not in kwargs:
             style |= {"vmin": low, "vmax": high}
     marker = {name: value for name, value in kwargs.items() if name not in ("c", "cmap", "norm", "vmin", "vmax")}
     style |= kwargs
 
-    # A stream apart from the position draws, so the ring jitter does not follow the angle.
+    # A stream apart from the position draws, so the radial spread does not follow the angle.
     rng = np.random.default_rng([seed, 1])
     if radius is None:
-        inner, outer, reach = 1.0, 1.0, 1.0 + rng.uniform(-0.06, 0.06, adata.n_obs)
+        band = 0.3 if width is None else width
+        inner, outer = 1.0 - band / 2, 1.0 + band / 2
+        reach = rng.uniform(inner, outer, adata.n_obs)
     elif radius not in obs.columns:
         raise KeyError(f"obs has no column {radius!r}")
     else:
         raw = obs[radius].to_numpy(dtype=float)
-        low, high = np.nanpercentile(raw[placed], [2, 98]) if np.isfinite(raw[placed]).any() else (0.0, 1.0)
-        inner, outer = 0.55, 1.15
-        reach = inner + (outer - inner) * np.clip((raw - low) / ((high - low) or 1.0), 0, 1)
+        low_r, high_r = np.nanpercentile(raw[placed], [2, 98]) if np.isfinite(raw[placed]).any() else (0.0, 1.0)
+        outer = 1.15
+        inner = outer - (0.6 if width is None else width)
+        reach = inner + (outer - inner) * np.clip((raw - low_r) / ((high_r - low_r) or 1.0), 0, 1)
     x, y = reach * np.sin(2 * np.pi * position), reach * np.cos(2 * np.pi * position)
     rim_radius = outer + 0.18
     limit = rim_radius + (0.12 if rim and edges is not None else -0.05)
 
     def draw(axis: Axes, panel: np.ndarray) -> Any:
-        axis.add_patch(plt.Circle((0, 0), inner, fill=False, color="0.85", lw=0.6))
-        if radius is not None:
-            axis.add_patch(plt.Circle((0, 0), outer, fill=False, color="0.9", lw=0.5))
+        guides = (1.0,) if radius is None else (inner, outer)
+        for ring in guides:
+            axis.add_patch(plt.Circle((0, 0), ring, fill=False, color="0.85", lw=0.6))
         rows = rng.permutation(np.flatnonzero(placed & panel))
-        if mode == "categorical":
-            # One scatter in shuffled order, so no category hides another under it; the legend uses proxies.
-            front = np.isin(text[rows], shown)
-            if groups is not None:
-                back = rows[~front]
-                background = {"s": size * 0.5, "linewidths": 0, "rasterized": True, "alpha": 0.5, **marker}
-                axis.scatter(x[back], y[back], c="0.85", **background)
-            rows = rows[front]
-        colours = to_rgba_array([palette[name] for name in text[rows]]) if mode == "categorical" else values[rows]
+        back = rows[~valued[rows]]
+        if back.size:
+            background = {"s": size * 0.5, "linewidths": 0, "rasterized": True, "alpha": 0.5, **marker}
+            axis.scatter(x[back], y[back], c=[na_color], **background)
+        # One scatter in shuffled order, so no category hides another under it; the legend uses proxies.
+        rows = rows[valued[rows]]
+        colours = to_rgba_array([colours_of[name] for name in text[rows]]) if mode == "categorical" else values[rows]
         drawn = axis.scatter(x[rows], y[rows], c=colours, **style)
         for (start, end), (name, note) in zip(pairwise(edges or ()), notes.items(), strict=False):
             middle = np.pi * (start + end)
@@ -383,8 +460,8 @@ def cell_cycle_clock(
                     Wedge((0, 0), rim_radius, 90 - 360 * end, 90 - 360 * start, color="0.6", alpha=0.12, lw=0, zorder=0)
                 )
             axis.text(
-                0.58 * rim_radius * np.sin(middle),
-                0.58 * rim_radius * np.cos(middle),
+                0.68 * inner * np.sin(middle),
+                0.68 * inner * np.cos(middle),
                 f"{name}\n{note}",
                 ha="center",
                 va="center",
@@ -395,8 +472,26 @@ def cell_cycle_clock(
             if rim:
                 turn = 2 * np.pi * np.linspace(start, end, 40)
                 axis.plot(rim_radius * np.sin(turn), rim_radius * np.cos(turn), color=PHASE_COLOURS[name], lw=3)
+        if mode == "categorical" and legend_loc == "on data":
+            for name in shown:
+                angle = 2 * np.pi * position[rows[text[rows] == name]]
+                if angle.size:
+                    middle = np.arctan2(np.sin(angle).mean(), np.cos(angle).mean())
+                    axis.text(
+                        (outer + 0.05) * np.sin(middle),
+                        (outer + 0.05) * np.cos(middle),
+                        name,
+                        ha="center",
+                        va="center",
+                        fontsize=legend_fontsize,
+                        fontweight="bold",
+                        color=colours_of[name],
+                    )
         axis.set(xlim=(-limit, limit), ylim=(-limit, limit), aspect="equal")
-        axis.axis("off")
+        if frameon:
+            axis.set(xticks=[], yticks=[])
+        else:
+            axis.axis("off")
         return drawn
 
     codes, keys = group_codes(adata, groupby)
@@ -414,8 +509,16 @@ def cell_cycle_clock(
         if groupby is not None or radius is not None:
             axes[index].set_title(str(group) if groupby is not None else f"radius: {radius}", fontsize=8)
     if mode == "categorical":
-        handles = [Line2D([], [], marker="o", linestyle="", color=palette[name], label=name) for name in shown]
-        axes[0].legend(handles=handles, fontsize=6, bbox_to_anchor=(1.0, 1.0), loc="upper left", title=label)
+        if legend_loc == "right margin":
+            handles = [Line2D([], [], marker="o", linestyle="", color=colours_of[name], label=name) for name in shown]
+            axes[0].legend(
+                handles=handles,
+                fontsize=legend_fontsize,
+                title=label,
+                title_fontsize=legend_fontsize,
+                bbox_to_anchor=(1.0, 1.0),
+                loc="upper left",
+            )
     else:
         axes[0].figure.colorbar(drawn, ax=axes[: len(keys)], label=label, fraction=0.046, pad=0.04)
     return _returned(axes[0]) if groupby is None else None

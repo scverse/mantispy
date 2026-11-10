@@ -2,6 +2,7 @@
 
 You need Python 3.13 or newer.
 If you don't have Python installed, we recommend [uv](https://github.com/astral-sh/uv).
+PyPI is the supported install. Cloning the repository and running `uv sync` is for contributors, see [Contributing](contributing.md).
 
 ## Alpha release
 
@@ -20,7 +21,8 @@ Pass `--pre` (`uv pip install --pre mantispy`, or `uv add --prerelease allow man
 Install the latest development version from GitHub:
 
 ```console
-pip install git+https://github.com/scverse/mantispy.git
+uv add git+https://github.com/scverse/mantispy  # in a uv project
+pip install git+https://github.com/scverse/mantispy.git  # or with pip
 ```
 
 ## Optional dependencies
@@ -30,7 +32,8 @@ pip install git+https://github.com/scverse/mantispy.git
 {func}`~mantispy.io.read_plate`, {func}`~mantispy.ds.jump_plate` and {func}`~mantispy.ds.blobs` read images into `SpatialData`:
 
 ```console
-pip install 'mantispy[spatial]'
+uv add 'mantispy[spatial]'  # in a uv project
+pip install 'mantispy[spatial]'  # or with pip
 ```
 
 ### Mean average precision
@@ -38,7 +41,8 @@ pip install 'mantispy[spatial]'
 {func}`~mantispy.tl.map` runs copairs, an optional extra:
 
 ```console
-pip install 'mantispy[map]'
+uv add 'mantispy[map]'  # in a uv project
+pip install 'mantispy[map]'  # or with pip
 ```
 
 ### Integration metrics
@@ -46,7 +50,8 @@ pip install 'mantispy[map]'
 {func}`~mantispy.metrics.evaluate_integration` delegates to scib-metrics:
 
 ```console
-pip install 'mantispy[integration]'
+uv add 'mantispy[integration]'  # in a uv project
+pip install 'mantispy[integration]'  # or with pip
 ```
 
 ### Interactive plots
@@ -54,7 +59,8 @@ pip install 'mantispy[integration]'
 With plotly installed, plots in a Jupyter notebook also draw an interactive version:
 
 ```console
-pip install 'mantispy[interactive]'
+uv add 'mantispy[interactive]'  # in a uv project
+pip install 'mantispy[interactive]'  # or with pip
 ```
 
 ### Tutorials
@@ -62,11 +68,13 @@ pip install 'mantispy[interactive]'
 The single-cell tutorial clusters cells with `scanpy.tl.leiden(..., flavor="igraph")`, which needs igraph:
 
 ```console
-pip install igraph
+uv add igraph  # in a uv project
+pip install igraph  # or with pip
 ```
 
 To run every tutorial and case study, install all of the above at once:
 
 ```console
-pip install 'mantispy[map,integration,interactive]' igraph
+uv add 'mantispy[map,integration,interactive]' igraph  # in a uv project
+pip install 'mantispy[map,integration,interactive]' igraph  # or with pip
 ```

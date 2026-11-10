@@ -14,7 +14,6 @@ from mantispy.tl._enrich import enrich, feature_sets, rank_features, rank_sets
 from mantispy.tl._gene_aggregation import aggregate_guides
 from mantispy.tl._guide_activity import guide_activity
 from mantispy.tl._heterogeneity import (
-    cell_cycle_phase,
     cluster_composition,
     composition_shift,
     dna_content,
@@ -35,7 +34,6 @@ from mantispy.tl._transport import transport
 __all__ = [
     "aggregate",
     "aggregate_guides",
-    "cell_cycle_phase",
     "cluster",
     "cluster_composition",
     "composition_shift",
