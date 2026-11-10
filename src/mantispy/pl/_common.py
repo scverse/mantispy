@@ -217,7 +217,8 @@ def maybe_interactive(
         )
     else:
         raise ValueError(f"unknown interactive kind {kind!r}")
-    figure.show(renderer="notebook_connected")
+    # The default renderer: connected HTML in Jupyter (set on import), plotly's own in VS Code and other frontends.
+    figure.show()
     if ax is not None and getattr(ax.figure, _OWNED, False):
         import matplotlib.pyplot as plt
 

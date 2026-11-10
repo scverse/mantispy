@@ -120,6 +120,19 @@ def test_each_kind_builds_and_displays_one_figure(displayed, kind):
     assert isinstance(capture.figures[0], figure_type)
 
 
+def test_a_twin_uses_the_frontends_default_renderer(monkeypatch):
+    pytest.importorskip("plotly")
+    import plotly.graph_objects as go
+
+    calls = []
+    monkeypatch.setattr(_common, "interactive_available", lambda: True)
+    monkeypatch.setattr(go.Figure, "show", lambda self, *args, **kwargs: calls.append(kwargs))
+    _common.maybe_interactive("heatmap", **_KINDS["heatmap"])
+    # VS Code cannot draw the connected HTML the docs use, so a twin must not force that renderer.
+    assert len(calls) == 1
+    assert calls[0].get("renderer") is None
+
+
 def test_an_unknown_kind_is_refused(displayed):
     with pytest.raises(ValueError, match="unknown interactive kind"):
         _common.maybe_interactive("violin", data=_FRAME, x="a", y="b")

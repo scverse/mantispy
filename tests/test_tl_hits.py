@@ -763,3 +763,119 @@ def test_an_explicit_well_replicate_keeps_the_well_null_on_a_pooled_design():
     adata = _pooled_cells()
     mt.tl.edistance(adata, replicate=["Metadata_Plate", "Metadata_Well"], n_permutations=50, seed=0)
     assert "edistance" in adata.uns["mantispy"]
+
+
+def _mcd_fixture(name):
+    """The inputs the robustbase and BioProfiling.jl reference values below were computed on."""
+    if name == "outliers":
+        x = np.random.default_rng(0).standard_normal((80, 3)) @ np.array([[1, 0.5, 0], [0, 1, 0.3], [0, 0, 1]])
+        x[:8] += 6.0
+    elif name == "small":
+        x = np.random.default_rng(1).standard_normal((12, 4))
+    elif name == "univariate":
+        x = np.random.default_rng(2).standard_normal((40, 1))
+        x[:4] += 10.0
+    else:
+        x = np.random.default_rng(3).standard_normal((60, 3)) * 1.5 + 0.5
+    return x
+
+
+# R robustbase 0.99.7: set.seed(777); covMcd(x), the call BioProfiling.jl makes.
+_ROBUSTBASE = {
+    "outliers": (
+        [-0.11203103400601118, -0.026170075855110747, 0.12733455016707523],
+        [1.313954837761304, 0.66235640511015881, -0.052679138409362163, 0.66235640511015881, 1.2639115345752787,
+         0.32769041604976762, -0.052679138409362163, 0.32769041604976762, 1.1814573304098956],
+    ),
+    "small": (
+        [-0.38975050320734855, -0.17124979583952829, -0.20666890345310315, -0.21336323271640623],
+        [2.3974755458798538, 1.6351026367595489, -0.031875576292900422, 0.39129397689023598, 1.6351026367595489,
+         1.2631518668063844, 0.11564647937440328, 0.11111902683963235, -0.031875576292900422, 0.11564647937440328,
+         0.2425220920096649, -0.26999945161526634, 0.39129397689023598, 0.11111902683963235, -0.26999945161526634,
+         0.96303969467134742],
+    ),
+    "univariate": ([0.092605571611283383], [0.96441965457501289]),
+}  # fmt: skip
+
+
+@pytest.mark.parametrize("name", ["outliers", "small", "univariate"])
+def test_the_mcd_matches_robustbase(name):
+    """Random starts on an outlier-laden sample, the exhaustive search with tabulated small-sample factors, and the univariate window."""
+    from mantispy._core._mcd import cov_mcd
+
+    x = _mcd_fixture(name)
+    centre, cov = cov_mcd(x)
+    expected_centre, expected_cov = _ROBUSTBASE[name]
+    np.testing.assert_allclose(centre, expected_centre, rtol=1e-10)
+    np.testing.assert_allclose(cov.ravel(), expected_cov, rtol=1e-10)
+
+
+@pytest.mark.parametrize(
+    ("covariance", "expected"), [("robust", 0.19290830153667438), ("empirical", 0.30686026980446723)]
+)
+def test_the_hellinger_distance_matches_bioprofiling(covariance, expected):
+    """BioProfiling.jl's ``hellinger`` on robustbase estimates (robust) or the sample mean and covariance (empirical)."""
+    from mantispy._core._hellinger import hellinger
+    from mantispy._core._mcd import cov_mcd
+
+    a, b = _mcd_fixture("outliers"), _mcd_fixture("shifted")
+    if covariance == "robust":
+        fits = (*cov_mcd(a), *cov_mcd(b))
+    else:
+        fits = (a.mean(0), np.cov(a, rowvar=False), b.mean(0), np.cov(b, rowvar=False))
+    assert hellinger(*fits) == pytest.approx(expected, rel=1e-10)
+
+
+def test_hellinger_sees_a_change_of_spread():
+    """A group that widens without moving its centre is called; the untouched groups are not."""
+    adata = _well_effect_cells(n_groups=4, wells_per_group=3, n_features=5, seed=0)
+    widened = adata.obs["Metadata_Perturbation"].isin(["p00", "p01"]).to_numpy()
+    values = adata.X.copy()
+    values[widened] = values[widened].mean(0) + (values[widened] - values[widened].mean(0)) * 2.0
+    adata.X = values
+    mt.tl.hit_calling(adata, method="hellinger", replicate="Metadata_Well", n_permutations=200, seed=0)
+    table = adata.uns["mantispy"]["hits"].set_index("group")
+    assert table.loc[["p00", "p01"], "is_hit"].all()
+    assert not table.loc[["p02", "p03"], "is_hit"].any()
+
+
+def test_hellinger_does_not_call_a_cell_screen_of_pure_noise():
+    called = total = 0
+    for seed in range(4):
+        adata = _well_effect_cells(n_features=5, seed=seed)
+        mt.tl.hit_calling(adata, method="hellinger", replicate="Metadata_Well", n_permutations=200, seed=seed)
+        table = adata.uns["mantispy"]["hits"]
+        treated = table[table["group"] != "DMSO"]
+        called += int((treated["qvalue"] < 0.05).sum())
+        total += len(treated)
+    assert called / total <= 0.1, f"{called}/{total} pure-noise groups called"
+
+
+def test_hellinger_leaves_a_group_too_small_for_its_covariance_unscored(pure_noise_screen):
+    adata = pure_noise_screen(n_features=4, per_group=16)
+    adata.obs["Metadata_Perturbation"] = adata.obs["Metadata_Perturbation"].astype(str)
+    adata.obs.loc[adata.obs_names[-5:], "Metadata_Perturbation"] = "tiny"
+    with pytest.warns(UserWarning, match="unscored.*tiny"):
+        mt.tl.hit_calling(adata, method="hellinger", n_permutations=50)
+    table = adata.uns["mantispy"]["hits"].set_index("group")
+    assert np.isnan(table.loc["tiny", "distance"])
+    assert np.isfinite(table.drop(index="tiny")["distance"]).all()
+
+
+def test_hellinger_leaves_out_rows_with_a_missing_value(pure_noise_screen):
+    adata = pure_noise_screen(n_features=4)
+    values = adata.X.copy()
+    values[-1, 0] = np.nan
+    adata.X = values
+    mt.tl.hit_calling(adata, method="hellinger", n_permutations=50)
+    table = adata.uns["mantispy"]["hits"].set_index("group")
+    assert np.isfinite(table["distance"]).all()
+    assert table.loc["p11", "n_obs"] == 11
+
+
+def test_a_permutation_the_statistic_could_not_be_computed_on_does_not_count_as_a_draw():
+    """A NaN draw is neither at least the observation nor below it, so it leaves the denominator too."""
+    from mantispy._core._stats import permutation_pvalue
+
+    null = np.array([[1.0, 2.0, np.nan, np.nan, 0.5]])
+    assert permutation_pvalue(np.array([1.5]), null)[0] == pytest.approx((1 + 1) / (3 + 1))
