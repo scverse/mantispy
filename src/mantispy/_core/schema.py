@@ -96,7 +96,6 @@ RESERVED_OBS: tuple[str, ...] = (
     "Metadata_Center_X",
     "Metadata_Center_Y",
     "Metadata_Control_Type",
-    "Metadata_CellCyclePhase",
     "Metadata_DNAContent",
     "Metadata_DNAState",
     "Metadata_LocalDensity",
