@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from itertools import cycle, pairwise
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -11,6 +13,7 @@ from mantispy._core._reduce import get_matrix, group_codes
 from mantispy._core.frames import as_frame
 from mantispy.pl._common import axes as _axes
 from mantispy.pl._common import maybe_interactive as _maybe_interactive
+from mantispy.pl._common import obs_or_feature as _obs_or_feature
 from mantispy.pl._common import returned as _returned
 from mantispy.pl._common import table as _table
 
@@ -18,7 +21,7 @@ if TYPE_CHECKING:
     from anndata import AnnData
     from matplotlib.axes import Axes
 
-PHASE_COLOURS = {"G1": "tab:blue", "S": "tab:grey", "G2M": "tab:red", "off-cycle": "black"}
+PHASE_COLOURS = {"G1": "tab:blue", "S": "tab:grey", "G2M": "tab:red", "sub-2N": "black", "above-4N": "tab:purple"}
 
 
 def cluster_composition(
@@ -104,19 +107,17 @@ def cell_cycle(
             ``layer``.
     """
     import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
 
     if key not in adata.obs:
         raise KeyError(f"obs has no column {key!r}; run mt.tl.cell_cycle_phase or mt.tl.project_cell_cycle first")
-    if dna_feature in adata.obs and dna_feature in adata.var_names:
-        raise ValueError(f"{dna_feature!r} is both an obs column and a feature; rename one of them")
-
-    if dna_feature in adata.obs:
-        values = as_frame(adata.obs)[dna_feature].to_numpy(dtype=float)
+    raw, from_obs = _obs_or_feature(adata, dna_feature, layer)
+    if from_obs:
+        values = raw.astype(float)
         shown, label = np.isfinite(values), str(dna_feature)
     else:
-        intensity = get_matrix(adata, layer)[:, adata.var_names.get_loc(dna_feature)].astype(float)
-        shown = np.isfinite(intensity) & (intensity > 0)
-        values, label = np.log(np.where(shown, intensity, 1.0)), "log DNA intensity"
+        shown = np.isfinite(raw) & (raw > 0)
+        values, label = np.log(np.where(shown, raw, 1.0)), "log DNA intensity"
     phases = as_frame(adata.obs)[key].astype(str).to_numpy()
     codes, keys = group_codes(adata, by)
 
@@ -129,14 +130,49 @@ def cell_cycle(
         for phase, colour in PHASE_COLOURS.items():
             selected = values[selected_rows[phases[selected_rows] == phase]]
             if selected.size:
-                axis.hist(selected, bins=40, histtype="stepfilled", alpha=0.6, color=colour, label=phase)
+                axis.hist(selected, bins=40, histtype="stepfilled", alpha=0.6, color=colour)
         axis.set_title(str(name), fontsize=8)
         axis.set_xlabel(label)
+        axis.tick_params(labelbottom=True)  # a shared axis hides them above the gaps of a partial last row
     for axis in axes.flat[len(keys) :]:
         axis.set_visible(False)
-    axes[0, 0].legend(fontsize=6)
+    present = set(phases[shown])
+    handles = [
+        Patch(color=colour, alpha=0.6, label=phase) for phase, colour in PHASE_COLOURS.items() if phase in present
+    ]
+    axes[0, 0].legend(handles=handles, fontsize=6)
     figure.tight_layout()
     return _returned(axes, owned=True)
+
+
+def _draw_positions(quantiles: np.ndarray, levels: np.ndarray, seed: int = 0) -> np.ndarray:
+    """One cycle position per cell drawn from its posterior, given as its quantiles at ``levels``.
+
+    The quantile function is interpolated linearly between the given quantiles and extended along its outer segments
+    to the ends of the cycle, so the outer draws spread over the tails instead of collapsing onto the outer quantiles.
+    """
+    levels = np.r_[0, levels, 1]
+    below = quantiles[:, 0] - (quantiles[:, 1] - quantiles[:, 0]) * levels[1] / (levels[2] - levels[1])
+    above = quantiles[:, -1] + (quantiles[:, -1] - quantiles[:, -2]) * (1 - levels[-2]) / (levels[-2] - levels[-3])
+    knots = np.column_stack([np.clip(below, 0, 1), quantiles, np.clip(above, 0, 1)])
+    draw = np.random.default_rng(seed).random(quantiles.shape[0])
+    upper = np.clip(np.searchsorted(levels, draw), 1, levels.size - 1)
+    fraction = (draw - levels[upper - 1]) / (levels[upper] - levels[upper - 1])
+    rows = np.arange(quantiles.shape[0])
+    return knots[rows, upper - 1] + fraction * (knots[rows, upper] - knots[rows, upper - 1])
+
+
+def _placed(adata: AnnData, key: str, seed: int) -> tuple[np.ndarray, np.ndarray, list[float] | None]:
+    """Which cells have a position, one position per cell drawn from its posterior, and the model's phase edges."""
+    name = f"{key}_quantiles"
+    if name not in adata.obsm:
+        raise KeyError(f"obsm has no {name!r}; run mt.tl.project_cell_cycle first")
+    frame = adata.obsm[name]
+    quantiles = np.asarray(frame, dtype=float)
+    levels = np.array([float(str(column).rstrip("%")) / 100 for column in frame.columns])
+    model = adata.uns.get("mantispy", {}).get(key)
+    edges = [float(edge) for edge in model["edges"]] if isinstance(model, Mapping) and "edges" in model else None
+    return np.isfinite(quantiles).all(axis=1), _draw_positions(np.nan_to_num(quantiles), levels, seed), edges
 
 
 def cell_cycle_occupancy(
@@ -145,13 +181,13 @@ def cell_cycle_occupancy(
     by: str | None = "Metadata_Perturbation",
     highlight: str | None = None,
     seed: int = 0,
-) -> None:
+    ax: Axes | None = None,
+) -> Axes | None:
     """How the cells of each group occupy the cycle placed by :func:`~mantispy.tl.project_cell_cycle`.
 
     Each cell contributes one position drawn from its own posterior, so a cell in a plateau spreads over that plateau
     instead of piling onto its median, and an arrest shows as a group's curve rising above the others at one
-    position. Off-cycle cells have no position and are left out. When the model is in ``uns["mantispy"][key]``, dotted
-    lines mark where its S phase begins and ends.
+    position. Cells off the cycle have no position and are left out. Dotted lines mark where S begins and ends.
 
     Args:
         adata: Single-cell object :func:`~mantispy.tl.project_cell_cycle` has run on.
@@ -159,72 +195,44 @@ def cell_cycle_occupancy(
         by: ``obs`` column whose groups become curves, or ``None`` for one curve over every row.
         highlight: A group of ``by``, such as the controls, drawn thicker and in black.
         seed: Seed for the positions drawn.
+        ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
-        ``None``; this plot always creates its own figure, one panel holding one density curve per group of ``by``.
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
+        They hold one density curve per group of ``by``.
 
     Raises:
         KeyError: ``obsm`` has no ``key + "_quantiles"``.
     """
-    import matplotlib.pyplot as plt
-
-    from mantispy.tl._cell_cycle import _age, _draw_positions
-
-    name = f"{key}_quantiles"
-    if name not in adata.obsm:
-        raise KeyError(f"obsm has no {name!r}; run mt.tl.project_cell_cycle first")
-    quantiles = np.asarray(adata.obsm[name], dtype=float)
-    placed = np.isfinite(quantiles).all(axis=1)
-    drawn = _draw_positions(np.nan_to_num(quantiles), seed)
-
+    placed, drawn, edges = _placed(adata, key, seed)
     codes, keys = group_codes(adata, by)
-    figure, axis = plt.subplots(figsize=(5, 3))
+    axis = _axes(ax, (5, 3))
     bins = list(np.linspace(0, 1, 41))
     for index, group in enumerate(keys):
         selected = drawn[(codes == index) & placed]
         if selected.size:
             style: dict[str, Any] = {"color": "black", "linewidth": 2} if str(group) == highlight else {}
             axis.hist(selected, bins=bins, density=True, histtype="step", label=str(group), **style)
-    model = adata.uns.get("mantispy", {}).get(key)
-    if model is not None and "fractions" in model:
-        for edge in _age(np.cumsum(model["fractions"])[:2]):
-            axis.axvline(float(edge), color="grey", linestyle=":", linewidth=1)
+    for edge in [] if edges is None else edges[1:3]:
+        axis.axvline(edge, color="grey", linestyle=":", linewidth=1)
     axis.set_xlabel("cycle position (0 = start of G1, 1 = division)")
     axis.set_ylabel("density")
     axis.legend(fontsize=6, bbox_to_anchor=(1.01, 1), loc="upper left")
-    figure.tight_layout()
+    if ax is None:
+        axis.figure.tight_layout()
+    return _returned(axis)
 
 
 def _clock_colour(adata: AnnData, color: str, key: str) -> tuple[str, np.ndarray, str]:
     """Resolve ``color`` to a mode (``"categorical"``, ``"continuous"`` or ``"cyclic"``), its values and a label."""
-    obs = as_frame(adata.obs)
     if color in (f"{key}_position", "position"):
-        return "cyclic", obs[f"{key}_position"].to_numpy(dtype=float), "cycle position"
-    in_obs, in_var = color in obs.columns, color in adata.var_names
-    if in_obs and in_var:
-        raise ValueError(f"{color!r} is both an obs column and a feature; rename one of them")
-    if in_obs:
-        series = obs[color]
-        if pd.api.types.is_numeric_dtype(series) and not pd.api.types.is_bool_dtype(series):
-            return "continuous", series.to_numpy(dtype=float), color
-        return "categorical", series.astype(object).to_numpy(), color
-    if in_var:
-        return "continuous", get_matrix(adata)[:, adata.var_names.get_loc(color)].astype(float), color
-    raise KeyError(f"{color!r} is neither an obs column nor a feature")
-
-
-def _clock_palette(categories: list[str]) -> dict[str, Any]:
-    """A colour per category: the phase colours where they match, else the tab10 cycle."""
-    import matplotlib.pyplot as plt
-
-    tab, extra = plt.get_cmap("tab10"), 0
-    out: dict[str, Any] = {}
-    for category in categories:
-        if category in PHASE_COLOURS:
-            out[category] = PHASE_COLOURS[category]
-        else:
-            out[category], extra = tab(extra % 10), extra + 1
-    return out
+        if f"{key}_position" not in adata.obs:
+            raise KeyError(f"obs has no column {key}_position; run mt.tl.project_cell_cycle first")
+        return "cyclic", as_frame(adata.obs)[f"{key}_position"].to_numpy(dtype=float), "cycle position"
+    values, from_obs = _obs_or_feature(adata, color)
+    if from_obs and values.dtype.kind not in "iuf":
+        return "categorical", values.astype(object), color
+    return "continuous", values.astype(float), color
 
 
 def cell_cycle_clock(
@@ -241,7 +249,7 @@ def cell_cycle_clock(
     rim: bool = True,
     seed: int = 0,
     **kwargs: Any,
-) -> Axes | np.ndarray | None:
+) -> Axes | None:
     """Cells on a ring, placed by angle at a cycle position drawn from their posterior.
 
     The angle is a cycle position drawn from each cell's posterior from :func:`~mantispy.tl.project_cell_cycle`,
@@ -250,234 +258,163 @@ def cell_cycle_clock(
     on a ring of a fixed radius with a little jitter, or, with ``radius``, on an annulus whose radius follows an
     ``obs`` column such as the DNA content.
 
-    DNA content is flat at 2N through G1 and at 4N through G2M, and the width of either peak is measurement noise, so
-    DNA content orders cells only through S. The S arc therefore places each cell from its own DNA, while in the G1
-    and G2M arcs the angular spread follows the control age distribution, where a cell is more likely to sit early.
-    Those two arcs are shaded and labelled as the population prior, the S arc as per-cell. When
-    ``obs[key + "_g2m_order"]`` holds the experimental order from ``refine_g2m``, G2M cells sit on their wedge by that
-    order instead, and the wedge is labelled so. Read the clock by where a colour concentrates, with ``color`` set to
-    the phase or a gene, not as a fine order within a prior wedge. Off-cycle cells have no position and are left out.
+    DNA content orders cells only through S, since it is flat at 2N through G1 and at 4N through G2M. The S arc
+    therefore places each cell from its own DNA, while in the G1 and G2M arcs the angle follows the reference's age
+    distribution, where a cell is more likely to sit early. Those two arcs are shaded and labelled as the population
+    prior. When ``obs[key + "_" + phase + "_order"]`` holds an order from :func:`~mantispy.tl.phase_order`, the
+    cells of that phase sit on their arc by that order instead, and the arc is labelled as the experimental order.
+    Read the clock by where a colour concentrates, not as a fine order within a prior arc. Cells off the cycle have
+    no position and are left out.
 
     Args:
         adata: Single-cell object :func:`~mantispy.tl.project_cell_cycle` has run on.
         key: The ``key_added`` prefix :func:`~mantispy.tl.project_cell_cycle` wrote.
         color: What colours the cells: ``None`` for the phase; ``"position"`` or ``key + "_position"`` for the cycle
-            position on a cyclic colour map; another ``obs`` column, categorical or numeric; or a feature.
+            position on a cyclic colour map; another ``obs`` column, categorical or numeric; or a feature. Cells
+            without a value are left out.
         groups: With a categorical ``color``, draw every other cell as a faint grey background and colour only the
             named categories, each with its own colour and a legend. ``None`` colours every category.
         radius: An ``obs`` column mapped to the radius, so the ring becomes an annulus, its inner edge the column's
             2nd percentile and its outer edge the 98th. ``None`` keeps the jittered ring.
-        groupby: ``obs`` column whose groups each get their own clock on a shared layout, or ``None`` for one clock.
+        groupby: ``obs`` column whose groups each get their own clock on a shared layout, colour scale and legend, or
+            ``None`` for one clock.
         ncols: Clocks per row when ``groupby`` is given, or ``None`` for one row.
-        ax: Axes to draw a single clock on, or ``None`` for a new figure. Ignored when ``groupby`` is given.
+        ax: Axes to draw a single clock on, or ``None`` for a new figure.
         size: Marker area.
         cmap: Colour map for a numeric or feature ``color``; defaults to twilight for the cyclic position and viridis
             otherwise.
         rim: Draw the phase arcs outside the ring.
-        seed: Seed for the ring jitter and the draw order.
-        kwargs: Passed to the underlying scatter.
+        seed: Seed for the drawn positions, the ring jitter and the draw order.
+        kwargs: Passed to the scatter, overriding its defaults; ``vmin``, ``vmax`` or ``norm`` set a numeric scale.
 
     Returns:
-        The axes when the caller passed ``ax`` and no ``groupby``, else ``None`` because the plot then owns the
-        figure it created.
+        The axes when the caller passed ``ax``, else ``None`` because the plot then owns the figure it created.
 
     Raises:
-        KeyError: ``obs`` has no ``key + "_position"`` column, or ``color`` or ``radius`` names nothing.
+        KeyError: ``obsm`` has no ``key + "_quantiles"``, or ``color`` or ``radius`` names nothing.
         ValueError: ``color`` is both an ``obs`` column and a feature, ``groups`` is given without a categorical
-            ``color``, or a name in ``groups`` is not a category of ``color``.
+            ``color``, a name in ``groups`` is not a category of ``color``, or ``ax`` is given with ``groupby``.
     """
     import matplotlib.pyplot as plt
     from matplotlib.colors import to_rgba_array
     from matplotlib.lines import Line2D
     from matplotlib.patches import Wedge
 
-    from mantispy.tl._cell_cycle import _age, _draw_positions
-
+    if groupby is not None and ax is not None:
+        raise ValueError("ax= draws a single clock; drop it to draw one clock per group of groupby=")
     obs = as_frame(adata.obs)
-    if f"{key}_quantiles" not in adata.obsm:
-        raise KeyError(f"obsm has no {key}_quantiles; run mt.tl.project_cell_cycle first")
-    quantiles = np.asarray(adata.obsm[f"{key}_quantiles"], dtype=float)
-    placed = np.isfinite(quantiles).all(axis=1)
-    position = _draw_positions(np.nan_to_num(quantiles), seed)
-    model = adata.uns.get("mantispy", {}).get(key)
-    edges = (
-        [0.0, *(_age(np.cumsum(model["fractions"])[:2]).tolist()), 1.0]
-        if isinstance(model, dict) and "fractions" in model
-        else None
-    )
-    refined = np.zeros(adata.n_obs, dtype=bool)
-    if edges is not None and f"{key}_g2m_order" in obs.columns:
-        order = obs[f"{key}_g2m_order"].to_numpy(dtype=float)
-        refined = placed & np.isfinite(order)
-        position = np.where(refined, edges[2] + np.nan_to_num(order) * (edges[3] - edges[2]), position)
-    mode, values, label = _clock_colour(adata, color or f"{key}_phase", key)
-    text = values.astype(str)
+    placed, position, edges = _placed(adata, key, seed)
+    notes = {"G1": "population prior", "S": "per-cell", "G2M": "population prior"}
+    phase_column = obs[f"{key}_phase"].astype(str).to_numpy() if f"{key}_phase" in obs else None
+    for index, phase in enumerate(notes):
+        if edges is None or phase_column is None or f"{key}_{phase}_order" not in obs:
+            continue
+        order = obs[f"{key}_{phase}_order"].to_numpy(dtype=float)
+        ordered = placed & (phase_column == phase) & np.isfinite(order)
+        position[ordered] = edges[index] + order[ordered] * (edges[index + 1] - edges[index])
+        if ordered.any():
+            notes[phase] = "experimental order"
 
-    groups_list = None
-    if groups is not None:
-        if mode != "categorical":
-            raise ValueError("groups= needs a categorical color=")
-        groups_list = [groups] if isinstance(groups, str) else list(groups)
+    mode, values, label = _clock_colour(adata, color or f"{key}_phase", key)
+    style: dict[str, Any] = {"s": size, "linewidths": 0, "rasterized": True}
+    if mode == "categorical":
+        placed &= pd.notna(values)
+        text = values.astype(str)
         present = set(text[placed])
-        unknown = [name for name in groups_list if name not in present]
-        if unknown:
+        if groups is None:
+            shown = [p for p in PHASE_COLOURS if p in present] if present <= PHASE_COLOURS.keys() else sorted(present)
+        else:
+            shown = [groups] if isinstance(groups, str) else list(groups)
+        if unknown := [name for name in shown if name not in present]:
             raise ValueError(f"groups {unknown} are not categories of {color!r}; have {sorted(present)[:10]}")
+        # Categories that are not phases take colours the phases do not use.
+        others = cycle(plt.get_cmap("tab10")([1, 2, 5, 6, 8, 9]))
+        palette = {name: PHASE_COLOURS.get(name) or next(others) for name in shown}
+        style["alpha"] = 0.7 if groups is None else 0.6
+    elif groups is not None:
+        raise ValueError("groups= needs a categorical color=")
+    else:
+        placed &= np.isfinite(values)
+        low, high = (0.0, 1.0) if mode == "cyclic" or not placed.any() else np.percentile(values[placed], [2, 98])
+        style |= {"cmap": cmap or ("twilight" if mode == "cyclic" else "viridis"), "alpha": 0.8}
+        if "norm" not in kwargs:
+            style |= {"vmin": low, "vmax": high}
+    marker = {name: value for name, value in kwargs.items() if name not in ("c", "cmap", "norm", "vmin", "vmax")}
+    style |= kwargs
 
     # A stream apart from the position draws, so the ring jitter does not follow the angle.
     rng = np.random.default_rng([seed, 1])
-    angle = 2 * np.pi * position
     if radius is None:
-        reach, inner = 1.0 + rng.uniform(-0.06, 0.06, adata.n_obs), 1.0
+        inner, outer, reach = 1.0, 1.0, 1.0 + rng.uniform(-0.06, 0.06, adata.n_obs)
+    elif radius not in obs.columns:
+        raise KeyError(f"obs has no column {radius!r}")
     else:
-        if radius not in obs.columns:
-            raise KeyError(f"obs has no column {radius!r}")
         raw = obs[radius].to_numpy(dtype=float)
-        low, high = np.nanpercentile(raw[placed], [2, 98])
-        inner = 0.55
-        reach = inner + 0.6 * np.clip((raw - low) / ((high - low) or 1.0), 0, 1)
-    x, y = reach * np.sin(angle), reach * np.cos(angle)
-
-    present_cats = list(dict.fromkeys(text[placed]))
-    categories = (
-        [phase for phase in PHASE_COLOURS if phase in present_cats]
-        if all(name in PHASE_COLOURS for name in present_cats)
-        else sorted(present_cats)
-    )
-    palette = _clock_palette(categories)
-    rim_radius = (0.55 + 0.6 if radius is not None else 1.0) + 0.18
-    limit = rim_radius + 0.12 if rim and "mantispy" in adata.uns else rim_radius - 0.05
+        low, high = np.nanpercentile(raw[placed], [2, 98]) if np.isfinite(raw[placed]).any() else (0.0, 1.0)
+        inner, outer = 0.55, 1.15
+        reach = inner + (outer - inner) * np.clip((raw - low) / ((high - low) or 1.0), 0, 1)
+    x, y = reach * np.sin(2 * np.pi * position), reach * np.cos(2 * np.pi * position)
+    rim_radius = outer + 0.18
+    limit = rim_radius + (0.12 if rim and edges is not None else -0.05)
 
     def draw(axis: Axes, panel: np.ndarray) -> Any:
-        axis.add_patch(plt.Circle((0, 0), inner if radius is None else 0.55, fill=False, color="0.85", lw=0.6))
+        axis.add_patch(plt.Circle((0, 0), inner, fill=False, color="0.85", lw=0.6))
         if radius is not None:
-            axis.add_patch(plt.Circle((0, 0), 1.15, fill=False, color="0.9", lw=0.5))
+            axis.add_patch(plt.Circle((0, 0), outer, fill=False, color="0.9", lw=0.5))
         rows = rng.permutation(np.flatnonzero(placed & panel))
-        drawn, handles = None, []
         if mode == "categorical":
             # One scatter in shuffled order, so no category hides another under it; the legend uses proxies.
-            shown = groups_list if groups_list is not None else categories
-            front = rows
-            if groups_list is not None:
-                back = rows[~np.isin(text[rows], groups_list)]
-                axis.scatter(x[back], y[back], s=size * 0.5, c="0.85", alpha=0.5, linewidths=0, rasterized=True)
-                front = rows[np.isin(text[rows], groups_list)]
-            if front.size:
-                axis.scatter(
-                    x[front],
-                    y[front],
-                    s=size,
-                    c=to_rgba_array([palette[name] for name in text[front]]),
-                    alpha=0.6 if groups_list is not None else 0.7,
-                    linewidths=0,
-                    rasterized=True,
-                    **kwargs,
+            front = np.isin(text[rows], shown)
+            if groups is not None:
+                back = rows[~front]
+                background = {"s": size * 0.5, "linewidths": 0, "rasterized": True, "alpha": 0.5, **marker}
+                axis.scatter(x[back], y[back], c="0.85", **background)
+            rows = rows[front]
+        colours = to_rgba_array([palette[name] for name in text[rows]]) if mode == "categorical" else values[rows]
+        drawn = axis.scatter(x[rows], y[rows], c=colours, **style)
+        for (start, end), (name, note) in zip(pairwise(edges or ()), notes.items(), strict=False):
+            middle = np.pi * (start + end)
+            if note == "population prior":
+                axis.add_patch(
+                    Wedge((0, 0), rim_radius, 90 - 360 * end, 90 - 360 * start, color="0.6", alpha=0.12, lw=0, zorder=0)
                 )
-            handles = [
-                Line2D([], [], marker="o", linestyle="", color=palette[name], label=name)
-                for name in shown
-                if (text[rows] == name).any()
-            ]
-        else:
-            span = (0.0, 1.0) if mode == "cyclic" else tuple(np.nanpercentile(values[rows], [2, 98]))
-            drawn = axis.scatter(
-                x[rows],
-                y[rows],
-                s=size,
-                c=values[rows],
-                cmap=cmap or ("twilight" if mode == "cyclic" else "viridis"),
-                vmin=span[0],
-                vmax=span[1],
-                alpha=0.8,
-                linewidths=0,
-                rasterized=True,
-                **kwargs,
-            )
-        if edges is not None:
-            # Where the angle follows the control age prior rather than the cell's own data, shade and label it so.
-            g2m_note = "experimental order" if refined.any() else "population prior"
-            arcs = [((edges[0], edges[1]), "G1", "population prior"), ((edges[2], edges[3]), "G2M", g2m_note)]
-            for (start, end), name, note in arcs:
-                if note == "population prior":
-                    axis.add_patch(
-                        Wedge(
-                            (0, 0),
-                            rim_radius,
-                            90 - 360 * end,
-                            90 - 360 * start,
-                            color="0.6",
-                            alpha=0.12,
-                            lw=0,
-                            zorder=0,
-                        )
-                    )
-                middle = (start + end) / 2
-                axis.text(
-                    0.58 * rim_radius * np.sin(2 * np.pi * middle),
-                    0.58 * rim_radius * np.cos(2 * np.pi * middle),
-                    f"{name}\n{note}",
-                    ha="center",
-                    va="center",
-                    fontsize=5,
-                    color="0.5",
-                    zorder=0,
-                )
-            middle = (edges[1] + edges[2]) / 2
             axis.text(
-                0.58 * rim_radius * np.sin(2 * np.pi * middle),
-                0.58 * rim_radius * np.cos(2 * np.pi * middle),
-                "S\nper-cell",
+                0.58 * rim_radius * np.sin(middle),
+                0.58 * rim_radius * np.cos(middle),
+                f"{name}\n{note}",
                 ha="center",
                 va="center",
                 fontsize=5,
-                color="0.4",
+                color="0.4" if note == "per-cell" else "0.5",
                 zorder=0,
             )
             if rim:
-                for (start, end), colour in zip(
-                    list(zip(edges[:-1], edges[1:], strict=True)), ("tab:blue", "tab:grey", "tab:red"), strict=True
-                ):
-                    turn = np.linspace(start, end, 40)
-                    axis.plot(
-                        rim_radius * np.sin(2 * np.pi * turn),
-                        rim_radius * np.cos(2 * np.pi * turn),
-                        color=colour,
-                        lw=3,
-                        solid_capstyle="round",
-                    )
-        axis.set_xlim(-limit, limit)
-        axis.set_ylim(-limit, limit)
-        axis.set_aspect("equal")
+                turn = 2 * np.pi * np.linspace(start, end, 40)
+                axis.plot(rim_radius * np.sin(turn), rim_radius * np.cos(turn), color=PHASE_COLOURS[name], lw=3)
+        axis.set(xlim=(-limit, limit), ylim=(-limit, limit), aspect="equal")
         axis.axis("off")
-        return drawn, handles
+        return drawn
 
+    codes, keys = group_codes(adata, groupby)
     if groupby is None:
-        axis = _axes(ax, (4.5, 4.5))
-        drawn, handles = draw(axis, np.ones(adata.n_obs, dtype=bool))
-        if mode == "categorical":
-            axis.legend(handles=handles, fontsize=6, bbox_to_anchor=(1.0, 1.0), loc="upper left", title=label)
-        elif drawn is not None:
-            axis.figure.colorbar(drawn, ax=axis, label=label, fraction=0.046, pad=0.04)
-        if radius is not None:
-            axis.set_title(f"radius: {radius}", fontsize=8)
-        return _returned(axis)
-
-    codes, groups_keys = group_codes(adata, groupby)
-    columns = min(ncols or len(groups_keys), len(groups_keys))
-    rows_count = -(-len(groups_keys) // columns)
-    figure, axes = plt.subplots(rows_count, columns, figsize=(3.4 * columns, 3.4 * rows_count), squeeze=False)
-    drawn, handles = None, []
-    for index, group in enumerate(groups_keys):
-        panel_drawn, panel_handles = draw(axes.flat[index], codes == index)
-        drawn, handles = panel_drawn or drawn, handles or panel_handles
-        axes.flat[index].set_title(str(group), fontsize=8)
-    for axis in axes.flat[len(groups_keys) :]:
-        axis.set_visible(False)
+        axes = [_axes(ax, (4.5, 4.5))]
+    else:
+        columns = min(ncols or len(keys), len(keys))
+        rows = -(-len(keys) // columns)
+        grid = plt.subplots(rows, columns, figsize=(3.4 * columns, 3.4 * rows), squeeze=False, layout="constrained")
+        axes = list(grid[1].ravel())
+        for axis in axes[len(keys) :]:
+            axis.set_visible(False)
+    for index, group in enumerate(keys):
+        drawn = draw(axes[index], codes == index)
+        if groupby is not None or radius is not None:
+            axes[index].set_title(str(group) if groupby is not None else f"radius: {radius}", fontsize=8)
     if mode == "categorical":
-        axes.flat[0].legend(handles=handles, fontsize=6, bbox_to_anchor=(1.0, 1.0), loc="upper left", title=label)
-    elif drawn is not None:
-        figure.colorbar(drawn, ax=list(figure.axes), label=label, fraction=0.046)
-    figure.tight_layout()
-    return _returned(axes, owned=True)
+        handles = [Line2D([], [], marker="o", linestyle="", color=palette[name], label=name) for name in shown]
+        axes[0].legend(handles=handles, fontsize=6, bbox_to_anchor=(1.0, 1.0), loc="upper left", title=label)
+    else:
+        axes[0].figure.colorbar(drawn, ax=axes[: len(keys)], label=label, fraction=0.046, pad=0.04)
+    return _returned(axes[0]) if groupby is None else None
 
 
 def subpopulation_hits(

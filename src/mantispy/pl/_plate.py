@@ -8,9 +8,10 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 
-from mantispy._core._reduce import get_matrix, group_codes, group_offsets
+from mantispy._core._reduce import group_codes, group_offsets
 from mantispy._core.frames import as_frame
 from mantispy._core.plate import plate_grid, row_label, well_col, well_row
+from mantispy.pl._common import obs_or_feature as _obs_or_feature
 from mantispy.pl._common import returned as _returned
 
 if TYPE_CHECKING:
@@ -19,15 +20,6 @@ if TYPE_CHECKING:
 
 #: How to combine rows falling in the same well; pandas skips NaN.
 AGGREGATIONS = ("median", "mean", "max", "min")
-
-
-def _values(adata: AnnData, color: str) -> np.ndarray:
-    """The per-row quantity to draw, from either a feature or an ``obs`` column."""
-    if color in adata.var_names:
-        return get_matrix(adata)[:, adata.var_names.get_loc(color)].astype(float)
-    if color in adata.obs:
-        return as_frame(adata.obs)[color].to_numpy(dtype=float)
-    raise KeyError(f"{color!r} is neither a feature name nor an obs column")
 
 
 def _natural(text: str) -> list[int | str]:
@@ -70,14 +62,14 @@ def plate(
         When several plates are drawn each panel is labeled with the plate's own well grid.
 
     Raises:
-        ValueError: ``agg`` is not one of ``AGGREGATIONS``, ``ax`` was passed for more than one plate, ``groupby`` varies within a drawn plate, or it or ``Metadata_Plate`` has missing values.
+        ValueError: ``color`` is both a feature name and an ``obs`` column, ``agg`` is not one of ``AGGREGATIONS``, ``ax`` was passed for more than one plate, ``groupby`` varies within a drawn plate, or it or ``Metadata_Plate`` has missing values.
         KeyError: ``color`` is neither a feature name nor an ``obs`` column, ``groupby`` is not an ``obs`` column, or ``plate`` is not a plate of ``adata``.
     """
     import matplotlib.pyplot as plt
 
     if agg not in AGGREGATIONS:
         raise ValueError(f"agg must be one of {AGGREGATIONS}, got {agg!r}")
-    values = _values(adata, color)
+    values = _obs_or_feature(adata, color)[0].astype(float)
     codes, keys = group_codes(adata, [groupby, "Metadata_Plate"] if groupby else "Metadata_Plate")
     panels = [key if isinstance(key, tuple) else (key,) for key in keys]
     drawn = [index for index, panel in enumerate(panels) if plate is None or str(panel[-1]) == str(plate)]

@@ -14,6 +14,7 @@
     :toctree: generated
 
     ds.aconcagua
+    ds.aconcagua_cells
     ds.bbbc021
     ds.rohban
     ds.pki

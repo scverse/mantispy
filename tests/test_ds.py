@@ -124,14 +124,13 @@ def test_jump_export_is_an_export_directory_that_reads() -> None:
 @pytest.mark.network
 @pytest.mark.slow
 def test_aconcagua_cells_holds_eight_genes_and_the_controls_at_cell_resolution() -> None:
-    adata = mt.ds.aconcagua(cells=True)
+    adata = mt.ds.aconcagua_cells()
 
+    assert adata.shape == (38674, 1483)
     assert adata.uns["mantispy"]["resolution"] == "object"
     genes = {"nontargeting", "RRM1", "DTL", "SKA2", "HAUS6", "ITGAV", "TLN1", "PSMB7", "SF3B3"}
     assert set(adata.obs["Metadata_Gene"].astype(str)) == genes
     assert adata.obs_names.is_unique
-    with pytest.raises(ValueError, match="cells must be a bool"):
-        mt.ds.aconcagua(cells="yes")  # type: ignore[arg-type]
 
 
 @pytest.mark.network

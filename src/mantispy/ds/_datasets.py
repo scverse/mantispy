@@ -135,7 +135,7 @@ def _fetch_variant(
     return adata
 
 
-def aconcagua(cache_dir: str | Path | None = None, *, cells: bool = False) -> AnnData:
+def aconcagua(cache_dir: str | Path | None = None) -> AnnData:
     """Aconcagua, the Brieflow reanalysis of an optical pooled CRISPR screen of 5,072 fitness-conferring genes in HeLa cells.
 
     One row per guide per well: the median profile of a guide's cells in a well, after a per plate-and-well robust normalization against the well's non-targeting controls, over a subset of the screen built for the optical-pooled-screens case study.
@@ -146,21 +146,37 @@ def aconcagua(cache_dir: str | Path | None = None, *, cells: bool = False) -> An
     The file is staged on ``scverse-exampledata``, so the loader fetches a single h5ad rather than rebuilding it from the raw per-cell table.
 
     Args:
-        cells: Return the single cells of eight genes (RRM1, DTL, SKA2, HAUS6, ITGAV, TLN1, PSMB7 and SF3B3) and the
-            non-targeting controls instead, with raw intensities and the screen's interphase or mitotic ``Metadata_Class``.
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Returns:
         Guide-by-well profiles read with :func:`mantispy.io.read`, carrying ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Guide``, ``Metadata_Gene``, ``Metadata_Perturbation`` (the gene, or ``"nontargeting"``), ``Metadata_Perturbation_Type`` (``"crispr"``), ``Metadata_Control`` and ``Metadata_Control_Type`` (``negcon``/``poscon``/``treatment``), ``Metadata_Tier`` (``control``/``strong``/``weak``/``random``), ``Metadata_CellCount`` and ``Metadata_MitoticFraction``.
-        With ``cells``, one row per cell at object resolution, carrying the same identifiers but ``Metadata_Class`` in place of the two counts.
 
     References:
         :cite:t:`Di_Bernardo_2026`, the Brieflow reanalysis; :cite:p:`Funk_2022`, the screen it reanalyses.
         The per-cell measurements are from brieflow; the subset is available through the CZ Biohub OPS Explorer.
     """
-    _require_bools(cells=cells)
-    return _fetch_variant("aconcagua", "aconcagua_cells.h5ad" if cells else "aconcagua_guide_well.h5ad", cache_dir)
+    return _fetch_variant("aconcagua", "aconcagua_guide_well.h5ad", cache_dir)
+
+
+def aconcagua_cells(cache_dir: str | Path | None = None) -> AnnData:
+    """Single cells of eight genes of the :func:`aconcagua` screen and its non-targeting controls, in HeLa cells.
+
+    The genes are RRM1, DTL, SKA2, HAUS6, ITGAV, TLN1, PSMB7 and SF3B3. The cells were imaged in four channels: DAPI
+    for DNA, gamma-H2AX, phalloidin for actin, and alpha-tubulin. Intensities are raw, as brieflow measured them, so
+    :func:`mantispy.tl.dna_content` can read the DNA stain.
+
+    Args:
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
+
+    Returns:
+        Cells by features at object resolution, read with :func:`mantispy.io.read`, carrying ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Guide``, ``Metadata_Gene``, ``Metadata_Perturbation`` (the gene, or ``"nontargeting"``), ``Metadata_Perturbation_Type`` (``"crispr"``), ``Metadata_Control``, ``Metadata_Control_Type`` and the screen's interphase or mitotic call per cell, ``Metadata_Class``.
+
+    References:
+        :cite:t:`Di_Bernardo_2026`, the Brieflow reanalysis; :cite:p:`Funk_2022`, the screen it reanalyses.
+    """
+    return _fetch_variant("aconcagua", "aconcagua_cells.h5ad", cache_dir)
 
 
 #: The (aggregated, feature_selected) combination each rehosted bbbc021 variant answers to.
