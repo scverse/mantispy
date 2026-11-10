@@ -96,13 +96,18 @@ def test_cell_cycle_plot_colours_the_projected_phases(placed):
     (panel,) = plt.gcf().axes
     assert {"G1", "S", "G2M"} <= {text.get_text() for text in panel.get_legend().get_texts()}
     assert panel.get_xlabel() == "Metadata_DNAContent"
+    mt.pl.cell_cycle(placed, dna_feature="Metadata_DNAContent", key="cell_cycle_phase", by="Metadata_Well", ncols=3)
+    assert sum(axis.get_visible() for axis in plt.gcf().axes) == 4
+    placed.obs["Nuclei_Intensity_IntegratedIntensity_DNA"] = 1.0
+    with pytest.raises(ValueError, match="both an obs column and a feature"):
+        mt.pl.cell_cycle(placed, dna_feature="Nuclei_Intensity_IntegratedIntensity_DNA", key="cell_cycle_phase")
+    del placed.obs["Nuclei_Intensity_IntegratedIntensity_DNA"]
 
 
-def test_cell_cycle_plot_draws_one_occupancy_curve_per_group(placed):
-    assert mt.pl.cell_cycle(placed, position="cell_cycle", by="Metadata_Perturbation") is None
+def test_cell_cycle_occupancy_draws_one_curve_per_group_and_marks_s(placed):
+    assert mt.pl.cell_cycle_occupancy(placed, by="Metadata_Perturbation", highlight="NTC") is None
     (panel,) = plt.gcf().axes
     assert sorted(text.get_text() for text in panel.get_legend().get_texts()) == ["KO", "NTC"]
+    assert len(panel.get_lines()) == 2
     with pytest.raises(KeyError, match="project_cell_cycle"):
-        mt.pl.cell_cycle(placed, position="missing")
-    with pytest.raises(ValueError, match="dna_feature= .* position="):
-        mt.pl.cell_cycle(placed)
+        mt.pl.cell_cycle_occupancy(placed, key="missing")

@@ -433,22 +433,33 @@ def test_composition_shift_warns_when_cells_are_the_unit():
         _composition(_phase_object(2, ko_g1=0.4), replicate=None, n_permutations=9)
 
 
-def _cycle_cells(n_cells=4000, kind="cycle", seed=0):
-    """Cells of an exponentially growing population: G1, then S with DNA rising linearly, then G2 and M.
+_AREA, _SOLIDITY = "Nuclei_AreaShape_Area", "Nuclei_AreaShape_Solidity"
+_G4 = 0.9  # where a measured 4N peak sits, short of the 1 a perfect stain gives
 
+
+def _ages(n_cells, rng):
+    return -np.log2(1 - rng.random(n_cells) / 2)
+
+
+def _cycle_cells(n_cells=4000, kind="cycle", seed=0):
+    """Cells of an exponentially growing population: G1, then S, then G2M, with S filling in DNA linearly.
+
+    The 4N peak sits at ``_G4`` doublings rather than 1, and through S the amount of DNA, not its logarithm, rises
+    linearly, so a model that assumes either a 4N peak at 1 or a linear rise on the log scale misplaces cells.
     ``kind`` replaces the DNA content with a population that does not cycle: a narrow line from 2N, a single 2N blob,
     or 2N and 4N clusters.
     """
     rng = np.random.default_rng(seed)
-    age = -np.log2(1 - rng.random(n_cells) / 2)
-    content = np.clip((age - 0.45) / 0.3, 0, 1)
+    age = _ages(n_cells, rng)
+    progress = np.clip((age - 0.45) / 0.3, 0, 1)
+    content = np.log2(1 + (2**_G4 - 1) * progress)
     if kind == "line":
         content = rng.uniform(0, 0.3, n_cells)
     elif kind == "blob":
         content = np.zeros(n_cells)
     elif kind == "two":
-        content = (rng.random(n_cells) < 0.4).astype(float)
-    content = content + rng.normal(0, 0.05, n_cells)
+        content = (rng.random(n_cells) < 0.4) * _G4
+    content = content + rng.normal(0, 0.03, n_cells)
     integrated = 1000 * 2**content
     phase = np.where(age < 0.45, "G1", np.where(age < 0.75, "S", "G2M"))
     obs = pd.DataFrame(
@@ -462,52 +473,92 @@ def _cycle_cells(n_cells=4000, kind="cycle", seed=0):
         },
         index=[str(row) for row in range(n_cells)],
     )
-    cells = ad.AnnData(X=integrated[:, None].astype(np.float32), obs=obs, var=pd.DataFrame(index=[_DNA]))
+    area = 1000 * 2 ** (0.7 * content + rng.normal(0, 0.05, n_cells))
+    solidity = np.clip(rng.normal(0.975, 0.004, n_cells), 0, 1)
+    X = np.column_stack([integrated, area, solidity]).astype(np.float32)
+    cells = ad.AnnData(X=X, obs=obs, var=pd.DataFrame(index=[_DNA, _AREA, _SOLIDITY]))
     mt.tl.dna_content(cells, dna_feature=_DNA)
     return cells
 
 
 def _clock(cells, **kwargs):
-    mt.tl.fit_cell_cycle(cells, **kwargs)
+    mt.tl.fit_cell_cycle(cells, qc_features=(_AREA, _SOLIDITY), **kwargs)
     mt.tl.project_cell_cycle(cells)
     return cells
 
 
-def test_cell_cycle_places_cells_with_calibrated_intervals():
-    """S cells are placed tightly from DNA; G1 and G2 cells get their whole plateau, which covers the true age."""
-    cells = _clock(_cycle_cells())
-    obs, quantiles = cells.obs, cells.obsm["cell_cycle_quantiles"]
+def test_cell_cycle_recovers_the_phases_and_places_cells_with_calibrated_intervals():
+    """The model finds the 4N peak where it is, the true phase shares, and S positions to within a few hundredths."""
+    cells = _clock(_cycle_cells(n_cells=6000))
+    model = cells.uns["mantispy"]["cell_cycle"]
+    assert abs(model["peaks"][1] - _G4) < 0.03
+    truth = 2 * (1 - 2.0 ** -np.array([0.45, 0.75]))  # the share of a growing population younger than each boundary
+    np.testing.assert_allclose(np.cumsum(model["fractions"])[:2], truth, atol=0.02)
+
+    obs, quantiles = cells.obs, cells.obsm["cell_cycle_quantiles"].to_numpy()
     age, position = obs["age"].to_numpy(), obs["cell_cycle_position"].to_numpy()
-    assert pd.Series(position).corr(pd.Series(age), method="spearman") > 0.8  # plateau medians tie
-    in_s = (obs["true_phase"] == "S").to_numpy()
-    assert np.median(np.abs(position[in_s] - age[in_s])) < 0.05
+    in_s = (obs["true_phase"] == "S").to_numpy() & (np.abs(age - 0.6) < 0.12)
+    assert np.median(position[in_s] - age[in_s]) == pytest.approx(0, abs=0.006)
+    placed = np.isfinite(quantiles).all(axis=1)
     inside90 = (age >= quantiles[:, 0]) & (age <= quantiles[:, 4])
     inside50 = (age >= quantiles[:, 1]) & (age <= quantiles[:, 3])
-    assert inside90.mean() > 0.85
-    assert 0.35 < inside50.mean() < 0.7
-    width = quantiles[:, 4] - quantiles[:, 0]
-    called = obs["cell_cycle_phase"].to_numpy()
-    assert width[called == "G1"].mean() > 3 * width[called == "S"].mean()
+    assert inside90[placed].mean() > 0.85
+    assert 0.35 < inside50[placed].mean() < 0.7
+
+    probabilities = cells.obsm["cell_cycle_probabilities"]
+    assert list(probabilities.columns) == ["G1", "S", "G2M", "off-cycle"]
+    np.testing.assert_allclose(probabilities.sum(axis=1), 1)
+    truth_probability = probabilities.to_numpy()[
+        np.arange(cells.n_obs), probabilities.columns.get_indexer(obs["true_phase"])
+    ]
+    assert truth_probability.mean() > 0.85
+    called = obs["cell_cycle_phase"].astype(str)
+    assert (called == obs["true_phase"]).mean() > 0.9
+    assert (called == probabilities.idxmax(axis=1)).all()
+
+
+def test_cell_cycle_flags_merged_nuclei_and_debris_against_the_reference(caplog):
+    cells = _cycle_cells(n_cells=3000)
+    merged, debris = np.arange(10), np.arange(10, 20)
+    cells.X[merged, 2] = 0.85
+    cells.X[debris, 1] = 40
+    _clock(cells)
+    flags = cells.obs["cell_cycle_qc"].astype(str).to_numpy()
+    assert (flags[merged] == "irregular").all()
+    assert (flags[debris] == "small").all()
+    assert (flags[20:] == "ok").mean() > 0.99
+    assert set(cells.uns["mantispy"]["cell_cycle"]["qc"]) == {"features", "cutoffs"}
+
+
+def test_draw_positions_spreads_the_outer_tenth_over_the_tails():
+    from mantispy.tl._cell_cycle import _draw_positions
+
+    quantiles = np.tile([0.3, 0.4, 0.5, 0.6, 0.7], (20000, 1))
+    drawn = _draw_positions(quantiles, seed=1)
+    low = drawn[drawn < 0.3]
+    assert 0.04 < low.size / drawn.size < 0.06
+    assert np.unique(low.round(4)).size > 100
+    assert drawn.min() >= 0.25 and drawn.max() <= 0.75
 
 
 def _stained(shift, well="W3", **kwargs):
     """Cycling cells whose ``well`` reads its DNA stain ``shift`` doublings off, set against the plate's controls."""
     cells = _cycle_cells(**kwargs)
     off = (cells.obs["Metadata_Well"] == well).to_numpy()
-    cells.X[off] *= 2**shift
+    cells.X[off, 0] *= 2**shift
     mt.tl.dna_content(cells, dna_feature=_DNA, by="Metadata_Plate", reference="negcon")
-    return cells, off
+    return cells
 
 
 def test_cell_cycle_warns_about_a_well_whose_peaks_both_sit_off_the_reference(caplog):
-    cells, off = _stained(-0.3)
+    cells = _stained(-0.3)
     content = cells.obs["Metadata_DNAContent"].copy()
     with caplog.at_level(logging.WARNING, logger="mantispy"):
         _clock(cells)
-    shift = cells.obs["cell_cycle_well_shift"].to_numpy()
-    assert np.allclose(shift[off], shift[off][0])
-    assert -0.4 < shift[off][0] < -0.2
-    assert (np.abs(shift[~off]) < cells.uns["mantispy"]["cell_cycle"]["sd"]).all()
+    wells = cells.uns["mantispy"]["cell_cycle_wells"].set_index("Metadata_Well")
+    assert -0.4 < wells.loc["W3", "shift"] < -0.2
+    assert (wells.drop(index="W3")["shift"].abs() < cells.uns["mantispy"]["cell_cycle"]["sd"]).all()
+    assert (wells["n_cells"] == 1000).all()
     warned = [record.getMessage() for record in caplog.records if "peaks off the reference" in record.getMessage()]
     assert len(warned) == 1 and "W3" in warned[0] and "W0" not in warned[0]
     pd.testing.assert_series_equal(cells.obs["Metadata_DNAContent"], content)
@@ -515,21 +566,25 @@ def test_cell_cycle_warns_about_a_well_whose_peaks_both_sit_off_the_reference(ca
 
 def test_cell_cycle_leaves_a_well_unchecked_without_both_peaks(caplog):
     """An arrested well has one peak, so a shifted stain and a shifted population look alike; it is not judged."""
-    cells, _ = _stained(0.0)
+    cells = _stained(0.0)
     arrested = ((cells.obs["Metadata_Well"] == "W3") & (cells.obs["true_phase"] != "G2M")).to_numpy()
     cells = cells[~arrested].copy()
     in_w2 = (cells.obs["Metadata_Well"] == "W2").to_numpy()
     cells = cells[~(in_w2 & (np.cumsum(in_w2) > 30))].copy()
     with caplog.at_level(logging.WARNING, logger="mantispy"):
         _clock(cells)
-    shift = cells.obs.groupby("Metadata_Well", observed=True)["cell_cycle_well_shift"].first()
+    shift = cells.uns["mantispy"]["cell_cycle_wells"].set_index("Metadata_Well")["shift"]
     assert np.isnan(shift["W3"]) and np.isnan(shift["W2"])
     assert shift[["W0", "W1"]].abs().max() < cells.uns["mantispy"]["cell_cycle"]["sd"]
     assert not any("peaks off the reference" in record.getMessage() for record in caplog.records)
     mt.tl.project_cell_cycle(cells, by=None)
-    assert cells.obs["cell_cycle_well_shift"].isna().all()
+    assert cells.uns["mantispy"]["cell_cycle_wells"]["shift"].isna().all()
     with pytest.raises(KeyError, match="Metadata_Missing"):
         mt.tl.project_cell_cycle(cells, by="Metadata_Missing")
+    cells.obs["Metadata_Well"] = cells.obs["Metadata_Well"].astype(object)
+    cells.obs.iloc[0, cells.obs.columns.get_loc("Metadata_Well")] = np.nan
+    with pytest.raises(ValueError, match="missing values"):
+        mt.tl.project_cell_cycle(cells)
 
 
 @pytest.mark.parametrize("kind", ["line", "blob", "two"])
@@ -538,10 +593,11 @@ def test_cell_cycle_gate_fails_without_a_cycling_population(kind, caplog):
     cells = _cycle_cells(kind=kind)
     with caplog.at_level(logging.WARNING, logger="mantispy"):
         _clock(cells)
-    assert not cells.uns["mantispy"]["cell_cycle"]["gate"]["passed"]
+    assert not cells.uns["mantispy"]["cell_cycle"]["passed"]
     assert cells.obs["cell_cycle_position"].isna().all()
     assert cells.obs["cell_cycle_phase"].isna().all()
-    assert any("failed its gate" in record.getMessage() for record in caplog.records)
+    assert cells.obsm["cell_cycle_probabilities"].isna().all().all()
+    assert any("failed its check" in record.getMessage() for record in caplog.records)
 
 
 def test_cell_cycle_needs_dna_content_and_a_reference():
@@ -568,7 +624,7 @@ def test_cell_cycle_leaves_cells_without_dna_content_unplaced():
 
 
 def test_cell_cycle_projects_perturbed_cells_through_the_reference_model():
-    """Cells arrested in G2 are placed on the reference's cycle and do not change the model fitted on it."""
+    """Cells arrested in G2M are placed on the reference's cycle and do not change the model fitted on it."""
     control = _cycle_cells(seed=1)
     arrested = _cycle_cells(seed=2)
     arrested = arrested[(arrested.obs["true_phase"] == "G2M").to_numpy()].copy()
@@ -577,17 +633,40 @@ def test_cell_cycle_projects_perturbed_cells_through_the_reference_model():
     cells = ad.concat([control, arrested], merge="same")
     _clock(cells)
     alone = _clock(control.copy())
-    for name in ("sd", "off_cycle", "fractions", "g4"):
+    for name in ("sd", "off_cycle", "fractions", "peaks"):
         np.testing.assert_allclose(cells.uns["mantispy"]["cell_cycle"][name], alone.uns["mantispy"]["cell_cycle"][name])
     ko = (cells.obs["Metadata_Perturbation"] == "KO").to_numpy()
     assert (cells.obs.loc[ko, "cell_cycle_phase"] == "G2M").mean() > 0.9
     assert cells.obs.loc[ko, "cell_cycle_position"].median() > cells.obs.loc[~ko, "cell_cycle_position"].quantile(0.75)
 
 
-def test_cell_cycle_model_round_trips_through_h5ad(tmp_path):
+def test_cell_cycle_model_round_trips_through_h5ad_and_projects_another_object(tmp_path):
     cells = _clock(_cycle_cells(n_cells=1000))
     path = tmp_path / "cycle.h5ad"
     cells.write_h5ad(path)
     back = ad.read_h5ad(path)
     mt.tl.project_cell_cycle(back, key_added="again")
     np.testing.assert_allclose(back.obs["again_position"], cells.obs["cell_cycle_position"])
+    other = _cycle_cells(n_cells=1000, seed=3)
+    mt.tl.project_cell_cycle(other, model=back.uns["mantispy"]["cell_cycle"])
+    assert other.obs["cell_cycle_qc"].notna().all()
+    assert other.obs["cell_cycle_phase"].notna().all()
+
+
+def test_dna_content_finds_the_nuclear_dna_feature_on_its_own():
+    rng = np.random.default_rng(0)
+    names = [
+        "Cells_Intensity_IntegratedIntensity_DAPI",
+        "Nuclei_Intensity_IntegratedIntensityEdge_DAPI",
+        "Nuclei_Intensity_IntegratedIntensity_Hoechst",
+    ]
+    values = 1000 * 2 ** rng.normal(0, 0.1, (300, 3))
+    values[:, 2] *= 7
+    cells = ad.AnnData(
+        X=values,
+        obs=pd.DataFrame({"Metadata_Plate": "P1"}, index=[str(row) for row in range(300)]),
+        var=pd.DataFrame({"channel": ["DAPI", "DAPI", "Hoechst"]}, index=names),
+    )
+    mt.tl.dna_content(cells, by="Metadata_Plate")
+    peak = cells.uns["mantispy"]["dna_content"]["g1_peak"].iloc[0]
+    assert peak == pytest.approx(np.log2(7000), abs=0.1)

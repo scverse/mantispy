@@ -241,7 +241,10 @@ def _dna_intensity(adata: AnnData, dna_feature: str | None, layer: str | None, c
         candidates = [
             name
             for name in adata.var_names
-            if "IntegratedIntensity" in name and "DNA" in str(var.loc[name].get("channel"))
+            if name.startswith("Nuclei_")
+            and "IntegratedIntensity" in name
+            and "Edge" not in name
+            and any(stain in str(var.loc[name].get("channel")).lower() for stain in ("dna", "dapi", "hoechst"))
         ]
         if not candidates:
             raise KeyError(
@@ -280,7 +283,7 @@ def cell_cycle_phase(
     Args:
         adata: Single-cell object holding raw, unnormalized intensities.
         dna_feature: The integrated DNA intensity feature.
-            Found from the feature names and ``var["channel"]`` when omitted.
+            Found when omitted as the ``Nuclei_`` integrated intensity, not its edge, whose ``var["channel"]`` names DNA, DAPI or Hoechst.
         by: Fit separately within each group, normally the plate, since staining intensity does not carry across plates.
         layer: Read this layer instead of ``X``, for example ``"raw"`` after ``normalize(keep_raw=True)``.
         key_added: ``obs`` column written.
@@ -366,14 +369,14 @@ def dna_content(
     Args:
         adata: Single-cell object holding raw, unnormalized intensities.
         dna_feature: The integrated DNA intensity feature.
-            Found from the feature names and ``var["channel"]`` when omitted.
+            Found when omitted as the ``Nuclei_`` integrated intensity, not its edge, whose ``var["channel"]`` names DNA, DAPI or Hoechst.
         by: Find the G1 peak separately within each group, normally the well, since staining intensity does not carry across wells.
         layer: Read this layer instead of ``X``, for example ``"raw"`` after ``normalize(keep_raw=True)``.
         min_cells: A group with fewer usable cells than this gets no G1 peak, and its cells get ``NaN``.
         reference: Find each group's G1 peak on these cells only, and apply it to every cell of the group:
             ``"negcon"`` for the negative controls, or the name of a boolean ``obs`` column. ``None`` uses every cell.
             Pass it when a treatment can arrest whole wells, so their peak is not taken for G1; ``by`` must then
-            group treated and control cells together, normally by plate.
+            group treated and control cells together, normally by plate, or by well in a pooled screen.
         key_added: ``obs`` column written.
         copy: Return a modified copy instead of mutating in place.
 

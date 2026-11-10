@@ -119,6 +119,7 @@ Plotting functions return Matplotlib axes and do not modify the object.
 
     pl.cluster_composition
     pl.cell_cycle
+    pl.cell_cycle_occupancy
     pl.density
     pl.subpopulation_hits
 ```

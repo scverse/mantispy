@@ -135,7 +135,7 @@ def _fetch_variant(
     return adata
 
 
-def aconcagua(cells: bool = False, cache_dir: str | Path | None = None) -> AnnData:
+def aconcagua(cache_dir: str | Path | None = None, *, cells: bool = False) -> AnnData:
     """Aconcagua, the Brieflow reanalysis of an optical pooled CRISPR screen of 5,072 fitness-conferring genes in HeLa cells.
 
     One row per guide per well: the median profile of a guide's cells in a well, after a per plate-and-well robust normalization against the well's non-targeting controls, over a subset of the screen built for the optical-pooled-screens case study.
