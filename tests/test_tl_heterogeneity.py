@@ -670,3 +670,65 @@ def test_dna_content_finds_the_nuclear_dna_feature_on_its_own():
     mt.tl.dna_content(cells, by="Metadata_Plate")
     peak = cells.uns["mantispy"]["dna_content"]["g1_peak"].iloc[0]
     assert peak == pytest.approx(np.log2(7000), abs=0.1)
+
+
+def _progress_cells(n_cells=3000, seed=0):
+    """Cycling cells plus a tubulin feature that rises with age through the whole cycle, G2M included."""
+    cells = _cycle_cells(n_cells=n_cells, seed=seed)
+    tubulin = cells.obs["age"].to_numpy() + np.random.default_rng(seed + 10).normal(0, 0.03, cells.n_obs)
+    X = np.column_stack([cells.X, 100 * (1 + tubulin)]).astype(np.float32)
+    return ad.AnnData(X=X, obs=cells.obs.copy(), var=pd.DataFrame(index=[*cells.var_names, _TUBULIN]))
+
+
+_TUBULIN = "Cells_Intensity_MeanIntensity_Tubulin"
+
+
+def test_cell_cycle_g2m_order_is_off_by_default_and_follows_progress_when_on(caplog):
+    cells = _progress_cells()
+    _clock(cells)
+    position = cells.obs["cell_cycle_position"].copy()
+    assert "g2m" not in cells.uns["mantispy"]["cell_cycle"]
+    assert "cell_cycle_g2m_order" not in cells.obs
+
+    mt.tl.fit_cell_cycle(cells, qc_features=(_AREA, _SOLIDITY), refine_g2m=True)
+    assert cells.uns["mantispy"]["cell_cycle"]["g2m"]["features"] == [_AREA, _SOLIDITY, _TUBULIN]  # no DNA stain
+    with caplog.at_level(logging.WARNING, logger="mantispy"):
+        mt.tl.project_cell_cycle(cells)
+    assert any("cannot be validated without a marker" in record.getMessage() for record in caplog.records)
+    pd.testing.assert_series_equal(cells.obs["cell_cycle_position"], position)
+
+    order = cells.obs["cell_cycle_g2m_order"].to_numpy()
+    g2m = (cells.obs["cell_cycle_phase"] == "G2M").to_numpy()
+    assert np.isfinite(order[g2m]).all() and np.isnan(order[~g2m]).all()
+    assert 0 < order[g2m].min() and order[g2m].max() < 1
+    age = cells.obs["age"].to_numpy()
+    assert pd.Series(order[g2m]).corr(pd.Series(age[g2m]), method="spearman") > 0.5
+
+
+def test_cell_cycle_g2m_order_handles_degenerate_inputs_and_reuses_the_model(tmp_path):
+    cells = _progress_cells()
+    mt.tl.fit_cell_cycle(cells, refine_g2m=True)
+    model = cells.uns["mantispy"]["cell_cycle"]
+
+    no_g2m = cells[(cells.obs["true_phase"] == "G1").to_numpy()].copy()
+    mt.tl.project_cell_cycle(no_g2m, model=model)
+    assert (no_g2m.obs["cell_cycle_phase"] != "G2M").all()
+    assert no_g2m.obs["cell_cycle_g2m_order"].isna().all()
+
+    few = cells[np.flatnonzero((cells.obs["true_phase"] == "G2M").to_numpy())[:5]].copy()
+    mt.tl.project_cell_cycle(few, model=model)
+    called = (few.obs["cell_cycle_phase"] == "G2M").to_numpy()
+    assert called.any() and few.obs.loc[called, "cell_cycle_g2m_order"].notna().all()
+
+    holes = cells.copy()
+    holes.X[:200, 3] = np.nan
+    mt.tl.project_cell_cycle(holes, model=model)
+    called = (holes.obs["cell_cycle_phase"] == "G2M").to_numpy()
+    assert holes.obs.loc[called, "cell_cycle_g2m_order"].notna().all()
+
+    mt.tl.project_cell_cycle(cells)
+    path = tmp_path / "g2m.h5ad"
+    cells.write_h5ad(path)
+    back = ad.read_h5ad(path)
+    mt.tl.project_cell_cycle(back, key_added="again")
+    np.testing.assert_allclose(back.obs["again_g2m_order"], cells.obs["cell_cycle_g2m_order"])

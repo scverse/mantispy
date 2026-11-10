@@ -23,6 +23,7 @@ _GRID = (np.arange(400) + 0.5) / 400
 _LOG_PRIOR = np.log(2 * np.log(2)) - _GRID * np.log(2)
 _MIN_REFERENCE = 50
 _QC_SPREAD = 4  # robust standard deviations below the reference median that flag a nucleus
+_G2M_COMPONENTS, _G2M_NEIGHBOURS, _G2M_SMOOTHING = 30, 30, 10.0
 
 
 def _age(fraction: Any) -> Any:
@@ -197,12 +198,111 @@ def _draw_positions(quantiles: np.ndarray, seed: int = 0) -> np.ndarray:
     return knots[rows, upper - 1] + fraction * (knots[rows, upper] - knots[rows, upper - 1])
 
 
+def _posterior(content: np.ndarray, model: Mapping) -> tuple[np.ndarray, np.ndarray]:
+    """Per finite DNA content, the probability of each of ``CYCLE_PHASES`` and the quantiles of the position."""
+    expected, edges = _template(model)
+    phase_of = np.digitize(_GRID, edges[1:3])
+    low, high = _span(model["peaks"])
+    off, flat, sd = float(model["off_cycle"]), 1 / (high - low), float(model["sd"])
+    probabilities = np.empty((content.size, len(CYCLE_PHASES)))
+    quantiles = np.empty((content.size, len(QUANTILES)))
+    for start in range(0, content.size, 8192):
+        chunk = slice(start, start + 8192)
+        log_post = _LOG_PRIOR[None] - 0.5 * ((content[chunk, None] - expected[None]) / sd) ** 2
+        peak = log_post.max(axis=1, keepdims=True)
+        post = np.exp(log_post - peak)
+        cycle = post.sum(axis=1) * np.exp(peak[:, 0]) / (_GRID.size * sd * np.sqrt(2 * np.pi))
+        p_off = off * flat / ((1 - off) * cycle + off * flat)
+        post /= post.sum(axis=1, keepdims=True)
+        for index in range(3):
+            probabilities[chunk, index] = (1 - p_off) * post[:, phase_of == index].sum(axis=1)
+        probabilities[chunk, 3] = p_off
+        cdf = np.cumsum(post, axis=1)
+        quantiles[chunk] = np.stack(
+            [_GRID[np.minimum((cdf < q).sum(axis=1), _GRID.size - 1)] for q in QUANTILES], axis=1
+        )
+    return probabilities, quantiles
+
+
+def _rank01(values: np.ndarray) -> np.ndarray:
+    return (pd.Series(values).rank().to_numpy() - 0.5) / values.size
+
+
+def _dna_free_features(adata: AnnData) -> list[str]:
+    """Every feature not measured on a DNA stain, so the G2M order cannot read DNA content back."""
+    var = as_frame(adata.var)
+    stains = ("dna", "dapi", "hoechst")
+    return [
+        str(name)
+        for name in adata.var_names
+        if not any(stain in str(name).lower() for stain in stains)
+        and not any(stain in str(var.loc[name].get("channel")).lower() for stain in stains)
+    ]
+
+
+def _g2m_space(block: np.ndarray, g2m: Mapping) -> tuple[np.ndarray, np.ndarray]:
+    """The robustly scaled features, clipped, and their projection on the reference's principal axes."""
+    scaled = np.clip(np.nan_to_num((block - g2m["median"]) / g2m["scale"], nan=0.0, posinf=8, neginf=-8), -8, 8)
+    return scaled, (scaled - g2m["mean"]) @ np.asarray(g2m["components"]).T
+
+
+def _fit_g2m(block: np.ndarray, content: np.ndarray, in_s: np.ndarray, names: list[str]) -> dict:
+    """The pieces of the G2M order, fitted on reference cells on the cycle; ``in_s`` marks those in S."""
+    from scipy.stats import rankdata
+    from sklearn.linear_model import Ridge
+
+    median = np.nanmedian(block, axis=0)
+    spread = np.nanpercentile(block, 75, axis=0) - np.nanpercentile(block, 25, axis=0)
+    scale = np.where(spread > 1e-8 * np.maximum(np.abs(median), 1), spread, np.nanstd(block, axis=0))
+    keep = np.isfinite(scale) & (scale > 1e-12) & np.isfinite(median)
+    g2m: dict[str, Any] = {"features": [name for name, kept in zip(names, keep, strict=True) if kept]}
+    g2m["median"], g2m["scale"] = median[keep], scale[keep]
+    scaled = np.clip(np.nan_to_num((block[:, keep] - g2m["median"]) / g2m["scale"], nan=0.0), -8, 8)
+    g2m["mean"] = scaled.mean(axis=0)
+    components = np.linalg.svd(scaled - g2m["mean"], full_matrices=False)[2][:_G2M_COMPONENTS]
+    g2m["components"] = components
+    projected = (scaled - g2m["mean"]) @ components.T
+    ridge = Ridge(alpha=float(in_s.sum())).fit(projected[in_s], content[in_s])
+    g2m["coef"], g2m["intercept"] = ridge.coef_, float(ridge.intercept_)
+    ranked = rankdata(scaled[in_s], axis=0)
+    target = rankdata(content[in_s])
+    centred = ranked - ranked.mean(axis=0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        correlation = (centred * (target - target.mean())[:, None]).sum(axis=0) / (
+            np.sqrt((centred**2).sum(axis=0)) * np.sqrt(((target - target.mean()) ** 2).sum())
+        )
+    g2m["weights"] = np.abs(np.nan_to_num(correlation))
+    return g2m
+
+
+def _g2m_order(block: np.ndarray, g2m: Mapping) -> np.ndarray:
+    """Order G2M cells along the S-phase axis, then smooth that order on their nearest-neighbour graph."""
+    import anndata as ad
+    import scanpy as sc
+    from scipy.sparse import csr_matrix, diags, eye
+    from scipy.sparse.linalg import cg
+
+    scaled, projected = _g2m_space(block, g2m)
+    start = _rank01(projected @ np.asarray(g2m["coef"]) + float(g2m["intercept"]))
+    if block.shape[0] < 3:
+        return start
+    weighted = ((scaled - g2m["mean"]) * g2m["weights"]) @ np.asarray(g2m["components"]).T
+    graph = ad.AnnData(np.ascontiguousarray(weighted, dtype=np.float32))
+    # With fewer than 50 dimensions scanpy builds the graph on X itself, so no representation needs naming.
+    sc.pp.neighbors(graph, n_neighbors=min(_G2M_NEIGHBOURS, block.shape[0] - 1))
+    affinity = csr_matrix(graph.obsp["connectivities"])
+    laplacian = diags(np.asarray(affinity.sum(axis=1)).ravel()) - affinity
+    smoothed = cg(eye(block.shape[0]) + _G2M_SMOOTHING * laplacian, start, maxiter=300)[0]
+    return _rank01(smoothed)
+
+
 @inplace_or_copy(expects="object")
 def fit_cell_cycle(
     adata: AnnData,
     key: str = "Metadata_DNAContent",
     reference: str | None = "negcon",
     qc_features: tuple[str, str] | None = None,
+    refine_g2m: bool = False,
     layer: str | None = None,
     key_added: str = "cell_cycle",
     copy: bool = False,
@@ -228,7 +328,14 @@ def fit_cell_cycle(
         qc_features: The nuclear area and solidity features, as a pair. With them, the model learns from the
             reference how small, how irregular and how dim, per amount of DNA, a nucleus may be, and
             :func:`~mantispy.tl.project_cell_cycle` flags nuclei beyond that. ``None`` checks no shape.
-        layer: Layer to read ``qc_features`` from, or ``None`` for ``X``.
+        refine_g2m: Experimental. Also fit a label-free order of the cells within G2M, which DNA content cannot
+            order. Every feature not measured on a DNA stain is used: a ridge regression of DNA content on them,
+            fitted on the reference's S cells, gives an axis that is extended into G2M, and
+            :func:`~mantispy.tl.project_cell_cycle` smooths the order along it on the G2M cells' nearest-neighbour
+            graph. In testing, the order followed a marker of G2 and mitosis on some datasets and not on others, and
+            no label-free check told the two apart, so validate it against an orthogonal marker before reading it
+            biologically.
+        layer: Layer to read ``qc_features`` and the ``refine_g2m`` features from, or ``None`` for ``X``.
         key_added: Key the model is written under in ``uns["mantispy"]``.
         copy: Return a modified copy instead of mutating in place.
 
@@ -236,8 +343,9 @@ def fit_cell_cycle(
         ``None``, or the modified copy.
         Writes ``uns["mantispy"][key_added]``: the DNA ``key``, whether the reference ``passed`` the check, the
         measured 2N and 4N ``peaks``, the 2N peak width ``sd``, the reference ``fractions`` in G1, S and G2M, the
-        ``off_cycle`` weight of cells off the cycle, and with ``qc_features`` a ``qc`` entry holding the features
-        and the ``cutoffs`` on log2 area, solidity and DNA per log2 area.
+        ``off_cycle`` weight of cells off the cycle, with ``qc_features`` a ``qc`` entry holding the features
+        and the ``cutoffs`` on log2 area, solidity and DNA per log2 area, and with ``refine_g2m`` a ``g2m`` entry
+        holding the features, their scaling, the principal axes, the feature weights and the ridge coefficients.
 
     Raises:
         KeyError: ``obs`` has no column ``key``; run :func:`~mantispy.tl.dna_content` first.
@@ -274,6 +382,18 @@ def fit_cell_cycle(
             centre, spread = _robust(column[np.isfinite(column)])
             cutoffs.append(centre - _QC_SPREAD * spread)
         model["qc"] = {"features": [str(name) for name in qc_features], "cutoffs": cutoffs}
+    if refine_g2m and gate["passed"]:
+        called = _posterior(values, model)[0].argmax(axis=1)
+        on, in_s = called != 3, called == 1
+        if in_s.sum() < _MIN_REFERENCE:
+            get_logger().warning(
+                "fit_cell_cycle: the reference has %d S cells, too few to fit the G2M order; refine_g2m is skipped",
+                int(in_s.sum()),
+            )
+        else:
+            names = _dna_free_features(adata)
+            block = get_matrix(adata[np.flatnonzero(reference_rows)[on]][:, names], layer).astype(np.float64)
+            model["g2m"] = _fit_g2m(block, values[on], in_s[on], names)
     if not gate["passed"]:
         get_logger().warning(
             "fit_cell_cycle: the reference does not show separate 2N and 4N peaks with S cells between them %s; "
@@ -310,7 +430,7 @@ def project_cell_cycle(
         adata: Object-resolution object carrying the DNA content column the model was fitted on.
         model: Key of the model in ``uns["mantispy"]``, or the model itself, such as one fitted on another object.
         by: The ``obs`` columns of a well, to check each well's peaks against the reference; ``None`` skips the check.
-        layer: Layer to read the model's ``qc_features`` from, or ``None`` for ``X``.
+        layer: Layer to read the model's ``qc_features`` and G2M features from, or ``None`` for ``X``.
         key_added: Prefix of the outputs written.
         copy: Return a modified copy instead of mutating in place.
 
@@ -323,7 +443,9 @@ def project_cell_cycle(
         ``obs[key_added + "_qc"]``, when the model holds ``qc_features``, the first shape check a nucleus fails out of
         ``QC_FLAGS``: ``"irregular"`` for a solidity below the reference's, as merged nuclei and mitotic figures
         have, ``"small"`` for an area below it, as fragments and debris have, ``"dim"`` for too little DNA per area,
-        and ``"ok"`` otherwise; and
+        and ``"ok"`` otherwise;
+        ``obs[key_added + "_g2m_order"]``, when the model was fitted with ``refine_g2m``, the experimental order of
+        each cell called G2M within G2M, from 0 to 1, ``NaN`` for every other cell; and
         ``uns["mantispy"][key_added + "_wells"]``, one row per ``by`` group with its ``n_cells`` and the ``shift``
         its 2N and 4N peaks share against the reference, in doublings, ``NaN`` when it lacks either peak.
         A cell without a DNA content gets ``NaN`` throughout, as does every cell when the model failed its check.
@@ -349,26 +471,7 @@ def project_cell_cycle(
     probabilities = np.full((adata.n_obs, len(CYCLE_PHASES)), np.nan)
     quantiles = np.full((adata.n_obs, len(QUANTILES)), np.nan)
     if passed and known.any():
-        expected, edges = _template(fitted)
-        phase_of = np.digitize(_GRID, edges[1:3])
-        low, high = _span(peaks)
-        off, flat = float(fitted["off_cycle"]), 1 / (high - low)
-        rows = np.flatnonzero(known)
-        for start in range(0, rows.size, 8192):
-            chunk = rows[start : start + 8192]
-            log_post = _LOG_PRIOR[None] - 0.5 * ((content[chunk, None] - expected[None]) / sd) ** 2
-            peak = log_post.max(axis=1, keepdims=True)
-            post = np.exp(log_post - peak)
-            cycle = post.sum(axis=1) * np.exp(peak[:, 0]) / (_GRID.size * sd * np.sqrt(2 * np.pi))
-            p_off = off * flat / ((1 - off) * cycle + off * flat)
-            post /= post.sum(axis=1, keepdims=True)
-            for index in range(3):
-                probabilities[chunk, index] = (1 - p_off) * post[:, phase_of == index].sum(axis=1)
-            probabilities[chunk, 3] = p_off
-            cdf = np.cumsum(post, axis=1)
-            quantiles[chunk] = np.stack(
-                [_GRID[np.minimum((cdf < q).sum(axis=1), _GRID.size - 1)] for q in QUANTILES], axis=1
-            )
+        probabilities[known], quantiles[known] = _posterior(content[known], fitted)
     elif not passed:
         get_logger().warning("project_cell_cycle: the model failed its check; every position is NaN")
 
@@ -403,6 +506,18 @@ def project_cell_cycle(
         flags = np.asarray(QC_FLAGS, dtype=object)[_qc(terms, fitted["qc"]["cutoffs"])]
         flags[~np.isfinite(terms).all(axis=1)] = np.nan
         adata.obs[f"{key_added}_qc"] = pd.Categorical(flags, categories=list(QC_FLAGS))
+
+    if "g2m" in fitted:
+        order = np.full(adata.n_obs, np.nan)
+        rows = np.flatnonzero(phase == "G2M")
+        if rows.size:
+            block = get_matrix(adata[rows][:, list(fitted["g2m"]["features"])], layer).astype(np.float64)
+            order[rows] = _g2m_order(block, fitted["g2m"])
+        get_logger().warning(
+            "project_cell_cycle: the G2M order is experimental and cannot be validated without a marker of G2 and "
+            "mitosis; check it against one before reading it biologically"
+        )
+        adata.obs[f"{key_added}_g2m_order"] = order
 
     names = adata.obs_names
     adata.obsm[f"{key_added}_probabilities"] = pd.DataFrame(probabilities, index=names, columns=list(CYCLE_PHASES))
