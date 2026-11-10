@@ -104,7 +104,8 @@ def permutation_pvalue(observed: np.ndarray, null: np.ndarray) -> np.ndarray:
     observed = np.asarray(observed, dtype=np.float64)
     null = np.atleast_2d(np.asarray(null, dtype=np.float64))
     at_least = (null >= observed[:, None]).sum(axis=1)
-    pvalues = (at_least + 1.0) / (null.shape[1] + 1.0)
+    # A draw the statistic could not be computed on is not a draw, rather than one that fell short of the observation.
+    pvalues = (at_least + 1.0) / (np.isfinite(null).sum(axis=1) + 1.0)
     # `nan >= x` is False, so an unmeasured observation, or one with no computable null, would otherwise get the smallest p-value the permutations can express.
     unmeasured = np.isnan(observed) | ~np.isfinite(null).any(axis=1)
     return np.where(unmeasured, np.nan, pvalues)

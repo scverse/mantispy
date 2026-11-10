@@ -66,7 +66,8 @@ Choose from the options below to install mantispy:
 1. Install the latest release from [PyPI][]. The current release is an alpha pre-release, so pip needs `--pre`:
 
    ```bash
-   pip install --pre mantispy  # (or `uv add --prerelease allow mantispy`)
+   uv add --prerelease allow mantispy  # in a uv project; `uv init` creates one
+   pip install --pre mantispy  # or with pip
    ```
 
 1. Install the latest development version:
