@@ -15,7 +15,6 @@
 
     ds.aconcagua
     ds.bbbc021
-    ds.bbbc021_cells
     ds.rohban
     ds.pki
     ds.jump_target2

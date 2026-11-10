@@ -190,83 +190,6 @@ def build_bbbc021_variants(cache_dir: str | Path | None = None) -> dict[str, Ann
     }
 
 
-def _assemble_bbbc021_cells(cache_dir: str | Path | None = None) -> AnnData:
-    """Assemble the BBBC021 cell-cycle subset from the per-well ``Nuclei.csv`` tables, the image table and the MOA table.
-
-    The nucleus shape and DNA (DAPI) measurements are kept as CellProfiler wrote them; the tubulin and actin
-    columns of the nucleus table are dropped to keep the download small.
-    """
-    import pandas as pd
-
-    from mantispy._core.frames import as_frame
-    from mantispy._core.logging import get_logger
-    from mantispy._core.schema import stamp
-    from mantispy.ds._datasets import _files
-    from mantispy.io._profiles import from_dataframe
-
-    images_path, moa_path, *nuclei = _files("bbbc021_cells", cache_dir, select=lambda name: not name.endswith(".h5ad"))
-    wells = (
-        pd.read_csv(images_path)[
-            [
-                "Image_Metadata_Plate_DAPI",
-                "Image_Metadata_Well_DAPI",
-                "Image_Metadata_Compound",
-                "Image_Metadata_Concentration",
-            ]
-        ]
-        .drop_duplicates()
-        .set_axis(["Metadata_Plate", "Metadata_Well", "Metadata_Compound", "Metadata_Concentration"], axis=1)
-    )
-    moa = pd.read_csv(moa_path).set_axis(["Metadata_Compound", "Metadata_Concentration", "Metadata_MOA"], axis=1)
-    parts = []
-    for path in nuclei:
-        table = pd.read_csv(path)
-        keep = [
-            c
-            for c in table.columns
-            if c.startswith("AreaShape_") or (c.endswith("_DAPI") and not c.startswith("Location_"))
-        ]
-        part = table[keep].add_prefix("Nuclei_")
-        plate, well = path.parent.name.rsplit("-", 1)
-        part.insert(0, "Metadata_Plate", plate)
-        part.insert(1, "Metadata_Well", well)
-        part.insert(2, "Metadata_Site", table["ImageNumber"].to_numpy())
-        part.insert(3, "Metadata_ObjectNumber", table["ObjectNumber"].to_numpy())
-        parts.append(part)
-    cells = pd.concat(parts, ignore_index=True).merge(wells, on=["Metadata_Plate", "Metadata_Well"], how="left")
-    cells = cells.merge(moa, on=["Metadata_Compound", "Metadata_Concentration"], how="left")
-    cells["Metadata_MOA"] = cells["Metadata_MOA"].fillna("DMSO")
-    cells["Metadata_ImageID"] = (
-        cells["Metadata_Plate"] + "_" + cells["Metadata_Well"] + "_" + cells["Metadata_Site"].astype(str)
-    )
-    cells["Metadata_ObjectType"] = "Nuclei"
-    cells.index = (cells["Metadata_ImageID"] + "_" + cells["Metadata_ObjectNumber"].astype(str)).to_numpy()
-
-    adata = from_dataframe(cells, resolution="object")
-    obs = as_frame(adata.obs)
-    set_control_columns(obs, obs["Metadata_Compound"] == "DMSO")
-    obs["Metadata_ConcentrationUnit"] = "uM"
-    obs["Metadata_Perturbation"] = pd.Categorical(
-        obs["Metadata_Compound"].astype(str) + "@" + obs["Metadata_Concentration"].astype(str)
-    )
-    obs["Metadata_Perturbation_Type"] = pd.Series("compound", index=obs.index, dtype="category")
-    stamp(adata, resolution="object")
-    get_logger().info("BBBC021 cells: %d cells x %d features in %d wells", adata.n_obs, adata.n_vars, len(nuclei))
-    return adata
-
-
-def build_bbbc021_cells(cache_dir: str | Path | None = None) -> dict[str, AnnData]:
-    """Returns {'bbbc021_cells.h5ad': the nuclei of the cell-cycle subset}."""
-    return {"bbbc021_cells.h5ad": _stable(_assemble_bbbc021_cells(cache_dir))}
-
-
-def _shipped_bbbc021_cells() -> dict[str, AnnData]:
-    """The bbbc021_cells object as fetched through the public ``mt.ds.bbbc021_cells`` API."""
-    from mantispy.ds._datasets import bbbc021_cells
-
-    return {"bbbc021_cells.h5ad": bbbc021_cells()}
-
-
 def _shipped_rohban_base() -> dict[str, AnnData]:
     """The rohban base as fetched through the public ``mt.ds.rohban`` API (both flags False)."""
     from mantispy.ds._datasets import rohban
@@ -685,7 +608,6 @@ STAGED: dict[str, tuple[Callable[..., dict[str, AnnData]], Callable[[], dict[str
     "rohban": (build_rohban_variants, _shipped_rohban, False),
     "rohban_base": (build_rohban_base, _shipped_rohban_base, False),
     "bbbc021": (build_bbbc021_variants, _shipped_bbbc021, True),
-    "bbbc021_cells": (build_bbbc021_cells, _shipped_bbbc021_cells, True),
     "neuropainting": (build_neuropainting, _shipped_neuropainting, False),
     "chroma": (build_chroma, _shipped_chroma, False),
     "pooled_rare": (build_pooled_rare, _shipped_pooled_rare, False),

@@ -135,7 +135,7 @@ def _fetch_variant(
     return adata
 
 
-def aconcagua(cache_dir: str | Path | None = None) -> AnnData:
+def aconcagua(cells: bool = False, cache_dir: str | Path | None = None) -> AnnData:
     """Aconcagua, the Brieflow reanalysis of an optical pooled CRISPR screen of 5,072 fitness-conferring genes in HeLa cells.
 
     One row per guide per well: the median profile of a guide's cells in a well, after a per plate-and-well robust normalization against the well's non-targeting controls, over a subset of the screen built for the optical-pooled-screens case study.
@@ -146,17 +146,21 @@ def aconcagua(cache_dir: str | Path | None = None) -> AnnData:
     The file is staged on ``scverse-exampledata``, so the loader fetches a single h5ad rather than rebuilding it from the raw per-cell table.
 
     Args:
+        cells: Return the single cells of eight genes (RRM1, DTL, SKA2, HAUS6, ITGAV, TLN1, PSMB7 and SF3B3) and the
+            non-targeting controls instead, with raw intensities and the screen's interphase or mitotic ``Metadata_Class``.
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Returns:
         Guide-by-well profiles read with :func:`mantispy.io.read`, carrying ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Guide``, ``Metadata_Gene``, ``Metadata_Perturbation`` (the gene, or ``"nontargeting"``), ``Metadata_Perturbation_Type`` (``"crispr"``), ``Metadata_Control`` and ``Metadata_Control_Type`` (``negcon``/``poscon``/``treatment``), ``Metadata_Tier`` (``control``/``strong``/``weak``/``random``), ``Metadata_CellCount`` and ``Metadata_MitoticFraction``.
+        With ``cells``, one row per cell at object resolution, carrying the same identifiers but ``Metadata_Class`` in place of the two counts.
 
     References:
         :cite:t:`Di_Bernardo_2026`, the Brieflow reanalysis; :cite:p:`Funk_2022`, the screen it reanalyses.
         The per-cell measurements are from brieflow; the subset is available through the CZ Biohub OPS Explorer.
     """
-    return _fetch_variant("aconcagua", "aconcagua_guide_well.h5ad", cache_dir)
+    _require_bools(cells=cells)
+    return _fetch_variant("aconcagua", "aconcagua_cells.h5ad" if cells else "aconcagua_guide_well.h5ad", cache_dir)
 
 
 #: The (aggregated, feature_selected) combination each rehosted bbbc021 variant answers to.
@@ -206,36 +210,6 @@ def bbbc021(
     """
     _require_bools(aggregated=aggregated, feature_selected=feature_selected)
     return _fetch_variant("bbbc021", _BBBC021_VARIANTS[aggregated, feature_selected], cache_dir)
-
-
-def bbbc021_cells(cache_dir: str | Path | None = None) -> AnnData:
-    """Single MCF-7 nuclei from BBBC021, picked so that each mechanism of action predicts a place in the cell cycle.
-
-    Fifteen compounds at one concentration each, in all three of their replicate wells, and one DMSO well from every
-    plate they sit on: microtubule destabilizers and stabilizers and Eg5 inhibitors, which stop cells in mitosis;
-    Aurora kinase inhibitors, which let cells skip division and grow past 4N; DNA replication inhibitors and DNA
-    damaging agents; and two cholesterol-lowering statins as a mechanism with no cell-cycle target.
-
-    Each nucleus keeps its shape and DNA (DAPI) measurements as CellProfiler wrote them, unnormalized, so
-    :func:`~mantispy.tl.dna_content` can read the integrated DNA intensity. The object is pre-built by
-    ``scripts/build_staged_datasets.py`` from the per-well ``Nuclei.csv`` tables of ``cpg0010-caie-drugresponse``
-    and rehosted on ``scverse-exampledata``, so the loader fetches a single h5ad.
-
-    Args:
-        cache_dir: Where to keep the download.
-            Defaults to :attr:`mantispy.settings.cache_dir`.
-
-    Returns:
-        Nuclei by features at object resolution, read with :func:`mantispy.io.read`, carrying ``Metadata_Plate``,
-        ``Metadata_Well``, ``Metadata_Site``, ``Metadata_Compound``, ``Metadata_Concentration``, ``Metadata_MOA``
-        (``"DMSO"`` for the controls), ``Metadata_Perturbation`` (compound at concentration),
-        ``Metadata_Perturbation_Type`` (``"compound"``) and ``Metadata_Control``.
-
-    References:
-        :cite:t:`Caie_2010`, the image set.
-        :cite:t:`Ljosa_2013`, the CellProfiler measurements.
-    """
-    return _fetch_variant("bbbc021_cells", "bbbc021_cells.h5ad", cache_dir)
 
 
 #: The (aggregated, feature_selected) combination each rehosted rohban variant answers to.

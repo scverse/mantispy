@@ -31,13 +31,13 @@ def main(args: argparse.Namespace) -> None:
 
     loaders = {
         "bbbc021": mt.ds.bbbc021,
-        "bbbc021_cells": mt.ds.bbbc021_cells,
         "rohban": mt.ds.rohban,
         # The staged rohban variants, so tutorials and tests that load them hit the cache (<7 MB each).
         "rohban_selected": lambda: mt.ds.rohban(feature_selected=True),
         "rohban_gene": lambda: mt.ds.rohban(aggregated=True),
         "rohban_gene_selected": lambda: mt.ds.rohban(aggregated=True, feature_selected=True),
         "pki": mt.ds.pki,
+        "aconcagua_cells": lambda: mt.ds.aconcagua(cells=True),
         # These two come to ~1.2 GB; all 141 plates would be 9.4 GB, over GitHub's 10 GB cache.
         "jump_target2": mt.ds.jump_target2,
         "jump_target2_hierarchy": lambda: mt.ds.jump_target2(plates=_TARGET2_HIERARCHY),
