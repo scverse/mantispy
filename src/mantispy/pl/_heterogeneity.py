@@ -168,6 +168,8 @@ def _placed(adata: AnnData, key: str, seed: int) -> tuple[np.ndarray, np.ndarray
     if name not in adata.obsm:
         raise KeyError(f"obsm has no {name!r}; run mt.tl.project_cell_cycle first")
     frame = adata.obsm[name]
+    if not isinstance(frame, pd.DataFrame):
+        raise TypeError(f"obsm[{name!r}] must be the frame mt.tl.project_cell_cycle writes, with a column per quantile")
     quantiles = np.asarray(frame, dtype=float)
     levels = np.array([float(str(column).rstrip("%")) / 100 for column in frame.columns])
     model = adata.uns.get("mantispy", {}).get(key)
@@ -219,7 +221,9 @@ def cell_cycle_occupancy(
     axis.set_ylabel("density")
     axis.legend(fontsize=6, bbox_to_anchor=(1.01, 1), loc="upper left")
     if ax is None:
-        axis.figure.tight_layout()
+        import matplotlib.pyplot as plt
+
+        plt.tight_layout()
     return _returned(axis)
 
 

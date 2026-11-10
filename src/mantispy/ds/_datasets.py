@@ -160,7 +160,7 @@ def aconcagua(cache_dir: str | Path | None = None) -> AnnData:
 
 
 def aconcagua_cells(cache_dir: str | Path | None = None) -> AnnData:
-    """Single cells of eight genes of the :func:`aconcagua` screen and its non-targeting controls, in HeLa cells.
+    """Single cells of eight genes of the :func:`~mantispy.ds.aconcagua` screen and its non-targeting controls, in HeLa cells.
 
     The genes are RRM1, DTL, SKA2, HAUS6, ITGAV, TLN1, PSMB7 and SF3B3. The cells were imaged in four channels: DAPI
     for DNA, gamma-H2AX, phalloidin for actin, and alpha-tubulin. Intensities are raw, as brieflow measured them, so

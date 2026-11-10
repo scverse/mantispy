@@ -464,7 +464,7 @@ def project_cell_cycle(
         flags = np.asarray(QC_FLAGS, dtype=object)[np.where(failed.any(axis=1), failed.argmax(axis=1) + 1, 0)]
         flags[~np.isfinite(terms).all(axis=1)] = np.nan
         adata.obs[f"{key_added}_qc"] = pd.Categorical(flags, categories=list(QC_FLAGS))
-    adata.obs = adata.obs.drop(columns=stale, errors="ignore")
+    adata.obs = as_frame(adata.obs).drop(columns=stale, errors="ignore")
 
     names = adata.obs_names
     adata.obsm[f"{key_added}_probabilities"] = pd.DataFrame(probabilities, index=names, columns=list(CYCLE_PHASES))
@@ -616,18 +616,19 @@ def phase_order(
                 f"phase_order needs at least {_MIN_REFERENCE} of each"
             )
         block = _matrix(adata[rows], features, layer)
-        entry = _fit_order(block, content[rows], in_s, in_phase)
-        entry = {
+        pieces = _fit_order(block, content[rows], in_s, in_phase)
+        kept = pieces.pop("kept")
+        entry: Mapping = {
             "phase": phase,
-            "features": [name for name, kept in zip(features, entry.pop("kept"), strict=True) if kept],
-            **entry,
+            "features": [name for name, keep in zip(features, kept, strict=True) if keep],
+            **pieces,
+            **({} if layer is None else {"layer": layer}),
         }
-        if layer is not None:
-            entry["layer"] = layer
     else:
-        entry = adata.uns.get("mantispy", {}).get(anchor) if isinstance(anchor, str) else anchor
-        if entry is None:
+        found = adata.uns.get("mantispy", {}).get(anchor) if isinstance(anchor, str) else anchor
+        if found is None:
             raise KeyError(f"uns['mantispy'] has no {anchor!r}; run mt.tl.phase_order first")
+        entry = found
         if entry["phase"] != phase:
             raise ValueError(f"the anchor orders {entry['phase']}, not {phase}")
 
