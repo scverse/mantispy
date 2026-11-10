@@ -127,8 +127,11 @@ def _feature_matrix(features: pd.DataFrame, *, missing_possible: bool = False) -
         dtype = np.dtype(np.float64)
     # Only an extension column holds pd.NA, which needs a float target to become NaN.
     if dtype.kind == "f" and any(extension):
-        return features.to_numpy(dtype=dtype, na_value=np.nan)
-    return features.to_numpy(dtype=dtype)
+        matrix = features.to_numpy(dtype=dtype, na_value=np.nan)
+    else:
+        matrix = features.to_numpy(dtype=dtype)
+    # Under copy-on-write, to_numpy can hand back a read-only view of a single-dtype block, and X must be writable.
+    return matrix if matrix.flags.writeable else matrix.copy()
 
 
 def from_dataframe(
@@ -685,6 +688,15 @@ def from_embedding(
     return adata
 
 
+#: What each resolution means, for the errors that ask for one.
+_RESOLUTION_HELP = (
+    "resolution says what one row is: 'object' for one segmented object such as a cell or nucleus "
+    "(alias 'cell'), 'well' for one profile per well, and 'aggregate' for anything coarser, such as one row "
+    "per gene or compound, which also needs grouped_by=. The 'Bring your own data' guide lists the obs "
+    "columns each one requires"
+)
+
+
 def stamp(
     adata: ad.AnnData,
     resolution: str | None = None,
@@ -702,7 +714,8 @@ def stamp(
 
     Args:
         adata: The object to stamp.
-        resolution: What one row is: ``"object"``, ``"well"`` or ``"aggregate"``.
+        resolution: What one row is: ``"object"`` for one segmented object such as a cell or nucleus, ``"well"`` for one profile per well, or ``"aggregate"`` for anything coarser, such as one row per gene or compound.
+            ``"cell"`` is accepted for ``"object"``, as in :func:`from_dataframe`.
             ``obs`` has to carry the columns that resolution requires.
             ``None`` keeps whatever resolution the object already records; an object that records none must be given one, since guessing could silently mislabel it (the internal ``schema.stamp`` and ``schema.get_resolution`` also refuse to assume one).
         feature_kind: The representation every feature carries: ``"measurement"``, ``"embedding"`` or ``"derived"``.
@@ -748,11 +761,13 @@ def stamp(
             resolution = RESOLUTION_RENAMES.get(str(resolution), str(resolution))
     if resolution is None:
         raise ValueError(
-            f"no resolution to stamp; pass resolution=... (one of {RESOLUTIONS}). mt.io.stamp does not "
+            f"no resolution to stamp; pass resolution=... ({_RESOLUTION_HELP}). mt.io.stamp does not "
             "assume one, so it cannot silently mislabel an object."
         )
+    # The same aliases from_dataframe takes, so "cell" means one segmented object here as well.
+    resolution = RESOLUTION_RENAMES.get(str(resolution), str(resolution))
     if resolution not in RESOLUTIONS:
-        raise ValueError(f"resolution must be one of {RESOLUTIONS}, got {resolution!r}")
+        raise ValueError(f"resolution must be one of {RESOLUTIONS}, got {resolution!r}. {_RESOLUTION_HELP}")
 
     # Every check that can fail runs before the copy, so a rejected stamp never duplicates X and never
     # leaves adata half-stamped (non-atomic stamping was a real defect).

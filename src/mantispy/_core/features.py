@@ -429,3 +429,43 @@ def blocklist_hits(candidates: Sequence[np.ndarray], blocklist: str | Sequence[s
     """
     blocked = set(load_blocklist(blocklist) if isinstance(blocklist, str) else blocklist)
     return np.logical_or.reduce([np.isin(np.asarray(candidate), list(blocked)) for candidate in candidates])
+
+
+def _identity_keys(frame: pd.DataFrame) -> list[tuple]:
+    """A feature's identity without its object: group, feature, channels (alias-folded, in order) and scale."""
+    keys = []
+    for group, feature, channel, scale in frame[["feature_group", "feature", "channel", "scale"]].itertuples(
+        index=False
+    ):
+        channels = tuple(canonical_channel(part) for part in str(channel).split("|")) if pd.notna(channel) else ()
+        keys.append((str(group), str(feature), channels, None if pd.isna(scale) else float(scale)))
+    return keys
+
+
+def var_blocklist_hits(adata: Any, blocklist: str | Sequence[str] = "default") -> np.ndarray:
+    """Boolean mask over ``adata.var``, ``True`` where a feature is on the blocklist.
+
+    Names are matched as :func:`blocklist_hits` matches them, against ``var_names`` and ``var["original_name"]``.
+    A feature whose name carries no object prefix, as cp_measure writes them, is matched on its parsed identity instead: group, feature, channels and scale, regardless of object, so ``Granularity_14__DNA`` meets the blocklist's ``Nuclei_Granularity_14_DNA``.
+    A name that does carry its object is matched only by name, as before.
+    """
+    names = [adata.var_names.to_numpy()]
+    if "original_name" in adata.var:
+        names.append(adata.var["original_name"].astype(str).to_numpy())
+    hits = blocklist_hits(names, blocklist)
+    needed = {"object", "feature_group", "feature", "channel", "scale"}
+    if not needed <= set(adata.var.columns):
+        return hits
+    var = adata.var
+    written = names[-1]
+    objects = var["object"].astype(object).to_numpy()
+    unprefixed = np.array(
+        [pd.isna(obj) or not str(name).startswith(f"{obj}_") for obj, name in zip(objects, written, strict=True)]
+    )
+    if not unprefixed.any():
+        return hits
+    entries = load_blocklist(blocklist) if isinstance(blocklist, str) else list(blocklist)
+    blocked = set(_identity_keys(parse_feature_names(entries)))
+    candidates = _identity_keys(var.loc[unprefixed])
+    hits[unprefixed] |= np.array([key in blocked for key in candidates], dtype=bool)
+    return hits

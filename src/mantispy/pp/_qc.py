@@ -12,7 +12,7 @@ from mantispy._core._corr import CHUNK_BYTES
 from mantispy._core._numba import MAD, grouped_median_spread
 from mantispy._core._reduce import get_matrix, group_codes
 from mantispy._core._stats import MAD_TO_SIGMA, nanvar
-from mantispy._core.features import blocklist_hits
+from mantispy._core.features import var_blocklist_hits
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger, report_drop
 from mantispy._core.mutation import inplace_or_copy
@@ -222,10 +222,7 @@ def filter_features(
     if min_variance > 0:
         keep &= np.nan_to_num(nanvar(X), nan=0.0, posinf=0.0) > min_variance
     if blocklist is not None:
-        names = [adata.var_names.to_numpy()]
-        if "original_name" in adata.var:
-            names.append(adata.var["original_name"].astype(str).to_numpy())
-        keep &= ~blocklist_hits(names, blocklist)
+        keep &= ~var_blocklist_hits(adata, blocklist)
 
     dropped = int((~keep).sum())
     report_drop("features", dropped, adata.n_vars, remedy="check drop_nan, min_variance and blocklist")

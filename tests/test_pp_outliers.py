@@ -55,3 +55,14 @@ def test_key_picks_the_features_scored_and_key_added_names_the_output(adata):
     mt.pp.outliers(adata, method="mad", score_cutoff=50.0, key=None, key_added="flagged_all")
     assert not adata.obs["flagged_usable"].iloc[0]
     assert adata.obs["flagged_all"].iloc[0]
+
+
+def test_outliers_join_qc_fail_so_filter_cells_drops_them(adata):
+    # filter_cells reads qc_fail, so an outlier left only in qc_outlier survived filtering (#272).
+    mt.pp.calculate_qc_metrics(adata)
+    failed_before = adata.obs["qc_fail"].to_numpy(dtype=bool).copy()
+    mt.pp.outliers(adata, method="mad", contamination=0.05)
+    flagged = adata.obs["qc_outlier"].to_numpy(dtype=bool)
+    assert (adata.obs["qc_fail"].to_numpy(dtype=bool) == (failed_before | flagged)).all()
+    kept = mt.pp.filter_cells(adata, min_cells_per_well=0, copy=True)
+    assert not kept.obs["qc_outlier"].any()

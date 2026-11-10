@@ -12,15 +12,53 @@ def adata():
     return synthetic_plate(n_plates=2, n_wells=24, n_cells=10, n_features=12, seed=0)
 
 
-@pytest.mark.parametrize("method", ["standardize", "robustize", "mad_robustize", "center"])
-def test_constant_feature_yields_zero_not_inf(adata, method):
-    """An unguarded zero scale would make the whole column inf or NaN."""
+@pytest.mark.parametrize("method", ["standardize", "robustize", "mad_robustize"])
+def test_a_feature_without_spread_among_the_controls_becomes_nan(adata, method):
+    """Dividing by 1.4826 * 0 + 1e-18 left values near 1e18 that dominated every distance (#268)."""
+    plate = adata.obs["Metadata_Plate"].astype(str).to_numpy()
+    control = adata.obs["Metadata_Control"].to_numpy(dtype=bool)
+    first = plate == sorted(set(plate))[0]
+    values = adata.X.copy()
+    values[first & control, 0] = 3.0
+    adata.X = values
+    with pytest.warns(UserWarning, match="no spread"):
+        mt.pp.normalize(adata, method=method, by="Metadata_Plate")
+    assert np.isnan(adata.X[first, 0]).all()
+    assert np.isfinite(adata.X[~first, 0]).all(), "the plate where the feature does vary is normalized as usual"
+    assert np.isfinite(adata.X[:, 1:]).all()
+    assert adata.var["degenerate_scale"].tolist() == [True] + [False] * (adata.n_vars - 1)
+
+
+def test_normalize_raises_when_no_feature_can_be_scaled(adata):
+    adata.X = np.ones_like(adata.X)
+    with pytest.raises(ValueError, match="every feature has no spread"):
+        mt.pp.normalize(adata, by="Metadata_Plate")
+
+
+def test_center_leaves_a_constant_feature_at_zero(adata):
     values = adata.X.copy()
     values[:, 0] = 3.0
     adata.X = values
-    mt.pp.normalize(adata, method=method, by="Metadata_Plate")
-    assert np.isfinite(adata.X).all()
+    mt.pp.normalize(adata, method="center", by="Metadata_Plate")
     np.testing.assert_allclose(adata.X[:, 0], 0.0, atol=1e-6)
+
+
+def test_the_no_reference_warning_names_each_group_once(adata):
+    # One warning per screen, naming none of them, on an 88-screen build (#278).
+    plate = adata.obs["Metadata_Plate"].astype(str).to_numpy()
+    control = adata.obs["Metadata_Control"].to_numpy(dtype=bool)
+    values = adata.X.copy()
+    for name in sorted(set(plate)):
+        values[(plate == name) & control, 1] = np.nan
+    adata.X = values
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        mt.pp.normalize(adata, by="Metadata_Plate")
+    messages = [str(w.message) for w in caught if "no reference values" in str(w.message)]
+    assert len(messages) == 1
+    for name in sorted(set(plate)):
+        count = int(((plate == name) & control).sum())
+        assert f"{name} ({count} reference rows)" in messages[0]
 
 
 def test_reference_rejects_a_non_boolean_column(adata):

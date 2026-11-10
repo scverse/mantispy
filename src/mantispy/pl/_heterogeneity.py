@@ -621,7 +621,7 @@ def density(
         ax.plot(grid, slope * grid + intercept, lw=1.2, color=points.get_facecolor()[0])
         records.append(pd.DataFrame({"density": crowding[rows], feature: values[rows], groupby: str(name)}))
 
-    ax.set_xlabel("mean distance to the k nearest cells in the field")
+    ax.set_xlabel("local cell density (cells per unit area)")
     ax.set_ylabel(feature)
     ax.legend(fontsize=6)
 

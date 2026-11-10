@@ -53,6 +53,7 @@ def aggregate(
 
     Returns:
         A new :class:`~anndata.AnnData` with one row per group.
+        Rows are named by their group keys joined with ``_``, e.g. ``"plate1_A01"``.
         ``var`` is carried over unchanged; ``obs`` holds the grouping columns, `count_key`, `site_key` when the fields of view are known, and every other ``obs`` column (not only ``Metadata_`` ones) that is constant within every group.
         `count_key` is the number of cells behind a row, so its scope follows ``by``: grouping by site counts the cells of one field of view, grouping by well those of every field.
         Profiles contribute the cells they carry rather than one each, and profiles that carry no count give an unknown one.
@@ -92,7 +93,7 @@ def aggregate(
     _warn_dropped_controls(obs, keep, resolve_control_column(adata), min_cells)
 
     obs = obs.loc[keep].reset_index(drop=True)
-    obs.index = pd.Index([str(index) for index in range(len(obs))])
+    obs.index = _group_names(obs, columns)
 
     var = reduced_var(adata, use_rep, values.shape[1])
     result = ad.AnnData(X=values[keep].astype(matrix_dtype(adata, layer, use_rep=use_rep)), obs=obs, var=var)
@@ -114,6 +115,12 @@ def aggregate(
     }
     record_params(result, "aggregate", call_params)
     return result
+
+
+def _group_names(obs: pd.DataFrame, columns: list[str]) -> pd.Index:
+    """Row names built from the group keys, so aggregates from several screens concatenate without clashes."""
+    # Keys that join to the same text get a numbered suffix.
+    return ad.utils.make_index_unique(pd.Index(obs[columns].astype(str).agg("_".join, axis=1).to_numpy(dtype=str)))
 
 
 def _warn_dropped_controls(obs: pd.DataFrame, keep: np.ndarray, control_col: str, min_cells: int) -> None:

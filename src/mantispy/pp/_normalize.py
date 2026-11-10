@@ -71,8 +71,8 @@ def _center_and_scale(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Per-group center and scale, plus the features that cannot be normalized somewhere.
 
-    Returned as ``(center, scale, no_spread, uncentred)``, the first two ``(n_groups, n_vars)`` in the dtype the matrix is read as and the last two boolean masks over features.
-    ``no_spread`` flags a spread of zero in some group and ``uncentred`` a group whose reference rows hold no usable centre or spread at all.
+    Returned as ``(center, scale, no_spread, uncentred)``, the first two ``(n_groups, n_vars)`` in the dtype the matrix is read as.
+    ``no_spread`` and ``uncentred`` are ``(n_groups, n_vars)`` masks of the groups where a feature has a spread of zero, and where its reference rows hold no usable centre or spread at all.
     The two overlap: a feature can be constant in one group and unmeasured in another, and both facts have to reach the caller.
     """
     if method == "standardize":
@@ -90,9 +90,9 @@ def _center_and_scale(
         centre, scale = _median_and_spread(adata, IQR, codes, keys, layer, mask)
 
     # A NaN or infinite scale fails this comparison, so it is left to `uncentred`.
-    no_spread = (scale <= epsilon).any(axis=0)
+    no_spread = scale <= epsilon
     # Repairing only the scale would subtract a NaN centre from every row of the group, wiping the non-reference values.
-    uncentred = ~(np.isfinite(centre) & np.isfinite(scale)).all(axis=0)
+    uncentred = ~(np.isfinite(centre) & np.isfinite(scale))
     centre = np.where(np.isfinite(centre), centre, 0.0)
     scale = np.where((scale == 0) | ~np.isfinite(scale), 1.0, scale)
     # In the matrix's own dtype, so rescaling a float32 block makes no full-size float64 temporary.
@@ -102,9 +102,9 @@ def _center_and_scale(
 
 def _centre_only(centre: np.ndarray, dtype: np.dtype) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """The ``_center_and_scale`` result for ``method="center"``: the median, a unit scale, no spread flags."""
-    uncentred = ~np.isfinite(centre).all(axis=0)
+    uncentred = ~np.isfinite(centre)
     centre = np.where(np.isfinite(centre), centre, 0.0)
-    return centre.astype(dtype), np.ones_like(centre, dtype=dtype), np.zeros(centre.shape[1], bool), uncentred
+    return centre.astype(dtype), np.ones_like(centre, dtype=dtype), np.zeros(centre.shape, bool), uncentred
 
 
 def _erased_treatments(adata: AnnData, by: str | list[str] | None) -> list[str]:
@@ -164,10 +164,10 @@ def normalize(
 
     Returns:
         ``None``, or the normalized copy when ``copy=True``.
-        Writes ``X`` or ``layers[key_added]``, and ``var["degenerate_scale"]``, or ``var["degenerate_scale_<key_added>"]`` when writing to a layer, which flags features that have no spread in some group or no reference values to centre on there, and comes with a warning; drop those features before computing distances.
+        Writes ``X`` or ``layers[key_added]``, and ``var["degenerate_scale"]``, or ``var["degenerate_scale_<key_added>"]`` when writing to a layer, which flags features that have no spread in some group or no reference values to centre on there, and comes with a warning; a feature with no spread in a group is set to NaN in that group, since it has no scale there. Drop the flagged features before computing distances.
 
     Raises:
-        ValueError: If ``method`` is unknown, or ``reference`` selects no rows at all or none in some group.
+        ValueError: If ``method`` is unknown, ``reference`` selects no rows at all or none in some group, or every feature has no spread in some group.
     """
     if method not in METHODS:
         raise ValueError(f"method must be one of {METHODS}, got {method!r}")
@@ -194,7 +194,13 @@ def normalize(
             UserWarning,
             stacklevel=3,
         )
-    centre, scale, no_spread, uncentred = _center_and_scale(adata, method, by, codes, keys, layer, mask, epsilon)
+    centre, scale, spreadless, unmeasured = _center_and_scale(adata, method, by, codes, keys, layer, mask, epsilon)
+    no_spread, uncentred = spreadless.any(axis=0), unmeasured.any(axis=0)
+    if adata.n_vars and no_spread.all():
+        raise ValueError(
+            f"every feature has no spread in at least one group of {by!r} among the reference rows, so none can "
+            "be scaled. Check that the reference rows are the controls you meant, or normalize by a coarser grouping."
+        )
     degenerate = no_spread | uncentred
     # One flag column per output matrix, so a call writing another layer does not reset the flags describing the first.
     flag = "degenerate_scale" if key_added is None else f"degenerate_scale_{key_added}"
@@ -208,28 +214,28 @@ def normalize(
             f"now, adata = adata[:, ~adata.var[{flag!r}]].copy()."
         )
     if uncentred.any():
+        affected = np.flatnonzero(unmeasured.any(axis=1))
+        groups = ", ".join(f"{keys[int(g)]} ({int(present[g])} reference rows)" for g in affected[:5])
+        groups += f" and {affected.size - 5} more" if affected.size > 5 else ""
         warnings.warn(
             f"{int(uncentred.sum())} of {adata.n_vars} features have no reference values to centre on "
-            f"in at least one group of {by!r}{scope}, because every value there is missing or infinite. "
+            f"in {affected.size} group(s) of {by!r}{scope}: {groups}. Every reference value of those features "
+            "is missing or infinite there. "
             "Their centre is set to 0 where it is missing and their scale to 1, so the values measured "
             "outside the reference rows pass through unnormalized instead of becoming NaN, and are not "
             f"comparable across groups. {remedy}",
             UserWarning,
             stacklevel=3,
         )
-    # Not elif: a feature constant in one group and unmeasured in another is still multiplied by 1e18 in the first.
+    # Not elif: a feature constant in one group and unmeasured in another is still unscalable in the first.
     if no_spread.any():
+        names = list(adata.var_names[no_spread])
+        shown = ", ".join(map(str, names[:5])) + (f" and {len(names) - 5} more" if len(names) > 5 else "")
         warnings.warn(
-            f"{int(no_spread.sum())} of {adata.n_vars} features have no spread in at least one "
-            f"group of {by!r}{scope}. "
-            + (
-                f"Adding epsilon={epsilon:g} to their scale multiplies them by up to 1e18, so they "
-                "dominate every distance downstream"
-                if method == "mad_robustize"
-                else "Their scale is clamped to 1, which sets them to 0"
-            )
-            + f". {remedy} A variance or outlier cut does not catch a feature that varies across a plate "
-            "but is constant among its control wells; the flag does.",
+            f"{len(names)} of {adata.n_vars} features have no spread in at least one group of {by!r}{scope} "
+            f"({shown}). They cannot be scaled there, so their values in those groups are set to NaN. {remedy} "
+            "A variance or outlier cut does not catch a feature that varies across a plate but is constant "
+            "among its control wells; the flag does.",
             UserWarning,
             stacklevel=3,
         )
@@ -237,7 +243,10 @@ def normalize(
 
     def _rescale(key: Any, block: np.ndarray) -> np.ndarray:
         index = lookup[key]
-        return (block - centre[index]) / scale[index]
+        scaled = (block - centre[index]) / scale[index]
+        # A feature with no spread among this group's reference rows has no scale, so its values are undefined here.
+        scaled[:, spreadless[index]] = np.nan
+        return scaled
 
     if keep_raw and "raw" not in adata.layers:
         adata.layers["raw"] = get_matrix(adata, layer).copy()

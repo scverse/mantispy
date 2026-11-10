@@ -10,6 +10,7 @@ from anndata import AnnData
 from mantispy._core._ecod import AGGREGATIONS, ecod_scores
 from mantispy._core._reduce import get_matrix, group_codes, group_offsets
 from mantispy._core._stats import robust_zscore
+from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy._core.masks import feature_mask
 from mantispy._core.mutation import inplace_or_copy
@@ -69,6 +70,7 @@ def outliers(
     Returns:
         ``None``, or the modified copy.
         Writes the boolean ``obs[key_added]`` and the score itself to ``obs[key_added + "_score"]``.
+        The flagged cells are also added to ``obs["qc_fail"]``, the union of the ``qc_*`` flags that :func:`~mantispy.pp.filter_cells` drops, which is created if absent; a cell already failing keeps failing.
 
     Raises:
         ValueError: If ``method`` or ``ecod_aggregation`` is unknown, or ``contamination`` is outside ``(0, 1)`` and no ``score_cutoff`` is given.
@@ -103,6 +105,9 @@ def outliers(
 
     adata.obs[key_added] = flagged
     adata.obs[f"{key_added}_score"] = scores
+    # qc_fail is the union of every qc_* flag and what filter_cells reads, so an outlier joins it.
+    previous = as_frame(adata.obs)["qc_fail"].to_numpy(dtype=bool) if "qc_fail" in adata.obs else False
+    adata.obs["qc_fail"] = previous | flagged
     get_logger().info(
         "outliers(%s) flagged %d of %d cells using %d features",
         method,
