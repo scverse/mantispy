@@ -34,6 +34,7 @@ PHASES = ("G1", "S", "G2M")
 DNA_STATES = ("2N", "S", "4N")
 
 _DISPERSION_MIN_CONTROLS = 8
+_WELL = ("Metadata_Plate", "Metadata_Well")
 
 
 def _cluster_labels(obs: pd.DataFrame, cluster_key: str) -> tuple[pd.Series, np.ndarray]:
@@ -234,21 +235,29 @@ def _composition_test(composition: AnnData, counts: np.ndarray, reference: str |
     return table, dispersion
 
 
+def _on_dna_stain(adata: AnnData) -> np.ndarray:
+    """Per feature, whether its name or ``var["channel"]`` names a DNA stain: DNA, DAPI or Hoechst."""
+    pattern = "dna|dapi|hoechst"
+    stain = adata.var_names.str.lower().str.contains(pattern)
+    if "channel" in adata.var:
+        stain |= as_frame(adata.var)["channel"].astype(str).str.lower().str.contains(pattern).to_numpy()
+    return np.asarray(stain, dtype=bool)
+
+
 def _dna_intensity(adata: AnnData, dna_feature: str | None, layer: str | None, caller: str) -> np.ndarray:
     """The integrated DNA intensity of every cell, refusing values that are mostly not positive."""
-    var = as_frame(adata.var)
     if dna_feature is None:
-        candidates = [
-            name
-            for name in adata.var_names
-            if "IntegratedIntensity" in name and "DNA" in str(var.loc[name].get("channel"))
-        ]
+        names = adata.var_names
+        candidates = list(
+            names[_on_dna_stain(adata) & names.str.contains("IntegratedIntensity") & ~names.str.contains("Edge")]
+        )
         if not candidates:
             raise KeyError(
                 "could not find an integrated DNA intensity feature; pass dna_feature= explicitly "
                 "(the usual name is Nuclei_Intensity_IntegratedIntensity_DNA)"
             )
-        dna_feature = candidates[0]
+        # The nucleus is where DNA is measured best, so its intensity wins over a whole-cell one.
+        dna_feature = min(candidates, key=lambda name: not name.startswith("Nuclei_"))
         get_logger().info("%s using %s", caller, dna_feature)
 
     values = get_matrix(adata, layer)[:, adata.var_names.get_loc(dna_feature)].astype(np.float64)
@@ -280,7 +289,7 @@ def cell_cycle_phase(
     Args:
         adata: Single-cell object holding raw, unnormalized intensities.
         dna_feature: The integrated DNA intensity feature.
-            Found from the feature names and ``var["channel"]`` when omitted.
+            Found when omitted as an integrated intensity, not its edge, whose name or ``var["channel"]`` names DNA, DAPI or Hoechst, the ``Nuclei_`` one first.
         by: Fit separately within each group, normally the plate, since staining intensity does not carry across plates.
         layer: Read this layer instead of ``X``, for example ``"raw"`` after ``normalize(keep_raw=True)``.
         key_added: ``obs`` column written.
@@ -354,6 +363,7 @@ def dna_content(
     by: Sequence[str] | str | None = ("Metadata_Plate", "Metadata_Well"),
     layer: str | None = None,
     min_cells: int = 50,
+    reference: str | None = None,
     key_added: str = "Metadata_DNAContent",
     copy: bool = False,
 ) -> AnnData | None:
@@ -365,16 +375,21 @@ def dna_content(
     Args:
         adata: Single-cell object holding raw, unnormalized intensities.
         dna_feature: The integrated DNA intensity feature.
-            Found from the feature names and ``var["channel"]`` when omitted.
+            Found when omitted as an integrated intensity, not its edge, whose name or ``var["channel"]`` names DNA, DAPI or Hoechst, the ``Nuclei_`` one first.
         by: Find the G1 peak separately within each group, normally the well, since staining intensity does not carry across wells.
         layer: Read this layer instead of ``X``, for example ``"raw"`` after ``normalize(keep_raw=True)``.
-        min_cells: A group with fewer usable cells than this gets no G1 peak, and its cells get ``NaN``.
+        min_cells: A group with fewer usable cells than this, or fewer ``reference`` cells when given, gets no G1
+            peak, and its cells get ``NaN``.
+        reference: Find each group's G1 peak on these cells only, and apply it to every cell of the group:
+            ``"negcon"`` for the negative controls, or the name of a boolean ``obs`` column. ``None`` uses every cell.
+            Pass it when a treatment can arrest whole wells, so their peak is not taken for G1; ``by`` must then
+            group treated and control cells together, normally by plate, or by well in a pooled screen.
         key_added: ``obs`` column written.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
         ``None``, or the modified copy.
-        Writes ``obs[key_added]``, and ``uns["mantispy"]["dna_content"]`` with one row per group: the ``by`` columns, ``n_cells`` (the usable cells) and ``g1_peak`` (log2 of the integrated intensity at the G1 peak, ``NaN`` for a group below ``min_cells``).
+        Writes ``obs[key_added]``, and ``uns["mantispy"]["dna_content"]`` with one row per group: the ``by`` columns, ``n_cells`` (the usable cells the peak was found on) and ``g1_peak`` (log2 of the integrated intensity at the G1 peak, ``NaN`` for a group below ``min_cells``).
 
     Raises:
         KeyError: ``dna_feature`` was not given and no integrated DNA intensity feature could be found.
@@ -408,26 +423,34 @@ def dna_content(
 
     codes, keys = group_codes(adata, by)
     order, offsets = group_offsets(codes, len(keys))
+    fit_on = reference_mask(adata, reference)
     content = np.full(adata.n_obs, np.nan)
     peaks = np.full(len(keys), np.nan)
     counts = np.zeros(len(keys), dtype=int)
     for index in range(len(keys)):
         rows = order[offsets[index] : offsets[index + 1]]
         usable = rows[positive[rows]]
-        counts[index] = usable.size
-        if usable.size < min_cells:
+        anchors = usable[fit_on[usable]]
+        counts[index] = anchors.size
+        if anchors.size < min_cells:
             continue
-        peaks[index] = _g1_peak(log_values[usable])
+        peaks[index] = _g1_peak(log_values[anchors])
         content[usable] = log_values[usable] - peaks[index]
 
     small = counts < min_cells
     if small.any():
+        counted = "usable cells" if reference is None else f"usable {reference!r} reference cells"
+        hint = (
+            "" if reference is None else "; by must group the reference with the other cells, e.g. by='Metadata_Plate'"
+        )
         get_logger().warning(
-            "dna_content: %d of %d group(s) have fewer than %d usable cells, too few to place a G1 peak; "
-            "their cells are left as NaN: %s",
+            "dna_content: %d of %d group(s) have fewer than %d %s, too few to place a G1 peak; "
+            "their cells are left as NaN%s: %s",
             int(small.sum()),
             len(keys),
             min_cells,
+            counted,
+            hint,
             list(keys[small])[:5],
         )
 
@@ -655,7 +678,7 @@ def composition_shift(
     key: str,
     groupby: str = "Metadata_Perturbation",
     reference: str = "negcon",
-    block: str | None = "Metadata_Well",
+    block: Sequence[str] | str | None = _WELL,
     replicate: str | None = "Metadata_sgRNA",
     n_permutations: int = 999,
     seed: int = 0,
@@ -664,7 +687,7 @@ def composition_shift(
 ) -> AnnData | None:
     """Change in each group's share of cells per category against the reference, compared within blocks.
 
-    The category is a label per cell, such as a cell-cycle state or a cluster. Within each ``block`` (a well),
+    The category is a label per cell, such as a cell-cycle state or a cluster. Within each ``block`` (a well on a plate),
     the group's share of cells in every category is compared with the reference's, and the differences are
     averaged over blocks. The distance is the total variation distance of that average, half the sum of its
     absolute values: 0 when the group's composition matches the reference, 1 when they share no category.
@@ -680,7 +703,9 @@ def composition_shift(
         groupby: ``obs`` column naming the groups to score, one row of the result each.
         reference: The rows to compare against: ``"negcon"`` for the negative controls, or the name of a
             boolean ``obs`` column. The reference has no row of its own.
-        block: ``obs`` column the comparison is paired within, normally the well; ``None`` pools all rows.
+        block: ``obs`` column or columns the comparison is paired within, normally the plate and well, so the same
+            well position on two plates stays two blocks; ``None`` pools all rows. The default uses whichever of the
+            two columns the object has.
         replicate: ``obs`` column naming the independent replicate the permutation relabels, normally the guide.
             ``None`` relabels single cells, which treats every cell as independent and warns.
             Each replicate must belong to one group.
@@ -697,8 +722,9 @@ def composition_shift(
         the group's share minus the reference's.
 
     Raises:
-        ValueError: ``n_permutations`` is not positive, ``reference`` selects no cells, or a ``replicate`` spans
-            more than one group.
+        KeyError: ``obs`` lacks a ``block`` column.
+        ValueError: ``n_permutations`` is not positive, ``reference`` selects no cells, a ``block`` column holds
+            missing values, or a ``replicate`` spans more than one group.
     """
     if n_permutations < 1:
         raise ValueError(f"n_permutations must be positive, got {n_permutations}")
@@ -712,7 +738,9 @@ def composition_shift(
     reference_rows = reference_mask(adata, reference)
     if not reference_rows.any():
         raise ValueError(f"reference={reference!r} selects no cells to compare against")
-    blocks = obs[block].to_numpy() if block is not None else np.zeros(adata.n_obs, dtype=int)
+    if block == _WELL:  # an object without plates pairs within wells alone
+        block = [column for column in _WELL if column in obs] or list(_WELL)
+    blocks = group_codes(adata, block)[0]
     if replicate is None:
         warnings.warn(
             "composition_shift: replicate=None relabels single cells, which treats every cell as an independent "

@@ -159,6 +159,26 @@ def aconcagua(cache_dir: str | Path | None = None) -> AnnData:
     return _fetch_variant("aconcagua", "aconcagua_guide_well.h5ad", cache_dir)
 
 
+def aconcagua_cells(cache_dir: str | Path | None = None) -> AnnData:
+    """Single cells of eight genes of the :func:`~mantispy.ds.aconcagua` screen and its non-targeting controls, in HeLa cells.
+
+    The genes are RRM1, DTL, SKA2, HAUS6, ITGAV, TLN1, PSMB7 and SF3B3. The cells were imaged in four channels: DAPI
+    for DNA, gamma-H2AX, phalloidin for actin, and alpha-tubulin. Intensities are raw, as brieflow measured them, so
+    :func:`mantispy.tl.dna_content` can read the DNA stain.
+
+    Args:
+        cache_dir: Where to keep the download.
+            Defaults to :attr:`mantispy.settings.cache_dir`.
+
+    Returns:
+        Cells by features at object resolution, read with :func:`mantispy.io.read`, carrying ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Guide``, ``Metadata_Gene``, ``Metadata_Perturbation`` (the gene, or ``"nontargeting"``), ``Metadata_Perturbation_Type`` (``"crispr"``), ``Metadata_Control``, ``Metadata_Control_Type`` and the screen's interphase or mitotic call per cell, ``Metadata_Class``.
+
+    References:
+        :cite:t:`Di_Bernardo_2026`, the Brieflow reanalysis; :cite:p:`Funk_2022`, the screen it reanalyses.
+    """
+    return _fetch_variant("aconcagua", "aconcagua_cells.h5ad", cache_dir)
+
+
 #: The (aggregated, feature_selected) combination each rehosted bbbc021 variant answers to.
 _BBBC021_VARIANTS = {
     (False, False): "bbbc021.h5ad",  # 632 x 467, well level, all features

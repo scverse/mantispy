@@ -133,6 +133,11 @@
         "cluster",
         "sphere_epsilon",
         "dna_content",
-        "dna_state"
+        "dna_state",
+        "cell_cycle",
+        "cell_cycle_wells",
+        "cell_cycle_G1_order",
+        "cell_cycle_S_order",
+        "cell_cycle_G2M_order"
     ]
 }

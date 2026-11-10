@@ -109,5 +109,8 @@ Aggregate profiles and ask what the perturbations did.
     tl.cell_cycle_phase
     tl.dna_content
     tl.dna_state
+    tl.fit_cell_cycle
+    tl.project_cell_cycle
+    tl.phase_order
     tl.neighbors_local_density
 ```
