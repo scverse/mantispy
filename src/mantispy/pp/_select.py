@@ -33,12 +33,16 @@ OPERATIONS = (
     "noise_removal",
 )
 
+#: The default operations, cheapest first: removing features by name, by missingness and by variance before the
+#: pairwise correlation means the correlation, the slowest step, compares only the features that are left.
+#: Pass pycytominer's order, ``("variance_threshold", "correlation_threshold", "drop_na_columns", "blocklist")``,
+#: to reproduce its selection.
 DEFAULT_OPERATIONS = (
     "drop_degenerate",
+    "blocklist",
+    "drop_na_columns",
     "variance_threshold",
     "correlation_threshold",
-    "drop_na_columns",
-    "blocklist",
 )
 
 
@@ -234,8 +238,9 @@ def feature_select(
     Args:
         adata: Object to select features on.
             Usually well-level profiles.
-        operations: Which operations to run, from ``OPERATIONS``.
-            The default is pycytominer's own, which omits ``frequency_threshold``, ``drop_outliers`` and ``noise_removal``, plus ``drop_degenerate``, which removes nothing from an object :func:`~mantispy.pp.normalize` did not flag.
+        operations: Which operations to run, from ``OPERATIONS``, in the order they run.
+            The default, ``DEFAULT_OPERATIONS``, holds pycytominer's usual operations plus ``drop_degenerate``, which removes nothing from an object :func:`~mantispy.pp.normalize` did not flag, ordered cheapest first so ``correlation_threshold`` runs last on what is left.
+            Passing pycytominer's order, ``["variance_threshold", "correlation_threshold", "drop_na_columns", "blocklist"]``, gives pycytominer's selection.
             Without ``drop_outliers``, a warning names the kept features whose values sit more than ``outlier_cutoff`` robust standard deviations from their own median.
         min_variance: ``variance_threshold``: keep features with variance above this.
         freq_cut: ``frequency_threshold``: drop a feature when the count of its second most common value divided by the count of its most common is below this.
@@ -276,7 +281,7 @@ def feature_select(
 
     Returns:
         ``None``, or the modified copy.
-        Writes ``var[key_added]`` and a per-operation count of removals to ``uns["mantispy"]["feature_select"]``, each count being what that operation removes on its own.
+        Writes ``var[key_added]`` and a per-operation count of removals to ``uns["mantispy"]["feature_select"]``, each count being what that operation removed from the features the earlier ones kept.
         Nothing is dropped unless ``subset=True``; :func:`subset_features` does it afterwards.
 
     Raises:
@@ -284,10 +289,12 @@ def feature_select(
         KeyError: If ``noise_removal`` is requested but ``noise_removal_perturb_groups`` is not an ``obs`` column.
 
     Notes:
-        ``drop_degenerate`` runs first, and the other operations judge only the features it keeps: a feature :func:`~mantispy.pp.normalize` could not scale can hold values large enough to decide the correlation ranking of every feature it is compared with.
-        Every other operation judges that whole set, so each count in ``uns["mantispy"]["feature_select"]`` says what that operation alone would remove and is the same whatever order ``operations`` runs in.
-        The counts therefore overlap: a feature that is both constant and mostly missing is counted by ``variance_threshold`` and by ``drop_na_columns``, and the counts sum to more than the number of features actually removed, which is ``n_vars`` minus ``var[key_added].sum()``.
-        ``decorrelate`` is the exception: it runs last, on the features the operations kept, so its count is what it removes from those survivors.
+        ``drop_degenerate`` runs first: a feature :func:`~mantispy.pp.normalize` could not scale can hold values large enough to decide the correlation ranking of every feature it is compared with.
+        The other operations then run in the order ``operations`` lists them, each judging only the features the earlier ones kept, as pycytominer does.
+        The counts in ``uns["mantispy"]["feature_select"]`` therefore do not overlap, and they sum to the number of features removed.
+        Order matters only for ``correlation_threshold``, which ranks a feature against the other features still present; every other operation judges each feature on its own values.
+        So the default order, which runs the correlation last, can keep a different member of a correlated pair than pycytominer's order, which runs it before ``drop_na_columns`` and ``blocklist``; it is also much faster on data with many mostly-missing features.
+        ``decorrelate`` runs last, on the features the operations kept.
 
         ``correlation_threshold`` is the most expensive operation.
         pycytominer uses ``pandas.DataFrame.corr``, one Cython pass per column pair.
@@ -317,22 +324,30 @@ def feature_select(
         removed["drop_degenerate"] = int((~keep).sum())
     judged = np.flatnonzero(keep)
     X = full[:, judged] if judged.size < adata.n_vars else full
+    # Each operation judges only the columns of X that the earlier ones kept, as pycytominer does.
+    alive = np.ones(judged.size, dtype=bool)
+    n_judged_by: dict[str, int] = {}
 
     for operation in operations:
         if operation == "drop_degenerate":
             continue
+        n_judged_by[operation] = int(alive.sum())
         if operation == "variance_threshold":
             mask = _op_variance_threshold(X, min_variance)
         elif operation == "frequency_threshold":
-            mask = _op_frequency_threshold(X, freq_cut, unique_cut)
+            mask = np.ones(judged.size, dtype=bool)
+            mask[alive] = _op_frequency_threshold(X[:, alive], freq_cut, unique_cut)
         elif operation == "correlation_threshold":
+            # The only operation whose verdict on a column depends on the other columns present.
+            columns = np.flatnonzero(alive)
             order = None
             if corr_window is not None:
-                # Names of the columns of the sliced X, so order indexes X's columns 0..judged.size-1.
-                names = np.asarray(adata.var_names[judged], dtype=str)
+                # Names of the columns passed in, so order indexes them 0..columns.size-1.
+                names = np.asarray(adata.var_names[judged[columns]], dtype=str)
                 order = np.argsort(names, kind="stable")
-            mask = _op_correlation_threshold(
-                X,
+            mask = np.ones(judged.size, dtype=bool)
+            mask[columns] = _op_correlation_threshold(
+                X if columns.size == judged.size else X[:, columns],
                 corr_threshold,
                 corr_method,
                 absolute=corr_absolute,
@@ -353,8 +368,9 @@ def feature_select(
                 raise KeyError(f"obs has no column {noise_removal_perturb_groups!r} to group replicates by")
             codes, _ = group_codes(adata, noise_removal_perturb_groups)
             mask = _op_noise_removal(X, codes, noise_removal_stdev_cutoff, mode=noise_removal_cutoff_mode)
-        removed[operation] = int((~mask).sum())
-        keep[judged] &= mask
+        removed[operation] = int((alive & ~mask).sum())
+        alive &= mask
+    keep[judged] = alive
 
     if decorrelate:
         survivors = np.flatnonzero(keep)
@@ -364,7 +380,8 @@ def feature_select(
 
     noise_stripped = removed.get("noise_removal", 0)
     # Only the absolute cutoff is tied to the normalization scale, so only it earns the scale-relative advice.
-    near_total_noise = noise_removal_cutoff_mode == "absolute" and noise_stripped > 0.95 * judged.size
+    n_noise_judged = n_judged_by.get("noise_removal", 0)
+    near_total_noise = noise_removal_cutoff_mode == "absolute" and noise_stripped > 0.95 * n_noise_judged
     if not keep.any() and adata.n_vars:
         warnings.warn(
             f"feature_select flagged none of the {adata.n_vars} features as selected; "
@@ -376,7 +393,7 @@ def feature_select(
         )
     elif near_total_noise:
         warnings.warn(
-            f"noise_removal alone flagged {noise_stripped} of the {judged.size} features it judged for removal "
+            f"noise_removal flagged {noise_stripped} of the {n_noise_judged} features it judged for removal "
             "(more than 95%). Its stdev_cutoff is an absolute threshold on the scale pp.normalize left the values "
             "on, so it strips nearly everything under the control-based or MAD normalization the package "
             "recommends. Set noise_removal_cutoff_mode='ratio' or 'quantile' for a scale-relative cutoff.",
