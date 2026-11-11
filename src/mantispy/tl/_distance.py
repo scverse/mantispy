@@ -145,7 +145,7 @@ def edistance(
             where = f"{nan_cols.size} column(s) of obsm[{use_rep!r}]"
         raise ValueError(
             f"e-distance cannot score profiles with missing values: {where}. "
-            "Drop them with mt.pp.feature_select(adata, na_cutoff=0.0, subset=True), or select features without NaN."
+            "Fill them with mt.pp.impute(adata), or drop them with mt.pp.feature_select(adata, na_cutoff=0.0, subset=True)."
         )
     codes, keys = group_codes(adata, groupby)
     order, offsets = group_offsets(codes, len(keys))

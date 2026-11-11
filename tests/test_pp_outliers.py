@@ -10,7 +10,7 @@ def adata():
     return synthetic_plate(n_wells=16, n_cells=40, n_features=15, seed=0)
 
 
-@pytest.mark.parametrize("method", ["ecod", "isolation_forest", "mad"])
+@pytest.mark.parametrize("method", ["ecod", "isolation_forest", "lof", "mad"])
 def test_every_method_writes_a_flag_and_a_score(adata, method):
     mt.pp.outliers(adata, method=method, contamination=0.05)
     assert adata.obs["qc_outlier"].dtype == bool
@@ -66,3 +66,22 @@ def test_outliers_join_qc_fail_so_filter_cells_drops_them(adata):
     assert (adata.obs["qc_fail"].to_numpy(dtype=bool) == (failed_before | flagged)).all()
     kept = mt.pp.filter_cells(adata, min_cells_per_well=0, copy=True)
     assert not kept.obs["qc_outlier"].any()
+
+
+def test_lof_flags_what_sklearn_and_brieflow_flag():
+    """Brieflow's intensity_filter (workflow/lib/aggregate/filter.py, v1.5.1) keeps fit_predict(...) == 1."""
+    from sklearn.neighbors import LocalOutlierFactor
+
+    adata = synthetic_plate(n_wells=25, n_cells=40, n_features=6, seed=1)
+    X = np.asarray(adata.X, dtype=np.float64)
+    brieflow = LocalOutlierFactor(contamination=0.01, n_jobs=-1).fit_predict(X) == -1
+    mt.pp.outliers(adata, method="lof", contamination=0.01)
+    assert brieflow.sum() == 10
+    np.testing.assert_array_equal(adata.obs["qc_outlier"].to_numpy(), brieflow)
+
+
+def test_lof_scores_a_group_of_one_or_two_rows():
+    adata = synthetic_plate(n_wells=2, n_cells=1, n_features=4, seed=0)
+    mt.pp.outliers(adata, method="lof", by="Metadata_Well")
+    assert adata.obs["qc_outlier"].all()
+    assert np.isfinite(adata.obs["qc_outlier_score"]).all()

@@ -15,17 +15,25 @@ from mantispy._core.logging import get_logger
 from mantispy._core.masks import feature_mask
 from mantispy._core.mutation import inplace_or_copy
 
-METHODS = ("ecod", "isolation_forest", "mad")
+METHODS = ("ecod", "isolation_forest", "lof", "mad")
 
 
 def _scores(X: np.ndarray, method: str, seed: int, ecod_aggregation: str) -> np.ndarray:
     """Outlier score per row, higher meaning more outlying."""
     if method == "ecod":
         return ecod_scores(X, ecod_aggregation)
-    if method == "isolation_forest":
+    if method in ("isolation_forest", "lof"):
+        filled = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+        if method == "lof":
+            from sklearn.neighbors import LocalOutlierFactor
+
+            if filled.shape[0] < 2:
+                return np.zeros(filled.shape[0])
+            # A group with fewer rows than neighbours uses every other row, as sklearn does after warning.
+            model = LocalOutlierFactor(n_neighbors=min(20, filled.shape[0] - 1)).fit(filled)
+            return -model.negative_outlier_factor_
         from sklearn.ensemble import IsolationForest
 
-        filled = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
         model = IsolationForest(random_state=seed, n_estimators=200).fit(filled)
         return -model.score_samples(filled)
 
@@ -51,12 +59,13 @@ def outliers(
 
     Args:
         adata: Object to flag.
-        method: ``"ecod"`` :cite:p:`Li_2023` needs no tuning and is interpretable per feature, ``"isolation_forest"`` catches outliers defined by feature interactions, and ``"mad"`` takes the largest robust z-score across features, which is easy to explain but sees each feature alone.
+        method: ``"ecod"`` :cite:p:`Li_2023` needs no tuning and is interpretable per feature, ``"isolation_forest"`` catches outliers defined by feature interactions, ``"lof"`` is sklearn's local outlier factor with its default 20 neighbours, which scores a cell against the density of its neighbourhood, and ``"mad"`` takes the largest robust z-score across features, which is easy to explain but sees each feature alone.
         contamination: Fraction of cells to flag, rounded up to a whole cell within each ``by`` group, so a non-empty group always flags its most outlying cell and the flagged fraction is higher than asked for in a group smaller than ``1 / contamination``.
             Ignored when ``score_cutoff`` is given.
         score_cutoff: Threshold the score absolutely instead of by quantile.
             With ``method="mad"`` the score is a robust z-score, so ``score_cutoff=5`` gives the usual rule.
         key: Input: the name of a boolean ``var`` column; only the features it flags are scored, usually ``"selected"``.
+            Brieflow's intensity filter is ``method="lof"`` with a ``key`` that flags the mean intensity of each channel.
             Falls back to every feature when the column is absent.
             Not the output name, which is ``key_added``.
         by: Threshold within each group of this ``obs`` column, e.g. per plate, rather than globally.

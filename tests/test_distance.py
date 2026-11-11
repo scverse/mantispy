@@ -12,5 +12,5 @@ def test_mahalanobis_transform_survives_a_missing_value():
     centre, whitening = mahalanobis_transform(reference)
     assert np.isfinite(centre).all() and np.isfinite(whitening).all()
 
-    with pytest.raises(ValueError, match="too few to estimate a covariance"):
+    with pytest.raises(ValueError, match=r"too few to estimate a covariance\. Fill them first with mt\.pp\.impute"):
         mahalanobis_transform(np.full((5, 3), np.nan))
