@@ -879,3 +879,53 @@ def test_a_permutation_the_statistic_could_not_be_computed_on_does_not_count_as_
 
     null = np.array([[1.0, 2.0, np.nan, np.nan, 0.5]])
     assert permutation_pvalue(np.array([1.5]), null)[0] == pytest.approx((1 + 1) / (3 + 1))
+
+
+# scipy.spatial.distance.mahalanobis(a.mean(0), b.mean(0), VI) ** 2 on the "outliers" (a) and "shifted" (b) fixtures, with
+# VI = inv((np.cov(a.T) + np.cov(b.T)) / 2) for Hutz et al.'s averaged covariance, and for b's covariance alone
+# cytominer-eval's calculate_mahalanobis, EmpiricalCovariance().fit(b).mahalanobis(a.mean(0)[None])[0] * (n_b - 1) / n_b,
+# the factor undoing scikit-learn's biased covariance.
+@pytest.mark.parametrize(("pooled", "expected"), [(True, 0.03341472019626355), (False, 0.024950200523523102)])
+def test_the_mp_value_statistic_matches_a_direct_computation(pooled, expected):
+    from mantispy._core._hellinger import mp_value
+
+    a, b = _mcd_fixture("outliers"), _mcd_fixture("shifted")
+    cov_b = np.cov(b, rowvar=False)
+    cov_a = np.cov(a, rowvar=False) if pooled else cov_b
+    assert mp_value(a.mean(0), cov_a, b.mean(0), cov_b) == pytest.approx(expected, rel=1e-10)
+
+
+def test_the_mp_value_calls_a_shift_at_three_replicate_wells(pure_noise_screen):
+    """Three rows give the group a rank-two covariance, which the controls' completes."""
+    adata = pure_noise_screen(n_control=60, n_groups=6, per_group=3, n_features=10)
+    shifted = adata.obs["Metadata_Perturbation"].isin(["p00", "p01"]).to_numpy()
+    values = adata.X.copy()
+    values[np.ix_(shifted, np.arange(5))] += 2.0
+    adata.X = values
+    mt.tl.hit_calling(adata, method="mp_value", n_permutations=500, seed=0)
+    table = adata.uns["mantispy"]["hits"].set_index("group")
+    assert table.loc[["p00", "p01"], "is_hit"].all()
+    assert not table.drop(index=["p00", "p01", "DMSO"])["is_hit"].any()
+
+
+def test_the_mp_value_is_calibrated_on_well_profiles_of_pure_noise(pure_noise_screen):
+    called = total = 0
+    for seed in range(4):
+        adata = pure_noise_screen(n_control=60, n_groups=40, per_group=3, n_features=10, seed=seed)
+        mt.tl.hit_calling(adata, method="mp_value", n_permutations=200, seed=seed)
+        table = adata.uns["mantispy"]["hits"]
+        treated = table[table["group"] != "DMSO"]
+        called += int((treated["pvalue"] < 0.05).sum())
+        total += len(treated)
+    assert called / total <= 0.1, f"{called}/{total} pure-noise groups below p = 0.05"
+
+
+def test_the_mp_value_leaves_a_one_row_group_unscored(pure_noise_screen):
+    adata = pure_noise_screen(n_features=10, per_group=3)
+    adata.obs["Metadata_Perturbation"] = adata.obs["Metadata_Perturbation"].astype(str)
+    adata.obs.loc[adata.obs_names[-1], "Metadata_Perturbation"] = "solo"
+    with pytest.warns(UserWarning, match="unscored.*solo"):
+        mt.tl.hit_calling(adata, method="mp_value", n_permutations=50)
+    table = adata.uns["mantispy"]["hits"].set_index("group")
+    assert np.isnan(table.loc["solo", "distance"])
+    assert np.isfinite(table.drop(index="solo")["distance"]).all()
