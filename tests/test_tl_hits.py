@@ -1,6 +1,7 @@
 """Hit calling and energy distance."""
 
 import logging
+import re
 import warnings
 
 import anndata as ad
@@ -927,12 +928,13 @@ def test_the_mp_value_is_calibrated_on_well_profiles_of_pure_noise(pure_noise_sc
     assert called / total <= 0.1, f"{called}/{total} pure-noise groups below p = 0.05"
 
 
-def test_the_mp_value_leaves_a_one_row_group_unscored(pure_noise_screen):
+def test_the_mp_value_leaves_a_one_row_group_unscored(pure_noise_screen, caplog):
     adata = pure_noise_screen(n_features=10, per_group=3)
     adata.obs["Metadata_Perturbation"] = adata.obs["Metadata_Perturbation"].astype(str)
     adata.obs.loc[adata.obs_names[-1], "Metadata_Perturbation"] = "solo"
-    with pytest.warns(UserWarning, match="unscored.*solo"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.tl.hit_calling(adata, method="mp_value", n_permutations=50)
+    assert re.search(r"unscored.*solo", caplog.text)
     table = adata.uns["mantispy"]["hits"].set_index("group")
     assert np.isnan(table.loc["solo", "distance"])
     assert np.isfinite(table.drop(index="solo")["distance"]).all()
