@@ -3,6 +3,12 @@ name: Release
 on:
     release:
         types: [published]
+    # Re-publish an existing tag when the release event's run never started.
+    workflow_dispatch:
+        inputs:
+            tag:
+                description: Release tag to build and upload, e.g. v0.1.0a4
+                required: true
 
 # Use "trusted publishing", see https://docs.pypi.org/trusted-publishers/
 permissions: {}
@@ -20,6 +26,7 @@ jobs:
         steps:
             - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
               with:
+                  ref: ${{ inputs.tag || github.ref }}
                   filter: blob:none
                   fetch-depth: 0
                   persist-credentials: false
