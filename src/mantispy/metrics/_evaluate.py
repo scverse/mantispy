@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 
+from mantispy._core._reduce import get_matrix
+from mantispy._core.frames import as_frame
 from mantispy._core.masks import control_annotated, reference_mask
 from mantispy.metrics._common import embedding
 
@@ -21,6 +23,9 @@ _PAIR_KEYS = ("pos_sameby", "pos_diffby", "neg_sameby", "neg_diffby")
 
 #: Tokens in ``metrics=`` that select the mAP rather than a scib metric.
 _MAP_TOKENS = frozenset({"map"})
+
+#: obsm key of the unintegrated PCA scib's PC-regression comparison reads, on mantispy's own copy.
+_UNINTEGRATED = "_mantispy_unintegrated_pca"
 
 
 def _has_scib() -> bool:
@@ -141,14 +146,23 @@ def _benchmark(
     scib-metrics is imported here and only here, and only the public ``get_results`` is read, never the private
     ``_results``, so scib's own Total stays the number scib computes.
     """
+    import anndata as ad
+    import scanpy as sc
     from scib_metrics.benchmark import Benchmarker
 
+    # scib writes its unintegrated PCA into obsm["X_pca"], so it gets a copy holding only what it reads, and the
+    # baseline is computed here the way scib computes it, under a key no representation can share.
+    slim = ad.AnnData(get_matrix(adata), obs=as_frame(adata.obs)[list(dict.fromkeys((batch_key, label_key)))].copy())
+    for rep in reps:
+        slim.obsm[rep] = adata.obsm[rep]
+    sc.tl.pca(slim, svd_solver="arpack", mask=None, key_added=_UNINTEGRATED)
     # progress_bar=False keeps the tqdm bars out of executed notebooks and test logs.
     bm = Benchmarker(
-        adata,
+        slim,
         batch_key=batch_key,
         label_key=label_key,
         embedding_obsm_keys=list(reps),
+        pre_integrated_embedding_obsm_key=_UNINTEGRATED,
         n_jobs=-1,
         progress_bar=False,
         **_scib_metric_specs(scib_names),
