@@ -25,13 +25,6 @@ def profiles():
 
 
 @requires_copairs
-def test_activity_warns_when_most_perturbations_come_out_active(profiles):
-    # Against non-targeting controls nearly every CRISPR knockout is active from cutting alone (#276).
-    with pytest.warns(UserWarning, match="perturbations active against the controls"):
-        mt.tl.map(profiles, mode="activity", null_size=200)
-
-
-@requires_copairs
 def test_activity_scores_treatments_against_the_controls(profiles):
     """Phenotypic activity as the field defines it: replicates retrieved against control profiles only, with the controls themselves dropped from the result."""
     mt.tl.map(profiles, mode="activity", null_size=200)

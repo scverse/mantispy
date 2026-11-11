@@ -49,6 +49,26 @@ def test_default_operations_is_public():
     from mantispy.pp._select import OPERATIONS
 
     assert isinstance(DEFAULT_OPERATIONS, tuple) and set(DEFAULT_OPERATIONS) <= set(OPERATIONS)
+    # The slowest operation runs last, on what the cheap ones left.
+    assert DEFAULT_OPERATIONS[-1] == "correlation_threshold"
+
+
+def test_each_feature_is_counted_once_by_the_first_operation_that_removes_it():
+    """Operations run in sequence, so the counts do not overlap and sum to the number of features removed."""
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(40, 4))
+    X[:, 1] = 1.0  # constant
+    X[:30, 1] = np.nan  # and mostly missing, so both variance_threshold and drop_na_columns would remove it
+    adata = ad.AnnData(X=X, var=pd.DataFrame(index=[f"Cells_AreaShape_F{i}" for i in range(4)]))
+
+    for operations, counted_by in (
+        (("variance_threshold", "drop_na_columns"), "variance_threshold"),
+        (("drop_na_columns", "variance_threshold"), "drop_na_columns"),
+    ):
+        result = mt.pp.feature_select(adata, operations=operations, copy=True)
+        counts = result.uns["mantispy"]["feature_select"]
+        assert counts[counted_by] == 1
+        assert sum(counts.values()) == adata.n_vars - int(result.var["selected"].sum()) == 1
 
 
 def test_feature_select_warns_only_when_non_measurements_are_the_majority():

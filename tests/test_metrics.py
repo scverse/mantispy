@@ -254,6 +254,20 @@ def test_evaluate_integration_scib_only_returns_a_frame_without_a_map_block(monk
     assert np.isfinite(frame["Total"]).all()
 
 
+@pytest.mark.filterwarnings("error:The argument mask_var is deprecated:FutureWarning")
+def test_evaluate_integration_scores_the_callers_x_pca_and_leaves_it_untouched(monkeypatch):
+    """scib-metrics computes its own PCA into obsm["X_pca"]; the caller's embedding must be the one scored and kept."""
+    pytest.importorskip("scib_metrics")
+    adata = _scib_ready()
+    adata.obsm["X_pca"] = np.asarray(adata.obsm["X_pca"])[:, :4]
+    before = adata.obsm["X_pca"].copy()
+    _block_imports(monkeypatch, "copairs")
+
+    mt.metrics.evaluate_integration(adata, reps=("X_pca",))
+    np.testing.assert_array_equal(adata.obsm["X_pca"], before)
+    assert list(adata.obsm) == ["X_pca"]
+
+
 def test_evaluate_integration_both_returns_the_map_column_and_both_totals():
     """With both installed the frame carries the metric columns, the mAP column and scib's Total beside mantispy's Total+mAP."""
     pytest.importorskip("scib_metrics")
