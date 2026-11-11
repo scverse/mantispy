@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-import warnings
 from typing import Any
 
 import numpy as np
@@ -20,6 +19,7 @@ from mantispy._core._reduce import (
 )
 from mantispy._core._stats import MAD_TO_SIGMA
 from mantispy._core.frames import as_frame
+from mantispy._core.logging import get_logger
 from mantispy._core.masks import reference_mask
 from mantispy._core.mutation import inplace_or_copy
 from mantispy._core.schema import resolve_perturbation_column
@@ -187,12 +187,11 @@ def normalize(
 
     erased = _erased_treatments(adata, by)
     if erased:
-        warnings.warn(
-            f"normalize: {erased} is constant within every group of {by!r}, so normalizing within those groups "
-            "subtracts each group's own centre and removes the differences between them. Normalize by a "
-            "coarser grouping if those columns are what you want to compare.",
-            UserWarning,
-            stacklevel=3,
+        get_logger().warning(
+            "normalize: %s is constant within every %s group, so normalizing removes its differences",
+            erased,
+            by,
+            deep="normalize by a coarser grouping to compare them",
         )
     centre, scale, spreadless, unmeasured = _center_and_scale(adata, method, by, codes, keys, layer, mask, epsilon)
     no_spread, uncentred = spreadless.any(axis=0), unmeasured.any(axis=0)
@@ -205,39 +204,25 @@ def normalize(
     # One flag column per output matrix, so a call writing another layer does not reset the flags describing the first.
     flag = "degenerate_scale" if key_added is None else f"degenerate_scale_{key_added}"
     adata.var[flag] = degenerate
-    scope = f" among the rows selected by reference={reference!r}" if reference is not None else ""
-    remedy = f"They are flagged in var[{flag!r}]; drop them with adata = adata[:, ~adata.var[{flag!r}]].copy()."
-    if key_added is None:
-        # feature_select reads the unsuffixed flag, which is the one describing X.
-        remedy = (
-            f"They are flagged in var[{flag!r}], and pp.feature_select drops them by default; to drop them "
-            f"now, adata = adata[:, ~adata.var[{flag!r}]].copy()."
-        )
+    remedy = f"drop them with adata = adata[:, ~adata.var[{flag!r}]].copy()"
     if uncentred.any():
         affected = np.flatnonzero(unmeasured.any(axis=1))
-        groups = ", ".join(f"{keys[int(g)]} ({int(present[g])} reference rows)" for g in affected[:5])
-        groups += f" and {affected.size - 5} more" if affected.size > 5 else ""
-        warnings.warn(
-            f"{int(uncentred.sum())} of {adata.n_vars} features have no reference values to centre on "
-            f"in {affected.size} group(s) of {by!r}{scope}: {groups}. Every reference value of those features "
-            "is missing or infinite there. "
-            "Their centre is set to 0 where it is missing and their scale to 1, so the values measured "
-            "outside the reference rows pass through unnormalized instead of becoming NaN, and are not "
-            f"comparable across groups. {remedy}",
-            UserWarning,
-            stacklevel=3,
+        get_logger().warning(
+            "normalize: %d of %d features have no finite reference value in %d %s group(s) and stay unnormalized",
+            int(uncentred.sum()),
+            adata.n_vars,
+            affected.size,
+            by,
+            deep=f"they are flagged in var[{flag!r}], and you can {remedy}",
         )
     # Not elif: a feature constant in one group and unmeasured in another is still unscalable in the first.
     if no_spread.any():
-        names = list(adata.var_names[no_spread])
-        shown = ", ".join(map(str, names[:5])) + (f" and {len(names) - 5} more" if len(names) > 5 else "")
-        warnings.warn(
-            f"{len(names)} of {adata.n_vars} features have no spread in at least one group of {by!r}{scope} "
-            f"({shown}). They cannot be scaled there, so their values in those groups are set to NaN. {remedy} "
-            "A variance or outlier cut does not catch a feature that varies across a plate but is constant "
-            "among its control wells; the flag does.",
-            UserWarning,
-            stacklevel=3,
+        get_logger().warning(
+            "normalize: %d of %d features have no reference spread in some %s group and are NaN there",
+            int(no_spread.sum()),
+            adata.n_vars,
+            by,
+            deep=f"{', '.join(map(str, adata.var_names[no_spread][:5]))} are flagged in var[{flag!r}], and you can {remedy}",
         )
     lookup = {key: position for position, key in enumerate(keys)}
 

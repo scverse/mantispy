@@ -1,5 +1,6 @@
 """Behaviour of feature_select beyond equivalence, which test_equivalence_* covers."""
 
+import logging
 import warnings
 
 import anndata as ad
@@ -71,21 +72,21 @@ def test_each_feature_is_counted_once_by_the_first_operation_that_removes_it():
         assert sum(counts.values()) == adata.n_vars - int(result.var["selected"].sum()) == 1
 
 
-def test_feature_select_warns_only_when_non_measurements_are_the_majority():
+def test_feature_select_warns_only_when_non_measurements_are_the_majority(caplog):
     """A few embedding columns among real measurements must not trigger the meaningless-selection warning."""
     adata = _one_feature_per_operation()  # four features
     adata.var["feature_kind"] = pd.Categorical(["embedding", "measurement", "measurement", "measurement"])
-    with warnings.catch_warnings(record=True) as record:
-        warnings.simplefilter("always")
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.pp.feature_select(adata, copy=True)
-    assert not any("unlikely to be meaningful" in str(w.message) for w in record)
+    assert "unlikely to mean much" not in caplog.text
 
     adata.var["feature_kind"] = pd.Categorical(["embedding", "embedding", "embedding", "measurement"])
-    with pytest.warns(UserWarning, match="unlikely to be meaningful"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.pp.feature_select(adata, copy=True)
+    assert "unlikely to mean much" in caplog.text
 
 
-def test_feature_select_warns_when_a_selected_feature_keeps_nan():
+def test_feature_select_warns_when_a_selected_feature_keeps_nan(caplog):
     """A feature with NaN in fewer than na_cutoff of its rows survives selection and then breaks PCA/sphere (audit A4)."""
     rng = np.random.default_rng(0)
     n_obs = 40
@@ -97,12 +98,14 @@ def test_feature_select_warns_when_a_selected_feature_keeps_nan():
     )
     adata = ad.AnnData(x, obs=obs)
     adata.var_names = [f"Cells_AreaShape_F{index}" for index in range(4)]
-    with pytest.warns(UserWarning, match="still hold NaN") as record:
+    with caplog.at_level(logging.INFO, logger="scverse.mantispy"):
         mt.pp.feature_select(adata, operations=("drop_na_columns",))
+    (record,) = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert "still hold NaN" in record.getMessage()
     assert bool(adata.var["selected"].iloc[1])  # the near-complete feature is kept, NaN and all
     # The advice must name the subsetting step: feature_select only flags, so na_cutoff=0.0 alone does not
     # drop anything (audit item 2). Following the advice as written must actually clear the NaN.
-    assert any("subset" in str(w.message) for w in record)
+    assert "subset" in record.deep
     mt.pp.feature_select(adata, operations=("drop_na_columns",), na_cutoff=0.0, subset=True)
     assert adata.n_vars == 3 and not np.isnan(np.asarray(adata.X)).any()
 
@@ -113,17 +116,19 @@ def test_noise_removal_needs_its_grouping_column(wells):
         mt.pp.feature_select(wells, operations=("noise_removal",))
 
 
-def test_feature_select_warns_on_embedding(wells):
+def test_feature_select_warns_on_embedding(wells, caplog):
     wells.var["feature_kind"] = pd.Categorical(["embedding"] * wells.n_vars)
-    with pytest.warns(UserWarning, match="embedding"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.pp.feature_select(wells, copy=True)
+    assert "are embedding, not measurements" in caplog.text
 
 
-def test_feature_select_silent_on_measurement(wells):
+def test_feature_select_silent_on_measurement(wells, caplog):
     assert set(wells.var["feature_kind"].dropna()) == {"measurement"}
-    with warnings.catch_warnings():
+    with warnings.catch_warnings(), caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         warnings.simplefilter("error")
         mt.pp.feature_select(wells, copy=True)
+    assert not caplog.records
 
 
 def test_subset_features_requires_the_key(wells):
@@ -154,16 +159,16 @@ def test_an_all_nan_feature_is_selected_on_without_a_warning():
     assert not adata.var["selected"]["Cells_AreaShape_Plain"], "an all-NaN feature has no variance to keep it"
 
 
-def test_selecting_nothing_warns_rather_than_emptying_the_object_silently(wells):
+def test_selecting_nothing_warns_rather_than_emptying_the_object_silently(wells, caplog):
     """noise_removal's cutoff is an absolute threshold on the scale normalize left the values on, so against control-normalized values it drops every feature, and on its own that surfaces as an empty matrix in whatever runs next."""
-    with pytest.warns(UserWarning, match="flagged none of the"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.pp.feature_select(
             wells,
             operations=("noise_removal",),
             noise_removal_perturb_groups="Metadata_Perturbation",
             noise_removal_stdev_cutoff=0.0,
         )
-
+    assert "feature_select: kept none of the" in caplog.text
     assert not wells.var["selected"].any()
     assert wells.uns["mantispy"]["feature_select"]["noise_removal"] == wells.n_vars
 
@@ -258,11 +263,12 @@ def _scale_mixed(n_groups=8, per_group=12, n_features=40, seed=0):
     return ad.AnnData(values.astype(np.float32), obs=obs, var=pd.DataFrame(index=[f"f{i}" for i in range(n_features)]))
 
 
-def test_near_total_absolute_noise_removal_warns():
+def test_near_total_absolute_noise_removal_warns(caplog):
     """Regression for #109: the absolute cutoff strips nearly every feature under control-based or MAD normalization, which was silent unless exactly zero survived."""
     adata = _scale_mixed()
-    with pytest.warns(UserWarning, match="more than 95%"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.pp.feature_select(adata, operations=("noise_removal",), noise_removal_stdev_cutoff=0.8)
+    assert "noise_removal dropped" in caplog.text
     kept = int(adata.var["selected"].sum())
     assert 0 < kept < adata.n_vars, "one quiet feature survives, so this is near-total and not the empty case"
 
@@ -272,9 +278,7 @@ def test_scale_relative_noise_removal_keeps_a_useful_subset(mode):
     """The scale-relative modes keep a nonzero, non-total subset where the absolute cutoff keeps almost none."""
     adata = _scale_mixed()
     absolute = adata.copy()
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", UserWarning)
-        mt.pp.feature_select(absolute, operations=("noise_removal",), noise_removal_stdev_cutoff=0.8)
+    mt.pp.feature_select(absolute, operations=("noise_removal",), noise_removal_stdev_cutoff=0.8)
     assert int(absolute.var["selected"].sum()) <= 1, "the absolute cutoff keeps almost nothing on this scale"
 
     scaled = adata.copy()
@@ -375,18 +379,21 @@ def test_feature_select_default_keeps_every_feature():
     assert adata.var["selected"].sum() == 3
 
 
-def test_a_kept_feature_far_outside_its_own_spread_warns():
+def test_a_kept_feature_far_outside_its_own_spread_warns(caplog):
     # Hu moments at 1e10 to 1e20 passed every default check without a word (#277).
     rng = np.random.default_rng(0)
     values = rng.normal(size=(200, 3))
     values[0, 2] = 1e12
     adata = ad.AnnData(values.astype(np.float64), obs=pd.DataFrame(index=[str(i) for i in range(200)]))
     adata.var_names = ["Cells_AreaShape_Area", "Cells_AreaShape_Perimeter", "Cells_AreaShape_HuMoment_3"]
-    with pytest.warns(UserWarning, match="Cells_AreaShape_HuMoment_3"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.pp.feature_select(adata, operations=("variance_threshold",))
-    with warnings.catch_warnings():
+    assert "Cells_AreaShape_HuMoment_3" in caplog.text
+    caplog.clear()
+    with warnings.catch_warnings(), caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         warnings.simplefilter("error")
         mt.pp.feature_select(adata, operations=("variance_threshold", "drop_outliers"))
+    assert not caplog.records
 
 
 def test_the_default_blocklist_also_matches_cp_measure_names():

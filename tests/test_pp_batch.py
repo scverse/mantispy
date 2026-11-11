@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -124,7 +126,7 @@ def test_regress_out_handles_categorical_keys_and_missing_columns(gradient_cells
         mt.pp.regress_out(wells, keys=("Metadata_Nope",))
 
 
-def test_harmony_says_so_when_it_corrects_nothing(cells):
+def test_harmony_says_so_when_it_corrects_nothing(cells, caplog):
     """Harmony returns the input unchanged when the batches are perfectly separated in the embedding, because every soft cluster is then single-batch.
 
     The wrapper warns in that case.
@@ -138,8 +140,9 @@ def test_harmony_says_so_when_it_corrects_nothing(cells):
     wells.X = values.astype(np.float32)
     sc.pp.pca(wells, n_comps=10)
 
-    with pytest.warns(UserWarning, match="corrected nothing"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.pp.harmony(wells, batch_key="Metadata_Site", use_rep="X_pca")
+    assert "harmony: corrected nothing" in caplog.text
     np.testing.assert_array_equal(wells.obsm["X_harmony"], wells.obsm["X_pca"])
 
 
@@ -413,11 +416,12 @@ def _two_plates(count_means=(1500.0, 1500.0), slope=0.0, n=192, n_features=30, s
     return adata
 
 
-def test_regress_out_says_when_a_plate_never_reaches_the_pooled_density():
+def test_regress_out_says_when_a_plate_never_reaches_the_pooled_density(caplog):
     """On pki two plates hold a third of the others' cells; fitted per plate and re-expressed at the pooled mean, the result correlated with the cell count more than the input had."""
     adata = _two_plates(count_means=(600.0, 1800.0), slope=0.002)
-    with pytest.warns(UserWarning, match="extrapolating"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.pp.regress_out(adata, keys=["Metadata_Count"], by="Metadata_Plate", reference=None)
+    assert "extrapolated to the pooled covariate mean" in caplog.text
 
 
 def _treated_and_thinned(seed=0):
@@ -511,7 +515,7 @@ def test_regress_out_refuses_a_covariate_with_a_missing_label():
 
 
 @pytest.mark.parametrize("value", [np.nan, np.inf])
-def test_regress_out_says_so_when_a_missing_covariate_value_disables_it(value):
+def test_regress_out_says_so_when_a_missing_covariate_value_disables_it(value, caplog):
     """``np.ptp`` is NaN for a covariate holding a NaN and ``NaN > 0`` is False, so the covariate is read as non-varying and dropped: the correction becomes a bitwise no-op (corr 0.98 before and after) while the only log line claims the covariate was removed.
 
     An infinite value is dropped the same way, where it was fitted without a warning (#66).
@@ -526,8 +530,9 @@ def test_regress_out_says_so_when_a_missing_covariate_value_disables_it(value):
     adata.obs["Metadata_CellCount"] = counts
 
     before = np.asarray(adata.X).copy()
-    with pytest.warns(UserWarning, match="Metadata_CellCount"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.pp.regress_out(adata, keys=["Metadata_CellCount"], by=None, reference=None)
+    assert "missing or infinite values are not regressed out" in caplog.text and "Metadata_CellCount" in caplog.text
     assert np.array_equal(np.asarray(adata.X), before)
 
 
@@ -621,13 +626,14 @@ def test_correct_chromosome_arm_needs_a_reference():
         mt.pp.correct_chromosome_arm(adata)
 
 
-def test_arm_correction_warns_and_noops_below_threshold():
+def test_arm_correction_warns_and_noops_below_threshold(caplog):
     genes = [f"q{i}" for i in range(22)]
     adata = _crispr_arm_plate({"1q": [3.0, 3.0]}, genes, ["1q"] * 22, dict.fromkeys(genes, 1.0), {}, n_features=2)
     adata.X = adata.X.astype(np.float64)
     before = adata.X.copy()
-    with pytest.warns(UserWarning, match="min_genes"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         out = mt.pp.correct_chromosome_arm(adata, unexpressed=set(genes), min_genes=10**6, copy=True)
+    assert "min_genes=1000000 unexpressed genes, so nothing was corrected" in caplog.text
     assert out.X.dtype == before.dtype
     np.testing.assert_array_equal(np.asarray(out.X), before)
     assert out.uns["mantispy"]["chromosome_arm"] == {}

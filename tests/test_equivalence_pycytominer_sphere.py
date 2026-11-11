@@ -1,5 +1,7 @@
 """Spherize equivalence against pycytominer."""
 
+import logging
+
 import numpy as np
 import pytest
 
@@ -59,14 +61,15 @@ def test_rank_deficient_reference_is_refused(wells):
         mt.pp.sphere(wells, method="ZCA", reference="negcon")
 
 
-def test_underdetermined_reference_warns(wells):
+def test_underdetermined_reference_warns(wells, caplog):
     """Fewer control rows than features means a padded, noise-amplifying transform."""
     narrow = wells[:, : wells.n_vars].copy()
     few = narrow[narrow.obs["Metadata_Control"].to_numpy()].copy()
     few = few[: narrow.n_vars - 2].copy()
     few.obs["Metadata_Control"] = True
-    with pytest.warns(UserWarning, match="fewer rows than features"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.pp.sphere(few, method="ZCA", reference="negcon")
+    assert "covariance is singular" in caplog.text
 
 
 def test_constant_feature_is_reported_for_the_cor_variants(wells):

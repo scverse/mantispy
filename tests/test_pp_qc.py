@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -135,20 +137,22 @@ def _no_area_object():
     return ad.AnnData(X=values, obs=obs, var=var)
 
 
-def test_qc_metrics_skips_the_area_check_when_no_area_is_found(capsys):
+def test_qc_metrics_skips_the_area_check_when_no_area_is_found(caplog):
     """No area column: qc_area_outlier is skipped (left all False) with a warning, the other metrics still run."""
     adata = _no_area_object()
-    mt.pp.calculate_qc_metrics(adata)
-    assert "qc_area_outlier is skipped" in capsys.readouterr().err
+    with caplog.at_level(logging.INFO, logger="scverse.mantispy"):
+        mt.pp.calculate_qc_metrics(adata)
+    assert "qc_area_outlier is all False" in caplog.text
     assert not adata.obs["qc_area_outlier"].any()
     assert "qc_fail" in adata.obs and "qc_nan_fraction" in adata.obs
 
 
-def test_qc_metrics_area_feature_names_the_column_or_rejects_an_unknown_one(capsys):
+def test_qc_metrics_area_feature_names_the_column_or_rejects_an_unknown_one(caplog):
     """area_feature= names the column to score on a table whose names do not parse as an area."""
     adata = _no_area_object()
-    mt.pp.calculate_qc_metrics(adata, area_feature="Cells_Intensity_MeanIntensity_DNA")
-    assert "qc_area_outlier is skipped" not in capsys.readouterr().err
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
+        mt.pp.calculate_qc_metrics(adata, area_feature="Cells_Intensity_MeanIntensity_DNA")
+    assert "qc_area_outlier is all False" not in caplog.text
 
     with pytest.raises(KeyError, match="area_feature"):
         mt.pp.calculate_qc_metrics(adata, area_feature="not_a_column")

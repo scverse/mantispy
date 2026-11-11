@@ -60,7 +60,7 @@ dependencies = [
   "scanpy>=1.13.0b1",
   "scikit-learn>=1.4",
   "scipy>=1.11",
-  "scverse-misc[datasets]>=0.1.6",
+  "scverse-misc[datasets,rich]>=0.1.8",
   # for debug logging (referenced from the issue template)
   "session-info2",
 ]
@@ -116,7 +116,7 @@ doc = [
   "ipython",                       # conf.py enables IPython.sphinxext.ipython_console_highlighting
   "mantispy[spatial]",             # autodoc imports io._plate
   "scverse-doc[full]>=0.4",
-  "scverse-misc[sphinx]>=0.1.6",   # scverse_misc.sphinx_ext documents the Settings object
+  "scverse-misc[sphinx]>=0.1.8",   # scverse_misc.sphinx_ext documents the Settings object
   "sphinx>=8.1",
   "sphinx-autodoc-typehints<3.14", # 3.14 stringifies class bases, which breaks scverse-doc's _skip_private_bases
   "sphinxcontrib-bibtex>=1",

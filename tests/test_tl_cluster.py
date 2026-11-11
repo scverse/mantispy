@@ -1,5 +1,8 @@
 """Hierarchical clustering of per-perturbation profiles."""
 
+import logging
+import re
+
 import anndata as ad
 import numpy as np
 import pandas as pd
@@ -200,7 +203,7 @@ def test_copy_leaves_the_input_alone(planted):
     assert "cluster" not in planted.obs
 
 
-def test_cluster_warns_on_degenerate_grouping():
+def test_cluster_warns_on_degenerate_grouping(caplog):
     rng = np.random.default_rng(0)
     values = rng.normal(scale=0.1, size=(24, 30))
     values[0] += 50.0  # one far outlier; the other 23 rows form a single blob
@@ -210,13 +213,12 @@ def test_cluster_warns_on_degenerate_grouping():
         var=pd.DataFrame(index=[f"f{i}" for i in range(30)]),
     )
     adata.uns["mantispy"] = {"schema_version": "0.1", "resolution": "aggregate"}
-    with pytest.warns(UserWarning, match=r"one cluster holds \d+% of rows"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.tl.cluster(adata, use_rep=None, n_clusters=2)
+    assert re.search(r"one cluster holds \d+% of rows", caplog.text)
 
 
-def test_cluster_is_silent_on_balanced_groups(planted):
-    import warnings
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
+def test_cluster_is_silent_on_balanced_groups(planted, caplog):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.tl.cluster(planted, use_rep=None)
+    assert "degenerate" not in caplog.text

@@ -95,14 +95,6 @@ def _permutation_padj(
     """
     import decoupler as dc
 
-    n_sources = network["source"].nunique()
-    if n_permutations * n_sources > 200_000:
-        warnings.warn(
-            f"n_permutations={n_permutations} over {n_sources} set(s) scores the net {n_permutations} times, "
-            f"which can be slow; lower n_permutations or the set count if it does not finish.",
-            stacklevel=4,
-        )
-
     observed_abs = observed.abs().to_numpy()
     count = np.zeros(observed_abs.shape, dtype=np.int64)
     for seed in range(n_permutations):
@@ -123,13 +115,13 @@ def _warn_if_collinear(dc: Any, network: pd.DataFrame, tmin: int) -> None:
     except Exception:  # noqa: BLE001 - net_corr raises assorted errors on an unusual net; any means skip the check
         return
     strong = corr[np.abs(corr["corr"].to_numpy(dtype=float)) > 0.95]
-    pairs = [f"{a} and {b}" for a, b in zip(strong["source_a"], strong["source_b"], strict=False)]
+    pairs = sorted(f"{a} and {b}" for a, b in zip(strong["source_a"], strong["source_b"], strict=False))
     if pairs:
-        warnings.warn(
-            f"feature sets are near-collinear ({'; '.join(pairs[:2])}); enrichment cannot separate "
-            f"near-duplicate sets, so interpret them together or merge them.",
-            UserWarning,
-            stacklevel=4,
+        get_logger().warning(
+            "enrich: %d pair(s) of feature sets are near-collinear (%s)",
+            len(pairs),
+            "; ".join(pairs[:2]),
+            deep="enrichment cannot separate them, so read them together or merge them",
         )
 
 
@@ -236,7 +228,6 @@ def enrich(
         frame = to_dataframe(adata, metadata=False)
         scores = dc.mt.decouple(frame, network, methods=list(panel), args=args, cons=True, **decoupler_kwargs)
         _write_scores(adata, scores)
-        get_logger().info("enrich(consensus) scored %d set(s) with panel %s", network["source"].nunique(), panel)
         return None
 
     if n_permutations > 0:
@@ -248,12 +239,6 @@ def enrich(
         _clear_enrich_obsm(adata)
         adata.obsm[f"score_{method}"] = observed
         adata.obsm[f"padj_{method}"] = pd.DataFrame(padj, index=observed.index, columns=observed.columns)
-        get_logger().info(
-            "enrich(%s) scored %d set(s) with %d-permutation p-values",
-            method,
-            network["source"].nunique(),
-            n_permutations,
-        )
         return None
 
     if method == "ora":
@@ -262,7 +247,6 @@ def enrich(
     frame = to_dataframe(adata, metadata=False)
     scored = dc.mt.decouple(frame, network, methods=[method], args={method: dict(decoupler_kwargs)}, cons=False)
     _write_scores(adata, scored)
-    get_logger().info("enrich(%s) scored %d set(s)", method, network["source"].nunique())
     return None
 
 

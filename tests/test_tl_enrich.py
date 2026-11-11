@@ -1,6 +1,6 @@
 """Feature sets built from the parsed annotation, and enrichment over them."""
 
-import warnings
+import logging
 
 import anndata as ad
 import numpy as np
@@ -366,7 +366,7 @@ def test_enrich_clears_stale_scores_from_an_earlier_run(active):
     assert keys == {"score_ulm", "padj_ulm"}
 
 
-def test_collinearity_warns_on_near_duplicate_sets():
+def test_collinearity_warns_on_near_duplicate_sets(caplog):
     """Two sets over the same features are perfectly collinear, so enrichment cannot separate them; the warning names them, and check_collinearity=False suppresses it."""
     rng = np.random.default_rng(0)
     names = [f"f{index}" for index in range(10)]
@@ -378,13 +378,14 @@ def test_collinearity_warns_on_near_duplicate_sets():
         {"source": ["A"] * 5 + ["B"] * 5 + ["C"] * 5, "target": names[:5] + names[:5] + names[5:], "weight": 1.0}
     )
 
-    with pytest.warns(UserWarning, match="near-collinear"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.tl.enrich(adata.copy(), net=net, method="ulm", tmin=2)
+    assert "near-collinear" in caplog.text and "A and B" in caplog.text
 
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.tl.enrich(adata.copy(), net=net, method="ulm", tmin=2, check_collinearity=False)
-    assert not any("near-collinear" in str(record.message) for record in caught)
+    assert "near-collinear" not in caplog.text
 
 
 def test_permutation_survives_an_overlapping_net_at_the_default_tmin():
@@ -412,7 +413,7 @@ def test_permutation_survives_an_overlapping_net_at_the_default_tmin():
     assert np.all((values >= 0.0) & (values <= 1.0))
 
 
-def test_collinearity_is_checked_below_decouplers_default_tmin():
+def test_collinearity_is_checked_below_decouplers_default_tmin(caplog):
     """Regression: net_corr's own default tmin=5 drops small sets and silently skips the check.
     enrich must thread the scoring tmin through, so near-duplicate sets smaller than five still warn."""
     rng = np.random.default_rng(0)
@@ -429,8 +430,9 @@ def test_collinearity_is_checked_below_decouplers_default_tmin():
             "weight": 1.0,
         }
     )
-    with pytest.warns(UserWarning, match="near-collinear"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.tl.enrich(adata, net=net, method="ulm", tmin=3)
+    assert "near-collinear" in caplog.text
 
 
 def test_get_features_filters_a_column_that_is_legitimately_empty():

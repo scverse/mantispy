@@ -8,7 +8,6 @@ import pandas as pd
 from mantispy._core._reduce import representation
 from mantispy._core._stats import permutation_pvalue
 from mantispy._core.frames import as_frame
-from mantispy._core.logging import get_logger
 from mantispy.metrics._common import tidy
 
 if TYPE_CHECKING:
@@ -194,7 +193,6 @@ def known_relationships(
 
     tail = percentile / 100.0
     recall = _recall(pool, similarities, tail)
-    get_logger().info("known_relationships: %.1f%% of %d annotated pair(s) in the tails", 100 * recall, keys.size)
     result = tidy(
         "known_relationships" if name is None else f"known_relationships:{name}", use_rep or "X", label_key, recall
     )

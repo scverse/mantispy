@@ -78,10 +78,9 @@ def calculate_qc_metrics(
     if len(area):
         area_outlier = _area_outlier_flag(adata, X, area)
     else:
-        get_logger().warning(
-            "no column in var names an area, so qc_area_outlier is skipped (left all False); the other QC "
-            "metrics are still computed. Pass area_feature= to name the area column when the table does not "
-            "use CellProfiler feature names."
+        get_logger().info(
+            "calculate_qc_metrics: no area feature in var, so qc_area_outlier is all False",
+            deep="pass area_feature= to name the area column",
         )
         area_outlier = np.zeros(adata.n_obs, dtype=bool)
 
@@ -103,7 +102,7 @@ def _border_flag(adata: AnnData, image_shape: tuple[int, int] | None, margin: in
     if image_shape is None or not coordinates:
         if image_shape is not None:
             get_logger().warning(
-                "image_shape was given but obs has no Metadata_Center_X/Y, so no cell can be flagged as a border cell"
+                "calculate_qc_metrics: obs has no Metadata_Center_X/Y, so no cell is flagged as a border cell"
             )
         return np.zeros(adata.n_obs, dtype=bool)
     height, width = image_shape
@@ -135,8 +134,6 @@ def _area_outlier_flag(adata: AnnData, X: np.ndarray, area: pd.Index) -> np.ndar
     """
     if "Metadata_Plate" not in adata.obs:
         return np.zeros(adata.n_obs, dtype=bool)
-    if len(area) > 1:
-        get_logger().info("qc_area_outlier flags a cell outlying in any of %s", list(area))
 
     columns = X[:, np.array([adata.var_names.get_loc(name) for name in area])]
     codes, keys = group_codes(adata, "Metadata_Plate")
@@ -187,7 +184,7 @@ def filter_cells(
             "filter_cells dropped %d of %d cells (%.1f%%)", dropped, adata.n_obs, 100 * dropped / adata.n_obs
         )
     if not keep.any():
-        get_logger().warning("filter_cells removed every cell; check qc_fail and min_cells_per_well")
+        get_logger().warning("filter_cells: removed every cell", deep="check qc_fail and min_cells_per_well")
     adata._inplace_subset_obs(keep)
     return None
 

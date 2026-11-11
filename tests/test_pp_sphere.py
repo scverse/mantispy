@@ -1,5 +1,8 @@
 """Sphering on reference sets that are too small to define a covariance."""
 
+import logging
+import re
+
 import numpy as np
 import pytest
 
@@ -284,15 +287,16 @@ def test_a_float_epsilon_is_unchanged_and_records_no_sweep():
     assert "sphere_epsilon" not in reference.uns.get("mantispy", {})
 
 
-def test_tvn_keeps_one_component_per_control_when_the_controls_are_few():
+def test_tvn_keeps_one_component_per_control_when_the_controls_are_few(caplog):
     """The rotation is fitted on the controls, so a control-poor screen comes back narrower than it went in.
 
     That is why this writes obsm: var would no longer describe the columns.
     Nine controls per batch against eighteen components is also the case the warning is for: the directions a batch's controls do not span have spread that is tiny rather than zero, so the check inside _centre_scale never fires and they are divided by it anyway.
     """
     adata = _batched(n_batches=2, per_batch=12, n_features=20)
-    with pytest.warns(UserWarning, match="no more reference rows than the 18 component"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.pp.tvn(adata, use_rep=None)
+    assert "no more reference rows than the 18 components" in caplog.text
     assert adata.obsm["X_tvn"].shape == (adata.n_obs, int(adata.obs["Metadata_Control"].sum()))
     assert np.isfinite(adata.obsm["X_tvn"]).all()
 
@@ -326,7 +330,7 @@ def test_tvn_refuses_a_batch_it_cannot_estimate_a_covariance_for():
         mt.pp.tvn(adata, use_rep=None, reference="Metadata_Nothing")
 
 
-def test_tvn_says_when_a_batch_cannot_scale_a_dimension():
+def test_tvn_says_when_a_batch_cannot_scale_a_dimension(caplog):
     """A batch whose controls are constant in one dimension scales it by 1 and says so.
 
     The per-batch pass is where this bites: it is fitted on that batch's controls alone.
@@ -339,8 +343,9 @@ def test_tvn_says_when_a_batch_cannot_scale_a_dimension():
     values[batch & control] = values[np.flatnonzero(batch & control)[0]]
     adata.X = values
 
-    with pytest.warns(UserWarning, match=r"no spread among the .* of batch 'B1'"):
+    with caplog.at_level(logging.INFO, logger="scverse.mantispy"):
         mt.pp.tvn(adata, use_rep=None)
+    assert re.search(r"no spread among the .* of batch 'B1'", caplog.text)
     assert np.isfinite(adata.obsm["X_tvn"]).all()
     # The rotation leaves those components a spread of about 1e-16, not zero, and dividing by it gives finite 1e16s.
     assert np.abs(adata.obsm["X_tvn"]).max() < 1e3

@@ -296,10 +296,8 @@ def hit_calling(
     replicate_codes = _default_replicate(adata, replicate=replicate, reference=is_control)
     if replicate_codes is None and replicate is None and _is_object_resolution(adata):
         warnings.warn(
-            "the object is at cell resolution and no usable replicate was given, so the test treats cells as "
-            "independent draws. Cells within a well are not independent replicates (they share the well, "
-            "its plate position, seeding and focus), so the test is anti-conservative. Pass replicate= a well "
-            "column, add a complete Metadata_Well, or aggregate to wells with mt.tl.aggregate.",
+            "replicate=None at cell resolution treats cells as independent replicates, which makes p-values too "
+            "small. Pass replicate= a well column, or aggregate with mt.tl.aggregate.",
             UserWarning,
             stacklevel=3,
         )
@@ -330,13 +328,12 @@ def hit_calling(
         fit_rows, null_rows = split_reference(control_rows, generator)
         replicate_codes = None
     if not refit and fit_rows.size <= values.shape[1]:
-        warnings.warn(
-            f"the covariance is estimated from {fit_rows.size} of {n_control} reference rows (half the "
-            f"controls) for {values.shape[1]} features, so it is singular and the Mahalanobis distances are "
-            "dominated by the regularization. Reduce the features with mt.pp.feature_select, or score a PCA "
-            "representation with use_rep='X_pca'.",
-            UserWarning,
-            stacklevel=3,
+        get_logger().warning(
+            "hit_calling: covariance from %d of %d reference rows for %d features is singular",
+            fit_rows.size,
+            n_control,
+            values.shape[1],
+            deep="reduce features with mt.pp.feature_select, or score use_rep='X_pca'",
         )
 
     if refit and covariance == "robust":
@@ -382,12 +379,11 @@ def hit_calling(
         null_replicates = np.unique(replicate_codes[null_rows]).size
         if null_replicates < _REPLICATE_MIN:
             where = "the reference" if refit else "the null half"
-            warnings.warn(
-                f"the replicate null draws from {null_replicates} replicate(s) in {where}, too few to calibrate "
-                "finely, so the test there is conservative rather than anti-conservative. For an exact "
-                "well-level test, aggregate to wells with mt.tl.aggregate before testing.",
-                UserWarning,
-                stacklevel=3,
+            get_logger().warning(
+                "hit_calling: the permutation test draws from only %d replicate(s) in %s, so its p-values can take only a few values",
+                null_replicates,
+                where,
+                deep="the test is conservative, and aggregating to wells with mt.tl.aggregate gives an exact test",
             )
 
     codes, keys = group_codes(adata, groupby)
@@ -443,27 +439,26 @@ def hit_calling(
     if refit and np.isnan(observed).any():
         unscored = [str(key) for key, value in zip(keys, observed, strict=True) if np.isnan(value)]
         if method == "hellinger":
-            reason = "a side had fewer than twice as many complete rows as features or a singular covariance"
+            reason = "a side had fewer than twice as many complete rows as features, or a singular covariance"
         else:
             reason = (
                 f"the group had fewer than {min_rows} complete rows, the reference no more than features, or the "
                 "averaged covariance was singular"
             )
-        warnings.warn(
-            f"{len(unscored)} group(s) were left unscored because {reason}: "
-            f"{', '.join(unscored[:5])}{', ...' if len(unscored) > 5 else ''}. "
-            "Score a reduced representation with use_rep, e.g. 'X_pca'.",
-            UserWarning,
-            stacklevel=3,
+        get_logger().warning(
+            "hit_calling: %d group(s) left unscored (%s)",
+            len(unscored),
+            ", ".join(unscored[:5]) + (", ..." if len(unscored) > 5 else ""),
+            deep=f"{reason}, so score a reduced representation with use_rep='X_pca'",
         )
     thin = int(np.sum(sizes < 3))
     if not refit and thin > len(keys) // 2:
-        warnings.warn(
-            f"{thin} of {len(keys)} groups have fewer than three rows, so their statistic is the median of "
-            "one or two wells. Aggregate more replicates, or score activity with mt.tl.map(mode='activity'), "
-            "which ranks replicate pairs and is built for screens with little replication.",
-            UserWarning,
-            stacklevel=3,
+        get_logger().warning(
+            "hit_calling: %d of %d groups have fewer than three rows",
+            thin,
+            len(keys),
+            deep="their statistic is the median of one or two wells, so aggregate more replicates or use "
+            "mt.tl.map(mode='activity')",
         )
 
     if method != "ks":

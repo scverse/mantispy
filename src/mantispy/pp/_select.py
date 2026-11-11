@@ -309,11 +309,11 @@ def feature_select(
     not_measured = feature_kind_of(adata) & {"embedding", "derived"}
     n_not_measured = int(adata.var["feature_kind"].isin(not_measured).sum()) if not_measured else 0
     if n_not_measured * 2 > adata.n_vars:
-        warnings.warn(
-            f"feature_select judges features by their values as measurements, but {n_not_measured} of "
-            f"{adata.n_vars} features here are {sorted(not_measured)}; the selection is unlikely to be meaningful",
-            UserWarning,
-            stacklevel=2,
+        get_logger().warning(
+            "feature_select: %d of %d features are %s, not measurements, so the selection is unlikely to mean much",
+            n_not_measured,
+            adata.n_vars,
+            "/".join(sorted(not_measured)),
         )
 
     full = get_matrix(adata)
@@ -383,22 +383,17 @@ def feature_select(
     n_noise_judged = n_judged_by.get("noise_removal", 0)
     near_total_noise = noise_removal_cutoff_mode == "absolute" and noise_stripped > 0.95 * n_noise_judged
     if not keep.any() and adata.n_vars:
-        warnings.warn(
-            f"feature_select flagged none of the {adata.n_vars} features as selected; "
-            f"uns['mantispy']['feature_select'] says what each operation removed. Every cutoff here is an "
-            f"absolute threshold on the scale pp.normalize left the values on, so check it against that "
-            f"scale; noise_removal's stdev_cutoff is the usual cause.",
-            UserWarning,
-            stacklevel=3,
+        get_logger().warning(
+            "feature_select: kept none of the %d features",
+            adata.n_vars,
+            deep="each cutoff is absolute on the scale pp.normalize left, and noise_removal's stdev_cutoff is the usual cause",
         )
     elif near_total_noise:
-        warnings.warn(
-            f"noise_removal flagged {noise_stripped} of the {n_noise_judged} features it judged for removal "
-            "(more than 95%). Its stdev_cutoff is an absolute threshold on the scale pp.normalize left the values "
-            "on, so it strips nearly everything under the control-based or MAD normalization the package "
-            "recommends. Set noise_removal_cutoff_mode='ratio' or 'quantile' for a scale-relative cutoff.",
-            UserWarning,
-            stacklevel=3,
+        get_logger().warning(
+            "feature_select: noise_removal dropped %d of %d features",
+            noise_stripped,
+            n_noise_judged,
+            deep="stdev_cutoff is absolute, so set noise_removal_cutoff_mode='ratio' or 'quantile' for a relative cutoff",
         )
 
     # A feature kept with NaN in fewer than na_cutoff of its rows still carries those missing values, which
@@ -408,16 +403,12 @@ def feature_select(
     with_nan = kept[np.isnan(full[:, kept]).any(axis=0)] if kept.size else kept
     if with_nan.size:
         lever = (
-            "Lower na_cutoff to 0.0"
-            if "drop_na_columns" in operations
-            else "Add the drop_na_columns operation with na_cutoff=0.0"
+            "lower na_cutoff to 0.0" if "drop_na_columns" in operations else "add drop_na_columns with na_cutoff=0.0"
         )
-        warnings.warn(
-            f"{with_nan.size} selected feature(s) still hold NaN in some rows, which pp.sphere and PCA cannot "
-            f"take. {lever} and pass subset=True (or run mt.pp.subset_features afterwards) to drop them, or "
-            "impute before those steps.",
-            UserWarning,
-            stacklevel=3,
+        get_logger().warning(
+            "feature_select: %d selected feature(s) still hold NaN, which pp.sphere and PCA cannot take",
+            with_nan.size,
+            deep=f"{lever} and subset, or impute the missing values",
         )
 
     if "drop_outliers" not in operations:
@@ -450,13 +441,12 @@ def _warn_extreme(adata: AnnData, full: np.ndarray, kept: np.ndarray, cutoff: fl
     if extreme:
         names = [str(adata.var_names[index]) for index in extreme]
         shown = ", ".join(names[:5]) + (f" and {len(names) - 5} more" if len(names) > 5 else "")
-        warnings.warn(
-            f"{len(names)} selected feature(s) hold values more than outlier_cutoff={cutoff:g} robust standard "
-            f"deviations from their own median ({shown}). They can dominate distances and PCA. Add 'drop_outliers' "
-            "to operations to drop them, or check where the extreme values come from; on single cells, before "
-            "aggregation, since a median profile hides a few extreme cells.",
-            UserWarning,
-            stacklevel=3,
+        get_logger().warning(
+            "feature_select: %d selected feature(s) lie more than %g robust standard deviations from their median (%s)",
+            len(names),
+            cutoff,
+            shown,
+            deep="add 'drop_outliers' to operations, or check the single cells they come from",
         )
 
 

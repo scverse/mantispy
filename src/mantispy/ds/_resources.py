@@ -10,7 +10,6 @@ from pathlib import Path
 
 import pandas as pd
 
-from mantispy._core.logging import get_logger
 from mantispy._settings import settings
 from mantispy.ds._datasets import corum
 
@@ -92,7 +91,6 @@ def gene_sets(name: str = "hallmark", organism: str = "human", cache_dir: str | 
             net = _normalize_net(msigdb[msigdb["collection"].astype(str) == collection])
         else:
             net = _normalize_net(dc.op.resource(name, organism=organism))
-        get_logger().info("gene_sets(%s): %d set(s) over %d edge(s)", name, net["source"].nunique(), len(net))
         return net
 
     return _cached(f"gene_sets_{name}_{organism}", build, cache_dir)
@@ -125,9 +123,6 @@ def interactions(source: str = "CORUM", organism: str = "human", cache_dir: str 
             members = sorted(set(block["target"].astype(str)))
             edges.update(combinations(members, 2))
         frame = pd.DataFrame(sorted(edges), columns=["gene_a", "gene_b"])
-        get_logger().info(
-            "interactions(%s): %d gene pair(s) from %d complex(es)", source, len(frame), complexes["source"].nunique()
-        )
         return frame
 
     return _cached(f"interactions_{source}_{organism}", build, cache_dir)

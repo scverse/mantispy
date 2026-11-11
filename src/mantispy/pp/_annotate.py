@@ -85,10 +85,10 @@ def annotate_controls(
     is_negcon = values.isin([str(v) for v in negcon]).to_numpy()
     if not is_negcon.any():
         get_logger().warning(
-            "no negative controls found: none of %s appear in obs[%r]. "
-            "Steps defaulting to reference='negcon' will fail until this is set.",
-            list(negcon),
+            "annotate_controls: no negative control in obs[%r] (looked for %s)",
             key,
+            ", ".join(map(str, negcon)),
+            deep="steps defaulting to reference='negcon' fail until controls are annotated",
         )
     if "Metadata_Control_Type" in adata.obs:
         upstream = as_frame(adata.obs)["Metadata_Control_Type"]
@@ -144,10 +144,4 @@ def annotate_jump(
     joined.index = obs.index
     adata.obs = categorize_metadata(joined)
     record_perturbation(adata)
-    get_logger().info(
-        "annotate_jump: %d perturbations over %d wells, %d of them controls",
-        int(joined["Metadata_JCP2022"].nunique()),
-        len(joined),
-        int(joined["Metadata_Control"].sum()),
-    )
     return None

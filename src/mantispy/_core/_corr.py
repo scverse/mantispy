@@ -135,14 +135,6 @@ def _gappy_corr(
     finite = np.isfinite(raw)
     out = np.full((left.size, right.size), np.nan)
     left_groups, right_groups = _pattern_groups(finite, left), _pattern_groups(finite, right)
-    if len(left_groups) * len(right_groups) > _PATTERN_PAIR_BUDGET:
-        warnings.warn(
-            f"spearman with pairwise-complete deletion is re-ranking {len(left_groups)} x {len(right_groups)} "
-            "distinct missingness patterns, which will be slow. Use method='pearson', or drop the incomplete "
-            "features first with mt.pp.feature_select (drop_na_columns) so the rest share one pattern.",
-            UserWarning,
-            stacklevel=3,
-        )
     for left_mask, left_slots in left_groups.items():
         left_rows = np.frombuffer(left_mask, dtype=bool)
         for right_mask, right_slots in right_groups.items():

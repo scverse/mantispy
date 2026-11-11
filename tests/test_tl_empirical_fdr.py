@@ -4,6 +4,8 @@ The control genes form the null, so a gene scores a hit when it sits past what t
 Tested on a fabricated per-gene table whose null, weak and strong genes are known, so the calibration and the two quantities can be checked without the network.
 """
 
+import logging
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -128,10 +130,11 @@ def test_no_pvalue_is_zero(genes):
     assert np.nanmin(p) > 0
 
 
-def test_few_controls_warn(genes):
+def test_few_controls_warn(genes, caplog):
     adata, _ = genes
-    with pytest.warns(UserWarning, match="control genes"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.tl.empirical_fdr(adata, control_genes={"ctrl0", "ctrl1", "ctrl2"}, score="score")
+    assert "control genes" in caplog.text
 
 
 def test_all_control_scores_missing_raises(genes):

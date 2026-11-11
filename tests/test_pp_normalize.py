@@ -1,4 +1,5 @@
-import warnings
+import logging
+import re
 
 import numpy as np
 import pytest
@@ -13,7 +14,7 @@ def adata():
 
 
 @pytest.mark.parametrize("method", ["standardize", "robustize", "mad_robustize"])
-def test_a_feature_without_spread_among_the_controls_becomes_nan(adata, method):
+def test_a_feature_without_spread_among_the_controls_becomes_nan(adata, method, caplog):
     """Dividing by 1.4826 * 0 + 1e-18 left values near 1e18 that dominated every distance (#268)."""
     plate = adata.obs["Metadata_Plate"].astype(str).to_numpy()
     control = adata.obs["Metadata_Control"].to_numpy(dtype=bool)
@@ -21,8 +22,9 @@ def test_a_feature_without_spread_among_the_controls_becomes_nan(adata, method):
     values = adata.X.copy()
     values[first & control, 0] = 3.0
     adata.X = values
-    with pytest.warns(UserWarning, match="no spread"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.pp.normalize(adata, method=method, by="Metadata_Plate")
+    assert "no reference spread" in caplog.text
     assert np.isnan(adata.X[first, 0]).all()
     assert np.isfinite(adata.X[~first, 0]).all(), "the plate where the feature does vary is normalized as usual"
     assert np.isfinite(adata.X[:, 1:]).all()
@@ -43,7 +45,7 @@ def test_center_leaves_a_constant_feature_at_zero(adata):
     np.testing.assert_allclose(adata.X[:, 0], 0.0, atol=1e-6)
 
 
-def test_the_no_reference_warning_names_each_group_once(adata):
+def test_the_no_reference_warning_names_each_group_once(adata, caplog):
     # One warning per screen, naming none of them, on an 88-screen build (#278).
     plate = adata.obs["Metadata_Plate"].astype(str).to_numpy()
     control = adata.obs["Metadata_Control"].to_numpy(dtype=bool)
@@ -51,14 +53,11 @@ def test_the_no_reference_warning_names_each_group_once(adata):
     for name in sorted(set(plate)):
         values[(plate == name) & control, 1] = np.nan
     adata.X = values
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.pp.normalize(adata, by="Metadata_Plate")
-    messages = [str(w.message) for w in caught if "no reference values" in str(w.message)]
+    messages = [r.getMessage() for r in caplog.records if "no finite reference value" in r.getMessage()]
     assert len(messages) == 1
-    for name in sorted(set(plate)):
-        count = int(((plate == name) & control).sum())
-        assert f"{name} ({count} reference rows)" in messages[0]
+    assert f"in {len(set(plate))} Metadata_Plate group(s)" in messages[0]
 
 
 def test_reference_rejects_a_non_boolean_column(adata):
@@ -104,7 +103,7 @@ def test_string_true_false_survives_a_round_trip(adata):
 
 
 @pytest.mark.parametrize("method", ["mad_robustize", "standardize", "robustize", "center"])
-def test_a_feature_unmeasured_among_one_groups_controls_keeps_its_measured_values(adata, method):
+def test_a_feature_unmeasured_among_one_groups_controls_keeps_its_measured_values(adata, method, caplog):
     """Repairing the zero scale to 1.0 but leaving the centre NaN turns every measured value in that group into NaN: the first plate's treated wells went from [-0.62, -0.22, -0.54] to all-NaN, 6 of 6 rows on that plate against 0 of 6 on the other."""
     plate = adata.obs["Metadata_Plate"].astype(str).to_numpy()
     control = adata.obs["Metadata_Control"].to_numpy(dtype=bool)
@@ -116,8 +115,9 @@ def test_a_feature_unmeasured_among_one_groups_controls_keeps_its_measured_value
     measured = (plate == first) & ~control
     assert np.isfinite(values[measured, 1]).all(), "the feature is measured outside the controls"
 
-    with pytest.warns(UserWarning, match="no reference values"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.pp.normalize(adata, method=method, by="Metadata_Plate", reference="negcon")
+    assert "no finite reference value" in caplog.text
 
     assert np.isfinite(np.asarray(adata.X)[measured, 1]).all()
     assert adata.var["degenerate_scale"].to_numpy()[1], "and the feature is still flagged"
@@ -173,35 +173,37 @@ def test_center_keeps_the_dtype_of_x(adata, dtype):
     assert adata.X.dtype == dtype
 
 
-def test_normalizing_within_groups_that_each_hold_one_treatment_warns(adata):
+def test_normalizing_within_groups_that_each_hold_one_treatment_warns(adata, caplog):
     """Each well holds one perturbation, so normalizing per well removes the perturbation effect."""
-    with pytest.warns(UserWarning, match="Metadata_Perturbation.*constant within every group"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.pp.normalize(adata, method="center", by="Metadata_Well", reference=None)
+    assert re.search("Metadata_Perturbation.*constant within every", caplog.text)
 
 
-def test_the_treatment_warning_reads_the_recorded_perturbation_column(adata):
+def test_the_treatment_warning_reads_the_recorded_perturbation_column(adata, caplog):
     """A perturbation column whose name no heuristic knows is still found through the perturbation record."""
     adata.obs["Metadata_Drug"] = adata.obs["Metadata_Perturbation"].astype(str)
     mt.io.stamp(adata, perturbation={"column": "Metadata_Drug"})
-    with pytest.warns(UserWarning, match="Metadata_Drug.*constant within every group"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.pp.normalize(adata, by="Metadata_Well", reference=None, copy=True)
+    assert re.search("Metadata_Drug.*constant within every", caplog.text)
 
 
 @pytest.mark.parametrize("column", ["Metadata_pert_iname", "Metadata_JCP2022", "Metadata_mmoles_per_liter"])
-def test_the_treatment_warning_knows_the_jump_column_names(adata, column):
+def test_the_treatment_warning_knows_the_jump_column_names(adata, column, caplog):
     adata.obs[column] = adata.obs["Metadata_Perturbation"].astype(str)
-    with pytest.warns(UserWarning, match=f"{column}.*constant within every group"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.pp.normalize(adata, by="Metadata_Well", reference=None, copy=True)
+    assert re.search(f"{column}.*constant within every", caplog.text)
 
 
-def test_per_plate_normalization_with_plate_level_labels_does_not_warn(adata):
+def test_per_plate_normalization_with_plate_level_labels_does_not_warn(adata, caplog):
     """A plate-level column whose name merely contains a treatment word is not taken for the treatment, and a
     concentration shared by a plate's treated wells but left empty on its controls is not constant there."""
     plate = adata.obs["Metadata_Plate"].astype(str)
     adata.obs["Metadata_growth_condition"] = plate
     concentration = plate.map({value: float(i + 1) for i, value in enumerate(sorted(plate.unique()))})
     adata.obs["Metadata_Concentration"] = concentration.where(~adata.obs["Metadata_Control"].astype(bool))
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.pp.normalize(adata, by="Metadata_Plate", copy=True)
-    assert not [w for w in caught if "constant within every group" in str(w.message)]
+    assert "constant within every" not in caplog.text

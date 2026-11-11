@@ -9,7 +9,6 @@ from anndata import AnnData
 
 from mantispy._core._stats import benjamini_hochberg
 from mantispy._core.frames import as_frame
-from mantispy._core.logging import get_logger
 from mantispy._core.mutation import inplace_or_copy
 
 
@@ -129,5 +128,4 @@ def ora(
         table["qvalue"] = benjamini_hochberg(table["pvalue"].to_numpy())
     table = table.sort_values("qvalue").reset_index(drop=True)
     adata.uns.setdefault("mantispy", {})[key_added] = table
-    get_logger().info("ora: %d test(s) over %d group(s)", len(table), len(groups))
     return None

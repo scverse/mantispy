@@ -169,7 +169,7 @@ def read_export(
     per_image = image[["ImageNumber", *renames]].rename(columns=renames)
     # ExportToSpreadsheet can also copy the image metadata into the object tables, and merging both copies would suffix them _x/_y.
     if shared := [c for c in per_image.columns if c != "ImageNumber" and c in merged.columns]:
-        get_logger().info("%s are on both the object tables and Image.csv; keeping the Image.csv value", shared)
+        get_logger().debug("%s are on both the object tables and Image.csv; keeping the Image.csv value", shared)
         merged = merged.drop(columns=shared)
     table = merged.merge(per_image, on="ImageNumber", how="left", validate="m:1")
     # CellProfiler 4 writes centroids under AreaShape, older versions under Location.

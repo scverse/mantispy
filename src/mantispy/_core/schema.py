@@ -860,10 +860,11 @@ def _legacy_controls(obs: pd.DataFrame) -> tuple[np.ndarray, np.ndarray] | None:
                     f"cannot migrate: Metadata_Control_Type holds {sorted(set(labels[unknown]))[:5]}, which are not "
                     f"control classes {CONTROL_TYPES}, and there is no Metadata_Control to read them from."
                 )
-            get_logger().info(
-                "Metadata_Control_Type labels %s are not control classes; they take their class from the 1.0 "
-                "Metadata_Control flag (negcon where it was set, treatment otherwise)",
-                sorted(set(labels[unknown]))[:5],
+            get_logger().warning(
+                "migrate: %d Metadata_Control_Type label(s) are not control classes (%s)",
+                len(set(labels[unknown])),
+                ", ".join(sorted(set(labels[unknown]))[:5]),
+                deep="they take their class from the 1.0 Metadata_Control flag, which makes them negcon where it is set and treatment otherwise",
             )
             mapped[unknown] = np.where(flag[unknown], "negcon", "treatment")
         types = mapped.to_numpy(dtype=object)
@@ -895,9 +896,9 @@ def _resolve_colliding_objects(identity: pd.DataFrame) -> None:
             "the image id resolves single fields, so they are duplicate rows rather than distinct objects. "
             "Remove the duplicates before reading the file."
         )
-    get_logger().warning(
-        "Metadata_ObjectNumber repeats within the image ids this object's columns allow (no site or image number), "
-        "so objects are renumbered within each image; the source numbers are kept in Metadata_SourceObjectNumber"
+    get_logger().info(
+        "migrate: Metadata_ObjectNumber repeats within an image id, so objects are renumbered within each image",
+        deep="no site or image number tells the fields apart, and the source numbers are kept in Metadata_SourceObjectNumber",
     )
     identity["Metadata_SourceObjectNumber"] = numbers.to_numpy()
     identity["Metadata_ObjectNumber"] = object_number_within(identity["Metadata_ImageID"].to_numpy())
@@ -1079,5 +1080,5 @@ def migrate(adata: AnnData, copy: bool = False) -> AnnData | None:
         target.obs["Metadata_Control_Type"] = controls[0]
         target.obs["Metadata_Control"] = controls[1]
 
-    get_logger().info("migrated an object from schema %s to %s", seen, SCHEMA_VERSION)
+    get_logger().debug("migrated an object from schema %s to %s", seen, SCHEMA_VERSION)
     return target if copy else None

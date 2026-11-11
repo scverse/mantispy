@@ -207,10 +207,10 @@ def from_dataframe(
         vocabulary = list(channels) if channels is not None else sorted(_infer_channels(candidates))
         parsed = parse_feature_names(candidates, channels=vocabulary, convention=convention)
         if channels is None and vocabulary:
-            get_logger().info(
-                "inferred the channel vocabulary %s from the column names; pass channels= to fix it, "
-                "since a different set of columns can infer a different vocabulary",
+            get_logger().debug(
+                "inferred the channel vocabulary %s from the column names",
                 vocabulary,
+                deep="pass channels= to fix it, since other columns can infer another vocabulary",
             )
     if convention == "cp_measure":
         # The names carry no object, so the compartment filter would drop every one of them.
@@ -259,8 +259,8 @@ def from_dataframe(
         )
 
     if opaque:
-        get_logger().info(
-            "kept %d column(s) that match no CellProfiler convention as opaque embedding features, such as %s",
+        get_logger().debug(
+            "kept %d column(s) that match no CellProfiler convention as embedding features (%s)",
             len(opaque),
             ", ".join(opaque[:3]),
         )
@@ -268,10 +268,11 @@ def from_dataframe(
     if keep_non_features:
         meta_columns += rest
     elif rest:
-        get_logger().info(
-            "dropped %d numeric non-feature column(s) such as %s; pass keep_non_features=True to keep them",
+        get_logger().debug(
+            "dropped %d numeric non-feature column(s) (%s)",
             len(rest),
             ", ".join(rest[:3]),
+            deep="pass keep_non_features=True to keep them",
         )
     var = parsed.loc[feature_names]
     if opaque:
@@ -342,7 +343,7 @@ def _join_platemap(obs: pd.DataFrame, platemap: str | Path | pd.DataFrame) -> pd
     unmatched = int((joined.pop("_platemap_match") == "left_only").sum())
     if unmatched:
         get_logger().warning(
-            "%d of %d rows have no platemap row for %s; the platemap's columns are missing on those rows",
+            "read_profiles: %d of %d rows have no row in the platemap %s, so they lack its columns",
             unmatched,
             len(joined),
             on,
@@ -461,7 +462,6 @@ def read_profiles(
                 raise FileNotFoundError(
                     f"{directory} holds neither an ExportToSpreadsheet Image.csv nor .parquet parts"
                 )
-            get_logger().info("read_profiles: %d parquet part(s) under %s", len(parts), directory)
             frame, lengths, files = _stack(parts, on_column_mismatch)
     else:
         resolution = RESOLUTION_RENAMES.get(resolution, resolution) if resolution is not None else "well"
@@ -511,7 +511,6 @@ def read_profiles(
             "resolution": resolution,
         },
     )
-    get_logger().info("read %d observations x %d features from %s", adata.n_obs, adata.n_vars, given[0])
     return adata
 
 

@@ -225,13 +225,11 @@ def correct_chromosome_arm(
         out[on_arm] = X[on_arm].astype(np.float64) - background
         corrected[str(key)] = int(n_genes)
 
-    get_logger().info("chromosome-arm correction: corrected %d arm(s)", len(corrected))
     if not corrected:
-        warnings.warn(
-            f"no chromosome arm has more than min_genes={min_genes} unexpressed genes, so nothing was corrected "
-            "and the data is unchanged",
-            UserWarning,
-            stacklevel=2,
+        get_logger().warning(
+            "correct_chromosome_arm: no arm has more than min_genes=%d unexpressed genes, so nothing was corrected",
+            min_genes,
+            deep="lower min_genes",
         )
         adata.uns.setdefault("mantispy", {})["chromosome_arm"] = corrected
         return None
@@ -399,7 +397,6 @@ def detect_plate_position(
         record(key, n_controls, float(np.median(cv_r2[scored])), float((cv_r2[scored] > 0).mean()), "")
 
     adata.uns.setdefault("mantispy", {})[key_added] = pd.DataFrame(table)
-    get_logger().info("detect_plate_position scored position artifacts per %s into uns['mantispy'][%r]", by, key_added)
     return None
 
 
@@ -479,39 +476,25 @@ def regress_out(
         pooled = np.nanmean(design_all, axis=0)
     pooled_ok = np.isfinite(pooled)
 
-    extrapolated = []
+    extrapolated: list[str] = []
+    skipped: list[str] = []
+    incomplete_in: set[str] = set()
     for group in range(len(keys_index)):
         rows = np.flatnonzero(codes == group)
         fit = fitted_on[rows]
         block_design = design_all[rows]
         unusable = ~np.isfinite(block_design).all(axis=0)
         if not fit.any():
-            get_logger().warning(
-                "regress_out: no reference rows within %s=%r, so nothing is regressed out there", by, keys_index[group]
-            )
+            skipped.append(str(keys_index[group]))
             continue
         # A column constant within the group carries no within-group information; its effect stays in the intercept.
         varying = (np.ptp(block_design[fit], axis=0) > 0) & ~unusable
         varying[0] = True
-        incomplete = sorted({str(name) for name in sources[unusable] if name})
-        if incomplete:
-            scope = f" within {by}={keys_index[group]!r}" if by is not None else ""
-            warnings.warn(
-                f"regress_out: {incomplete} has missing or infinite values{scope}, so it is dropped from "
-                "the design; nothing is regressed out for it there. Fill the column or drop those rows to "
-                "correct that group.",
-                UserWarning,
-                stacklevel=3,
-            )
+        incomplete_in.update(str(name) for name in sources[unusable] if name)
         selected = np.flatnonzero(varying)[_independent(block_design[fit][:, varying])]
         design = block_design[:, selected]
         if fit.sum() <= design.shape[1]:
-            get_logger().warning(
-                "regress_out: %s has too few wells to fit within %s=%r, so nothing is regressed out there",
-                list(keys),
-                by,
-                keys_index[group],
-            )
+            skipped.append(str(keys_index[group]))
             continue
 
         # Never anchored at zero: the bare intercept lies outside the data and turns each group's slope noise into an offset between groups.
@@ -547,19 +530,32 @@ def regress_out(
                 gap_anchor = design[observed & fit].mean(axis=0)
             out[rows[observed], feature] = residual + gap_anchor @ coefficients
 
+    if skipped:
+        get_logger().warning(
+            "regress_out: %d of %d %s group(s) have too few reference rows to fit and are left as they are (%s)",
+            len(skipped),
+            len(keys_index),
+            by,
+            ", ".join(skipped[:5]),
+        )
+    if incomplete_in:
+        get_logger().warning(
+            "regress_out: covariate(s) with missing or infinite values are not regressed out where they are incomplete (%s)",
+            ", ".join(sorted(incomplete_in)),
+            deep="fill the column or drop those rows",
+        )
     if extrapolated:
-        warnings.warn(
-            f"regress_out: the pooled mean of {list(keys)} lies outside the range {by}={extrapolated} span, so those "
-            "groups are corrected by extrapolating their own fit, which can leave the result more dependent on the "
-            "covariate than it was. Pass reference='negcon' to anchor each group at its own controls.",
-            UserWarning,
-            stacklevel=3,
+        get_logger().warning(
+            "regress_out: %d %s group(s) are extrapolated to the pooled covariate mean (%s)",
+            len(extrapolated),
+            by,
+            ", ".join(extrapolated),
+            deep="pass reference='negcon' to anchor each group at its own controls",
         )
     if key_added is None:
         adata.X = out
     else:
         adata.layers[key_added] = out
-    get_logger().info("regress_out removed %s within %s", list(keys), by)
     return None
 
 
@@ -685,15 +681,11 @@ def harmony(
     corrected = corrected.astype(matrix_dtype(adata, use_rep=use_rep))
     # Harmony leaves float64 rounding noise on an embedding it does not move, so the check compares at float32 precision.
     if np.array_equal(corrected.astype(np.float32), np.asarray(adata.obsm[use_rep], dtype=np.float32)):
-        warnings.warn(
-            f"harmony corrected nothing and returned {use_rep!r} unchanged. "
-            "This happens when the batches are fully separated in the embedding, so every soft cluster "
-            "holds a single batch. Check that the batches overlap, for example with mt.pl.metrics or an "
-            f"embedding colored by {batch_key!r}.",
-            UserWarning,
-            stacklevel=3,
+        get_logger().warning(
+            "harmony: corrected nothing, %r is unchanged",
+            use_rep,
+            deep=f"this happens when the batches are fully separated in the embedding, so check that they overlap, e.g. coloured by {batch_key!r}",
         )
 
     adata.obsm[key_added] = corrected
-    get_logger().info("harmony corrected %s for %s into %s", use_rep, batch_key, key_added)
     return None

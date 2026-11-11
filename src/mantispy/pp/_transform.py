@@ -11,7 +11,6 @@ import numpy as np
 from anndata import AnnData
 
 from mantispy._core._reduce import transform_grouped
-from mantispy._core.logging import get_logger
 from mantispy._core.mutation import inplace_or_copy
 
 BLOM = 3.0 / 8.0
@@ -100,5 +99,4 @@ def rank_int(
         adata.X = out
     else:
         adata.layers[key_added] = out
-    get_logger().info("rank_int transformed %d features within %s", adata.n_vars, by or "the whole object")
     return None

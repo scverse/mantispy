@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
-
 import numpy as np
 from anndata import AnnData
 
@@ -89,20 +87,13 @@ def guide_activity(
     scored = ~is_reference & np.isfinite(pvalue)
     at_floor = int((scored & (pvalue <= floor)).sum())
     if scored.any() and at_floor >= 0.25 * int(scored.sum()):
-        warnings.warn(
-            f"{at_floor} of {int(scored.sum())} guides sit at the p-value floor 1/(n_reference+1) = "
-            f"{floor:.2g}, the smallest value {ref_sorted.size} reference guides can give, so their "
-            "activities are not separated and later hit counts are degenerate. Add reference guides, or "
-            "rank activity directly with mt.tl.map.",
-            UserWarning,
-            stacklevel=3,
+        get_logger().warning(
+            "guide_activity: %d of %d guides sit at the p-value floor %.2g, so they are not separated",
+            at_floor,
+            int(scored.sum()),
+            floor,
+            deep=f"{ref_sorted.size} reference guides set that floor, so add reference guides or rank with mt.tl.map",
         )
 
     adata.obs[key_added] = pvalue
-    get_logger().info(
-        "guide_activity scored %d guides against %d %r reference guides",
-        int((~is_reference).sum()),
-        int(is_reference.sum()),
-        reference,
-    )
     return None

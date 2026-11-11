@@ -4,6 +4,9 @@ The join is tested offline against fabricated tables, since its failure cases (a
 The download is tested separately and marked.
 """
 
+import logging
+import re
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -230,11 +233,12 @@ def test_unexpressed_genes_rejects_an_unknown_model_id(depmap_expression):
         _jump.unexpressed_genes(depmap_expression, "U2OS")
 
 
-def test_annotate_jump_warns_on_unmapped_ids(fake_crispr_metadata):
+def test_annotate_jump_warns_on_unmapped_ids(fake_crispr_metadata, caplog):
     wells = mt.ds.synthetic_plate(n_wells=3, n_cells=1, n_features=3, seed=0)
     wells.obs["Metadata_JCP2022"] = ["JCP2022_805264", "JCP2022_900001", "JCP2022_999999"]
-    with pytest.warns(UserWarning, match=r"1 JUMP id.*could not map.*gene"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         out = mt.pp.annotate_jump(wells, kind="crispr", copy=True)
+    assert re.search(r"1 JUMP id.*could not map.*gene", caplog.text)
     assert out.n_obs == 3
 
 
@@ -244,30 +248,33 @@ def _unmapped_wells():
     return wells
 
 
-def test_annotate_jump_on_unmapped_warn_keeps_the_wells(fake_crispr_metadata):
-    with pytest.warns(UserWarning, match=r"1 JUMP id.*could not map"):
+def test_annotate_jump_on_unmapped_warn_keeps_the_wells(fake_crispr_metadata, caplog):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         out = mt.pp.annotate_jump(_unmapped_wells(), kind="crispr", on_unmapped="warn", copy=True)
+    assert re.search(r"1 JUMP id.*could not map", caplog.text)
     assert out.n_obs == 3
 
 
 @pytest.mark.parametrize("copy", [True, False])
-def test_annotate_jump_on_unmapped_drop_removes_the_wells(fake_crispr_metadata, copy):
+def test_annotate_jump_on_unmapped_drop_removes_the_wells(fake_crispr_metadata, copy, caplog):
     wells = _unmapped_wells()
-    with pytest.warns(UserWarning, match=r"1 JUMP id.*could not map.*dropped"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         out = mt.pp.annotate_jump(wells, kind="crispr", on_unmapped="drop", copy=copy)
+    assert re.search(r"1 JUMP id.*could not map.*dropped", caplog.text)
     result = out if copy else wells
     assert result.n_obs == 2
     assert not result.obs["Metadata_Gene"].isna().any()
     assert list(result.obs["Metadata_Gene"].astype(str)) == ["PLK1", "PSMB2"]
 
 
-def test_annotate_jump_on_unmapped_drop_removes_compound_wells(monkeypatch):
+def test_annotate_jump_on_unmapped_drop_removes_compound_wells(monkeypatch, caplog):
     tables = {"compound": pd.DataFrame({"Metadata_JCP2022": ["JCP2022_000001"], "Metadata_InChIKey": ["KEY-A"]})}
     monkeypatch.setattr(_jump, "jump_metadata", tables.__getitem__)
     wells = mt.ds.synthetic_plate(n_wells=2, n_cells=1, n_features=3, seed=0)
     wells.obs["Metadata_JCP2022"] = ["JCP2022_000001", "JCP2022_999999"]
-    with pytest.warns(UserWarning, match=r"1 JUMP id.*could not map.*compound.*dropped"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         out = mt.pp.annotate_jump(wells, on_unmapped="drop", copy=True)
+    assert re.search(r"1 JUMP id.*could not map.*compound.*dropped", caplog.text)
     assert out.n_obs == 1
     assert not out.obs["Metadata_InChIKey"].isna().any()
 

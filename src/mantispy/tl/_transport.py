@@ -182,7 +182,7 @@ def transport(
     matrix_rows: list[dict[str, object]] = []
     for level, pairs in buckets.items():
         if not pairs:
-            get_logger().info("transport has no unit pair separating at %r; skipping that level", level)
+            get_logger().debug("transport: no unit pair separates at %r, so that level is skipped", level)
             continue
 
         total = np.zeros((len(keys), len(keys)))

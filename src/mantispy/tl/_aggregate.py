@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
 from collections.abc import Sequence
 from copy import deepcopy
 
@@ -89,7 +88,7 @@ def aggregate(
     # A group whose count is unknown is kept rather than dropped as too small.
     keep = ~(tallies[count_key] < min_cells)
     if not keep.any():
-        get_logger().warning("aggregate dropped every group; min_cells=%d exceeds every group size", min_cells)
+        get_logger().warning("aggregate: dropped every group, since min_cells=%d exceeds every group size", min_cells)
     _warn_dropped_controls(obs, keep, resolve_control_column(adata), min_cells)
 
     obs = obs.loc[keep].reset_index(drop=True)
@@ -103,7 +102,7 @@ def aggregate(
     result.uns["mantispy"].update({key: deepcopy(value) for key, value in store.items() if key in _INHERITED})
     dropped = sorted(set(store) - _INHERITED - set(REQUIRED_UNS) - {"params"})
     if dropped:
-        get_logger().debug("aggregate dropped %s, which describe the input rows", dropped)
+        get_logger().debug("aggregate: dropped %s, which describe the input rows", dropped)
     call_params = {
         "by": columns,
         "func": func,
@@ -142,12 +141,12 @@ def _warn_dropped_controls(obs: pd.DataFrame, keep: np.ndarray, control_col: str
             if present.any() and not (present & keep).any():
                 lost.append(f"{control} on plate {plate}" if plate_col else control)
     if lost:
-        warnings.warn(
-            f"aggregate(min_cells={min_cells}) dropped every {', '.join(lost)} group, so a later "
-            "normalize(reference=) or map(mode='activity') has no reference there. Lower min_cells, "
-            "or check the cell counts of the control wells.",
-            UserWarning,
-            stacklevel=2,
+        get_logger().warning(
+            "aggregate: min_cells=%d dropped %d control group(s) entirely (%s)",
+            min_cells,
+            len(lost),
+            ", ".join(lost[:3]),
+            deep="normalize(reference=) then has no reference there, so lower min_cells or check the control wells' cell counts",
         )
 
 
@@ -187,5 +186,5 @@ def _group_obs(
             if constant[column]:
                 obs[column] = grouped[column].first().to_numpy()
             else:
-                get_logger().debug("aggregate dropped non-constant column %s", column)
+                get_logger().debug("aggregate: dropped non-constant column %s", column)
     return categorize_metadata(obs)

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-import warnings
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, cast
@@ -492,10 +491,10 @@ def read_gallery_plate(
     if not images:
         raise FileNotFoundError(f"no images for well(s) {requested or 'on the plate'} of {plate} under {root}")
     if unnamed:
-        warnings.warn(
-            f"read no labels for {len(unnamed)} analysed sites holding outline images this reader could not name, {unnamed[0]} among them",
-            UserWarning,
-            stacklevel=2,
+        get_logger().warning(
+            "read_plate: read no labels for %d analysed site(s) whose outline images it could not name (%s)",
+            len(unnamed),
+            unnamed[0],
         )
 
     tables, shapes = {}, {}

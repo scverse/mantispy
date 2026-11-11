@@ -11,6 +11,7 @@ from anndata import AnnData
 
 from mantispy._core._reduce import representation
 from mantispy._core.frames import as_frame
+from mantispy._core.logging import get_logger
 from mantispy._core.masks import reference_mask
 from mantispy._core.mutation import inplace_or_copy
 from mantispy._core.schema import resolve_perturbation_column
@@ -167,11 +168,10 @@ def _score_map(
             )
         if warn:
             scope = settings["neg_sameby"] or group_columns
-            warnings.warn(
-                f"{int(stranded.sum())} profile(s) have replicates but no negative pair to rank them against, and are "
-                f"left out. They are in {precision.loc[stranded, scope].drop_duplicates().to_dict('records')}.",
-                UserWarning,
-                stacklevel=4,
+            get_logger().warning(
+                "map: %d profile(s) have replicates but no negative pair, and are left out",
+                int(stranded.sum()),
+                deep=f"they are in {precision.loc[stranded, scope].drop_duplicates().to_dict('records')}",
             )
         precision = precision[~stranded]
 
@@ -185,12 +185,11 @@ def _score_map(
         groups = len(precision.loc[precision["n_pos_pairs"] > 0, group_columns].drop_duplicates())
         sharing = groups / ((null_size + 1) * threshold)
         if sharing >= 1:
-            warnings.warn(
-                f"with null_size={null_size} no p-value can fall below 1/{null_size + 1}, so the correction over "
-                f"{groups} groups calls none of them unless at least {math.floor(sharing) + 1} reach that floor "
-                f"together. Raise null_size above {groups / threshold:.0f} for one group to be callable on its own.",
-                UserWarning,
-                stacklevel=4,
+            get_logger().warning(
+                "map: null_size is too small to call any of %d groups unless at least %d of them reach the smallest p-value together",
+                groups,
+                math.floor(sharing) + 1,
+                deep=f"raise null_size above {groups / threshold:.0f} for one group to be callable on its own",
             )
 
     # copairs keys its on-disk null cache without the seed, so a shared cache leaks nulls between calls.
@@ -331,13 +330,11 @@ def map(
         if mode == "consistency":
             perturbations = adata.obs[label].nunique() if label in adata.obs else 0
             if perturbations and adata.n_obs > perturbations:
-                warnings.warn(
-                    f"mode='consistency' expects one profile per perturbation, and this object has "
-                    f"{adata.n_obs} rows for {perturbations} perturbation(s). Same-perturbation pairs are "
-                    "excluded, but perturbations with more wells still weigh more. Collapse first with "
-                    "mt.tl.consensus().",
-                    UserWarning,
-                    stacklevel=3,
+                get_logger().warning(
+                    "map: mode='consistency' expects one profile per perturbation, but the object has %d rows for %d perturbations",
+                    adata.n_obs,
+                    perturbations,
+                    deep="perturbations with more wells weigh more, so collapse them first with mt.tl.consensus()",
                 )
     elif pos_sameby:
         settings = {
@@ -409,9 +406,8 @@ def map(
     )
     if pairs > MAX_PAIRS:
         warnings.warn(
-            f"these pair definitions build up to {pairs:,} pairs over {len(meta)} profiles, and copairs holds all of "
-            "them in memory at once, which can need many gigabytes. Run the query on consensus profiles, one per "
-            "perturbation, from mt.tl.consensus(), and set batch_size= to cap the distance step.",
+            f"these pair definitions build up to {pairs:,} pairs over {len(meta)} profiles, which copairs holds in "
+            "memory at once. Run on mt.tl.consensus() profiles and set batch_size=.",
             UserWarning,
             stacklevel=3,
         )

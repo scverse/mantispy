@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -329,9 +328,8 @@ def fit_cell_cycle(
             model["layer"] = layer
     if not passed:
         get_logger().warning(
-            "fit_cell_cycle: the reference does not show separate 2N and 4N peaks with S cells between them %s; "
-            "project_cell_cycle will give NaN",
-            {name: round(value, 3) if isinstance(value, float) else value for name, value in gate.items()},
+            "fit_cell_cycle: the reference shows no separate 2N and 4N peaks, so project_cell_cycle will give NaN",
+            deep=str({name: round(value, 3) if isinstance(value, float) else value for name, value in gate.items()}),
         )
     adata.uns.setdefault("mantispy", {})[key_added] = model
     return None
@@ -414,7 +412,7 @@ def project_cell_cycle(
     if passed and known.any():
         probabilities[known], quantiles[known] = _posterior(content[known], fitted)
     elif not passed:
-        get_logger().warning("project_cell_cycle: the model failed its check; every position is NaN")
+        get_logger().info("project_cell_cycle: the model failed its check, so every position is NaN")
 
     placed = np.isfinite(probabilities).all(axis=1)
     phase = np.full(adata.n_obs, np.nan, dtype=object)
@@ -435,22 +433,21 @@ def project_cell_cycle(
         shifted = table[table["shift"].abs() > sd]
         if len(shifted):
             get_logger().warning(
-                "project_cell_cycle: %d %s group(s) have both their 2N and 4N peaks off the reference's, so their DNA "
-                "stain reads differently and their positions carry the shift given, in doublings: %s",
+                "project_cell_cycle: %d %s group(s) have both their 2N and 4N peaks off the reference",
                 len(shifted),
                 by,
-                shifted.round(2).head(5).to_dict("records"),
+                deep=f"their positions carry the shift, in doublings: {shifted.round(2).head(5).to_dict('records')}",
             )
         unchecked: dict[str, list] = {}
         for name, (_, why) in zip(keys, shifts, strict=True):
             if why:
                 unchecked.setdefault(why, []).append(name)
         if unchecked:
-            get_logger().warning(
-                "project_cell_cycle: %d %s group(s) could not be checked against the reference: %s",
+            get_logger().info(
+                "project_cell_cycle: %d %s group(s) could not be checked against the reference",
                 sum(map(len, unchecked.values())),
                 by,
-                {why: names[:5] for why, names in unchecked.items()},
+                deep=str({why: names[:5] for why, names in unchecked.items()}),
             )
 
     stale = [f"{key_added}_{name}_order" for name in CYCLE_PHASES[:3]]
@@ -640,12 +637,6 @@ def phase_order(
         k = min(_ORDER_NEIGHBOURS, reference_embedding.shape[0])
         neighbours = NearestNeighbors(n_neighbors=k).fit(reference_embedding).kneighbors(embedding)[1]
         order[rows] = np.asarray(entry["order"])[neighbours].mean(axis=1)
-    warnings.warn(
-        "phase_order is experimental: validate the order against a marker of the phase or a paired modality "
-        "before reading it biologically",
-        UserWarning,
-        stacklevel=3,
-    )
     adata.obs[key_added] = order
     adata.uns.setdefault("mantispy", {})[key_added] = dict(entry)
     return None

@@ -6,7 +6,6 @@ Everything here works off ``uns["mantispy"]["image_table"]``, which the reader f
 
 from __future__ import annotations
 
-import warnings
 from collections.abc import Sequence
 
 import numpy as np
@@ -164,11 +163,7 @@ def image_qc(
     broadcast = adata.obs["Metadata_ImageID"].map(table["qc_image_fail"])
     n_missing = int(broadcast.isna().sum())
     if n_missing:
-        warnings.warn(
-            f"{n_missing} cells have an ImageID not present in the image table; treating them as not flagged",
-            UserWarning,
-            stacklevel=3,
-        )
+        get_logger().warning("image_qc: %d cells have an ImageID not in the image table and are not flagged", n_missing)
     # Both writes come after the last raise, so a failed call leaves no verdict in uns disagreeing with obs.
     adata.obs["qc_image_fail"] = broadcast.fillna(False).to_numpy(dtype=bool)
     store["image_qc"] = table

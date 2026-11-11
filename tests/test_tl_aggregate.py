@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 import pytest
 
@@ -46,7 +48,7 @@ def test_a_constant_column_survives_whatever_its_name(adata):
     assert "cell_quality" not in wells.obs  # varying columns are dropped, not silently copied
 
 
-def test_aggregate_warns_when_min_cells_wipes_a_plates_controls():
+def test_aggregate_warns_when_min_cells_wipes_a_plates_controls(caplog):
     """min_cells dropping every negcon well of a plate leaves later reference= empty (audit A3)."""
     import anndata as ad
     import pandas as pd
@@ -68,8 +70,9 @@ def test_aggregate_warns_when_min_cells_wipes_a_plates_controls():
     adata.var_names = [f"Cells_AreaShape_F{index}" for index in range(5)]
     mt.io.stamp(adata, resolution="object", feature_kind="measurement")
 
-    with pytest.warns(UserWarning, match="negcon on plate P1"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.tl.aggregate(adata, min_cells=5)
+    assert "negcon on plate P1" in caplog.text
 
 
 def _grouped_elsewhere(adata):

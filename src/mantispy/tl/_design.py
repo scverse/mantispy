@@ -185,7 +185,7 @@ def replicate_saturation(
         else:
             values = np.array([metric(profiles, codes, depth, generator) for _ in range(n_draws)])
         if np.isnan(values).all():
-            get_logger().info("replicate_saturation: no group has enough replicates at depth %d; stopping", depth)
+            get_logger().debug("replicate_saturation: no group has enough replicates at depth %d; stopping", depth)
             break
         records.append(
             {
@@ -302,5 +302,5 @@ def cytotoxicity(
     table = pd.DataFrame(records)
     adata.uns.setdefault("mantispy", {})[key_added] = table
     adata.obs[f"{key_added}_suspect"] = table.set_index("group")["suspect"].reindex(obs[groupby].astype(str)).to_numpy()
-    get_logger().info("cytotoxicity flagged %d of %d groups as suspect", int(table["suspect"].sum()), len(table))
+    get_logger().info("cytotoxicity: flagged %d of %d groups as suspect", int(table["suspect"].sum()), len(table))
     return None

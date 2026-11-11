@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 import anndata as ad
@@ -171,20 +172,21 @@ def test_write_compression_reaches_h5ad_and_round_trips(tmp_path, cells):
     np.testing.assert_array_equal(mt.io.read(path).X, cells.X)
 
 
-def test_dropping_a_majority_of_named_features_warns_at_default_verbosity(capsys, monkeypatch):
+def test_dropping_a_majority_of_named_features_warns_at_default_verbosity(caplog):
     """A bulk drop of the caller's own columns (here names that carry no object) must reach the user by default.
 
     Only the by-design whole-field ``Image_`` drop stays quiet when it is large.
     """
-    monkeypatch.setattr(mt.settings, "verbosity", 1)
     # Kept set deliberately above THIN_FEATURE_SET so only the "non-Image object dropped" rule escalates.
     kept = {f"Cells_AreaShape_F{i}": [1.0, 2.0] for i in range(10)}
     bare = {f"Granularity_{i}_DNA": [3.0, 4.0] for i in range(1, 12)}
     frame = pd.DataFrame({"Metadata_Plate": ["P1", "P1"], "Metadata_Well": ["A01", "A02"], **kept, **bare})
-    from_dataframe(frame, channels=["DNA"])
-    captured = capsys.readouterr().err
-    assert "11 of 21 feature(s)" in captured
-    assert "<no object>" in captured and "objects=None" in captured
+    # At info level the record also carries the remedy, which only shows below the warning's level.
+    with caplog.at_level(logging.INFO, logger="scverse.mantispy"):
+        from_dataframe(frame, channels=["DNA"])
+    (record,) = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert "11 of 21 feature(s)" in record.getMessage() and "<no object>" in record.getMessage()
+    assert "objects=None" in record.deep
 
 
 def test_colliding_metadata_prefixes_are_refused():
@@ -201,69 +203,61 @@ def test_colliding_metadata_prefixes_are_refused():
         from_dataframe(frame)
 
 
-def test_dropping_a_majority_of_features_warns_but_a_minority_stays_quiet(capsys):
+def test_dropping_a_majority_of_features_warns_but_a_minority_stays_quiet(caplog):
     """The default `objects=` filter applies without the caller asking for it and can remove most of a table.
 
     Losing the majority must reach the user at the default verbosity; losing a minority stays quiet.
     """
-    previous = mt.settings.verbosity
-    mt.settings.verbosity = 1
-    try:
-        majority = pd.DataFrame(
-            {
-                "Metadata_Plate": ["P1", "P1"],
-                "Metadata_Well": ["A01", "A02"],
-                "Cells_AreaShape_Area": [1.0, 2.0],
-                "Image_Texture_Contrast_DNA_3_00_256": [5.0, 6.0],
-                "Image_Granularity_1_DNA": [7.0, 8.0],
-                "Image_AreaShape_Area": [9.0, 10.0],
-            }
-        )
+    majority = pd.DataFrame(
+        {
+            "Metadata_Plate": ["P1", "P1"],
+            "Metadata_Well": ["A01", "A02"],
+            "Cells_AreaShape_Area": [1.0, 2.0],
+            "Image_Texture_Contrast_DNA_3_00_256": [5.0, 6.0],
+            "Image_Granularity_1_DNA": [7.0, 8.0],
+            "Image_AreaShape_Area": [9.0, 10.0],
+        }
+    )
+    with caplog.at_level(logging.INFO, logger="scverse.mantispy"):
         from_dataframe(majority)
-        captured = capsys.readouterr().err
-        assert "3 of 4 feature(s)" in captured
-        assert "objects=None" in captured
+    (record,) = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert "3 of 4 feature(s)" in record.getMessage()
+    assert "objects=None" in record.deep
 
-        minority = pd.DataFrame(
-            {
-                "Metadata_Plate": ["P1", "P1"],
-                "Metadata_Well": ["A01", "A02"],
-                "Cells_AreaShape_Area": [1.0, 2.0],
-                "Nuclei_Intensity_MeanIntensity_DNA": [3.0, 4.0],
-                "Cytoplasm_AreaShape_Area": [5.0, 6.0],
-                "Image_Texture_Contrast_DNA_3_00_256": [7.0, 8.0],
-            }
-        )
+    caplog.clear()
+    minority = pd.DataFrame(
+        {
+            "Metadata_Plate": ["P1", "P1"],
+            "Metadata_Well": ["A01", "A02"],
+            "Cells_AreaShape_Area": [1.0, 2.0],
+            "Nuclei_Intensity_MeanIntensity_DNA": [3.0, 4.0],
+            "Cytoplasm_AreaShape_Area": [5.0, 6.0],
+            "Image_Texture_Contrast_DNA_3_00_256": [7.0, 8.0],
+        }
+    )
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         from_dataframe(minority)
-        assert capsys.readouterr().err == ""
-    finally:
-        mt.settings.verbosity = previous
+    assert not caplog.records
 
 
-def test_dropping_features_with_no_object_is_reported(capsys):
+def test_dropping_features_with_no_object_is_reported(caplog):
     """A column naming no object (``AreaShape_Perimeter``) parses with a missing object.
 
     Reporting the drop sorted that missing value alongside the object names and raised a TypeError on pandas 3.
     """
-    previous = mt.settings.verbosity
-    mt.settings.verbosity = 2
-    try:
-        frame = pd.DataFrame(
-            {
-                "Metadata_Plate": ["P1", "P1"],
-                "Metadata_Well": ["A01", "A02"],
-                "Cells_AreaShape_Area": [1.0, 2.0],
-                "AreaShape_Perimeter": [3.0, 4.0],
-            }
-        )
-        assert parse_feature_names(["AreaShape_Perimeter"])["object"].isna().all()
+    frame = pd.DataFrame(
+        {
+            "Metadata_Plate": ["P1", "P1"],
+            "Metadata_Well": ["A01", "A02"],
+            "Cells_AreaShape_Area": [1.0, 2.0],
+            "AreaShape_Perimeter": [3.0, 4.0],
+        }
+    )
+    assert parse_feature_names(["AreaShape_Perimeter"])["object"].isna().all()
+    with caplog.at_level(logging.INFO, logger="scverse.mantispy"):
         adata = from_dataframe(frame, channels=["DAPI"])
-        assert adata.var_names.tolist() == ["Cells_AreaShape_Area"]
-        captured = capsys.readouterr().err
-        assert "1 of 2 feature(s)" in captured
-        assert "<no object>" in captured
-    finally:
-        mt.settings.verbosity = previous
+    assert adata.var_names.tolist() == ["Cells_AreaShape_Area"]
+    assert "1 of 2 feature(s)" in caplog.text and "<no object>" in caplog.text
 
 
 def _cytotable_part(rows: range) -> pd.DataFrame:

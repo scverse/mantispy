@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import numbers
-import warnings
 from typing import Literal
 
 import numpy as np
@@ -25,11 +24,10 @@ def _warn_if_degenerate(labels: np.ndarray) -> None:
         return
     share = counts.iloc[0] / n_obs
     if share > _DOMINANT_SHARE:
-        warnings.warn(
-            f"one cluster holds {share:.0%} of rows; clustering may be degenerate. "
-            "Consider a different method or resolution.",
-            UserWarning,
-            stacklevel=3,
+        get_logger().warning(
+            "cluster: one cluster holds %.0f%% of rows, so the clustering may be degenerate",
+            100 * share,
+            deep="try a different method or resolution",
         )
 
 
@@ -199,7 +197,6 @@ def cluster(
             raise KeyError(f"obsm has no representation {use_rep!r}; run sc.pp.pca first, or pass use_rep=None")
         sc.pp.neighbors(adata, use_rep=use_rep)
         sc.tl.leiden(adata, resolution=resolution, key_added=key_added, flavor="igraph", n_iterations=2, directed=False)
-        get_logger().info("cluster(leiden): %d cluster(s)", adata.obs[key_added].nunique())
         _warn_if_degenerate(adata.obs[key_added].to_numpy())
         return None
 
@@ -243,6 +240,5 @@ def cluster(
         "stability": stability,
         "labels": [str(name) for name in adata.obs_names],
     }
-    get_logger().info("cluster(hierarchical): %d cluster(s) over %d profile(s)", chosen, adata.n_obs)
     _warn_if_degenerate(labels)
     return None

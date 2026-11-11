@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
-
 import numpy as np
 import pandas as pd
 from anndata import AnnData
@@ -95,11 +93,10 @@ def nn_moa_classify(
     predicted[usable] = truth[similarity[usable].argmax(axis=1)]
 
     if not usable.any():
-        warnings.warn(
-            f"scheme={scheme!r} excluded every neighbour of every profile, so nothing was classified. "
-            "This happens, for example, with scheme='nscb' on a single batch.",
-            UserWarning,
-            stacklevel=3,
+        get_logger().warning(
+            "nn_moa_classify: scheme=%r excluded every neighbour, so nothing was classified",
+            scheme,
+            deep="scheme='nscb' needs more than one batch",
         )
 
     # pd.Series.eq rather than ==, which raises on an object array holding pd.NA; eq treats a missing value as unequal.

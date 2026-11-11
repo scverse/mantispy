@@ -1,5 +1,7 @@
 """Hit calling and energy distance."""
 
+import logging
+import re
 import warnings
 
 import anndata as ad
@@ -60,7 +62,7 @@ def test_hit_calling_is_reproducible(scored):
     np.testing.assert_allclose(first, scored.uns["mantispy"]["hits"]["pvalue"].to_numpy())
 
 
-def test_more_features_than_controls_warns_and_names_the_way_out(scored):
+def test_more_features_than_controls_warns_and_names_the_way_out(scored, caplog):
     """rohban reached Mahalanobis distances of 3e17 this way."""
     few = scored[scored.obs["Metadata_Perturbation"] != "DMSO"].copy()
     is_control = np.arange(few.n_obs) < 5
@@ -68,8 +70,10 @@ def test_more_features_than_controls_warns_and_names_the_way_out(scored):
     few.obs["Metadata_Control_Type"] = np.where(is_control, "negcon", "treatment")
     # The first five cells share wells with treated cells, so name the well as the replicate: the pooled-design
     # check would otherwise stop the call before the warning this test is about.
-    with pytest.warns(UserWarning, match="use_rep"):
+    with caplog.at_level(logging.INFO, logger="scverse.mantispy"):
         mt.tl.hit_calling(few, n_permutations=50, replicate=["Metadata_Plate", "Metadata_Well"])
+    (record,) = [r for r in caplog.records if r.levelno == logging.WARNING and "singular" in r.getMessage()]
+    assert "use_rep" in record.deep
 
 
 def test_the_vectorised_ks_matches_scipy():
@@ -117,21 +121,21 @@ def test_results_round_trip(scored, tmp_path):
     assert len(loaded.uns["mantispy"]["edistance"]) == 4
 
 
-def test_hit_calling_does_not_call_a_screen_of_pure_noise(pure_noise_screen):
+def test_hit_calling_does_not_call_a_screen_of_pure_noise(pure_noise_screen, caplog):
     """The null is drawn from control rows held out of the centroid and covariance fit, so it is out-of-sample like every group.
 
     An in-sample null calls 12 of 12 groups here.
     The screen also warns, because splitting halves the rows that fit the covariance and leaves 60 of them against 80 features.
     """
     adata = pure_noise_screen()
-    with pytest.warns(UserWarning, match="reference rows"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.tl.hit_calling(adata, n_permutations=1000, seed=0)
+    assert "reference rows" in caplog.text
     table = adata.uns["mantispy"]["hits"]
     treated = table[table["group"] != "DMSO"]
     assert int(treated["is_hit"].sum()) <= 1, treated[["group", "pvalue", "qvalue"]]
 
 
-@pytest.mark.filterwarnings("ignore:the covariance is estimated")
 def test_hit_calling_still_finds_a_real_effect(pure_noise_screen):
     """A guard against fixing the false positives by refusing to call anything."""
     adata = pure_noise_screen()
@@ -144,7 +148,6 @@ def test_hit_calling_still_finds_a_real_effect(pure_noise_screen):
     assert bool(table.loc["p00", "is_hit"])
 
 
-@pytest.mark.filterwarnings("ignore:the covariance is estimated")
 def test_a_missing_feature_does_not_make_a_group_maximally_control_like(pure_noise_screen):
     """nan_to_num after the matmul would turn one NaN feature into a whitened row of NaN and then zeros, making the strongest hit the most control-like group."""
     adata = pure_noise_screen()
@@ -245,21 +248,22 @@ def test_the_controls_are_not_a_hit_against_themselves(pure_noise_screen):
     assert float(row["pvalue"]) > 0.05
 
 
-def test_a_reference_too_small_to_halve_is_unscored_rather_than_a_crash(pure_noise_screen):
+def test_a_reference_too_small_to_halve_is_unscored_rather_than_a_crash(pure_noise_screen, caplog):
     """``split_reference`` raises below four rows.
 
     With two or three control rows every treated group can still be scored against the reference; only the reference against itself cannot, so that row is left unscored.
     """
     adata = pure_noise_screen(n_control=3, n_groups=1, per_group=20)
-    with pytest.warns(UserWarning, match="fewer than four rows"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.tl.edistance(adata, n_permutations=200, seed=0)
+    assert "too few rows to test" in caplog.text
     table = adata.uns["mantispy"]["edistance"].set_index("group")
     assert np.isfinite(table.loc["p00", "pvalue"])
     assert np.isnan(table.loc["DMSO", "pvalue"])
     assert not bool(table.loc["DMSO", "is_hit"])
 
 
-def test_single_row_groups_are_named_in_a_warning_not_silently_nan(pure_noise_screen):
+def test_single_row_groups_are_named_in_a_warning_not_silently_nan(pure_noise_screen, caplog):
     """A group of one well has no within-group term for energy distance, so its p-value is NaN.
 
     Those groups are named in a warning, since this is the shape of a single-well primary screen or a tl.consensus output.
@@ -270,8 +274,9 @@ def test_single_row_groups_are_named_in_a_warning_not_silently_nan(pure_noise_sc
     values[moved] += 8.0
     adata.X = values
 
-    with pytest.warns(UserWarning, match="fewer than two rows"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.tl.edistance(adata, n_permutations=200, seed=0)
+    assert "too few rows to test" in caplog.text and "p00" in caplog.text
     table = adata.uns["mantispy"]["edistance"].set_index("group")
     for group in [f"p{i:02d}" for i in range(5)]:
         assert np.isnan(table.loc[group, "pvalue"]), group
@@ -336,7 +341,7 @@ def test_edistance_caps_both_sides_and_says_so(scored, caplog):
     import logging
 
     wells = mt.tl.aggregate(scored, min_cells=0)
-    with caplog.at_level(logging.INFO, logger="mantispy"):
+    with caplog.at_level(logging.DEBUG, logger="scverse.mantispy"):
         mt.tl.edistance(wells, n_permutations=20, max_reference=6, key_added="capped")
 
     table = wells.uns["mantispy"]["capped"]
@@ -400,16 +405,18 @@ def _plate(group_size: int, n_groups: int = 20, n_controls: int = 24, seed: int 
     return adata
 
 
-def test_a_screen_without_replication_says_so():
+def test_a_screen_without_replication_says_so(caplog):
     """A group of one or two wells has a median no permutation null can rescue, so say so rather than call it."""
-    with pytest.warns(UserWarning, match="fewer than three rows"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.tl.hit_calling(_plate(group_size=2), n_permutations=200)
+    assert "fewer than three rows" in caplog.text
 
 
-def test_a_replicated_screen_does_not_warn():
-    with warnings.catch_warnings():
+def test_a_replicated_screen_does_not_warn(caplog):
+    with warnings.catch_warnings(), caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         warnings.simplefilter("error", UserWarning)
         mt.tl.hit_calling(_plate(group_size=6), n_permutations=200)
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 
 def test_a_robust_covariance_still_calls_a_hit_that_stray_controls_would_hide():
@@ -558,7 +565,7 @@ def test_hit_calling_warns_without_a_well_column_at_cell_resolution():
     """No well column and no explicit block leaves the anti-conservative cell-shuffle null, so warn."""
     adata = _well_effect_cells(seed=0)
     del adata.obs["Metadata_Well"]
-    with pytest.warns(UserWarning, match="not independent replicates"):
+    with pytest.warns(UserWarning, match="independent replicates"):
         mt.tl.hit_calling(adata, n_permutations=100, seed=0)
 
 
@@ -637,7 +644,7 @@ def test_hit_calling_does_not_crash_on_missing_wells_at_cell_resolution():
     wells = adata.obs["Metadata_Well"].astype(object).to_numpy().copy()
     wells[: 5 * 200] = np.nan
     adata.obs["Metadata_Well"] = wells
-    with pytest.warns(UserWarning, match="not independent replicates"):
+    with pytest.warns(UserWarning, match="independent replicates"):
         mt.tl.hit_calling(adata, n_permutations=100, seed=0)
     table = adata.uns["mantispy"]["hits"].set_index("group")
     assert np.isfinite(table.loc["DMSO", "pvalue"]), "every group is still scored on the cell path"
@@ -851,12 +858,13 @@ def test_hellinger_does_not_call_a_cell_screen_of_pure_noise():
     assert called / total <= 0.1, f"{called}/{total} pure-noise groups called"
 
 
-def test_hellinger_leaves_a_group_too_small_for_its_covariance_unscored(pure_noise_screen):
+def test_hellinger_leaves_a_group_too_small_for_its_covariance_unscored(pure_noise_screen, caplog):
     adata = pure_noise_screen(n_features=4, per_group=16)
     adata.obs["Metadata_Perturbation"] = adata.obs["Metadata_Perturbation"].astype(str)
     adata.obs.loc[adata.obs_names[-5:], "Metadata_Perturbation"] = "tiny"
-    with pytest.warns(UserWarning, match="unscored.*tiny"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.tl.hit_calling(adata, method="hellinger", n_permutations=50)
+    assert "unscored" in caplog.text and "tiny" in caplog.text
     table = adata.uns["mantispy"]["hits"].set_index("group")
     assert np.isnan(table.loc["tiny", "distance"])
     assert np.isfinite(table.drop(index="tiny")["distance"]).all()
@@ -920,12 +928,13 @@ def test_the_mp_value_is_calibrated_on_well_profiles_of_pure_noise(pure_noise_sc
     assert called / total <= 0.1, f"{called}/{total} pure-noise groups below p = 0.05"
 
 
-def test_the_mp_value_leaves_a_one_row_group_unscored(pure_noise_screen):
+def test_the_mp_value_leaves_a_one_row_group_unscored(pure_noise_screen, caplog):
     adata = pure_noise_screen(n_features=10, per_group=3)
     adata.obs["Metadata_Perturbation"] = adata.obs["Metadata_Perturbation"].astype(str)
     adata.obs.loc[adata.obs_names[-1], "Metadata_Perturbation"] = "solo"
-    with pytest.warns(UserWarning, match="unscored.*solo"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.tl.hit_calling(adata, method="mp_value", n_permutations=50)
+    assert re.search(r"unscored.*solo", caplog.text)
     table = adata.uns["mantispy"]["hits"].set_index("group")
     assert np.isnan(table.loc["solo", "distance"])
     assert np.isfinite(table.drop(index="solo")["distance"]).all()

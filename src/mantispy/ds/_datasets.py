@@ -266,13 +266,6 @@ def _rohban_raw(cache_dir: str | Path | None = None) -> AnnData:
     obs["Metadata_Gene"] = gene.astype("category")
     obs["Metadata_Construct"] = construct
     obs["Metadata_Allele"] = allele.astype("category")
-    get_logger().info(
-        "rohban: %d wells x %d features, %d ORF constructs over %d genes",
-        adata.n_obs,
-        adata.n_vars,
-        int(construct.nunique()),
-        int(gene.nunique()),
-    )
     return adata
 
 
@@ -448,12 +441,6 @@ def _assemble_jump_target2(plates: Sequence[str] | None, annotate: bool, cache_d
     adata = read_jump(profiles, annotate=annotate, on_column_mismatch="intersect", platemap=counts)
     batches = {_plate(file.name): file.name.split("__")[0] for file in _DATASETS["jump_target2"].files}
     adata.obs["Metadata_Batch"] = [batches[str(plate)] for plate in adata.obs["Metadata_Plate"]]
-    get_logger().info(
-        "jump_target2: %d wells x %d features from %d source(s)",
-        adata.n_obs,
-        adata.n_vars,
-        adata.obs["Metadata_Source"].nunique(),
-    )
     return adata
 
 
@@ -622,7 +609,7 @@ def _oasis_platemaps(cache_dir: str | Path | None) -> pd.DataFrame:
             for name, spellings in _OASIS_PLATEMAP_COLUMNS.items()
         }
         if found["Metadata_Compound"] is None or found["Metadata_Concentration"] is None:
-            get_logger().warning("oasis_pilot: %s names no compound or concentration column", path.name)
+            get_logger().debug("oasis_pilot: skipped %s, which names no compound or concentration column", path.name)
             continue
         kept = pd.DataFrame(
             {
@@ -717,7 +704,7 @@ def _assemble_jump_lite(model: str, annotate: bool, cache_dir: str | Path | None
     joined.index = obs.index
     if unmatched := int(joined["cell_count"].isna().sum()):
         # Downstream, a missing count reads as a well with no cells.
-        get_logger().warning("jump_lite(%s): %d well(s) have no cell count in the count table", model, unmatched)
+        get_logger().debug("jump_lite(%s): %d well(s) have no cell count in the count table", model, unmatched)
     adata.obs = joined.rename(columns={"cell_count": "Metadata_CellCount"})
     order = as_frame(adata.obs).sort_values(["Metadata_Source", "Metadata_Plate", "Metadata_Well"], kind="stable").index
     adata = adata[order].copy()
@@ -726,13 +713,6 @@ def _assemble_jump_lite(model: str, annotate: bool, cache_dir: str | Path | None
         from mantispy.pp._annotate import annotate_jump
 
         annotate_jump(adata)
-    get_logger().info(
-        "jump_lite(%s): %d wells x %d features over %d source(s)",
-        model,
-        adata.n_obs,
-        adata.n_vars,
-        int(as_frame(adata.obs)["Metadata_Source"].nunique()),
-    )
     return adata
 
 
@@ -862,14 +842,6 @@ def _finish_guide_screen(adata: AnnData, name: str) -> AnnData:
     """Record the accession, mark the perturbation type and log the shape shared by the single-cell guide screens."""
     # These are CRISPR guide screens: Metadata_Perturbation is the guide, set by each loader.
     adata.obs["Metadata_Perturbation_Type"] = pd.Series("crispr", index=adata.obs_names, dtype="category")
-    get_logger().info(
-        "%s: %d cells x %d features, %d gene(s) over %d guide(s)",
-        name,
-        adata.n_obs,
-        adata.n_vars,
-        adata.obs["Metadata_Gene"].nunique(),
-        adata.obs["Metadata_sgRNA"].nunique(),
-    )
     return adata
 
 
@@ -1194,7 +1166,7 @@ def _assemble_cells(entry: DatasetEntry, cache_dir: str | Path | None, *, annota
     # is no longer a join key.
     adata = ad.concat(parts, join="inner", merge="first", uns_merge="first")
     adata.uns["mantispy"]["image_table"] = pd.concat([part.uns["mantispy"]["image_table"] for part in parts])
-    n_parts, widest = len(parts), max(part.n_vars for part in parts)
+    widest = max(part.n_vars for part in parts)
     del parts
     report_drop("features measured in only some fields of view", widest - adata.n_vars, widest)
 
@@ -1202,13 +1174,6 @@ def _assemble_cells(entry: DatasetEntry, cache_dir: str | Path | None, *, annota
         adata.obs = join_jump_annotation(as_frame(adata.obs)).set_axis(adata.obs_names)
         _mark_selected(adata)
     stamp(adata, resolution="object")
-    get_logger().info(
-        "jump_cells: %d cells x %d features from %d field(s) of view in %d well(s)",
-        adata.n_obs,
-        adata.n_vars,
-        n_parts,
-        adata.obs["Metadata_Well"].nunique(),
-    )
     return adata
 
 
