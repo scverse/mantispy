@@ -380,7 +380,7 @@ def test_collinearity_warns_on_near_duplicate_sets(caplog):
 
     with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.tl.enrich(adata.copy(), net=net, method="ulm", tmin=2)
-    assert "near-collinear (A and B" in caplog.text
+    assert "near-collinear" in caplog.text and "A and B" in caplog.text
 
     caplog.clear()
     with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):

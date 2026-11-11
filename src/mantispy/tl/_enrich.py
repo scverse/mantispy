@@ -115,7 +115,7 @@ def _warn_if_collinear(dc: Any, network: pd.DataFrame, tmin: int) -> None:
     except Exception:  # noqa: BLE001 - net_corr raises assorted errors on an unusual net; any means skip the check
         return
     strong = corr[np.abs(corr["corr"].to_numpy(dtype=float)) > 0.95]
-    pairs = [f"{a} and {b}" for a, b in zip(strong["source_a"], strong["source_b"], strict=False)]
+    pairs = sorted(f"{a} and {b}" for a, b in zip(strong["source_a"], strong["source_b"], strict=False))
     if pairs:
         get_logger().warning(
             "enrich: %d pair(s) of feature sets are near-collinear (%s)",
