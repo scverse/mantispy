@@ -219,26 +219,6 @@ def _score_map(
     return table, group_columns
 
 
-def _warn_most_active(table: pd.DataFrame) -> None:
-    """Warn when more than half the perturbations come out active against the controls.
-
-    In a CRISPR screen every targeting guide cuts DNA and a non-targeting one does not, so the cutting response alone separates them from the controls.
-    """
-    if "is_significant" not in table or not len(table):
-        return
-    active = table["is_significant"].fillna(False).to_numpy(dtype=bool)
-    if active.mean() > 0.5:
-        warnings.warn(
-            f"tl.map(mode='activity') called {int(active.sum())} of {active.size} perturbations active against "
-            "the controls. If the controls are non-targeting guides in a CRISPR screen, DNA cutting alone can "
-            "produce this, so read the calls as a ranking rather than as that many hits. Retrieve against cutting "
-            "controls instead (e.g. guides against genes the cell line does not express, from "
-            "mt.io.unexpressed_genes), or calibrate the calls with mt.tl.empirical_fdr.",
-            UserWarning,
-            stacklevel=3,
-        )
-
-
 @inplace_or_copy(expects=("well", "aggregate"))
 def map(
     adata: AnnData,
@@ -279,7 +259,7 @@ def map(
                 Its replicates are retrieved against the control profiles on the query's own plate only.
                 This is the phenotypic activity of :cite:t:`Kalinin_2025`.
                 Needs ``reference`` and the ``batch`` column; queries on a plate without controls are left out, with a warning.
-                In a CRISPR screen, non-targeting controls do not cut DNA, so nearly every knockout can come out active from the cutting response alone; guides against genes the cell line does not express (:func:`~mantispy.io.unexpressed_genes`) are a cutting control to retrieve against instead, and :func:`~mantispy.tl.empirical_fdr` calibrates the calls. A warning says when more than half the perturbations come out active.
+                In a CRISPR screen, non-targeting controls do not cut DNA, so nearly every knockout can come out active from the cutting response alone; guides against genes the cell line does not express (:func:`~mantispy.io.unexpressed_genes`) are a cutting control to retrieve against instead, and :func:`~mantispy.tl.empirical_fdr` calibrates the calls.
             ``"consistency"``
                 Do perturbations sharing an annotation look more alike than those that do not?
                 This is the phenotypic consistency of :cite:t:`Kalinin_2025`.
@@ -455,7 +435,6 @@ def map(
         control_groups = set(np.asarray(meta.loc[is_control, label], dtype=object))
         table = table[~table[label].isin(control_groups)].reset_index(drop=True)
         table = table.drop(columns=[REFERENCE_COLUMN], errors="ignore")
-        _warn_most_active(table)
 
     adata.uns.setdefault("mantispy", {})[key_added] = table
 
