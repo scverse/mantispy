@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import cast
@@ -97,14 +98,15 @@ def _outline_dirs(root: Path, plate: str) -> list[Path]:
     return sorted((root / "workspace/analysis" / BATCH / plate / "analysis").glob("*/outlines"))
 
 
-def test_outlines_the_reader_cannot_name_warn(gallery: Path) -> None:
+def test_outlines_the_reader_cannot_name_warn(gallery: Path, caplog) -> None:
     """Outline images present but unmatched are a broken read, not a plate without segmentations."""
     for directory in _outline_dirs(gallery, PLATE):
         for path in sorted(directory.glob("A01_s*_outlines.png")):
             path.rename(path.with_name(path.name.replace("A01_s", "A01_site")))
 
-    with pytest.warns(UserWarning, match="could not name"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         sdata = mt.io.read_plate(gallery, PLATE, batch=BATCH, profile="test")
+    assert "could not name" in caplog.text
 
     assert not sdata.labels
 

@@ -112,16 +112,10 @@ def feature_signature(
         firsts = grouped.first()
         for column in carried:
             if not constant[column]:
-                get_logger().debug("feature_signature dropped non-constant column %s", column)
+                get_logger().debug("feature_signature: dropped non-constant column %s", column)
                 continue
             values = firsts[column].reindex(signature.obs_names)
             if values.notna().any():
                 signature.obs[column] = values.to_numpy()
     stamp(signature, resolution="aggregate", grouped_by=[label])
-    get_logger().info(
-        "feature_signature: %d perturbations by %d families, from %d features",
-        signature.n_obs,
-        signature.n_vars,
-        adata.n_vars,
-    )
     return signature

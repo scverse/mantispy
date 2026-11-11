@@ -1,5 +1,6 @@
 """mAP, similarity, percent replicating and grit."""
 
+import logging
 import warnings
 from importlib.util import find_spec
 
@@ -84,7 +85,7 @@ def test_activity_does_not_depend_on_another_plates_controls(pure_noise_screen):
 
 
 @requires_copairs
-def test_a_plate_without_controls_calls_nothing_active(pure_noise_screen):
+def test_a_plate_without_controls_calls_nothing_active(pure_noise_screen, caplog):
     """A query with replicates and nothing to rank them against has a perfect rank list by construction.
     Scored, the inert compound on the plate without controls would come out active at the smallest p."""
     here = pure_noise_screen(n_control=24, n_groups=1, per_group=6, n_features=12, seed=0)
@@ -93,21 +94,24 @@ def test_a_plate_without_controls_calls_nothing_active(pure_noise_screen):
     wells = ad.concat([here, there], keys=["P1", "P2"], index_unique=":")
     mt.io.stamp(wells, resolution="well", feature_kind="measurement")
 
-    with pytest.warns(UserWarning, match="no negative pair"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.tl.map(wells, mode="activity", null_size=200)
+    assert "no negative pair" in caplog.text
 
     assert set(wells.uns["mantispy"]["map"]["Metadata_Perturbation"]) == {"p00"}
 
 
 @requires_copairs
-def test_a_null_too_small_for_the_correction_says_so(pure_noise_screen):
+def test_a_null_too_small_for_the_correction_says_so(pure_noise_screen, caplog):
     """No p-value falls below 1 / (null_size + 1), so over enough groups the correction calls nothing however strong a lone effect is, and a screen scored that way would report no hits without saying why."""
     screen = pure_noise_screen()
-    with pytest.warns(UserWarning, match="at least 3 reach that floor"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.tl.map(screen, mode="activity", null_size=100)
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", UserWarning)
+    assert "at least 3 reach its floor" in caplog.text
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.tl.map(screen, mode="activity", null_size=1000)
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 
 @requires_copairs
@@ -176,7 +180,7 @@ def test_activity_needs_controls_and_says_so(profiles):
 
 
 @requires_copairs
-def test_consistency_groups_by_an_annotation(profiles):
+def test_consistency_groups_by_an_annotation(profiles, caplog):
     """Phenotypic consistency :cite:p:`Kalinin_2025`: do perturbations sharing a mechanism look alike, against those that do not?"""
     with pytest.raises(ValueError, match="annotation_key"):
         mt.tl.map(profiles, mode="consistency", null_size=100)
@@ -184,13 +188,14 @@ def test_consistency_groups_by_an_annotation(profiles):
     profiles.obs["Metadata_MOA"] = np.where(
         profiles.obs["Metadata_Perturbation"].astype(str).isin(["pert00", "pert01"]), "A", "B"
     )
-    with pytest.warns(UserWarning, match="one profile per perturbation"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.tl.map(profiles, mode="consistency", annotation_key="Metadata_MOA", null_size=200)
+    assert "one profile per perturbation" in caplog.text
     assert set(profiles.uns["mantispy"]["map"]["Metadata_MOA"]) == {"A", "B"}
 
 
 @requires_copairs
-def test_consistency_does_not_count_a_perturbation_agreeing_with_itself(profiles):
+def test_consistency_does_not_count_a_perturbation_agreeing_with_itself(profiles, caplog):
     """Two wells of one treatment share its annotation trivially.
 
     Counting those pairs makes replicate retrieval look like mechanism coherence, more so the more wells a perturbation has.
@@ -202,8 +207,9 @@ def test_consistency_does_not_count_a_perturbation_agreeing_with_itself(profiles
     treated = profiles[~profiles.obs["Metadata_Control"].to_numpy()].copy()
 
     wells = treated.copy()
-    with pytest.warns(UserWarning, match="one profile per perturbation"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.tl.map(wells, mode="consistency", annotation_key="Metadata_MOA", null_size=200, seed=0)
+    assert "one profile per perturbation" in caplog.text
     loose = wells.copy()
     mt.tl.map(
         loose,

@@ -160,7 +160,7 @@ def _assemble_bbbc021(cache_dir: str | Path | None = None) -> AnnData:
         _bbbc021_counts(fields), on=["Metadata_Plate", "Metadata_Well"], how="left"
     )
     if unmatched := int(merged["Metadata_Compound"].isna().sum()):
-        get_logger().warning("%d wells have no compound annotation and are dropped", unmatched)
+        get_logger().debug("BBBC021: %d wells have no compound annotation and are dropped", unmatched)
         merged = merged[merged["Metadata_Compound"].notna()]
 
     adata = from_dataframe(merged, resolution="well")
@@ -356,7 +356,7 @@ def _assemble_oasis_pilot(cache_dir: str | Path | None = None) -> AnnData:
     merged = obs.merge(_oasis_platemaps(cache_dir), on=["Metadata_plate_map_name", "Metadata_Well"], how="left")
     merged.index = obs.index
     if unmatched := int(merged["Metadata_Compound"].isna().sum()):
-        get_logger().warning("oasis_pilot: %d of %d wells have no plate-map row", unmatched, len(merged))
+        get_logger().debug("oasis_pilot: %d of %d wells have no plate-map row", unmatched, len(merged))
     adata.obs["Metadata_Compound"] = merged["Metadata_Compound"].to_numpy()
     adata.obs["Metadata_Concentration"] = merged["Metadata_Concentration"].to_numpy(dtype=float)
     adata.obs["Metadata_ConcentrationUnit"] = "uM"  # the OASIS platemaps record the dose in micromolar

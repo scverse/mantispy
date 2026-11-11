@@ -51,8 +51,7 @@ def test_feature_distributions_gains_a_ridge_kind(clustered):
 
 def test_an_empty_subpopulation_table_is_refused_rather_than_drawn(clustered):
     empty = clustered.copy()
-    with pytest.warns(UserWarning):
-        mt.tl.subpopulation_hits(empty, cluster_key="leiden")
+    mt.tl.subpopulation_hits(empty, cluster_key="leiden")
     empty.uns["mantispy"]["subpopulation_hits"] = empty.uns["mantispy"]["subpopulation_hits"].iloc[:0]
     with pytest.raises(ValueError, match="is empty"):
         mt.pl.subpopulation_hits(empty)

@@ -14,7 +14,6 @@ References:
 
 from __future__ import annotations
 
-import warnings
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -158,9 +157,18 @@ def _handle_unmapped(joined: pd.DataFrame, unmapped: np.ndarray, what: str, on_u
     if on_unmapped == "error":
         raise ValueError(f"{message}; pass on_unmapped='drop' to remove their wells or 'warn' to keep them.")
     if on_unmapped == "drop":
-        warnings.warn(f"{message}; their {int(unmapped.sum())} well(s) were dropped.", UserWarning, stacklevel=3)
+        get_logger().warning(
+            "annotate_jump: %d JUMP id(s) could not map to a %s; their %d well(s) were dropped",
+            n_ids,
+            what,
+            int(unmapped.sum()),
+        )
         return joined.loc[~unmapped]
-    warnings.warn(f"{message}; their wells are kept as treatments without one.", UserWarning, stacklevel=3)
+    get_logger().warning(
+        "annotate_jump: %d JUMP id(s) could not map to a %s; their wells are kept as treatments without one",
+        n_ids,
+        what,
+    )
     return joined
 
 
@@ -182,7 +190,9 @@ def _join_wells(obs: pd.DataFrame) -> pd.DataFrame:
     unannotated = int(joined["Metadata_JCP2022"].isna().sum())
     if unannotated:
         get_logger().warning(
-            "%d of %d wells have no JUMP annotation; their Metadata_JCP2022 is missing", unannotated, len(joined)
+            "annotate_jump: %d of %d wells have no JUMP annotation, so their Metadata_JCP2022 is missing",
+            unannotated,
+            len(joined),
         )
     return joined
 

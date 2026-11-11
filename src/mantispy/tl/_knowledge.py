@@ -12,7 +12,6 @@ from anndata import AnnData
 from mantispy._core._reduce import representation
 from mantispy._core._stats import benjamini_hochberg, permutation_pvalue
 from mantispy._core.frames import as_frame
-from mantispy._core.logging import get_logger
 from mantispy._core.mutation import inplace_or_copy
 from mantispy.tl._similarity import similarity_matrix
 
@@ -49,7 +48,6 @@ def gene_set_network(source: str = "hallmark", organism: str = "human") -> pd.Da
     net = net.rename(columns={column: column.lower() for column in net.columns})
     if "weight" not in net:
         net["weight"] = 1.0
-    get_logger().info("gene_set_network(%s): %d sets over %d edges", source, net["source"].nunique(), len(net))
     return net[["source", "target", "weight"]]
 
 
@@ -136,7 +134,6 @@ def pathway_coherence(
     table["qvalue"] = benjamini_hochberg(table["pvalue"].to_numpy()) if len(table) else []
     table = table.sort_values("coherence", ascending=False).reset_index(drop=True)
     adata.uns.setdefault("mantispy", {})[key_added] = table
-    get_logger().info("pathway_coherence scored %d set(s) of %d", len(table), net["source"].nunique())
     return None
 
 
@@ -217,5 +214,4 @@ def enrich_hits(
     ).sort_values("qvalue")
 
     adata.uns.setdefault("mantispy", {})[key_added] = table.reset_index(drop=True)
-    get_logger().info("enrich_hits: %d hit gene(s) of %d", n_hits, n_bg)
     return None

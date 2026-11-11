@@ -5,6 +5,8 @@ small. Tested on fabricated guide tables whose null, hit and single-strong-guide
 so FDR control, power and the Stouffer/Fisher split can be checked without the network.
 """
 
+import logging
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -198,7 +200,8 @@ def test_direction_lets_opposing_guides_cancel():
     assert abs(stat_with) < 1.0  # opposing guides roughly cancel
 
 
-def test_repeated_guide_ids_warn(adata):
+def test_repeated_guide_ids_warn(adata, caplog):
     adata.obs.loc[adata.obs["Metadata_sgRNA"] == "hit0_1", "Metadata_sgRNA"] = "hit0_0"  # a duplicate id
-    with pytest.warns(UserWarning, match="repeats ids"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         _call(adata)
+    assert "repeats ids" in caplog.text

@@ -3,6 +3,8 @@
 Network-dependent, so marked.
 """
 
+import logging
+
 import numpy as np
 import pytest
 
@@ -96,13 +98,14 @@ def test_the_recipe_reproduces_the_moa_benchmark(bbbc021):
 
 @pytest.mark.network
 @pytest.mark.slow
-def test_sphering_hurts_this_dataset(bbbc021):
+def test_sphering_hurts_this_dataset(bbbc021, caplog):
     """With 330 DMSO wells against 346 features, sphering is underdetermined and amplifies noise.
 
     pycytominer gives the same result, so the loss comes from the method itself.
     This is why evaluate_integration compares corrections instead of applying a fixed recipe.
     """
     without = _not_same_compound_accuracy(_treatment_consensus(bbbc021, sphere=False))
-    with pytest.warns(UserWarning, match="fewer rows than features"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         sphered = _treatment_consensus(bbbc021, sphere=True)
+    assert "covariance is singular" in caplog.text
     assert _not_same_compound_accuracy(sphered) < without

@@ -10,6 +10,7 @@ from anndata import AnnData
 
 from mantispy._core._numba import group_offsets
 from mantispy._core._reduce import get_matrix, group_codes, matrix_dtype, representation
+from mantispy._core.logging import get_logger
 from mantispy._core.masks import CONTROL_CLASSES, reference_mask
 from mantispy._core.mutation import inplace_or_copy
 
@@ -48,12 +49,11 @@ def _decompose(reference: np.ndarray, method: str) -> tuple[np.ndarray, np.ndarr
 
     n_obs, n_vars = centered.shape
     if n_obs <= n_vars:
-        warnings.warn(
-            f"sphering is fitted on {n_obs} reference rows for {n_vars} features. With fewer rows "
-            "than features the covariance is singular and the transform amplifies noise. Select fewer "
-            "features first, or use more controls.",
-            UserWarning,
-            stacklevel=5,
+        get_logger().warning(
+            "sphere: fitted on %d reference rows for %d features, so the covariance is singular",
+            n_obs,
+            n_vars,
+            deep="select fewer features first, or use more controls",
         )
     # Centering costs one degree of freedom, so a full-rank reference has rank min(n_vars, n_obs - 1).
     rank = np.linalg.matrix_rank(centered)
@@ -294,9 +294,8 @@ def sphere(
         raise ValueError(f"method must be one of {METHODS}, got {method!r}")
     if method.startswith("PCA") and key_added is None:
         warnings.warn(
-            f"{method} rotates out of the feature basis, so the columns of X are principal "
-            "components while var still describes the original features. Pass key_added= to "
-            "keep X, or use ZCA or ZCA-cor, which rotate back into the feature basis.",
+            f"{method} rotates out of the feature basis, so X holds principal components while var names the features; "
+            "pass key_added= or use ZCA.",
             UserWarning,
             stacklevel=3,
         )
@@ -365,13 +364,13 @@ def _centre_scale(values: np.ndarray, reference: np.ndarray, where: str = "") ->
     # The tolerance scales with the row count because the rounding error in a standard deviation grows with its rows.
     degenerate = scale <= block.shape[0] * np.finfo(scale.dtype).eps * np.abs(block).max(axis=0)
     if (no_spread := int(degenerate.sum())) > 0:
-        warnings.warn(
-            f"{no_spread} of {scale.size} dimension(s) have no spread among the {int(reference.sum())} "
-            f"reference row(s){where}. Their scale is clamped to 1, so they pass through centred but "
-            "unscaled and are not comparable with the rest. Reduce to fewer components, or use more "
-            "controls.",
-            UserWarning,
-            stacklevel=4,
+        get_logger().info(
+            "tvn: %d of %d dimension(s) have no spread among the %d reference row(s)%s and stay unscaled",
+            no_spread,
+            scale.size,
+            int(reference.sum()),
+            where,
+            deep="reduce to fewer components, or use more controls",
         )
     return (values - centre) / np.where(degenerate, 1.0, scale)
 
@@ -489,13 +488,12 @@ def tvn(
         values[rows] = _centre_scale(values[rows], controls[rows], where=f" of batch {key!r}")
 
     if thin:
-        warnings.warn(
-            f"{len(thin)} batch(es) have no more reference rows than the {values.shape[1]} component(s) "
-            f"they are scaled in, such as {', '.join(thin[:3])}. Their controls cannot span the space, so "
-            "the directions they leave empty are divided by near-zero spread and come out amplified. "
-            "Reduce to fewer components, or pool smaller batches together.",
-            UserWarning,
-            stacklevel=3,
+        get_logger().warning(
+            "tvn: %d batch(es) have no more reference rows than the %d components (%s)",
+            len(thin),
+            values.shape[1],
+            ", ".join(thin[:3]) + (", ..." if len(thin) > 3 else ""),
+            deep="their empty directions come out amplified; reduce to fewer components or pool smaller batches",
         )
 
     target = _symmetric_power(_regularized_covariance(values[controls], epsilon), 0.5)

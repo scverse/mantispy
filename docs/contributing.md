@@ -174,6 +174,17 @@ Consider enabling this option for [ruff][ruff-editors] and [biome][biome-editors
 [ruff-editors]: https://docs.astral.sh/ruff/integrations/
 [biome-editors]: https://biomejs.dev/guides/integrate-in-editor/
 
+### Logging and warnings
+
+mantispy logs through `mantispy._core.logging.get_logger()`, the `scverse.mantispy` logger from `scverse_misc.logging`, so it follows the verbosity shared by all scverse packages.
+
+- `warnings.warn` for anything about the call: deprecations (`FutureWarning`) and arguments whose effect the caller may not expect, such as `replicate=None` at cell resolution (`UserWarning`).
+- Anything about the data goes through the logger.
+  A warning is one line saying what happened, with counts, and the remedy goes in `deep=`, which shows only at info verbosity.
+  Info is at most one line per public function, giving its result, and per-item detail goes to debug.
+
+In tests, assert on log messages with `caplog.at_level(logging.WARNING, logger="scverse.mantispy")`.
+
 (writing-tests)=
 
 ## Writing tests
@@ -334,15 +345,20 @@ as they are. The `Tutorials run` job in `.github/workflows/test.yaml` executes e
 Re-run a notebook and commit its outputs whenever you change it. The pages in `docs/datasets` load about 3 GB, so
 CI skips them; re-run them whenever a loader or a function they call changes.
 
-`nb_output_stderr` is `remove`, so warnings do **not** appear on the rendered page. Never write
-prose that tells the reader to read a warning. If a warning is part of the explanation, capture it
+`nb_output_stderr` is `remove`, so warnings and log messages do **not** appear on the rendered page. Never write
+prose that tells the reader to read a warning. If a log message is part of the explanation, capture it
 and print it:
 
 ```python
-with warnings.catch_warnings(record=True) as caught:
-    warnings.simplefilter("always")
-    mt.pp.sphere(adata, reference="negcon")
-print(caught[0].message)
+import logging
+
+records = []
+handler = logging.Handler()
+handler.emit = records.append
+logging.getLogger("scverse.mantispy").addHandler(handler)
+mt.pp.sphere(adata, reference="negcon")
+logging.getLogger("scverse.mantispy").removeHandler(handler)
+print(records[0].getMessage())
 ```
 
 

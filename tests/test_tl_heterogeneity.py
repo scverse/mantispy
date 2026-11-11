@@ -69,7 +69,7 @@ def test_subpopulation_hits_defaults_to_the_well_block_at_cell_resolution():
 def test_subpopulation_hits_warns_without_a_well_column_at_cell_resolution():
     adata = _one_cluster(seed=0)
     del adata.obs["Metadata_Well"]
-    with pytest.warns(UserWarning, match="not independent replicates"):
+    with pytest.warns(UserWarning, match="independent replicates"):
         mt.tl.subpopulation_hits(adata, cluster_key="cluster", n_permutations=100, seed=0)
 
 
@@ -183,7 +183,7 @@ def test_dna_content_leaves_unusable_intensities_and_small_wells_unassigned(capl
     cells = _cycling_wells([(0.5, 0.2, 0.3), (0.5, 0.2, 0.3)], [1000.0, 1000.0])
     cells.X[:3, 0] = [np.nan, 0.0, -5.0]
     cells = cells[np.r_[0 : cells.n_obs - 1990]].copy()  # the second well keeps 10 cells
-    with caplog.at_level(logging.WARNING, logger="mantispy"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.tl.dna_content(cells, dna_feature=_DNA)
     mt.tl.dna_state(cells)
 
@@ -345,7 +345,6 @@ def test_a_cluster_the_controls_never_reached_does_not_fabricate_a_hit():
     assert float(composition[row, "2"].X[0, 0]) == pytest.approx(0.05)
 
 
-@pytest.mark.filterwarnings("ignore:the controls occupy")
 def test_a_well_with_no_assigned_cell_is_left_out(clustered):
     """Zero in every cluster said the well was measured and found empty everywhere; NaN said it was unknown, and tl.map refuses an object with missing values although the Returns clause promises tl.map accepts it.
 
@@ -369,7 +368,7 @@ def test_the_drop_is_reported_only_when_something_is_dropped(clustered, caplog):
     """report_drop ran before the no-cluster refusal, so an unclustered object was told its cells were 'left out of the fractions' immediately before being told there are no fractions."""
     clustered = clustered.copy()  # module-scoped fixture; this test rewrites obs["leiden"]
     clustered.obs["leiden"] = pd.Categorical([None] * clustered.n_obs)
-    with caplog.at_level(logging.INFO, logger="mantispy"), pytest.raises(ValueError, match="no cell"):
+    with caplog.at_level(logging.INFO, logger="scverse.mantispy"), pytest.raises(ValueError, match="no cell"):
         mt.tl.cluster_composition(clustered)
     assert not [record for record in caplog.records if "left out of the fractions" in record.getMessage()]
 
@@ -456,7 +455,7 @@ def test_composition_shift_keeps_the_same_well_on_two_plates_apart():
 
 
 def test_composition_shift_warns_when_cells_are_the_unit():
-    with pytest.warns(UserWarning, match="single cells"):
+    with pytest.warns(UserWarning, match="independent replicates"):
         _composition(_phase_object(2, ko_g1=0.4), replicate=None, n_permutations=9)
 
 
@@ -603,13 +602,17 @@ def _stained(shift, well="W3", **kwargs):
 def test_cell_cycle_warns_about_a_well_whose_peaks_both_sit_off_the_reference(caplog):
     cells = _stained(-0.3)
     content = cells.obs["Metadata_DNAContent"].copy()
-    with caplog.at_level(logging.WARNING, logger="mantispy"):
+    with caplog.at_level(logging.INFO, logger="scverse.mantispy"):
         _clock(cells)
     wells = cells.uns["mantispy"]["cell_cycle_wells"].set_index("Metadata_Well")
     assert -0.4 < wells.loc["W3", "shift"] < -0.2
     assert (wells.drop(index="W3")["shift"].abs() < cells.uns["mantispy"]["cell_cycle"]["sd"]).all()
     assert (wells["n_cells"] == 1000).all()
-    warned = [record.getMessage() for record in caplog.records if "peaks off the reference" in record.getMessage()]
+    warned = [
+        record.deep
+        for record in caplog.records
+        if record.levelno == logging.WARNING and "peaks off the reference" in record.getMessage()
+    ]
     assert len(warned) == 1 and "W3" in warned[0] and "W0" not in warned[0]
     pd.testing.assert_series_equal(cells.obs["Metadata_DNAContent"], content)
 
@@ -628,13 +631,13 @@ def test_cell_cycle_leaves_a_well_unchecked_without_both_peaks(caplog):
     cells = cells[~arrested].copy()
     in_w2 = (cells.obs["Metadata_Well"] == "W2").to_numpy()
     cells = cells[~(in_w2 & (np.cumsum(in_w2) > 30))].copy()
-    with caplog.at_level(logging.WARNING, logger="mantispy"):
+    with caplog.at_level(logging.DEBUG, logger="scverse.mantispy"):
         _clock(cells)
     shift = cells.uns["mantispy"]["cell_cycle_wells"].set_index("Metadata_Well")["shift"]
     assert np.isnan(shift["W3"]) and np.isnan(shift["W2"])
     assert shift[["W0", "W1"]].abs().max() < cells.uns["mantispy"]["cell_cycle"]["sd"]
     assert not any("peaks off the reference" in record.getMessage() for record in caplog.records)
-    (unchecked,) = [record.getMessage() for record in caplog.records if "could not be checked" in record.getMessage()]
+    (unchecked,) = [record.deep for record in caplog.records if "could not be checked" in record.getMessage()]
     assert "too few cells" in unchecked and "no 2N peak" in unchecked
     mt.tl.project_cell_cycle(cells, by=None)
     assert cells.uns["mantispy"]["cell_cycle_wells"]["shift"].isna().all()
@@ -650,7 +653,7 @@ def test_cell_cycle_leaves_a_well_unchecked_without_both_peaks(caplog):
 def test_cell_cycle_gate_fails_without_a_cycling_population(kind, caplog):
     """2N and 4N clusters without S cells between them are not a cycle either."""
     cells = _cycle_cells(kind=kind)
-    with caplog.at_level(logging.WARNING, logger="mantispy"):
+    with caplog.at_level(logging.INFO, logger="scverse.mantispy"):
         _clock(cells)
     model = cells.uns["mantispy"]["cell_cycle"]
     assert not model["passed"] and "edges" not in model
@@ -777,10 +780,10 @@ def test_dna_content_finds_the_nuclear_dna_feature_on_its_own():
 def test_dna_content_names_reference_cells_when_a_group_has_too_few(caplog):
     cells = _cycle_cells(n_cells=400)
     cells.obs["Metadata_Control_Type"] = np.where(cells.obs["Metadata_Well"] == "W0", "negcon", "trt")
-    with caplog.at_level(logging.WARNING, logger="mantispy"):
+    with caplog.at_level(logging.INFO, logger="scverse.mantispy"):
         mt.tl.dna_content(cells, dna_feature=_DNA, reference="negcon")
-    (message,) = [record.getMessage() for record in caplog.records if "too few" in record.getMessage()]
-    assert "'negcon' reference cells" in message and "by='Metadata_Plate'" in message
+    (record,) = [r for r in caplog.records if r.levelno == logging.WARNING and "too few" in r.getMessage()]
+    assert "'negcon' reference cells" in record.getMessage() and "by='Metadata_Plate'" in record.deep
 
 
 def _progress_cells(n_cells=3000, seed=0):
@@ -798,8 +801,7 @@ _TUBULIN = "Cells_Intensity_MeanIntensity_Tubulin"
 def test_phase_order_follows_progress_within_g2m_and_leaves_the_rest():
     cells = _clock(_progress_cells())
     position = cells.obs["cell_cycle_position"].copy()
-    with pytest.warns(UserWarning, match="validate the order against a marker"):
-        mt.tl.phase_order(cells)
+    mt.tl.phase_order(cells)
     entry = cells.uns["mantispy"]["cell_cycle_G2M_order"]
     assert entry["phase"] == "G2M" and entry["features"] == [_TUBULIN]  # no DNA stain and no nuclear shape
     pd.testing.assert_series_equal(cells.obs["cell_cycle_position"], position)

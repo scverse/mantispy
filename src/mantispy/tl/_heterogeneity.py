@@ -166,17 +166,15 @@ def _composition_test(composition: AnnData, counts: np.ndarray, reference: str |
     comparable = int(reached.sum()) >= 2
     share = pooled[reached] / pooled[reached].sum()
     if not comparable:
-        warnings.warn(
-            f"the controls occupy {int(reached.sum())} of {len(reached)} clusters, so the composition test has no "
-            "second category to set a well against and every statistic, pvalue and qvalue is NaN. The clustering "
-            "is following the perturbation rather than a cell state the conditions share: cluster on fewer "
-            "components so that they mix, or at a higher resolution so that the controls' own cluster splits into "
-            "sub-states. To compare whole populations instead, use mt.tl.hit_calling or mt.tl.edistance.",
-            UserWarning,
-            stacklevel=3,
+        get_logger().warning(
+            "cluster_composition: the controls occupy %d of %d clusters, so every p-value is NaN",
+            int(reached.sum()),
+            len(reached),
+            deep="cluster on fewer components or at a higher resolution, or compare whole populations with "
+            "mt.tl.hit_calling or mt.tl.edistance",
         )
     elif not reached.all():
-        get_logger().info(
+        get_logger().debug(
             "cluster_composition: %d cluster(s) hold no control cells, so the composition test leaves them out",
             int((~reached).sum()),
         )
@@ -212,12 +210,10 @@ def _composition_test(composition: AnnData, counts: np.ndarray, reference: str |
     # Below one the controls are tighter than multinomial; scaling down would only invent hits.
     dispersion = max(1.0, float(np.mean(calibration) / dof)) if calibration.size else np.nan
     if comparable and calibration.size < _DISPERSION_MIN_CONTROLS:
-        warnings.warn(
-            f"the dispersion the composition test calibrates against comes from {calibration.size} control "
-            f"well(s), too few to estimate it; p-values are anti-conservative by however much the wells vary. "
-            f"Use at least {_DISPERSION_MIN_CONTROLS}, or read the statistic as a ranking rather than a test.",
-            UserWarning,
-            stacklevel=3,
+        get_logger().warning(
+            "cluster_composition: dispersion estimated from %d control well(s), so p-values are anti-conservative",
+            calibration.size,
+            deep=f"use at least {_DISPERSION_MIN_CONTROLS} control wells, or read the statistic as a ranking",
         )
 
     # Quasi-likelihood F-test, since the dispersion is estimated; each finite control statistic adds ~dof denominator df.
@@ -376,14 +372,13 @@ def dna_content(
             "" if reference is None else "; by must group the reference with the other cells, e.g. by='Metadata_Plate'"
         )
         get_logger().warning(
-            "dna_content: %d of %d group(s) have fewer than %d %s, too few to place a G1 peak; "
-            "their cells are left as NaN%s: %s",
+            "dna_content: %d of %d group(s) have fewer than %d %s, too few to place a G1 peak (%s)",
             int(small.sum()),
             len(keys),
             min_cells,
             counted,
-            hint,
-            list(keys[small])[:5],
+            ", ".join(map(str, list(keys[small])[:5])),
+            deep=f"their cells are left as NaN{hint}",
         )
 
     columns = ["group"] if by is None else ([by] if isinstance(by, str) else list(by))
@@ -520,10 +515,8 @@ def subpopulation_hits(
     replicate_codes = _default_replicate(adata, replicate=replicate, reference=is_control)
     if replicate_codes is None and replicate is None and _is_object_resolution(adata):
         warnings.warn(
-            "subpopulation_hits is at cell resolution with no usable well column, so its p-values come from the "
-            "analytic KS approximation on cell counts. Cells within a well are not independent replicates, so "
-            "that p-value is anti-conservative. Pass replicate= a well column, add a complete Metadata_Well, or "
-            "aggregate to wells with mt.tl.aggregate.",
+            "replicate=None at cell resolution treats cells as independent replicates, which is "
+            "anti-conservative; pass replicate= a well column or aggregate with mt.tl.aggregate.",
             UserWarning,
             stacklevel=3,
         )
@@ -591,13 +584,11 @@ def subpopulation_hits(
 
     table = pd.DataFrame(records, columns=["cluster", "group", "n_cells", "statistic", "pvalue"])
     if table.empty or int(table.groupby("cluster")["group"].nunique().max()) <= 1:
-        warnings.warn(
-            f"no cluster held at least {needed} controls, half to place its centroid and half to test against, "
-            f"and {min_cells} cells of another group, so nothing was compared. The clustering separates the "
-            "perturbations, leaving no shared cell state to compare within. Cluster on fewer components, or "
-            "test whole populations with mt.tl.edistance.",
-            UserWarning,
-            stacklevel=3,
+        get_logger().warning(
+            "subpopulation_hits: no cluster held %d controls and %d cells of another group, so nothing was compared",
+            needed,
+            min_cells,
+            deep="cluster on fewer components, or test whole populations with mt.tl.edistance",
         )
     table["qvalue"] = benjamini_hochberg(table["pvalue"].to_numpy()) if len(table) else []
     adata.uns.setdefault("mantispy", {})[key_added] = table
@@ -675,8 +666,8 @@ def composition_shift(
     blocks = group_codes(adata, block)[0]
     if replicate is None:
         warnings.warn(
-            "composition_shift: replicate=None relabels single cells, which treats every cell as an independent "
-            "replicate and gives p-values that are far too small when guides or wells differ. Pass replicate=, the guide.",
+            "replicate=None treats cells as independent replicates, which gives p-values far too small; pass "
+            "replicate=, the guide.",
             UserWarning,
             stacklevel=3,
         )
@@ -782,7 +773,7 @@ def neighbors_local_density(
 
     adata.obs[key_added] = density
     if np.isnan(density).any():
-        get_logger().info(
+        get_logger().debug(
             "neighbors_local_density: %d cell(s) have no measurable neighbourhood in their field, left as NaN",
             int(np.isnan(density).sum()),
         )

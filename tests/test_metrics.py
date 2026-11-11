@@ -1,5 +1,7 @@
 """Correction metrics: PC-regression is native and pinned against a plain-numpy reference; evaluate_integration triages on what is installed, so its four cases are forced by blocking the imports."""
 
+import logging
+
 import matplotlib
 import numpy as np
 import pandas as pd
@@ -100,7 +102,7 @@ def test_pc_regression_is_one_when_the_only_component_is_the_covariate():
     assert mt.metrics.pc_regression(adata, "num")["value"].iloc[0] == pytest.approx(1.0, abs=1e-6)
 
 
-def test_pc_regression_returns_nan_for_a_constant_covariate():
+def test_pc_regression_returns_nan_for_a_constant_covariate(caplog):
     """A single-value covariate has no variance to regress against, so its share is NaN with a warning, not a crash."""
     import anndata as ad
 
@@ -109,8 +111,9 @@ def test_pc_regression_returns_nan_for_a_constant_covariate():
     adata = ad.AnnData(X=rng.normal(size=(40, 3)).astype(np.float32), obs=obs)
     adata.obsm["X_pca"] = rng.normal(size=(40, 4))
 
-    with pytest.warns(UserWarning, match="PC-regression"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         value = mt.metrics.pc_regression(adata, "batch")["value"].iloc[0]
+    assert "PC regression is undefined" in caplog.text
     assert np.isnan(value)
 
 

@@ -7,7 +7,6 @@ from anndata import AnnData
 
 from mantispy._core._reduce import get_matrix, group_codes
 from mantispy._core._stats import benjamini_hochberg
-from mantispy._core.logging import get_logger
 from mantispy._core.mutation import inplace_or_copy
 
 
@@ -96,13 +95,6 @@ def feature_reproducibility(
     icc = intraclass_correlation(get_matrix(adata).astype(np.float64), codes, len(keys))
     adata.var[key_added] = icc
     adata.var[f"{key_added}_selected"] = icc > min_icc
-    get_logger().info(
-        "feature_reproducibility: %d of %d features above ICC %.2f (median %.3f)",
-        int((icc > min_icc).sum()),
-        adata.n_vars,
-        min_icc,
-        float(np.median(icc)),
-    )
     return None
 
 
@@ -158,11 +150,4 @@ def feature_batch_sensitivity(
     adata.var[f"{key_added}_pvalue"] = pvalues
     adata.var[f"{key_added}_qvalue"] = qvalues
     adata.var[f"{key_added}_sensitive"] = qvalues < threshold
-    get_logger().info(
-        "feature_batch_sensitivity: %d of %d features depend on %s at q < %.2g",
-        int((qvalues < threshold).sum()),
-        adata.n_vars,
-        batch_key,
-        threshold,
-    )
     return None

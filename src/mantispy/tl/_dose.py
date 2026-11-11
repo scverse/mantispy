@@ -257,10 +257,10 @@ def _baseline_and_cutoff(
 
     if control.size < 2:
         if cutoff is None:
-            get_logger().info(
-                "dose_response: %d usable control row(s), so no hit call. Mark the controls with "
-                "mt.pp.annotate_controls, or pass an explicit cutoff.",
+            get_logger().warning(
+                "dose_response: %d usable control row(s), so no hit call",
                 control.size,
+                deep="mark the controls with mt.pp.annotate_controls, or pass cutoff",
             )
         return 0.0, float(cutoff) if cutoff is not None else np.nan
 
@@ -400,7 +400,7 @@ def dose_response(
     table = pd.DataFrame(records, columns=list(_COLUMNS))
     table["qvalue"] = benjamini_hochberg(table["pvalue"].to_numpy()) if len(table) else []
     adata.uns.setdefault("mantispy", {})[key_added] = table
-    get_logger().info("dose_response fitted %d of %d compound(s)", int(table["fit_ok"].sum()), len(table))
+    get_logger().info("dose_response: fitted %d of %d compound(s)", int(table["fit_ok"].sum()), len(table))
     return None
 
 
@@ -747,10 +747,10 @@ def _viability(
     """Each row's cell count against its own plate's controls, rather than against the whole screen's."""
     obs = as_frame(adata.obs)
     if count_key not in obs:
-        get_logger().info(
-            "dose_direction: obs has no column %r, so no concentration is marked cytotoxic. "
-            "mt.tl.aggregate and every well-level mt.ds dataset write Metadata_CellCount.",
+        get_logger().warning(
+            "dose_direction: obs has no column %r, so no concentration is marked cytotoxic",
             count_key,
+            deep="mt.tl.aggregate and every well-level mt.ds dataset write Metadata_CellCount",
         )
         return np.full(adata.n_obs, np.nan)
 
@@ -918,12 +918,6 @@ def dose_direction(
     adata.uns.setdefault("mantispy", {})[key_added] = table
     phases[phases == ""] = None
     adata.obs[f"{key_added}_phase"] = pd.Categorical(phases, categories=list(DOSE_PHASES), ordered=False)
-    get_logger().info(
-        "dose_direction: %d compound(s) over %d concentration(s); %s",
-        table["group"].nunique(),
-        len(table),
-        table["phase"].value_counts().to_dict(),
-    )
     return None
 
 
@@ -987,10 +981,10 @@ def dose_trajectory(
     if phase_key in obs:
         in_window = obs[phase_key].astype(str).isin(list(phases)).to_numpy()
     elif phase_key is not None:
-        get_logger().info(
-            "dose_trajectory: obs has no column %r, so the path is read over every concentration. "
-            "Run mt.tl.dose_direction first to read it over the responding window.",
+        get_logger().debug(
+            "dose_trajectory: obs has no column %r, so the path is read over every concentration",
             phase_key,
+            deep="run mt.tl.dose_direction first to read it over the responding window",
         )
 
     grid = np.linspace(0.0, 1.0, n_positions)
@@ -1047,10 +1041,4 @@ def dose_trajectory(
         "n_positions": n_positions,
     }
     record_params(result, "dose_trajectory", call_params)
-    get_logger().info(
-        "dose_trajectory: %d compound(s) over %d position(s); windows of %s concentration(s)",
-        result.n_obs,
-        n_positions,
-        sorted(set(result.obs["n_doses"])),
-    )
     return result

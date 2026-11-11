@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
@@ -12,6 +11,7 @@ from numba import njit
 
 from mantispy._core._reduce import get_matrix
 from mantispy._core.frames import as_frame
+from mantispy._core.logging import get_logger
 from mantispy.metrics._common import embedding, is_categorical, tidy
 
 if TYPE_CHECKING:
@@ -143,12 +143,7 @@ def pc_regression(adata: AnnData, key: str, use_rep: str = "X_pca", n_comps: int
 
     if covariate.nunique(dropna=False) <= 1:
         # A constant covariate has no variance to regress against, so its share is undefined.
-        warnings.warn(
-            f"PC-regression over obs[{key!r}] is undefined: the covariate is constant (a single batch), "
-            "so there is no variance to regress against. Returning NaN.",
-            UserWarning,
-            stacklevel=2,
-        )
+        get_logger().warning("pc_regression: obs[%r] is constant, so the PC regression is undefined and NaN", key)
         return tidy("pc_regression", use_rep, key, np.nan)
 
     variances = values.var(axis=0, ddof=1)

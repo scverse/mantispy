@@ -1,5 +1,7 @@
 """Image-, well- and cell-level QC, and feature name standardization."""
 
+import logging
+
 import anndata as ad
 import numpy as np
 import pandas as pd
@@ -59,10 +61,11 @@ def test_image_qc_reports_a_missing_table_and_unknown_metrics(imaged):
         mt.pp.image_qc(imaged)
 
 
-def test_image_qc_warns_about_unmatched_cells(imaged):
+def test_image_qc_warns_about_unmatched_cells(imaged, caplog):
     imaged.obs["Metadata_ImageID"] = imaged.obs["Metadata_ImageID"].astype(str) + "_unmatched"
-    with pytest.warns(UserWarning, match="not present in the image table"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.pp.image_qc(imaged)
+    assert "ImageID not in the image table" in caplog.text
     assert not imaged.obs["qc_image_fail"].any()
 
 
@@ -79,24 +82,23 @@ def test_well_qc_criteria(cells):
     assert table["control_cv"].isna().any()
 
 
-def test_well_qc_warns_on_already_aggregated_input():
+def test_well_qc_warns_on_already_aggregated_input(caplog):
     """Regression for #111: an unstamped one-row-per-well object gives no resolution advisory, so well_qc's own shape check must warn."""
     obs = pd.DataFrame({"Metadata_Plate": ["P1"] * 8, "Metadata_Well": [f"A{i:02d}" for i in range(1, 9)]})
     obs.index = obs["Metadata_Plate"] + ":" + obs["Metadata_Well"]
     wells = ad.AnnData(np.random.default_rng(0).normal(size=(8, 5)).astype(np.float32), obs=obs)
     wells.var_names = [f"Cells_AreaShape_F{i}" for i in range(5)]
 
-    with pytest.warns(UserWarning, match="already aggregated"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.pp.well_qc(wells)
+    assert "already aggregated" in caplog.text
 
 
-def test_well_qc_does_not_warn_on_genuine_single_cell_input(cells):
+def test_well_qc_does_not_warn_on_genuine_single_cell_input(cells, caplog):
     """A real multi-cell-per-well object must not trip the already-aggregated warning."""
-    import warnings
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", UserWarning)
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.pp.well_qc(cells, min_cells=1)
+    assert not caplog.records
 
 
 def test_standardize_keeps_originals_and_is_idempotent(cells):

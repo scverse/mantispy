@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
-
 import numpy as np
 import pandas as pd
 from anndata import AnnData
@@ -145,11 +143,10 @@ def aggregate_guides(
             "split a single control class in two: label half of its guides as a separate class to use here."
         )
     if n_control < _FEW_CONTROLS:
-        warnings.warn(
-            f"only {n_control} non-targeting guides are scored, so the null is coarse. Widen the control set "
-            "or loosen alpha.",
-            UserWarning,
-            stacklevel=3,
+        get_logger().warning(
+            "aggregate_guides: only %d non-targeting guides are scored, so the null is coarse",
+            n_control,
+            deep="widen the control set or loosen alpha",
         )
 
     ctrl_z, ctrl_p, ctrl_w = z[control_scored], p[control_scored], w[control_scored]
@@ -158,11 +155,10 @@ def aggregate_guides(
     # One scored row per guide is expected; repeated ids mean guide-level rows were not collapsed.
     scored_guides = obs[guide].astype(str).to_numpy()[scored & ~is_control]
     if pd.Series(scored_guides).duplicated().any():
-        warnings.warn(
-            f"obs[{guide!r}] repeats ids among scored guides, so some guides are counted more than once. "
-            "Pass one row per guide (collapse replicate wells or cells first).",
-            UserWarning,
-            stacklevel=3,
+        get_logger().warning(
+            "aggregate_guides: obs[%r] repeats ids among scored guides, so some are counted more than once",
+            guide,
+            deep="pass one row per guide; collapse replicate wells or cells first",
         )
 
     # One combined statistic per gene, over its scored, non-control guides.
@@ -181,12 +177,11 @@ def aggregate_guides(
     # NTC-size-matched null: for each distinct guide count, draw n_null groups of that many NTC guides,
     # without replacement so each group is a genuine same-size sample of the controls.
     if 2 * max(k_list) > n_control:
-        warnings.warn(
-            f"a gene has {max(k_list)} guides against only {n_control} non-targeting guides, more than half the "
-            "pool, so a same-size NTC group is nearly the whole pool and its null has almost no spread, leaving "
-            "the p-value unreliable. Use more controls, or drop such genes.",
-            UserWarning,
-            stacklevel=3,
+        get_logger().warning(
+            "aggregate_guides: a gene has %d guides against %d non-targeting guides, so its p-value is unreliable",
+            max(k_list),
+            n_control,
+            deep="a same-size control group is nearly the whole pool; use more controls or drop such genes",
         )
     null_by_k: dict[int, np.ndarray] = {}
     for k in sorted(set(k_list)):

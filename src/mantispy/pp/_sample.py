@@ -7,7 +7,6 @@ from anndata import AnnData
 
 from mantispy._core._reduce import group_codes, group_offsets
 from mantispy._core.frames import as_frame
-from mantispy._core.logging import get_logger
 from mantispy._core.provenance import record_params
 
 
@@ -66,7 +65,6 @@ def downsample(
             chosen.append(taken if taken.size <= n_per_group else generator.choice(taken, n_per_group, replace=False))
 
     keep = np.sort(np.concatenate(chosen)) if chosen else np.array([], dtype=int)
-    get_logger().info("downsample kept %d of %d rows in %d group(s)", keep.size, adata.n_obs, len(keys))
 
     result = adata[keep].copy()
     record_params(

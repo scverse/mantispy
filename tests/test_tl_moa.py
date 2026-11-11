@@ -1,5 +1,7 @@
 """Mechanism-of-action retrieval and neighbourhood enrichment."""
 
+import logging
+
 import pytest
 
 import mantispy as mt
@@ -22,14 +24,15 @@ def labelled():
     return wells[wells.obs["Metadata_MOA"] != "DMSO"].copy()
 
 
-def test_nscb_on_a_single_batch_classifies_nothing_and_says_so(labelled):
+def test_nscb_on_a_single_batch_classifies_nothing_and_says_so(labelled, caplog):
     """Every neighbour shares the batch, so there is nowhere to look.
 
     Returning an accuracy of 0.0 without a warning would read as a failed method rather than an impossible split.
     """
     single = labelled.copy()
     single.obs["Metadata_Batch"] = "one"
-    with pytest.warns(UserWarning, match="excluded every neighbour"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.tl.nn_moa_classify(single, scheme="nscb")
+    assert "excluded every neighbour" in caplog.text
     assert single.uns["mantispy"]["moa"]["n_excluded"] == single.n_obs
     assert single.obs["moa_predicted"].isna().all()

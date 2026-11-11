@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
 from collections.abc import Collection
 
 import numpy as np
@@ -111,11 +110,10 @@ def empirical_fdr(
     if n_control == 0:
         raise ValueError(f"every control gene has a missing {score!r}, so there is no null to calibrate against")
     if n_control < _FEW_CONTROLS:
-        warnings.warn(
-            f"only {n_control} control genes are present, so the null is coarse and the smallest resolvable "
-            "rate is one over that count. Widen the control set or loosen alpha.",
-            UserWarning,
-            stacklevel=3,
+        get_logger().warning(
+            "empirical_fdr: only %d control genes are present, so the null is coarse",
+            n_control,
+            deep="the smallest resolvable rate is one over that count; widen the control set or loosen alpha",
         )
 
     control_sorted = np.sort(values[control])

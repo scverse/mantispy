@@ -156,12 +156,6 @@ def edistance(
         for index in range(len(keys)):
             rows = order[offsets[index] : offsets[index + 1]]
             if rows.size > max_reference:
-                get_logger().info(
-                    "edistance sampled %d of %d rows of %r for the pairwise matrix",
-                    max_reference,
-                    rows.size,
-                    keys[index],
-                )
                 rows = np.sort(generator.choice(rows, size=max_reference, replace=False))
             blocks.append(values[rows])
         matrix = np.zeros((len(keys), len(keys)))
@@ -182,16 +176,13 @@ def edistance(
 
     control_rows = np.flatnonzero(is_control)
     if control_rows.size > max_reference:
-        get_logger().info("edistance sampled %d of %d reference rows for the null", max_reference, control_rows.size)
         control_rows = np.sort(generator.choice(control_rows, size=max_reference, replace=False))
 
     replicate_codes = _default_replicate(adata, replicate=replicate, reference=is_control)
     if replicate_codes is None and replicate is None and _is_object_resolution(adata):
         warnings.warn(
-            "edistance is at cell resolution and no usable replicate was given, so the null permutes single cells. "
-            "Cells within a well are not independent replicates (they share the well, its plate position, seeding "
-            "and focus), so the null is anti-conservative. Pass replicate= a well column, add a complete "
-            "Metadata_Well, or aggregate to wells with mt.tl.aggregate.",
+            "replicate=None at cell resolution treats cells as independent replicates, which is "
+            "anti-conservative; pass replicate= a well column or aggregate with mt.tl.aggregate.",
             UserWarning,
             stacklevel=3,
         )
@@ -205,7 +196,7 @@ def edistance(
         rows = order[offsets[index] : offsets[index + 1]]
         sizes[index] = rows.size
         if rows.size > max_reference:
-            get_logger().info(
+            get_logger().debug(
                 "edistance sampled %d of %d rows of %r for the null", max_reference, rows.size, keys[index]
             )
             rows = np.sort(generator.choice(rows, size=max_reference, replace=False))
@@ -239,19 +230,13 @@ def edistance(
         observed[index] = statistics[0]
         null[index] = statistics[1:]
 
-    if unscorable_reference:
-        warnings.warn(
-            f"{len(unscorable_reference)} group(s) are the reference itself with fewer than four rows, too few "
-            f"to split in half, so their p-values are NaN: {', '.join(unscorable_reference)}.",
-            UserWarning,
-            stacklevel=3,
-        )
-    if unscorable_size:
-        warnings.warn(
-            f"{len(unscorable_size)} group(s) have fewer than two rows on one side of the comparison, which "
-            f"energy distance needs, so their p-values are NaN: {', '.join(unscorable_size)}.",
-            UserWarning,
-            stacklevel=3,
+    unscorable = unscorable_reference + unscorable_size
+    if unscorable:
+        get_logger().warning(
+            "edistance: %d group(s) have too few rows to test, so their p-values are NaN (%s)",
+            len(unscorable),
+            ", ".join(unscorable[:5]),
+            deep="a group needs two rows per side, and the reference four to split in half",
         )
 
     pvalues = permutation_pvalue(observed, null)

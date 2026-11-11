@@ -243,12 +243,11 @@ def differential_features(
         )
     if confounded:
         logger.warning(
-            "differential_features skipped %d group(s) whose wells share no %s with the reference, "
-            "so treatment and %s cannot be told apart: %s",
+            "differential_features: skipped %d group(s) that share no %s with the reference (%s)",
             len(confounded),
             block,
-            block,
-            ", ".join(confounded[:5]) + ("..." if len(confounded) > 5 else ""),
+            ", ".join(confounded[:5]) + (", ..." if len(confounded) > 5 else ""),
+            deep=f"treatment and {block} cannot be told apart there",
         )
     if unscored:
         logger.info(
