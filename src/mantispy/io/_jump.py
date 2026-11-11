@@ -158,14 +158,14 @@ def _handle_unmapped(joined: pd.DataFrame, unmapped: np.ndarray, what: str, on_u
         raise ValueError(f"{message}; pass on_unmapped='drop' to remove their wells or 'warn' to keep them.")
     if on_unmapped == "drop":
         get_logger().warning(
-            "annotate_jump: %d JUMP id(s) could not map to a %s; their %d well(s) were dropped",
+            "annotate_jump: %d JUMP id(s) could not map to a %s, so their %d well(s) were dropped",
             n_ids,
             what,
             int(unmapped.sum()),
         )
         return joined.loc[~unmapped]
     get_logger().warning(
-        "annotate_jump: %d JUMP id(s) could not map to a %s; their wells are kept as treatments without one",
+        "annotate_jump: %d JUMP id(s) could not map to a %s, so their wells are kept as treatments without one",
         n_ids,
         what,
     )

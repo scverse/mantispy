@@ -153,7 +153,7 @@ def _warn_if_not_streamable(matrix: Any) -> None:
         return
     if getattr(matrix, "format", None) == "csc":
         get_logger().warning(
-            "the on-disk matrix is column-major (CSC), so every group's read loads all of it",
+            "the matrix on disk is stored by column (CSC), so each group's read loads all of it",
             deep="write it row-major with adata.X = adata.X.tocsr(), or read it into memory with mt.io.read(path)",
         )
 

@@ -294,8 +294,8 @@ def sphere(
         raise ValueError(f"method must be one of {METHODS}, got {method!r}")
     if method.startswith("PCA") and key_added is None:
         warnings.warn(
-            f"{method} rotates out of the feature basis, so X holds principal components while var names the features; "
-            "pass key_added= or use ZCA.",
+            f"{method} rotates out of the feature basis, so X holds principal components while var still names "
+            "the features. Pass key_added= or use ZCA.",
             UserWarning,
             stacklevel=3,
         )
@@ -493,7 +493,7 @@ def tvn(
             len(thin),
             values.shape[1],
             ", ".join(thin[:3]) + (", ..." if len(thin) > 3 else ""),
-            deep="their empty directions come out amplified; reduce to fewer components or pool smaller batches",
+            deep="their empty directions are amplified, so reduce to fewer components or pool the smaller batches",
         )
 
     target = _symmetric_power(_regularized_covariance(values[controls], epsilon), 0.5)

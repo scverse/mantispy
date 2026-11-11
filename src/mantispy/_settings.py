@@ -9,7 +9,7 @@ from scverse_misc import Settings
 class MantispySettings(Settings):
     """Settings of mantispy, overridable through ``MANTISPY_`` environment variables.
 
-    How much mantispy logs is set for every scverse package at once, with ``scverse_misc.logging.config.verbosity``.
+    The log level is shared by all scverse packages, and ``scverse_misc.logging.config.verbosity`` sets it.
     """
 
     cache_dir: Path = Path(user_cache_dir("mantispy"))

@@ -92,7 +92,7 @@ def guide_activity(
             at_floor,
             int(scored.sum()),
             floor,
-            deep=f"{ref_sorted.size} reference guides set that floor; add reference guides or rank with mt.tl.map",
+            deep=f"{ref_sorted.size} reference guides set that floor, so add reference guides or rank with mt.tl.map",
         )
 
     adata.obs[key_added] = pvalue

@@ -343,7 +343,7 @@ def _join_platemap(obs: pd.DataFrame, platemap: str | Path | pd.DataFrame) -> pd
     unmatched = int((joined.pop("_platemap_match") == "left_only").sum())
     if unmatched:
         get_logger().warning(
-            "read_profiles: %d of %d rows have no platemap row for %s, so its columns are missing there",
+            "read_profiles: %d of %d rows have no row in the platemap %s, so they lack its columns",
             unmatched,
             len(joined),
             on,

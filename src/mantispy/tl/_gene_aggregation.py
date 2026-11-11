@@ -144,7 +144,7 @@ def aggregate_guides(
         )
     if n_control < _FEW_CONTROLS:
         get_logger().warning(
-            "aggregate_guides: only %d non-targeting guides are scored, so the null is coarse",
+            "aggregate_guides: only %d non-targeting guides are scored, so p-values can take only a few values",
             n_control,
             deep="widen the control set or loosen alpha",
         )
@@ -158,7 +158,7 @@ def aggregate_guides(
         get_logger().warning(
             "aggregate_guides: obs[%r] repeats ids among scored guides, so some are counted more than once",
             guide,
-            deep="pass one row per guide; collapse replicate wells or cells first",
+            deep="pass one row per guide, by collapsing replicate wells or cells first",
         )
 
     # One combined statistic per gene, over its scored, non-control guides.
@@ -181,7 +181,7 @@ def aggregate_guides(
             "aggregate_guides: a gene has %d guides against %d non-targeting guides, so its p-value is unreliable",
             max(k_list),
             n_control,
-            deep="a same-size control group is nearly the whole pool; use more controls or drop such genes",
+            deep="a control group of the same size is nearly the whole pool, so use more controls or drop such genes",
         )
     null_by_k: dict[int, np.ndarray] = {}
     for k in sorted(set(k_list)):

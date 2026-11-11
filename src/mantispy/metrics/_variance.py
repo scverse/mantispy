@@ -143,7 +143,9 @@ def pc_regression(adata: AnnData, key: str, use_rep: str = "X_pca", n_comps: int
 
     if covariate.nunique(dropna=False) <= 1:
         # A constant covariate has no variance to regress against, so its share is undefined.
-        get_logger().warning("pc_regression: obs[%r] is constant, so the PC regression is undefined and NaN", key)
+        get_logger().warning(
+            "pc_regression: obs[%r] is constant, so the PC regression is undefined and returns NaN", key
+        )
         return tidy("pc_regression", use_rep, key, np.nan)
 
     variances = values.var(axis=0, ddof=1)

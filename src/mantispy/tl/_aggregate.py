@@ -142,11 +142,11 @@ def _warn_dropped_controls(obs: pd.DataFrame, keep: np.ndarray, control_col: str
                 lost.append(f"{control} on plate {plate}" if plate_col else control)
     if lost:
         get_logger().warning(
-            "aggregate: min_cells=%d dropped every control group in %d place(s) (%s)",
+            "aggregate: min_cells=%d dropped %d control group(s) entirely (%s)",
             min_cells,
             len(lost),
             ", ".join(lost[:3]),
-            deep="normalize(reference=) has no reference there; lower min_cells or check the control wells' counts",
+            deep="normalize(reference=) then has no reference there, so lower min_cells or check the control wells' cell counts",
         )
 
 

@@ -213,7 +213,7 @@ def normalize(
             adata.n_vars,
             affected.size,
             by,
-            deep=f"flagged in var[{flag!r}]; {remedy}",
+            deep=f"they are flagged in var[{flag!r}], and you can {remedy}",
         )
     # Not elif: a feature constant in one group and unmeasured in another is still unscalable in the first.
     if no_spread.any():
@@ -222,7 +222,7 @@ def normalize(
             int(no_spread.sum()),
             adata.n_vars,
             by,
-            deep=f"{', '.join(map(str, adata.var_names[no_spread][:5]))}; flagged in var[{flag!r}], {remedy}",
+            deep=f"{', '.join(map(str, adata.var_names[no_spread][:5]))} are flagged in var[{flag!r}], and you can {remedy}",
         )
     lookup = {key: position for position, key in enumerate(keys)}
 

@@ -684,7 +684,7 @@ def harmony(
         get_logger().warning(
             "harmony: corrected nothing, %r is unchanged",
             use_rep,
-            deep=f"the batches are fully separated in the embedding; check they overlap, e.g. coloured by {batch_key!r}",
+            deep=f"this happens when the batches are fully separated in the embedding, so check that they overlap, e.g. coloured by {batch_key!r}",
         )
 
     adata.obsm[key_added] = corrected

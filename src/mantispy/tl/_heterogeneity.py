@@ -211,7 +211,7 @@ def _composition_test(composition: AnnData, counts: np.ndarray, reference: str |
     dispersion = max(1.0, float(np.mean(calibration) / dof)) if calibration.size else np.nan
     if comparable and calibration.size < _DISPERSION_MIN_CONTROLS:
         get_logger().warning(
-            "cluster_composition: dispersion estimated from %d control well(s), so p-values are anti-conservative",
+            "cluster_composition: the dispersion comes from only %d control well(s), so p-values are too small",
             calibration.size,
             deep=f"use at least {_DISPERSION_MIN_CONTROLS} control wells, or read the statistic as a ranking",
         )
@@ -369,7 +369,9 @@ def dna_content(
     if small.any():
         counted = "usable cells" if reference is None else f"usable {reference!r} reference cells"
         hint = (
-            "" if reference is None else "; by must group the reference with the other cells, e.g. by='Metadata_Plate'"
+            ""
+            if reference is None
+            else ", and by= must group the reference with the other cells, e.g. by='Metadata_Plate'"
         )
         get_logger().warning(
             "dna_content: %d of %d group(s) have fewer than %d %s, too few to place a G1 peak (%s)",
@@ -515,8 +517,8 @@ def subpopulation_hits(
     replicate_codes = _default_replicate(adata, replicate=replicate, reference=is_control)
     if replicate_codes is None and replicate is None and _is_object_resolution(adata):
         warnings.warn(
-            "replicate=None at cell resolution treats cells as independent replicates, which is "
-            "anti-conservative; pass replicate= a well column or aggregate with mt.tl.aggregate.",
+            "replicate=None at cell resolution treats cells as independent replicates, which makes p-values too "
+            "small. Pass replicate= a well column, or aggregate with mt.tl.aggregate.",
             UserWarning,
             stacklevel=3,
         )
@@ -666,8 +668,8 @@ def composition_shift(
     blocks = group_codes(adata, block)[0]
     if replicate is None:
         warnings.warn(
-            "replicate=None treats cells as independent replicates, which gives p-values far too small; pass "
-            "replicate=, the guide.",
+            "replicate=None treats cells as independent replicates, which makes p-values far too small. Pass "
+            "the guide column as replicate=.",
             UserWarning,
             stacklevel=3,
         )

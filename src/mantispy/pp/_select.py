@@ -386,14 +386,14 @@ def feature_select(
         get_logger().warning(
             "feature_select: kept none of the %d features",
             adata.n_vars,
-            deep="each cutoff is absolute on the scale pp.normalize left; noise_removal's stdev_cutoff is the usual cause",
+            deep="each cutoff is absolute on the scale pp.normalize left, and noise_removal's stdev_cutoff is the usual cause",
         )
     elif near_total_noise:
         get_logger().warning(
             "feature_select: noise_removal dropped %d of %d features",
             noise_stripped,
             n_noise_judged,
-            deep="stdev_cutoff is absolute; set noise_removal_cutoff_mode='ratio' or 'quantile'",
+            deep="stdev_cutoff is absolute, so set noise_removal_cutoff_mode='ratio' or 'quantile' for a relative cutoff",
         )
 
     # A feature kept with NaN in fewer than na_cutoff of its rows still carries those missing values, which
@@ -408,7 +408,7 @@ def feature_select(
         get_logger().warning(
             "feature_select: %d selected feature(s) still hold NaN, which pp.sphere and PCA cannot take",
             with_nan.size,
-            deep=f"{lever} and subset, or impute",
+            deep=f"{lever} and subset, or impute the missing values",
         )
 
     if "drop_outliers" not in operations:
@@ -442,7 +442,7 @@ def _warn_extreme(adata: AnnData, full: np.ndarray, kept: np.ndarray, cutoff: fl
         names = [str(adata.var_names[index]) for index in extreme]
         shown = ", ".join(names[:5]) + (f" and {len(names) - 5} more" if len(names) > 5 else "")
         get_logger().warning(
-            "feature_select: %d selected feature(s) reach %g robust SDs from their median (%s)",
+            "feature_select: %d selected feature(s) lie more than %g robust standard deviations from their median (%s)",
             len(names),
             cutoff,
             shown,

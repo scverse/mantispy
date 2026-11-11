@@ -111,9 +111,9 @@ def empirical_fdr(
         raise ValueError(f"every control gene has a missing {score!r}, so there is no null to calibrate against")
     if n_control < _FEW_CONTROLS:
         get_logger().warning(
-            "empirical_fdr: only %d control genes are present, so the null is coarse",
+            "empirical_fdr: only %d control genes are present, so the false discovery rate can take only a few values",
             n_control,
-            deep="the smallest resolvable rate is one over that count; widen the control set or loosen alpha",
+            deep="the smallest rate it can resolve is one over that count, so widen the control set or loosen alpha",
         )
 
     control_sorted = np.sort(values[control])

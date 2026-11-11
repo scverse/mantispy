@@ -178,12 +178,12 @@ Consider enabling this option for [ruff][ruff-editors] and [biome][biome-editors
 
 mantispy logs through `mantispy._core.logging.get_logger()`, the `scverse.mantispy` logger from `scverse_misc.logging`, so it follows the verbosity shared by all scverse packages.
 
-- `warnings.warn` for anything about the call: deprecations (`FutureWarning`) and arguments whose effect the caller may not expect, such as `replicate=None` at cell resolution (`UserWarning`).
-- Anything about the data goes through the logger.
-  A warning is one line saying what happened, with counts, and the remedy goes in `deep=`, which shows only at info verbosity.
-  Info is at most one line per public function, giving its result, and per-item detail goes to debug.
+- Use `warnings.warn` for problems with the call, such as a deprecation (`FutureWarning`) or an argument whose effect the caller may not expect, e.g. `replicate=None` at cell resolution (`UserWarning`).
+- Send anything about the data through the logger.
+  A warning is one line that says what happened, with counts, and the fix goes in `deep=`, which shows only at info verbosity.
+  A function logs at most one info line, with its result, and per-item detail goes to debug.
 
-In tests, assert on log messages with `caplog.at_level(logging.WARNING, logger="scverse.mantispy")`.
+To test a log message, capture it with `caplog.at_level(logging.WARNING, logger="scverse.mantispy")`.
 
 (writing-tests)=
 

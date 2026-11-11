@@ -864,7 +864,7 @@ def _legacy_controls(obs: pd.DataFrame) -> tuple[np.ndarray, np.ndarray] | None:
                 "migrate: %d Metadata_Control_Type label(s) are not control classes (%s)",
                 len(set(labels[unknown])),
                 ", ".join(sorted(set(labels[unknown]))[:5]),
-                deep="they take their class from the 1.0 Metadata_Control flag: negcon where set, treatment otherwise",
+                deep="they take their class from the 1.0 Metadata_Control flag, which makes them negcon where it is set and treatment otherwise",
             )
             mapped[unknown] = np.where(flag[unknown], "negcon", "treatment")
         types = mapped.to_numpy(dtype=object)
@@ -898,7 +898,7 @@ def _resolve_colliding_objects(identity: pd.DataFrame) -> None:
         )
     get_logger().info(
         "migrate: Metadata_ObjectNumber repeats within an image id, so objects are renumbered within each image",
-        deep="no site or image number tells the fields apart; the source numbers are kept in Metadata_SourceObjectNumber",
+        deep="no site or image number tells the fields apart, and the source numbers are kept in Metadata_SourceObjectNumber",
     )
     identity["Metadata_SourceObjectNumber"] = numbers.to_numpy()
     identity["Metadata_ObjectNumber"] = object_number_within(identity["Metadata_ImageID"].to_numpy())

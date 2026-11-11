@@ -186,7 +186,7 @@ def _score_map(
         sharing = groups / ((null_size + 1) * threshold)
         if sharing >= 1:
             get_logger().warning(
-                "map: the null is too coarse to call any of %d groups unless at least %d reach its floor together",
+                "map: null_size is too small to call any of %d groups unless at least %d of them reach the smallest p-value together",
                 groups,
                 math.floor(sharing) + 1,
                 deep=f"raise null_size above {groups / threshold:.0f} for one group to be callable on its own",
@@ -331,10 +331,10 @@ def map(
             perturbations = adata.obs[label].nunique() if label in adata.obs else 0
             if perturbations and adata.n_obs > perturbations:
                 get_logger().warning(
-                    "map: mode='consistency' expects one profile per perturbation, but has %d rows for %d",
+                    "map: mode='consistency' expects one profile per perturbation, but the object has %d rows for %d perturbations",
                     adata.n_obs,
                     perturbations,
-                    deep="perturbations with more wells weigh more; collapse first with mt.tl.consensus()",
+                    deep="perturbations with more wells weigh more, so collapse them first with mt.tl.consensus()",
                 )
     elif pos_sameby:
         settings = {
@@ -407,7 +407,7 @@ def map(
     if pairs > MAX_PAIRS:
         warnings.warn(
             f"these pair definitions build up to {pairs:,} pairs over {len(meta)} profiles, which copairs holds in "
-            "memory at once; run on mt.tl.consensus() profiles and set batch_size=.",
+            "memory at once. Run on mt.tl.consensus() profiles and set batch_size=.",
             UserWarning,
             stacklevel=3,
         )

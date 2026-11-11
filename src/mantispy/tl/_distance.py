@@ -181,8 +181,8 @@ def edistance(
     replicate_codes = _default_replicate(adata, replicate=replicate, reference=is_control)
     if replicate_codes is None and replicate is None and _is_object_resolution(adata):
         warnings.warn(
-            "replicate=None at cell resolution treats cells as independent replicates, which is "
-            "anti-conservative; pass replicate= a well column or aggregate with mt.tl.aggregate.",
+            "replicate=None at cell resolution treats cells as independent replicates, which makes p-values too "
+            "small. Pass replicate= a well column, or aggregate with mt.tl.aggregate.",
             UserWarning,
             stacklevel=3,
         )

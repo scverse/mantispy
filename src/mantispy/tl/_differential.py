@@ -251,8 +251,7 @@ def differential_features(
         )
     if unscored:
         logger.info(
-            "differential_features returned %d group-feature pair(s) as NaN for a non-finite value in a well "
-            "the comparison uses",
+            "differential_features: %d group-feature pair(s) are NaN because a well they use holds a non-finite value",
             unscored,
         )
 

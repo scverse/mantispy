@@ -107,7 +107,7 @@ def test_a_null_too_small_for_the_correction_says_so(pure_noise_screen, caplog):
     screen = pure_noise_screen()
     with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.tl.map(screen, mode="activity", null_size=100)
-    assert "at least 3 reach its floor" in caplog.text
+    assert "at least 3 of them reach the smallest p-value" in caplog.text
     caplog.clear()
     with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.tl.map(screen, mode="activity", null_size=1000)

@@ -315,7 +315,7 @@ def evaluate_integration(
     if not use_scib:
         if metrics is None:  # scib genuinely not installed (an explicit map-only request chose this silently)
             warnings.warn(
-                'scib-metrics is not installed, so only mAP is computed; pip install "mantispy[integration,map]" for the full panel.',
+                'scib-metrics is not installed, so only mAP is computed. Install with pip install "mantispy[integration,map]" for the full panel.',
                 UserWarning,
                 stacklevel=2,
             )
@@ -335,7 +335,7 @@ def evaluate_integration(
 
     if min_max_scale and len(reps) == 1:
         warnings.warn(
-            "min_max_scale=True with a single representation collapses every scaled column; pass more representations.",
+            "min_max_scale=True needs more than one representation to scale against, so every scaled column is constant here.",
             UserWarning,
             stacklevel=2,
         )
@@ -366,7 +366,7 @@ def evaluate_integration(
             aggregate_cols = [*aggregate_cols, "Total+mAP"]
         else:
             warnings.warn(
-                "scib-metrics returned no bio-conservation columns, so Total+mAP is left out; check the scib-metrics version.",
+                "scib-metrics returned no bio-conservation columns, so Total+mAP is left out. Check the scib-metrics version.",
                 UserWarning,
                 stacklevel=2,
             )

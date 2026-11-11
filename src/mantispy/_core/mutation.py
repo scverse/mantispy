@@ -27,8 +27,8 @@ def warn_resolution(adata: AnnData, expected: str | tuple[str, ...]) -> None:
     if actual is not None and actual not in accepted:
         wanted = " or ".join(repr(name) for name in accepted)
         warnings.warn(
-            f"this function expects {wanted} resolution but the object is annotated "
-            f"{actual!r}; results may not mean what you expect",
+            f"this function expects {wanted} resolution, but the object is annotated "
+            f"{actual!r}, so the results may not mean what you expect",
             UserWarning,
             stacklevel=3,
         )

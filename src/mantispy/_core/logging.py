@@ -18,7 +18,7 @@ def report_drop(what: str, dropped: int, total: int, remedy: str = "", escalate:
 
     Dropping 2 features of 3634 is routine and logged at info level.
     Dropping half or more is logged as a warning, since it can leave an object too small to use.
-    The ``remedy`` is shown only at a verbosity below the message's level.
+    The ``remedy`` is shown only when the verbosity is more detailed than the message's level.
 
     ``escalate=False`` keeps the message at info level however much of the input is removed.
     It is for exclusions that are the documented default rather than a loss: reading a CellProfiler export drops whole-field ``Image_`` measurements by design, and a normal four-image export can have more of those than per-cell ones.

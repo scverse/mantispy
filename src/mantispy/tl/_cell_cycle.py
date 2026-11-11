@@ -412,7 +412,7 @@ def project_cell_cycle(
     if passed and known.any():
         probabilities[known], quantiles[known] = _posterior(content[known], fitted)
     elif not passed:
-        get_logger().info("project_cell_cycle: the model failed its check; every position is NaN")
+        get_logger().info("project_cell_cycle: the model failed its check, so every position is NaN")
 
     placed = np.isfinite(probabilities).all(axis=1)
     phase = np.full(adata.n_obs, np.nan, dtype=object)
