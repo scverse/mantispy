@@ -8,6 +8,7 @@ Start with the hits tutorial; the others build on its result.
 :maxdepth: 1
 
 compounds/hits
+compounds/hit_calling_methods
 compounds/mechanism_of_action
 compounds/enrichment
 compounds/dose_response

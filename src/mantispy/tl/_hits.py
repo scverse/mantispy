@@ -24,7 +24,7 @@ from mantispy._core.logging import get_logger
 from mantispy._core.masks import reference_mask
 from mantispy._core.mutation import inplace_or_copy
 
-METHODS = ("mahalanobis", "ks", "hellinger")
+METHODS = ("mahalanobis", "ks", "hellinger", "mp_value")
 
 COVARIANCES = ("empirical", "robust")
 
@@ -128,11 +128,12 @@ def _hellinger_null(
     against: np.ndarray,
     replicate_codes: np.ndarray | None,
     settings: tuple,
+    min_against: int,
     n_permutations: int,
     seed: int,
     index: int,
 ) -> tuple[float, np.ndarray]:
-    """Observed Hellinger distance and its null, from the same kernel so that the observed draw ties with itself.
+    """Observed Hellinger distance or mp-value statistic and its null, from the same kernel so that the observed draw ties with itself.
 
     The null draws as many whole replicates as the tested group spans, or as many rows without a replicate, from the tested and reference rows pooled, against the rest of them.
     """
@@ -149,7 +150,7 @@ def _hellinger_null(
     n_units, n_draw = (int(units.max()) + 1 if pool.size else 0), observed_draw.size
     # A side too small for its covariance leaves the group unscored, so there is no null to draw.
     min_rows = settings[-1]
-    if n_draw == 0 or n_draw >= n_units or tested.size < min_rows or against.size < min_rows:
+    if n_draw == 0 or n_draw >= n_units or tested.size < min_rows or against.size < min_against:
         return np.nan, np.full(n_permutations, np.nan)
     generator = np.random.default_rng([seed, index])
     draws = np.stack(
@@ -210,10 +211,14 @@ def hit_calling(
             It is opt-in; the default stays ``"mahalanobis"``.
             A single Gaussian describes a cloud with several cell states poorly, so on a real screen it can call fewer groups than ``"mahalanobis"`` or ``"ks"``; read it beside them rather than instead of them.
             With ``covariance="robust"`` it is the robust Hellinger distance of BioProfiling.jl (see Notes), which resists stray cells but trims a partial responder and runs far slower.
+            ``"mp_value"`` scores the squared Mahalanobis distance between the group's centroid and the controls', measured in the average of the two sides' covariances, the multidimensional perturbation value of Hutz et al. (see Notes).
+            Unlike ``"mahalanobis"`` it counts the group's own spread, so a group whose replicates disagree is measured in a wider covariance and moves less.
+            The average is positive definite whenever the controls' covariance is, so the group needs only two rows and the controls more rows than features; it works on well profiles with a few replicates, where ``"hellinger"`` cannot.
+            A group with fewer rows is left unscored with a warning.
         covariance: Scatter the Mahalanobis distance is measured in.
             ``"empirical"`` uses every fitting control row.
             ``"robust"`` uses the minimum covariance determinant subset, so a few stray control wells stop widening the covariance in their own direction and masking real hits there; it needs more control rows than features, so pair it with ``use_rep``.
-            Under ``method="hellinger"`` it is the location and scatter both Gaussians are fitted with, refitted on every permutation.
+            Under ``method="hellinger"`` and ``method="mp_value"`` it is the location and scatter both sides are fitted with, refitted on every permutation; under ``method="mp_value"`` the group then needs more rows than features too.
         use_rep: Score ``obsm[use_rep]`` instead of ``X``.
             When the covariance-fitting half of the controls has no more rows than there are features, the covariance is singular and a warning suggests a PCA representation.
         replicate: ``obs`` column, or sequence of columns, whose groups are the design's exchangeable unit: the well in an arrayed screen, the guide (``"Metadata_sgRNA"``) in a pooled one.
@@ -222,7 +227,7 @@ def hit_calling(
             On such an object where some well holds both reference and tested cells, a pooled design, there is no default and it raises instead.
             It stays off when the object is not stamped cell resolution and when it has no complete well column, in which case the cell path warns; under ``method="ks"`` without a replicate the p-value then falls back to ``scipy.stats.ks_2samp``.
         n_permutations: Size of the permutation null.
-            Applies to ``method="mahalanobis"`` and ``method="hellinger"``, and to ``method="ks"`` when a replicate is in use.
+            Applies to ``method="mahalanobis"``, ``method="hellinger"`` and ``method="mp_value"``, and to ``method="ks"`` when a replicate is in use.
         threshold: q-value below which a group is called a hit in ``is_hit``.
         seed: Seed for the control split and the permutation null.
         key_added: Name for the outputs.
@@ -275,6 +280,10 @@ def hit_calling(
         With ``covariance="robust"`` each fit is the reweighted minimum covariance determinant estimate with the defaults of R robustbase's ``covMcd``, which BioProfiling.jl calls, so the distance agrees with BioProfiling.jl's wherever the two searches reach the same subset.
         That robustness costs a partial responder: the MCD fits the most concentrated half of a side's rows, so a responding subpopulation smaller than half of the group is trimmed as outlying, where the empirical fit keeps it.
         The robust fit is also refitted on every permutation, which makes it far slower than the empirical one; the empirical fit is the default for that reason.
+
+        ``method="mp_value"`` follows the multidimensional perturbation value of Hutz et al. (J Biomol Screen, 2013), with the covariance averaged over the group and the controls as its Methods describe; cytominer-eval's ``mp_value`` uses the controls' covariance alone.
+        Like ``method="hellinger"`` it does not split the controls, and its null draws whole replicates, or rows without a replicate, from the group and the controls pooled.
+        Hutz et al. first project each group and the controls onto the principal components that carry 90% of their variance; that step is left out, and ``use_rep`` sets the representation as for the other methods.
     """
     from scipy.stats import ks_2samp
 
@@ -309,7 +318,8 @@ def hit_calling(
     control_replicates = (
         np.unique(replicate_codes[control_rows]) if replicate_codes is not None else np.empty(0, dtype=int)
     )
-    if method == "hellinger":
+    refit = method in ("hellinger", "mp_value")
+    if refit:
         # Both sides are refitted on every draw, so no control is spent on a fixed centroid.
         fit_rows = null_rows = control_rows
     elif replicate_codes is not None and control_replicates.size >= 4:
@@ -319,7 +329,7 @@ def hit_calling(
     else:
         fit_rows, null_rows = split_reference(control_rows, generator)
         replicate_codes = None
-    if method != "hellinger" and fit_rows.size <= values.shape[1]:
+    if not refit and fit_rows.size <= values.shape[1]:
         warnings.warn(
             f"the covariance is estimated from {fit_rows.size} of {n_control} reference rows (half the "
             f"controls) for {values.shape[1]} features, so it is singular and the Mahalanobis distances are "
@@ -329,7 +339,7 @@ def hit_calling(
             stacklevel=3,
         )
 
-    if method == "hellinger" and covariance == "robust":
+    if refit and covariance == "robust":
         # The row distances use the same MCD the statistic does, rather than scikit-learn's.
         from mantispy._core._mcd import cov_mcd
 
@@ -342,10 +352,10 @@ def hit_calling(
     # Fill gaps before whitening, which mixes columns; one NaN would otherwise zero the row's distance.
     to_control = np.linalg.norm(np.nan_to_num(values - centre) @ whitening, axis=1)
     fitted = np.zeros(adata.n_obs, dtype=bool)
-    if method != "hellinger":
+    if not refit:
         fitted[fit_rows] = True
     held_out = is_control & ~fitted
-    if method == "hellinger":
+    if refit:
         from scipy.stats import chi2
 
         from mantispy._core._mcd import N_SAMP, mcd_constants
@@ -356,14 +366,22 @@ def hit_calling(
         # MCD constants by sample size, looked up inside numba where scipy is unavailable; unused for the empirical fit.
         sizes_up_to = np.arange(adata.n_obs + 1) if robust else np.zeros(1, dtype=np.int64)
         tables = mcd_constants(sizes_up_to, x.shape[1])
-        # BioProfiling leaves a side with fewer than twice as many rows as features unscored.
-        settings = (robust, *tables, float(chi2.ppf(0.975, x.shape[1])), N_SAMP, seed, 2 * x.shape[1])
+        n_features = x.shape[1]
+        if method == "hellinger":
+            # BioProfiling leaves a side with fewer than twice as many rows as features unscored.
+            min_rows = min_against = 2 * n_features
+        else:
+            # The pooled covariance only needs the controls' to be full rank; the group needs two rows for a covariance,
+            # or more rows than features for an MCD fit.
+            min_rows, min_against = (n_features + 1 if robust else 2), n_features + 1
+        cutoff = float(chi2.ppf(0.975, n_features))
+        settings = (method == "mp_value", robust, *tables, cutoff, N_SAMP, seed, min_rows)
 
     if replicate_codes is not None:
         # Only the null half enters the permutation pool, so it alone sets how finely the null calibrates.
         null_replicates = np.unique(replicate_codes[null_rows]).size
         if null_replicates < _REPLICATE_MIN:
-            where = "the reference" if method == "hellinger" else "the null half"
+            where = "the reference" if refit else "the null half"
             warnings.warn(
                 f"the replicate null draws from {null_replicates} replicate(s) in {where}, too few to calibrate "
                 "finely, so the test there is conservative rather than anti-conservative. For an exact "
@@ -395,11 +413,11 @@ def hit_calling(
         against_rows = null_rows[~in_sample[null_rows]]
         against = to_control[against_rows]
         sizes[index] = tested.size
-        if method == "hellinger":
+        if refit:
             tested, against_rows = tested[complete[tested]], against_rows[complete[against_rows]]
             sizes[index] = tested.size
             observed[index], null[index] = _hellinger_null(
-                x, tested, against_rows, replicate_codes, settings, n_permutations, seed, index
+                x, tested, against_rows, replicate_codes, settings, min_against, n_permutations, seed, index
             )
             continue
         observed[index] = _statistic(to_control[tested], against, method)[0]
@@ -422,17 +440,24 @@ def hit_calling(
         draws = pool[np.argsort(spread, axis=1)[:, : max(tested.size, 1)]]
         null[index] = _statistic(to_control[draws], against, method)
 
-    if method == "hellinger" and np.isnan(observed).any():
+    if refit and np.isnan(observed).any():
         unscored = [str(key) for key, value in zip(keys, observed, strict=True) if np.isnan(value)]
+        if method == "hellinger":
+            reason = "a side had fewer than twice as many complete rows as features or a singular covariance"
+        else:
+            reason = (
+                f"the group had fewer than {min_rows} complete rows, the reference no more than features, or the "
+                "averaged covariance was singular"
+            )
         warnings.warn(
-            f"{len(unscored)} group(s) were left unscored because a side had fewer than twice as many complete rows "
-            f"as features or a singular covariance: {', '.join(unscored[:5])}{', ...' if len(unscored) > 5 else ''}. "
+            f"{len(unscored)} group(s) were left unscored because {reason}: "
+            f"{', '.join(unscored[:5])}{', ...' if len(unscored) > 5 else ''}. "
             "Score a reduced representation with use_rep, e.g. 'X_pca'.",
             UserWarning,
             stacklevel=3,
         )
     thin = int(np.sum(sizes < 3))
-    if method != "hellinger" and thin > len(keys) // 2:
+    if not refit and thin > len(keys) // 2:
         warnings.warn(
             f"{thin} of {len(keys)} groups have fewer than three rows, so their statistic is the median of "
             "one or two wells. Aggregate more replicates, or score activity with mt.tl.map(mode='activity'), "

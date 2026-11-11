@@ -1,4 +1,4 @@
-"""Hellinger distance between two Gaussian fits, and its permutation null.
+"""Hellinger distance between two Gaussian fits, the mp-value statistic, and their permutation null.
 
 This is BioProfiling.jl's robust Hellinger distance when each side is fitted with the minimum covariance determinant.
 """
@@ -19,6 +19,24 @@ else:
 
 
 @njit(cache=True, nogil=True)
+def _pooled(centre_a: np.ndarray, cov_a: np.ndarray, centre_b: np.ndarray, cov_b: np.ndarray) -> tuple[float, float]:
+    """Log-determinant of ``S = (A + B) / 2`` and the squared Mahalanobis distance between the centres in it; ``NaN`` when a fit failed or ``S`` is not positive definite."""
+    if not (
+        np.isfinite(cov_a).all()
+        and np.isfinite(cov_b).all()
+        and np.isfinite(centre_a).all()
+        and np.isfinite(centre_b).all()
+    ):
+        return np.nan, np.nan
+    pooled = (cov_a + cov_b) / 2
+    sign, log_pooled = np.linalg.slogdet(pooled)
+    if sign <= 0:
+        return np.nan, np.nan
+    shift = centre_a - centre_b
+    return log_pooled, shift @ np.linalg.solve(pooled, shift)
+
+
+@njit(cache=True, nogil=True)
 def hellinger(centre_a: np.ndarray, cov_a: np.ndarray, centre_b: np.ndarray, cov_b: np.ndarray) -> float:
     """Squared Hellinger distance between two Gaussians, ``NaN`` when a fit failed or a covariance is not positive definite.
 
@@ -26,22 +44,30 @@ def hellinger(centre_a: np.ndarray, cov_a: np.ndarray, centre_b: np.ndarray, cov
     in log-determinants so that it does not underflow in more than a few dimensions.
     It is zero for identical Gaussians and approaches one as they stop overlapping, through either the means or the covariances.
     """
-    if not (
-        np.isfinite(cov_a).all()
-        and np.isfinite(cov_b).all()
-        and np.isfinite(centre_a).all()
-        and np.isfinite(centre_b).all()
-    ):
+    log_pooled, quadratic = _pooled(centre_a, cov_a, centre_b, cov_b)
+    if np.isnan(quadratic):
         return np.nan
-    pooled = (cov_a + cov_b) / 2
     sign_a, log_a = np.linalg.slogdet(cov_a)
     sign_b, log_b = np.linalg.slogdet(cov_b)
-    sign, log_pooled = np.linalg.slogdet(pooled)
-    if sign_a <= 0 or sign_b <= 0 or sign <= 0:
+    if sign_a <= 0 or sign_b <= 0:
         return np.nan
-    shift = centre_a - centre_b
-    quadratic = shift @ np.linalg.solve(pooled, shift)
     return 1.0 - np.exp(0.25 * log_a + 0.25 * log_b - 0.5 * log_pooled - quadratic / 8)
+
+
+@njit(cache=True, nogil=True)
+def mp_value(centre_a: np.ndarray, cov_a: np.ndarray, centre_b: np.ndarray, cov_b: np.ndarray) -> float:
+    """Squared Mahalanobis distance between the centres in ``S = (A + B) / 2``, the statistic of the mp-value.
+
+    Only ``S`` must be positive definite, so either side may have fewer rows than features.
+    """
+    return _pooled(centre_a, cov_a, centre_b, cov_b)[1]
+
+
+@njit(cache=True, nogil=True)
+def _distance(centre_a, cov_a, centre_b, cov_b, mp):
+    if mp:
+        return mp_value(centre_a, cov_a, centre_b, cov_b)
+    return hellinger(centre_a, cov_a, centre_b, cov_b)
 
 
 @njit(cache=True, nogil=True)
@@ -53,13 +79,13 @@ def _fit(x, rows, robust, h, raw, rew, exhaustive, cutoff, n_samp, seed):
 
 
 @njit(cache=True, nogil=True)
-def statistic(x, rows_a, rows_b, robust, h, raw, rew, exhaustive, cutoff, n_samp, seed, min_rows) -> float:
-    """Hellinger distance between the Gaussian fits to two row sets of ``x``; ``NaN`` when either has fewer than ``min_rows``."""
+def statistic(x, rows_a, rows_b, mp, robust, h, raw, rew, exhaustive, cutoff, n_samp, seed, min_rows) -> float:
+    """Hellinger distance, or the mp-value statistic when ``mp``, between the fits to two row sets of ``x``; ``NaN`` when either has fewer than ``min_rows``."""
     if rows_a.size < min_rows or rows_b.size < min_rows:
         return np.nan
     centre_a, cov_a = _fit(x, rows_a, robust, h, raw, rew, exhaustive, cutoff, n_samp, seed)
     centre_b, cov_b = _fit(x, rows_b, robust, h, raw, rew, exhaustive, cutoff, n_samp, seed)
-    return hellinger(centre_a, cov_a, centre_b, cov_b)
+    return _distance(centre_a, cov_a, centre_b, cov_b, mp)
 
 
 @njit(cache=True, nogil=True)
@@ -69,7 +95,7 @@ def _from_sums(k, total, cross):
 
 
 @njit(cache=True, parallel=True)
-def null(x, units, draws, robust, h, raw, rew, exhaustive, cutoff, n_samp, seed, min_rows) -> np.ndarray:
+def null(x, units, draws, mp, robust, h, raw, rew, exhaustive, cutoff, n_samp, seed, min_rows) -> np.ndarray:
     """Statistic for each row of ``draws``: the rows of ``x`` whose unit was drawn against the rest.
 
     ``units`` labels each row of ``x`` with a unit numbered from zero (a replicate, or the row itself for a row-level null).
@@ -86,6 +112,7 @@ def null(x, units, draws, robust, h, raw, rew, exhaustive, cutoff, n_samp, seed,
                 x,
                 np.flatnonzero(inside),
                 np.flatnonzero(~inside),
+                mp,
                 robust,
                 h,
                 raw,
@@ -125,5 +152,5 @@ def null(x, units, draws, robust, h, raw, rew, exhaustive, cutoff, n_samp, seed,
                 products[c, a] = products[a, c]
         centre_a, cov_a = _from_sums(k, total, products)
         centre_b, cov_b = _from_sums(n - k, all_sums - total, all_cross - products)
-        out[b] = hellinger(centre_a, cov_a, centre_b, cov_b)
+        out[b] = _distance(centre_a, cov_a, centre_b, cov_b, mp)
     return out
