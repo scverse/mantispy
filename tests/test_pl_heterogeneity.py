@@ -339,3 +339,35 @@ def test_cell_cycle_clock_warns_that_many_rings_are_hard_to_read(placed):
     cells.obs["guide"] = np.array([f"g{index:02d}" for index in range(10)])[np.arange(cells.n_obs) % 10]
     with pytest.warns(UserWarning, match="kind='ridge'"):
         mt.pl.cell_cycle_clock(cells, kind="rings", color="guide", ax=plt.subplots()[1])
+
+
+def test_cell_cycle_clock_density_honours_groups_when_color_is_none(placed):
+    # With color=None the single density is drawn over the groups' cells, not every placed cell (finding 2).
+    def curve(groups):
+        _, ax = plt.subplots()
+        mt.pl.cell_cycle_clock(placed, kind="ridge", groups=groups, ax=ax)
+        return np.concatenate([line.get_ydata() for line in ax.get_lines() if line.get_linestyle() != "--"])
+
+    assert not np.array_equal(curve(["G1"]), curve(None))
+
+
+def test_cell_cycle_clock_reference_does_not_reorder_colour_panels(placed):
+    # A colour reference is a ring, not a panel, so a groupby key named like it must not be promoted first (finding 3).
+    cells = placed.copy()
+    cells.obs["batch"] = np.where((np.arange(cells.n_obs) // 3) % 2 == 0, "AAA", "NTC")
+    mt.pl.cell_cycle_clock(cells, kind="rings", color="Metadata_Perturbation", groupby="batch", reference="NTC")
+    assert [axis.get_title() for axis in plt.gcf().axes if axis.get_title()] == ["AAA", "NTC"]
+
+
+def test_cell_cycle_clock_rejects_a_nonpositive_bandwidth(placed):
+    with pytest.raises(ValueError, match="bandwidth must be > 0"):
+        mt.pl.cell_cycle_clock(placed, kind="rings", color="Metadata_Perturbation", bandwidth=0)
+
+
+def test_palette_counts_falsy_entries_so_a_finite_scheme_is_not_overrun():
+    # A category present in the palette with a falsy value still consumes a default colour (finding 4).
+    from mantispy.pl._heterogeneity import _palette
+
+    shown = [f"c{index:02d}" for index in range(21)]
+    result = _palette(shown, {"c00": None})
+    assert len(result) == 21 and all(result.values())

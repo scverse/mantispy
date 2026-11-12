@@ -107,7 +107,6 @@ def cell_cycle(
         ValueError: ``dna_feature`` names both a feature and an ``obs`` column, or the object has no layer named
             ``layer``.
     """
-    import matplotlib.pyplot as plt
     from matplotlib.patches import Patch
 
     if key not in adata.obs:
@@ -122,11 +121,9 @@ def cell_cycle(
     phases = as_frame(adata.obs)[key].astype(str).to_numpy()
     codes, keys = group_codes(adata, by)
 
-    columns = min(ncols or len(keys), len(keys))
-    rows = -(-len(keys) // columns)
-    figure, axes = plt.subplots(rows, columns, figsize=(3.2 * columns, 3 * rows), squeeze=False, sharex=True)
+    figure, axes = _grid(len(keys), ncols, len(keys), (3.2, 3), sharex=True)
     for index, name in enumerate(keys):
-        axis = axes.flat[index]
+        axis = axes[index]
         selected_rows = np.flatnonzero((codes == index) & shown)
         for phase, colour in PHASE_COLOURS.items():
             selected = values[selected_rows[phases[selected_rows] == phase]]
@@ -135,15 +132,13 @@ def cell_cycle(
         axis.set_title(str(name), fontsize=8)
         axis.set_xlabel(label)
         axis.tick_params(labelbottom=True)  # a shared axis hides them above the gaps of a partial last row
-    for axis in axes.flat[len(keys) :]:
-        axis.set_visible(False)
     present = set(phases[shown])
     handles = [
         Patch(color=colour, alpha=0.6, label=phase) for phase, colour in PHASE_COLOURS.items() if phase in present
     ]
-    axes[0, 0].legend(handles=handles, fontsize=6)
+    axes[0].legend(handles=handles, fontsize=6)
     figure.tight_layout()
-    return _returned(axes, owned=True)
+    return _returned(np.array(axes), owned=True)
 
 
 def _draw_positions(quantiles: np.ndarray, levels: np.ndarray, seed: int = 0) -> np.ndarray:
@@ -278,7 +273,7 @@ def _palette(shown: list[str], palette: Mapping[str, Any] | Sequence[Any] | str 
     if palette is not None and not isinstance(palette, Mapping):
         palette = dict(zip(shown, cycle(palette), strict=False))
     given = palette or {}
-    unnamed = sum(name not in given and name not in PHASE_COLOURS for name in shown)
+    unnamed = sum(not (given.get(name) or PHASE_COLOURS.get(name)) for name in shown)
     others: Any = cycle(plt.get_cmap("tab10")([1, 2, 5, 6, 8, 9]))
     for scheme in (default_20, default_28, default_102):
         if 6 < unnamed <= len(scheme):
@@ -336,9 +331,10 @@ def cell_cycle_clock(
     With ``kind="rings"`` the same positions are smoothed into one density per category of ``color``, each on its own
     ring in the order of ``groups``, the first outermost, so where in the cycle the cells of each group concentrate
     reads from the ring's height. ``kind="ridge"`` draws the same densities as rows over a straight cycle axis, which
-    stays readable for many groups. All densities share one scale, and a dashed line marks the height of cells spread
-    evenly over the cycle. Within a prior arc the shape of a density follows the prior, so compare how much of each
-    group sits in an arc rather than its shape there.
+    stays readable for many groups. Densities share one scale within a panel and across panels with the same number of
+    rings or rows, and each density reads against its own dashed line, which marks the height of cells spread evenly
+    over the cycle. Within a prior arc the shape of a density follows the prior, so compare how much of each group sits
+    in an arc rather than its shape there.
 
     The colour and legend parameters follow :func:`scanpy.pl.embedding`.
 
@@ -400,7 +396,7 @@ def cell_cycle_clock(
     import matplotlib.pyplot as plt
     from matplotlib.colors import to_rgba_array
     from matplotlib.lines import Line2D
-    from matplotlib.patches import Patch, Wedge
+    from matplotlib.patches import Wedge
 
     if groupby is not None and ax is not None:
         raise ValueError("ax= draws a single clock; drop it to draw one clock per group of groupby=")
@@ -408,6 +404,8 @@ def cell_cycle_clock(
         raise ValueError(f"legend_loc must be 'right margin', 'on data' or None, not {legend_loc!r}")
     if kind not in ("cells", "rings", "ridge"):
         raise ValueError(f"kind must be 'cells', 'rings' or 'ridge', not {kind!r}")
+    if kind != "cells" and bandwidth <= 0:
+        raise ValueError(f"bandwidth must be > 0, not {bandwidth}")
     obs = as_frame(adata.obs)
     placed, position, edges = _placed(adata, key, seed)
     notes = {"G1": "population prior", "S": "per-cell", "G2M": "population prior"}
@@ -422,8 +420,6 @@ def cell_cycle_clock(
             notes[phase] = "experimental order"
 
     mode, values, label = _clock_colour(adata, color or f"{key}_phase", key)
-    size = 120_000 / max(adata.n_obs, 1) if size is None else size
-    style: dict[str, Any] = {"s": size, "linewidths": 0, "rasterized": True}
     if mode == "categorical":
         valued = pd.notna(values)
         text = values.astype(str)
@@ -436,9 +432,41 @@ def cell_cycle_clock(
             raise ValueError(f"groups {unknown} are not categories of {color!r}; have {sorted(present)[:10]}")
         colours_of = _palette(shown, palette)
         valued &= np.isin(text, shown)
-        style["alpha"] = (0.7 if groups is None else 0.6) if alpha is None else alpha
     elif groups is not None:
         raise ValueError("groups= needs a categorical color=")
+
+    if kind != "cells":
+        if mode != "categorical":
+            raise ValueError(f"kind={kind!r} draws one density per category, so it needs a categorical color=")
+        return _draw_clock_densities(
+            adata,
+            color,
+            groupby,
+            reference,
+            palette,
+            text,
+            shown,
+            colours_of,
+            valued,
+            placed,
+            position,
+            edges,
+            notes,
+            label,
+            kind,
+            bandwidth,
+            ncols,
+            ax,
+            legend_loc,
+            legend_fontsize,
+            frameon,
+            rim,
+        )
+
+    size = 120_000 / max(adata.n_obs, 1) if size is None else size
+    style: dict[str, Any] = {"s": size, "linewidths": 0, "rasterized": True}
+    if mode == "categorical":
+        style["alpha"] = (0.7 if groups is None else 0.6) if alpha is None else alpha
     else:
         valued = np.isfinite(values)
         drawn_values = values[placed & valued]
@@ -457,78 +485,6 @@ def cell_cycle_clock(
         }
         if "norm" not in kwargs:
             style |= {"vmin": low, "vmax": high}
-    if kind != "cells":
-        if mode != "categorical":
-            raise ValueError(f"kind={kind!r} draws one density per category, so it needs a categorical color=")
-        codes, keys = group_codes(adata, groupby)
-        compared = None
-        if reference is not None:
-            column = color or groupby
-            labels = text if color is not None else np.asarray(keys, dtype=str)[codes] if groupby is not None else None
-            if labels is None or reference not in set(labels[placed]):
-                raise ValueError(f"reference {reference!r} is not a category of color= or groupby= {column!r}")
-            compared = placed & (labels == reference)
-            if color is not None:
-                shown = [reference, *(name for name in shown if name != reference)]
-                given = palette.get(reference) if isinstance(palette, Mapping) else None
-                colours_of[reference] = given or "0.55"  # the reference in grey, so the groups keep the colours
-        if color is None:
-            members, colours_of = {"all cells": placed}, {"all cells": "0.3"}
-        else:
-            members = {name: placed & (text == name) for name in shown}
-        # Each panel draws only the categories it has cells of, so its rings or rows share the space between them.
-        curves = [
-            {
-                name: _circular_density(position[panel], bandwidth)
-                for name, rows in members.items()
-                if (panel := rows & (codes == index)).any()
-            }
-            for index in range(len(keys))
-        ]
-        references = [
-            None
-            if compared is None
-            else _circular_density(
-                position[compared & (codes == index) if (compared & (codes == index)).any() else compared], bandwidth
-            )
-            for index in range(len(keys))
-        ]
-        top = max(
-            (curve.max() for panel in curves for curve in [*panel.values(), *references] if curve is not None),
-            default=1.0,
-        )
-        if kind == "rings" and (most := max(map(len, curves))) > 8:
-            warnings.warn(
-                f"cell_cycle_clock: {most} rings are hard to read; use kind='ridge', or groupby= for one small clock per group",
-                stacklevel=2,
-            )
-        axes = _clock_panels(ax, len(keys), groupby is not None, ncols, kind, max(map(len, curves)))
-        by_phase = edges if color is None else None
-        on_data = legend_fontsize if kind == "rings" and color is not None and legend_loc == "on data" else None
-        # The reference's own panel comes first, as its ring does.
-        panels = sorted(range(len(keys)), key=lambda index: str(keys[index]) != reference)
-        for slot, index in enumerate(panels):
-            group = keys[index]
-            _draw_densities(
-                axes[slot],
-                curves[index],
-                references[index],
-                top,
-                colours_of,
-                kind,
-                edges,
-                notes,
-                by_phase,
-                rim,
-                frameon,
-                on_data,
-            )
-            if groupby is not None:
-                axes[slot].set_title(str(group), fontsize=8, pad=10 if kind == "rings" else 4)
-        if kind == "rings" and color is not None and legend_loc == "right margin":
-            patches = [Patch(color=colours_of[name], alpha=0.6, label=name) for name in members]
-            _margin_legend(axes[0], groupby is not None, patches, f"{label}, outer to inner", legend_fontsize)
-        return _returned(axes[0]) if groupby is None else None
     marker = {name: value for name, value in kwargs.items() if name not in ("c", "cmap", "norm", "vmin", "vmax")}
     style |= kwargs
 
@@ -619,10 +575,33 @@ def cell_cycle_clock(
     return _returned(axes[0]) if groupby is None else None
 
 
-def _clock_panels(ax: Axes | None, n_panels: int, grouped: bool, ncols: int | None, kind: str, n_rows: int) -> list:
-    """The axes of a clock, or of one clock per group on a grid, sized for the ``kind`` drawn."""
+def _grid(
+    n_panels: int,
+    ncols: int | None,
+    default_cols: int,
+    cell: tuple[float, float],
+    extra_width: float = 0.0,
+    **kwargs: Any,
+) -> tuple[Any, list]:
+    """A subplot grid of ``n_panels`` panels, ``ncols`` per row (``default_cols`` when ``None``), each ``cell`` inches.
+
+    Returns the figure and the axes as a flat list, with the axes past ``n_panels`` hidden.
+    """
     import matplotlib.pyplot as plt
 
+    columns = min(ncols or default_cols, n_panels)
+    rows = -(-n_panels // columns)
+    figure, axes = plt.subplots(
+        rows, columns, figsize=(cell[0] * columns + extra_width, cell[1] * rows), squeeze=False, **kwargs
+    )
+    flat = list(axes.ravel())
+    for axis in flat[n_panels:]:
+        axis.set_visible(False)
+    return figure, flat
+
+
+def _clock_panels(ax: Axes | None, n_panels: int, grouped: bool, ncols: int | None, kind: str, n_rows: int) -> list:
+    """The axes of a clock, or of one clock per group on a grid, sized for the ``kind`` drawn."""
     # Densities get a fixed thickness per ring or row, so one ring makes a small clock and many make a large one;
     # past eight rings the clock stops growing and the rings get thinner.
     if kind == "ridge":
@@ -633,129 +612,192 @@ def _clock_panels(ax: Axes | None, n_panels: int, grouped: bool, ncols: int | No
         width = height = 3.4 if grouped else 4.5
     if not grouped:
         return [_axes(ax, (width, height))]
-    columns = min(ncols or 5, n_panels)
-    rows = -(-n_panels // columns)
-    figsize = (width * columns + 1.5, height * rows)  # room for the legend or colour bar
-    axes = list(plt.subplots(rows, columns, figsize=figsize, squeeze=False, layout="constrained")[1].ravel())
-    for axis in axes[n_panels:]:
-        axis.set_visible(False)
-    return axes
+    return _grid(n_panels, ncols, 5, (width, height), extra_width=1.5, layout="constrained")[1]
 
 
 def _circular_density(positions: np.ndarray, bandwidth: float, bins: int = 360) -> np.ndarray:
     """Density of cycle positions at ``bins`` evenly spaced points, smoothed across division, 1 where cells are even."""
-    counts = np.bincount((positions * bins).astype(int) % bins, minlength=bins).astype(float)
-    offset = np.minimum(np.arange(bins), bins - np.arange(bins)) / bins
-    kernel = np.exp(-0.5 * (offset / bandwidth) ** 2)
-    smooth = np.fft.irfft(np.fft.rfft(counts) * np.fft.rfft(kernel), bins)
+    from scipy.ndimage import gaussian_filter1d
+
+    counts = np.histogram(positions % 1.0, bins=bins, range=(0, 1))[0].astype(float)
+    smooth = gaussian_filter1d(counts, bandwidth * bins, mode="wrap")
     return smooth / smooth.mean()
 
 
-def _draw_densities(
-    axis: Axes,
-    curves: Mapping[str, np.ndarray],
-    compared: np.ndarray | None,
-    top: float,
-    colours: Mapping[str, Any],
-    kind: str,
+def _draw_clock_densities(
+    adata: AnnData,
+    color: str | None,
+    groupby: str | None,
+    reference: str | None,
+    palette: Mapping[str, Any] | Sequence[Any] | str | None,
+    text: np.ndarray,
+    shown: list[str],
+    colours_of: dict[str, Any],
+    valued: np.ndarray,
+    placed: np.ndarray,
+    position: np.ndarray,
     edges: list[float] | None,
     notes: Mapping[str, str],
-    by_phase: list[float] | None,
-    rim: bool,
+    label: str,
+    kind: str,
+    bandwidth: float,
+    ncols: int | None,
+    ax: Axes | None,
+    legend_loc: str | None,
+    legend_fontsize: float,
     frameon: bool,
-    on_data: float | None,
-) -> None:
-    """One density per curve on concentric rings, the first outermost, or on rows, the first on top.
+    rim: bool,
+) -> Axes | None:
+    """Render the clock as one smoothed density per category of ``color``, on concentric rings or on rows."""
+    from matplotlib.patches import Patch, Wedge
 
-    The dashed line of each density is ``compared``, the reference density, or the even spread when it is ``None``.
-    ``on_data`` is the font size of each ring's name written at its top, or ``None`` for no names.
-    """
-    from matplotlib.patches import Wedge
+    codes, keys = group_codes(adata, groupby)
+    compared = None
+    if reference is not None:
+        column = color or groupby
+        labels = text if color is not None else np.asarray(keys, dtype=str)[codes] if groupby is not None else None
+        if labels is None or reference not in set(labels[placed]):
+            raise ValueError(f"reference {reference!r} is not a category of color= or groupby= {column!r}")
+        compared = placed & (labels == reference)
+        if color is not None:
+            shown = [reference, *(name for name in shown if name != reference)]
+            given = palette.get(reference) if isinstance(palette, Mapping) else None
+            colours_of[reference] = given or "0.55"  # the reference in grey, so the groups keep the colours
+    if color is None:
+        members, colours_of = {"all cells": placed & valued}, {"all cells": "0.3"}
+    else:
+        members = {name: placed & (text == name) for name in shown}
 
+    # Each panel draws only the categories it has cells of, so its rings or rows share the space between them.
+    masks = [codes == index for index in range(len(keys))]
+    curves = [
+        {
+            name: _circular_density(position[panel], bandwidth)
+            for name, rows in members.items()
+            if (panel := rows & masks[index]).any()
+        }
+        for index in range(len(keys))
+    ]
+    references = [
+        None
+        if compared is None
+        else _circular_density(position[sel if (sel := compared & masks[index]).any() else compared], bandwidth)
+        for index in range(len(keys))
+    ]
+    all_curves = [curve for panel in curves for curve in panel.values()]
+    all_curves += [reference for reference in references if reference is not None]
+    top = max((curve.max() for curve in all_curves), default=1.0)
+    most = max(map(len, curves))
+    if kind == "rings" and most > 8:
+        warnings.warn(
+            f"cell_cycle_clock: {most} rings are hard to read; use kind='ridge', or groupby= for one small clock per group",
+            stacklevel=3,
+        )
+    axes = _clock_panels(ax, len(keys), groupby is not None, ncols, kind, most)
+    on_data = legend_fontsize if kind == "rings" and color is not None and legend_loc == "on data" else None
     grid = (np.arange(360) + 0.5) / 360
-    band = 0.75 / max(len(curves), 1)
     arcs = list(zip(pairwise(edges or ()), notes, strict=False))
 
     def ring(turn: Any, radius: Any) -> tuple[Any, Any]:
         return radius * np.sin(2 * np.pi * turn), radius * np.cos(2 * np.pi * turn)
 
-    for row, (name, curve) in enumerate(curves.items()):
-        base = 1.0 - (row + 1) * band if kind == "rings" else len(curves) - 1 - row
-        scale = 0.85 * (band if kind == "rings" else 1.0) / top
-        pieces = [((start, end), PHASE_COLOURS[phase]) for (start, end), phase in arcs] if by_phase else []
-        for (start, end), colour in pieces or [((0.0, 1.0), colours[name])]:
-            turn = np.linspace(start, end, 2 + int(360 * (end - start)))
-            height = base + scale * np.interp(turn, grid, curve, period=1)
+    def draw(axis: Axes, curves: Mapping[str, np.ndarray], compared: np.ndarray | None) -> None:
+        band = 0.75 / max(len(curves), 1)
+        for row, (name, curve) in enumerate(curves.items()):
+            base = 1.0 - (row + 1) * band if kind == "rings" else len(curves) - 1 - row
+            scale = 0.85 * (band if kind == "rings" else 1.0) / top
+            pieces = [((s, e), PHASE_COLOURS[phase]) for (s, e), phase in arcs] if color is None else []
+            for (start, end), colour in pieces or [((0.0, 1.0), colours_of[name])]:
+                turn = np.linspace(start, end, 2 + int(360 * (end - start)))
+                height = base + scale * np.interp(turn, grid, curve, period=1)
+                if kind == "rings":
+                    x, y = ring(np.r_[turn, turn[::-1]], np.r_[height, np.full(turn.size, base)])
+                    axis.fill(x, y, color=colour, alpha=0.6, lw=0)
+                    axis.plot(*ring(turn, height), color=colour, lw=0.8)
+                else:
+                    axis.fill_between(turn, base, height, color=colour, alpha=0.6, lw=0)
+                    axis.plot(turn, height, color=colour, lw=0.8)
+            dashed: dict[str, Any] = {"color": "0.25", "lw": 0.7, "linestyle": "--"}
+            line = base + scale * (np.ones_like(grid) if compared is None else compared)
             if kind == "rings":
-                x, y = ring(np.r_[turn, turn[::-1]], np.r_[height, np.full(turn.size, base)])
-                axis.fill(x, y, color=colour, alpha=0.6, lw=0)
-                axis.plot(*ring(turn, height), color=colour, lw=0.8)
+                axis.plot(*ring(np.r_[grid, grid[0]], np.r_[line, line[0]]), **dashed)
+                if on_data is not None:
+                    axis.text(
+                        -0.03,
+                        base + 0.4 * band,
+                        name,
+                        ha="right",
+                        va="center",
+                        fontsize=on_data,
+                        color=colours_of[name],
+                    )
             else:
-                axis.fill_between(turn, base, height, color=colour, alpha=0.6, lw=0)
-                axis.plot(turn, height, color=colour, lw=0.8)
-        dashed: dict[str, Any] = {"color": "0.25", "lw": 0.7, "linestyle": "--"}
-        line = base + scale * (np.ones_like(grid) if compared is None else compared)
-        if kind == "rings":
-            axis.plot(*ring(np.r_[grid, grid[0]], np.r_[line, line[0]]), **dashed)
-            if on_data is not None:
-                axis.text(
-                    -0.03, base + 0.4 * band, name, ha="right", va="center", fontsize=on_data, color=colours[name]
-                )
-        else:
-            axis.plot(grid, line, **dashed)
+                axis.plot(grid, line, **dashed)
 
-    outer = 1.0 if kind == "rings" else len(curves)
-    for (start, end), phase in arcs:
-        if notes[phase] == "population prior":
+        outer = 1.0 if kind == "rings" else len(curves)
+        for (start, end), phase in arcs:
+            if notes[phase] == "population prior":
+                if kind == "rings":
+                    axis.add_patch(
+                        Wedge((0, 0), 1.0, 90 - 360 * end, 90 - 360 * start, width=0.75, color="0.6", alpha=0.12, lw=0)
+                    )
+                else:
+                    axis.axvspan(start, end, color="0.6", alpha=0.12, lw=0)
+            if rim:
+                turn = np.linspace(start, end, 40)
+                middle = (start + end) / 2
+                if kind == "rings":
+                    axis.plot(*ring(turn, np.full(turn.size, 1.06)), color=PHASE_COLOURS[phase], lw=3)
+                    across, up = ring(middle, 1.0)
+                    axis.annotate(
+                        phase,
+                        ring(middle, 1.06),
+                        xytext=(5 * across, 5 * up),
+                        textcoords="offset points",
+                        ha="left" if across > 0.3 else "right" if across < -0.3 else "center",
+                        va="bottom" if up > 0.3 else "top" if up < -0.3 else "center",
+                        fontsize=6,
+                    )
+                else:
+                    axis.plot(turn, [outer] * turn.size, color=PHASE_COLOURS[phase], lw=3)
+                    axis.annotate(
+                        phase,
+                        (middle, outer),
+                        xytext=(0, 4),
+                        textcoords="offset points",
+                        ha="center",
+                        va="bottom",
+                        fontsize=6,
+                    )
+        for edge in (edges or [])[1:3]:
             if kind == "rings":
-                wedge = Wedge((0, 0), 1.0, 90 - 360 * end, 90 - 360 * start, width=0.75, color="0.6", alpha=0.12, lw=0)
-                axis.add_patch(wedge)
+                axis.plot(*ring(np.array([edge, edge]), np.array([0.25, 1.0])), color="grey", lw=0.6, linestyle=":")
             else:
-                axis.axvspan(start, end, color="0.6", alpha=0.12, lw=0)
-        if rim:
-            turn = np.linspace(start, end, 40)
-            middle = (start + end) / 2
-            if kind == "rings":
-                axis.plot(*ring(turn, np.full(turn.size, 1.06)), color=PHASE_COLOURS[phase], lw=3)
-                across, up = ring(middle, 1.0)
-                axis.annotate(
-                    phase,
-                    ring(middle, 1.06),
-                    xytext=(5 * across, 5 * up),
-                    textcoords="offset points",
-                    ha="left" if across > 0.3 else "right" if across < -0.3 else "center",
-                    va="bottom" if up > 0.3 else "top" if up < -0.3 else "center",
-                    fontsize=6,
-                )
-            else:
-                axis.plot(turn, [outer] * turn.size, color=PHASE_COLOURS[phase], lw=3)
-                axis.annotate(
-                    phase,
-                    (middle, outer),
-                    xytext=(0, 4),
-                    textcoords="offset points",
-                    ha="center",
-                    va="bottom",
-                    fontsize=6,
-                )
-    for edge in (edges or [])[1:3]:
-        if kind == "rings":
-            axis.plot(*ring(np.array([edge, edge]), np.array([0.25, 1.0])), color="grey", lw=0.6, linestyle=":")
-        else:
-            axis.axvline(edge, color="grey", lw=0.6, linestyle=":")
+                axis.axvline(edge, color="grey", lw=0.6, linestyle=":")
 
-    if kind == "rings":
-        axis.set(xlim=(-1.1, 1.1), ylim=(-1.1, 1.1), aspect="equal")
-        if frameon:
-            axis.set(xticks=[], yticks=[])
+        if kind == "rings":
+            axis.set(xlim=(-1.1, 1.1), ylim=(-1.1, 1.1), aspect="equal")
+            if frameon:
+                axis.set(xticks=[], yticks=[])
+            else:
+                axis.axis("off")
         else:
-            axis.axis("off")
-    else:
-        axis.set(xlim=(0, 1), ylim=(-0.1, outer + 0.1))
-        axis.set_yticks(np.arange(len(curves))[::-1], list(curves), fontsize=6)
-        axis.set_xlabel("cycle position (0 = start of G1, 1 = division)")
-        axis.spines[["top", "right", "left"]].set_visible(False)
-        axis.tick_params(axis="y", length=0)
+            axis.set(xlim=(0, 1), ylim=(-0.1, outer + 0.1))
+            axis.set_yticks(np.arange(len(curves))[::-1], list(curves), fontsize=6)
+            axis.set_xlabel("cycle position (0 = start of G1, 1 = division)")
+            axis.spines[["top", "right", "left"]].set_visible(False)
+            axis.tick_params(axis="y", length=0)
+
+    # The reference's own panel comes first, as its ring does; with a per-category colour the panels keep their order.
+    panels = sorted(range(len(keys)), key=lambda index: color is not None or str(keys[index]) != reference)
+    for slot, index in enumerate(panels):
+        draw(axes[slot], curves[index], references[index])
+        if groupby is not None:
+            axes[slot].set_title(str(keys[index]), fontsize=8, pad=10 if kind == "rings" else 4)
+    if kind == "rings" and color is not None and legend_loc == "right margin":
+        patches = [Patch(color=colours_of[name], alpha=0.6, label=name) for name in members]
+        _margin_legend(axes[0], groupby is not None, patches, f"{label}, outer to inner", legend_fontsize)
+    return _returned(axes[0]) if groupby is None else None
 
 
 def _margin_legend(axis: Axes, grouped: bool, handles: list, title: str, fontsize: float) -> None:
