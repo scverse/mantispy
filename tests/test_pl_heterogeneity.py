@@ -156,7 +156,7 @@ def test_cell_cycle_clock_groupby_and_radius(placed):
     assert {clock.collections[-1].get_clim() for clock in clocks} == {(10.0, 100.0)}  # one scale over both panels
     g1_only = cells.obs["cell_cycle_phase"].eq("G1").to_numpy() | (cells.obs["Metadata_Perturbation"] == "NTC")
     mt.pl.cell_cycle_clock(cells[g1_only].copy(), groupby="Metadata_Perturbation")
-    legend = next(axis.get_legend() for axis in plt.gcf().axes if axis.get_legend() is not None)
+    (legend,) = plt.gcf().legends  # one legend beside the grid, not inside a panel
     assert {"G1", "S", "G2M"} <= {text.get_text() for text in legend.get_texts()}  # though the first panel is G1 only
     with pytest.raises(ValueError, match="single clock"):
         mt.pl.cell_cycle_clock(cells, groupby="Metadata_Perturbation", ax=plt.subplots()[1])
@@ -279,3 +279,63 @@ def test_cell_cycle_clock_legend_options_and_frame(placed):
     mt.pl.cell_cycle_occupancy(placed, palette=["tab:orange", "tab:green"], legend_loc=None, ax=ax)
     assert ax.get_legend() is None
     assert {line.get_edgecolor()[:3] for line in ax.patches} == {to_rgba("tab:orange")[:3], to_rgba("tab:green")[:3]}
+
+
+def test_cell_cycle_clock_draws_densities_as_rings_or_rows_in_the_order_of_groups(placed):
+    _, ax = plt.subplots()
+    assert (
+        mt.pl.cell_cycle_clock(placed, kind="rings", color="Metadata_Perturbation", groups=["NTC", "KO"], ax=ax) is ax
+    )
+    assert [text.get_text() for text in ax.get_legend().get_texts()] == ["NTC", "KO"]
+    from matplotlib.patches import Polygon
+
+    rings = [patch for patch in ax.patches if isinstance(patch, Polygon)]
+    reach = [np.hypot(*ring.get_xy().T).min() for ring in rings]
+    colours = [handle.get_facecolor() for handle in ax.get_legend().legend_handles]
+    assert len(rings) == 2 and reach[0] > reach[1]  # the first group is the outer ring
+    assert [ring.get_facecolor() for ring in rings] == colours
+
+    _, ax = plt.subplots()
+    mt.pl.cell_cycle_clock(placed, kind="ridge", color="Metadata_Perturbation", groups=["KO", "NTC"], ax=ax)
+    rows = sorted(zip(ax.get_yticks(), [label.get_text() for label in ax.get_yticklabels()], strict=True))
+    assert [name for _, name in rows] == ["NTC", "KO"]  # the first group on top
+
+    _, ax = plt.subplots()
+    mt.pl.cell_cycle_clock(placed, kind="ridge", ax=ax)
+    fills = {tuple(to_rgba(c.get_facecolor()[0])[:3]) for c in ax.collections if len(c.get_facecolor())}
+    assert {to_rgba(PHASE)[:3] for PHASE in ("tab:blue", "tab:grey", "tab:red")} <= fills  # one curve, filled by phase
+
+    with pytest.raises(ValueError, match="categorical"):
+        mt.pl.cell_cycle_clock(placed, kind="rings", color="Metadata_DNAContent")
+    with pytest.raises(ValueError, match="kind"):
+        mt.pl.cell_cycle_clock(placed, kind="violin")
+
+
+def test_circular_density_wraps_across_division_and_reads_one_for_even_cells():
+    from mantispy.pl._heterogeneity import _circular_density
+
+    even = _circular_density(np.random.default_rng(0).random(200_000), 0.02)
+    assert np.allclose(even, 1, atol=0.05)
+    late = _circular_density(np.full(100, 0.995), 0.02)
+    assert np.isclose(late[1], late[-5])  # as high just after division as just before
+
+
+def test_cell_cycle_clock_compares_densities_to_a_reference(placed):
+    _, ax = plt.subplots()
+    mt.pl.cell_cycle_clock(placed, kind="ridge", color="Metadata_Perturbation", groups=["KO"], reference="NTC", ax=ax)
+    rows = sorted(zip(ax.get_yticks(), [label.get_text() for label in ax.get_yticklabels()], strict=True))
+    assert [name for _, name in rows] == ["KO", "NTC"]  # the reference joins, drawn first
+    dashed = [line for line in ax.get_lines() if line.get_linestyle() == "--"]
+    assert np.ptp(dashed[0].get_ydata()) > 0  # the reference's density, not the flat even line
+
+    mt.pl.cell_cycle_clock(placed, kind="rings", groupby="Metadata_Perturbation", reference="NTC")
+    assert [axis.get_title() for axis in plt.gcf().axes] == ["NTC", "KO"]  # the reference's panel first
+    with pytest.raises(ValueError, match="not a category"):
+        mt.pl.cell_cycle_clock(placed, kind="rings", color="Metadata_Perturbation", reference="missing")
+
+
+def test_cell_cycle_clock_warns_that_many_rings_are_hard_to_read(placed):
+    cells = placed.copy()
+    cells.obs["guide"] = np.array([f"g{index:02d}" for index in range(10)])[np.arange(cells.n_obs) % 10]
+    with pytest.warns(UserWarning, match="kind='ridge'"):
+        mt.pl.cell_cycle_clock(cells, kind="rings", color="guide", ax=plt.subplots()[1])
