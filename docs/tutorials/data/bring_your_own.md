@@ -7,11 +7,11 @@ Everything downstream reads the stamp, so an object that carries it works with e
 
 Pick the resolution that matches the table, then make sure `obs` carries the identifier columns it requires.
 
-| `resolution` | One row is                                          | Required `obs` columns                                                                                                    | `grouped_by`                                         |
-| ------------ | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| `object`     | one segmented cell or other object                  | `Metadata_ImageID`, `Metadata_ObjectType`, `Metadata_ObjectNumber`, plus `Metadata_Plate` and `Metadata_Well` for a plate | defaults                                             |
-| `well`       | one well                                            | `Metadata_Plate`, `Metadata_Well`                                                                                         | defaults to plate and well                           |
-| `aggregate`  | one consensus profile, such as a gene or a compound | none                                                                                                                      | you give it, for example `["Metadata_Perturbation"]` |
+  | `resolution` | One row is                                          | Required `obs` columns                                                                                                    | `grouped_by`                                         |
+  | ------------ | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+  | `object`     | one segmented cell or other object                  | `Metadata_ImageID`, `Metadata_ObjectType`, `Metadata_ObjectNumber`, plus `Metadata_Plate` and `Metadata_Well` for a plate | defaults                                             |
+  | `well`       | one well                                            | `Metadata_Plate`, `Metadata_Well`                                                                                         | defaults to plate and well                           |
+  | `aggregate`  | one consensus profile, such as a gene or a compound | none                                                                                                                      | you give it, for example `["Metadata_Perturbation"]` |
 
 There is no guide level.
 Rows are objects, wells or aggregates, and guides are values in a column.
@@ -48,7 +48,7 @@ Readouts such as `mt.tl.map` and `mt.tl.hit_calling` compare against these rows.
 
 ## Stamp an object that came from elsewhere
 
-A published `h5ad`, another pipeline's output or a matrix of embeddings has no stamp yet.
+A published `h5ad`, another pipeline’s output or a matrix of embeddings has no stamp yet.
 `mt.io.stamp` records the resolution and the kind of feature, and rejects the object if `obs` lacks a required column.
 
 ```python
@@ -62,7 +62,7 @@ mt.io.stamp(adata, resolution="aggregate", grouped_by=["Metadata_Perturbation"],
 mt.io.stamp(adata, resolution="well", feature_kind="embedding")
 ```
 
-`X` is stored in the dtype you give it, `float32`, `float64` or an integer type, and mantispy's tools write their results in that dtype too.
+`X` is stored in the dtype you give it, `float32`, `float64` or an integer type, and mantispy’s tools write their results in that dtype too.
 `float32` takes half the memory of `float64`, so convert with `adata.X = adata.X.astype("float32")` if a large matrix does not fit.
 
 ## Build one from a DataFrame

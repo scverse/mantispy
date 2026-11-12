@@ -41,7 +41,7 @@ mt.pl.hits(wells)
 ```
 
 `pp` prepares, `tl` computes, `pl` plots, `metrics` evaluates a correction, `io` reads and
-writes, and `ds` downloads public screens. Everything operates on an `AnnData`, so scanpy's
+writes, and `ds` downloads public screens. Everything operates on an `AnnData`, so scanpy’s
 PCA, neighbors, UMAP and Leiden work on the same object. `io.read_plate` reads the images
 behind the profiles as `SpatialData`.
 
@@ -57,7 +57,7 @@ Please refer to the [documentation][], in particular the [API documentation][].
 ## Installation
 
 You need to have Python 3.13 or newer installed on your system.
-If you don't have Python installed, we recommend installing [uv][].
+If you don’t have Python installed, we recommend installing [uv][].
 
 We recommend managing dependencies in project-specific virtual environments to avoid dependency conflicts.
 This is most convenient using package managers such as [uv][].
@@ -135,6 +135,6 @@ If you like scverse® and want to support our mission, please consider making a 
   <img
     src="https://raw.githubusercontent.com/numfocus/templates/master/images/numfocus-logo.png"
     width="200"
-  >
+>
 </a>
 </div>

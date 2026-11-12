@@ -10,12 +10,12 @@ Most return a tidy frame with `metric`, `representation`, `key` and `value`, so 
 
 ```{eval-rst}
 .. autosummary::
-    :toctree: generated
+   :toctree: generated
 
-    metrics.known_relationships
-    metrics.evaluate_integration
-    metrics.diagnose_testing
-    metrics.pc_regression
-    metrics.batch_variance_explained
-    metrics.variance_carried
+   metrics.known_relationships
+   metrics.evaluate_integration
+   metrics.diagnose_testing
+   metrics.pc_regression
+   metrics.batch_variance_explained
+   metrics.variance_carried
 ```
