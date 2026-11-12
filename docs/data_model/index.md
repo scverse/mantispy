@@ -51,12 +51,12 @@ A function that needs to know what a row is fails with a clear message when the 
 Four questions describe any profiling object, and mantispy keeps the answer to each in its own place.
 No answer is encoded in another: the resolution is never `gene`, and a column of embeddings is not a different kind of row.
 
-| Question                                 | Where the answer lives                                                           | Allowed values                             |
-| ---------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------ |
-| What does one row represent?             | `uns["mantispy"]["resolution"]` and `uns["mantispy"]["grouped_by"]`              | `object`, `well`, `aggregate`              |
-| What does one column represent?          | `var["feature_kind"]`                                                            | `measurement`, `embedding`, `derived`      |
-| What treatment or condition produced it? | `Metadata_Compound`, `Metadata_Gene`, `Metadata_sgRNA` and related `obs` columns | the biological intervention                |
-| Where did it come from?                  | `Metadata_Plate`, `Metadata_Well`, `Metadata_ImageID`, `Metadata_ObjectNumber`   | the identity and origin of the observation |
+  | Question                                 | Where the answer lives                                                           | Allowed values                             |
+  | ---------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------ |
+  | What does one row represent?             | `uns["mantispy"]["resolution"]` and `uns["mantispy"]["grouped_by"]`              | `object`, `well`, `aggregate`              |
+  | What does one column represent?          | `var["feature_kind"]`                                                            | `measurement`, `embedding`, `derived`      |
+  | What treatment or condition produced it? | `Metadata_Compound`, `Metadata_Gene`, `Metadata_sgRNA` and related `obs` columns | the biological intervention                |
+  | Where did it come from?                  | `Metadata_Plate`, `Metadata_Well`, `Metadata_ImageID`, `Metadata_ObjectNumber`   | the identity and origin of the observation |
 
 The first two axes describe the shape of the data and are stamped on the object.
 The last two are ordinary `obs` columns that describe biology and provenance.

@@ -140,7 +140,7 @@ The namespace MUST contain:
 - `resolution`
 - `grouped_by`
 
-The schema's stability status is stated in section 21, not stored in the object.
+The schema’s stability status is stated in section 21, not stored in the object.
 
 A stable schema version MUST NOT be declared until the package implementation, loaders, staged datasets, tutorials, and CellProfiler integrations follow the contract.
 
@@ -154,7 +154,7 @@ Allowed values are:
 - `well`
 - `aggregate`
 
-These are a structural hierarchy, not a biological ontology. They answer "what does one row represent?" at the level of structure; the exact unit is carried by `grouped_by`.
+These are a structural hierarchy, not a biological ontology. They answer “what does one row represent?” at the level of structure; the exact unit is carried by `grouped_by`.
 
 ### 4.1 Object resolution
 
@@ -427,12 +427,12 @@ Allowed values are:
 
 The expected relationship is:
 
-| Metadata_Control_Type | Metadata_Control |
-| --------------------- | ---------------- |
-| `negcon`              | `True`           |
-| `poscon`              | `True`           |
-| `empty`               | `True`           |
-| `treatment`           | `False`          |
+  | Metadata_Control_Type | Metadata_Control |
+  | --------------------- | ---------------- |
+  | `negcon`              | `True`           |
+  | `poscon`              | `True`           |
+  | `empty`               | `True`           |
+  | `treatment`           | `False`          |
 
 Dataset-specific labels such as `non-targeting`, `nontargeting`, `no-guide`, `intergenic`, `DMSO`, or specific positive-control compounds do not belong in the control-type vocabulary. They remain in the relevant biological annotation fields.
 

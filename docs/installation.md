@@ -1,7 +1,7 @@
 # Installation
 
 You need Python 3.13 or newer.
-If you don't have Python installed, we recommend [uv](https://github.com/astral-sh/uv).
+If you don’t have Python installed, we recommend [uv](https://github.com/astral-sh/uv).
 PyPI is the supported install. Cloning the repository and running `uv sync` is for contributors, see [Contributing](contributing.md).
 
 ## Alpha release
@@ -14,7 +14,7 @@ uv add mantispy  # in a uv project; `uv init` creates one
 pip install mantispy  # or with pip
 ```
 
-Pass `--pre` (`uv pip install --pre mantispy`, or `uv add --prerelease allow mantispy` in a project) to get pre-releases of mantispy's dependencies as well, or to keep getting the newest alpha once a final release is out.
+Pass `--pre` (`uv pip install --pre mantispy`, or `uv add --prerelease allow mantispy` in a project) to get pre-releases of mantispy’s dependencies as well, or to keep getting the newest alpha once a final release is out.
 
 ## Development version
 

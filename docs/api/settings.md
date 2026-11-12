@@ -11,9 +11,9 @@ To set the level for all of them, use `scverse_misc.logging.config.verbosity = "
 
 ```{eval-rst}
 .. autosummary::
-    :toctree: generated
+   :toctree: generated
 
-    settings
-    settings.override
-    settings.reset
+   settings
+   settings.override
+   settings.reset
 ```

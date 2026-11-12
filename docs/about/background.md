@@ -1,7 +1,7 @@
 # About mantispy
 
 mantispy brings Cell Painting and other image-based profiling data into the scverse ecosystem, from reading what a pipeline wrote through quality control, normalization and batch correction to evaluating what survived.
-Profiles live in an `AnnData`, so scanpy's PCA, neighbors, UMAP and Leiden work on the same object, and the images and segmentations behind them are read as `SpatialData`.
+Profiles live in an `AnnData`, so scanpy’s PCA, neighbors, UMAP and Leiden work on the same object, and the images and segmentations behind them are read as `SpatialData`.
 If you find mantispy useful for your research, please check out {doc}`cite`.
 
 ## Why is it called mantispy?
@@ -19,6 +19,6 @@ If you like scverse® and want to support our mission, please consider making a 
   <img
     src="https://raw.githubusercontent.com/numfocus/templates/master/images/numfocus-logo.png"
     width="200"
-  >
+>
 </a>
 </div>

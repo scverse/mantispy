@@ -11,56 +11,56 @@
 
 ```{eval-rst}
 .. autosummary::
-    :toctree: generated
+   :toctree: generated
 
-    ds.aconcagua
-    ds.aconcagua_cells
-    ds.bbbc021
-    ds.rohban
-    ds.pki
-    ds.jump_target2
-    ds.jump_crispr
-    ds.jump_lite
-    ds.chroma
-    ds.neuropainting
-    ds.oasis_pilot
-    ds.pooled_rare
+   ds.aconcagua
+   ds.aconcagua_cells
+   ds.bbbc021
+   ds.rohban
+   ds.pki
+   ds.jump_target2
+   ds.jump_crispr
+   ds.jump_lite
+   ds.chroma
+   ds.neuropainting
+   ds.oasis_pilot
+   ds.pooled_rare
 ```
 
 ## Single cells and images
 
 ```{eval-rst}
 .. autosummary::
-    :toctree: generated
+   :toctree: generated
 
-    ds.jump_cells
-    ds.jump_export
-    ds.jump_plate
-    ds.scallops_arv471
-    ds.cp_posh
+   ds.jump_cells
+   ds.jump_export
+   ds.jump_plate
+   ds.scallops_arv471
+   ds.cp_posh
 ```
 
 ## Annotations
 
 ```{eval-rst}
 .. autosummary::
-    :toctree: generated
+   :toctree: generated
 
-    ds.corum
-    ds.depmap_expression
-    ds.gene_sets
-    ds.interactions
-    ds.jump_lite_targets
+   ds.corum
+   ds.depmap_expression
+   ds.gene_sets
+   ds.interactions
+   ds.jump_lite_targets
 ```
 
 ## Synthetic
 
 ```{eval-rst}
 .. autosummary::
-    :toctree: generated
+   :toctree: generated
 
-    ds.synthetic_plate
-    ds.blobs
+   ds.synthetic_plate
+   ds.blobs
 ```
 
 ## Dataset pages

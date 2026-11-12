@@ -9,18 +9,18 @@ Read profiles, plates and JUMP data into `AnnData` or `SpatialData`, and check t
 
 ```{eval-rst}
 .. autosummary::
-    :toctree: generated
+   :toctree: generated
 
-    io.read_profiles
-    io.read_plate
-    io.read_jump
-    io.unexpressed_genes
-    io.read
-    io.write
-    io.stamp
-    io.from_dataframe
-    io.from_embedding
-    io.validate
+   io.read_profiles
+   io.read_plate
+   io.read_jump
+   io.unexpressed_genes
+   io.read
+   io.write
+   io.stamp
+   io.from_dataframe
+   io.from_embedding
+   io.validate
 ```
 
 ```{eval-rst}
