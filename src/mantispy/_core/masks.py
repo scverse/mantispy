@@ -127,6 +127,35 @@ def reference_mask(adata: AnnData, reference: str | None) -> np.ndarray:
     )
 
 
+def reference_groups(
+    adata: AnnData, reference: str | None, by: str | list[str] | None
+) -> tuple[np.ndarray, np.ndarray, pd.Index]:
+    """The reference mask and per-row group codes, refusing a reference that selects no rows at all or none in some group.
+
+    Shared by :func:`~mantispy.pp.normalize` and :func:`~mantispy.pp.impute`, which both fit on reference rows within groups and must reject the same empty selections.
+
+    Returns:
+        ``(mask, codes, keys)``: the boolean reference mask over ``obs``, the integer group code per row, and the ordered group keys.
+
+    Raises:
+        ValueError: If ``reference`` selects no rows at all, or none in some group of ``by``.
+    """
+    from mantispy._core._reduce import group_codes
+
+    mask = reference_mask(adata, reference)
+    if not mask.any():
+        raise ValueError(
+            f"no reference rows selected by reference={reference!r}. Check that obs['Metadata_Control_Type'] has "
+            "'negcon' rows (mt.pp.annotate_controls), or pass reference=None to use all rows."
+        )
+    codes, keys = group_codes(adata, by)
+    present = np.bincount(codes[mask], minlength=len(keys))
+    if (present == 0).any():
+        empty = [str(keys[int(index)]) for index in np.flatnonzero(present == 0)]
+        raise ValueError(f"no reference rows in group(s): {empty[:5]}")
+    return mask, codes, keys
+
+
 def control_annotated(adata: AnnData) -> bool:
     """Whether ``adata.obs`` carries the control annotation a named reference class is read from.
 

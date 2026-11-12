@@ -5,10 +5,10 @@ from __future__ import annotations
 import numpy as np
 from anndata import AnnData
 
-from mantispy._core._numba import MAD, grouped_median_spread
-from mantispy._core._reduce import get_matrix, group_codes, group_rows
+from mantispy._core._numba import MEDIAN, grouped_stat
+from mantispy._core._reduce import get_matrix, group_rows
 from mantispy._core.logging import get_logger
-from mantispy._core.masks import reference_mask
+from mantispy._core.masks import reference_groups
 from mantispy._core.mutation import inplace_or_copy
 
 METHODS = ("knn", "reference_median", "zero")
@@ -89,21 +89,15 @@ def impute(
     if method == "zero":
         out[missing] = 0.0
     elif missing.any():
-        mask = reference_mask(adata, reference)
-        if not mask.any():
-            raise ValueError(
-                f"no reference rows selected by reference={reference!r}; pass reference=None to use all rows."
-            )
-        codes, keys = group_codes(adata, by)
-        present = np.bincount(codes[mask], minlength=len(keys))
-        if (present == 0).any():
-            empty = [str(keys[int(index)]) for index in np.flatnonzero(present == 0)]
-            raise ValueError(f"no reference rows in group(s): {empty[:5]}")
+        mask, codes, keys = reference_groups(adata, reference, by)
         if method == "reference_median":
-            median, _ = grouped_median_spread(out[mask], codes[mask], len(keys), MAD)
+            median = grouped_stat(out[mask], codes[mask], len(keys), MEDIAN)
             rows, columns = np.nonzero(missing)
             out[rows, columns] = median[codes[rows], columns]
         else:
+            # KNNImputer rejects inf, but the contract leaves inf in place, so it is fit and transformed on a
+            # copy that reads inf as NaN, and only the originally-NaN cells take the result back.
+            finite = np.where(np.isinf(out), np.nan, out) if np.isinf(out).any() else out
             rng = np.random.default_rng(seed)
             for rows in group_rows(codes, len(keys)):
                 if not missing[rows].any():
@@ -111,7 +105,11 @@ def impute(
                 donors = rows[mask[rows]]
                 if n_donors is not None and donors.size > n_donors:
                     donors = np.sort(rng.choice(donors, size=n_donors, replace=False))
-                out[rows] = _knn(out[rows], out[donors], n_neighbors)
+                target = missing[rows]
+                block = _knn(finite[rows], finite[donors], n_neighbors)
+                updated = out[rows]
+                updated[target] = block[target]
+                out[rows] = updated
 
     filled = missing & ~np.isnan(out)
     column = "n_imputed" if key_added is None else f"n_imputed_{key_added}"

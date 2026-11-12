@@ -1,5 +1,9 @@
+import logging
+
 import numpy as np
+import pandas as pd
 import pytest
+from anndata import AnnData
 
 import mantispy as mt
 from mantispy.ds import synthetic_plate
@@ -81,7 +85,37 @@ def test_lof_flags_what_sklearn_and_brieflow_flag():
 
 
 def test_lof_scores_a_group_of_one_or_two_rows():
-    adata = synthetic_plate(n_wells=2, n_cells=1, n_features=4, seed=0)
+    # One well of one cell and one of two, so both the single-row path and the real two-row (n_neighbors=1) path run.
+    X = np.random.default_rng(0).normal(size=(3, 4))
+    obs = pd.DataFrame({"Metadata_Well": ["A", "B", "B"]}, index=["c0", "c1", "c2"])
+    adata = AnnData(X=X, obs=obs, var=pd.DataFrame(index=[f"f{j}" for j in range(4)]))
+    assert sorted(adata.obs["Metadata_Well"].value_counts().tolist()) == [1, 2]
     mt.pp.outliers(adata, method="lof", by="Metadata_Well")
-    assert adata.obs["qc_outlier"].all()
     assert np.isfinite(adata.obs["qc_outlier_score"]).all()
+    assert adata.obs["qc_outlier"].sum() == 2  # one flagged per group
+
+
+def test_lof_excludes_all_missing_rows_and_still_flags_real_outliers(caplog):
+    """#2: filling all-missing rows with zero collapses them onto the origin, inflating nearby cells' LOF so the
+    real outliers go unflagged. They must be excluded from the fit, left unscored, and the true outliers flagged."""
+    rng = np.random.default_rng(0)
+    n_core, n_missing, n_outliers, n_vars = 200, 30, 6, 6
+    core = rng.normal(size=(n_core, n_vars))
+    far = rng.normal(size=(n_outliers, n_vars)) + 15.0
+    gone = np.full((n_missing, n_vars), np.nan)
+    X = np.vstack([core, far, gone])
+    obs = pd.DataFrame(index=[f"c{i}" for i in range(X.shape[0])])
+    adata = AnnData(X=X, obs=obs, var=pd.DataFrame(index=[f"f{j}" for j in range(n_vars)]))
+    outlier_rows = np.arange(n_core, n_core + n_outliers)
+    missing_rows = np.arange(n_core + n_outliers, X.shape[0])
+
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
+        mt.pp.outliers(adata, method="lof", contamination=0.03)
+
+    flagged = adata.obs["qc_outlier"].to_numpy()
+    scores = adata.obs["qc_outlier_score"].to_numpy()
+    assert flagged[outlier_rows].all()  # the genuine outliers are flagged
+    assert not flagged[missing_rows].any()  # the all-missing rows are not
+    assert np.isnan(scores[missing_rows]).all()  # and are left unscored
+    assert np.isfinite(scores[: n_core + n_outliers]).all()
+    assert f"{n_missing} cell" in caplog.text

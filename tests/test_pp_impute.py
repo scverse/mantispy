@@ -50,6 +50,17 @@ def test_knn_matches_sklearn_and_brieflow():
     np.testing.assert_allclose(adata.X, brieflow, rtol=1e-12)
 
 
+def test_knn_keeps_inf_and_fills_nan():
+    """The contract leaves inf in place; knn used to raise on it (KNNImputer rejects inf)."""
+    adata = _with_gaps()
+    adata.X[0, 0] = np.inf
+    adata.X[0, 1] = np.nan
+    mt.pp.impute(adata, n_donors=None)
+    assert np.isinf(adata.X[0, 0])  # the inf is left exactly as it was
+    assert not np.isnan(adata.X[0, 1])  # the NaN beside it is filled
+    assert not np.isnan(adata.X).any()  # every other gap is filled too
+
+
 def test_knn_takes_values_only_from_reference_rows_of_the_same_group():
     adata = _with_gaps()
     reference = adata.obs["is_ref"].to_numpy()

@@ -22,18 +22,25 @@ def _scores(X: np.ndarray, method: str, seed: int, ecod_aggregation: str) -> np.
     """Outlier score per row, higher meaning more outlying."""
     if method == "ecod":
         return ecod_scores(X, ecod_aggregation)
-    if method in ("isolation_forest", "lof"):
-        filled = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
-        if method == "lof":
-            from sklearn.neighbors import LocalOutlierFactor
+    if method == "lof":
+        from sklearn.neighbors import LocalOutlierFactor
 
-            if filled.shape[0] < 2:
-                return np.zeros(filled.shape[0])
-            # A group with fewer rows than neighbours uses every other row, as sklearn does after warning.
-            model = LocalOutlierFactor(n_neighbors=min(20, filled.shape[0] - 1)).fit(filled)
-            return -model.negative_outlier_factor_
+        scores = np.full(X.shape[0], np.nan)
+        # LOF needs complete input; a row missing every selected feature, filled with zero, would collapse onto
+        # the origin and inflate the density of nearby cells, so those rows are left out of the fit and unscored.
+        present = ~np.isnan(X).all(axis=1)
+        fitted = np.nan_to_num(X[present], nan=0.0, posinf=0.0, neginf=0.0)
+        if fitted.shape[0] < 2:
+            scores[present] = 0.0
+            return scores
+        # Cap neighbours at group size - 1 so sklearn never raises on a small group.
+        model = LocalOutlierFactor(n_neighbors=min(20, fitted.shape[0] - 1)).fit(fitted)
+        scores[present] = -model.negative_outlier_factor_
+        return scores
+    if method == "isolation_forest":
         from sklearn.ensemble import IsolationForest
 
+        filled = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
         model = IsolationForest(random_state=seed, n_estimators=200).fit(filled)
         return -model.score_samples(filled)
 
@@ -109,8 +116,19 @@ def outliers(
             flagged[rows] = block > score_cutoff
         else:
             # Flag by rank: `> quantile` flags too few cells on ties, and none when an infinite value makes the quantile infinite.
-            k = math.ceil(contamination * rows.size)
-            flagged[rows[np.argsort(block)[::-1][:k]]] = True
+            # Unscored rows (NaN, e.g. a cell LOF could not fit) are ranked out so they are never flagged.
+            scorable = np.flatnonzero(~np.isnan(block))
+            k = math.ceil(contamination * scorable.size)
+            flagged[rows[scorable[np.argsort(block[scorable])[::-1][:k]]]] = True
+
+    if method == "lof":
+        unscored = int(np.isnan(scores).sum())
+        if unscored:
+            get_logger().warning(
+                "outliers(lof): %d cell(s) have no selected feature measured and stay unscored and unflagged",
+                unscored,
+                deep="impute them first with mt.pp.impute, or drop them",
+            )
 
     adata.obs[key_added] = flagged
     adata.obs[f"{key_added}_score"] = scores
