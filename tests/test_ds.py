@@ -29,14 +29,14 @@ def test_blobs_is_a_plate_with_everything_on_it(n_wells: int, n_sites: int) -> N
 
 def test_blobs_looks_like_a_plate_that_was_read() -> None:
     sdata = mt.ds.blobs(n_wells=2, n_sites=2)
-    cells = sdata["BLOBS01_A01_s1_cells"].to_numpy()
-    nuclei = sdata["BLOBS01_A01_s1_nuclei"].to_numpy()
-    var = sdata.tables["cells"].var
+    cells = np.asarray(sdata["BLOBS01_A01_s1_cells"])
+    nuclei = np.asarray(sdata["BLOBS01_A01_s1_nuclei"])
+    var = as_frame(sdata.tables["cells"].var)
 
     assert {"BLOBS01", "BLOBS01_A01", "BLOBS01_A01_s1"} <= set(sdata.coordinate_systems)
     assert sd.get_extent(sdata["BLOBS01_A02_s1_image"], coordinate_system="BLOBS01")["x"][0] == pytest.approx(9000.0)
     assert set(np.unique(nuclei)) <= set(np.unique(cells))
-    assert np.array_equal(sdata["BLOBS01_A01_s1_cytoplasm"].to_numpy(), np.where(nuclei > 0, 0, cells))
+    assert np.array_equal(np.asarray(sdata["BLOBS01_A01_s1_cytoplasm"]), np.where(nuclei > 0, 0, cells))
     assert var.loc["Cells_Intensity_MeanIntensity_DNA", "channel"] == "DNA"
     assert var.loc["Cells_Correlation_Correlation_DNA_RNA", "channel"] == "DNA|RNA"
     for table in sdata.tables.values():
@@ -169,7 +169,9 @@ def test_jump_plate_reads_the_fields_that_were_downloaded() -> None:
     assert len(sdata.labels) == 2 * 3
     assert sdata.tables["cells"].n_obs > 0
     # The channel vocabulary comes from load_data, so no invented channel reaches var.
-    channels = {part for value in sdata.tables["cells"].var["channel"].dropna() for part in str(value).split("|")}
+    channels = {
+        part for value in as_frame(sdata.tables["cells"].var)["channel"].dropna() for part in str(value).split("|")
+    }
     assert channels <= {"AGP", "Brightfield", "Brightfield_H", "Brightfield_L", "DNA", "ER", "Mito", "RNA"}
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import anndata as ad
 import numpy as np
@@ -121,7 +121,9 @@ def blobs(
     wells = _wells(n_wells)
     columns = int(np.ceil(np.sqrt(n_sites)))
 
-    images, labels, frames, obs = {}, {}, [], []
+    images: dict[str, Any] = {}
+    labels: dict[str, Any] = {}
+    frames, obs = [], []
     for well in wells:
         row, column = ord(well[0]) - ord("A"), int(well[1:]) - 1
         for site in range(1, n_sites + 1):

@@ -165,7 +165,7 @@ def read_cellprofiler_export(path: Path | str, *, lazy: bool = True) -> SpatialD
     """
     from spatialdata import SpatialData
     from spatialdata.models import Image2DModel, Labels2DModel, TableModel
-    from spatialdata.transformations import Identity
+    from spatialdata.transformations import BaseTransformation, Identity
 
     from mantispy._core.frames import as_frame
     from mantispy._core.schema import make_image_id, validate
@@ -180,7 +180,7 @@ def read_cellprofiler_export(path: Path | str, *, lazy: bool = True) -> SpatialD
     labels: dict[str, Any] = {}
     for row in written.to_dict("records"):
         field = str(row["sample_key"])
-        transformations = {field: Identity()}
+        transformations: dict[str, BaseTransformation] = {field: Identity()}
         array = _read_array(plate / str(row["path"]), lazy=lazy)
         if row["element_type"] == ELEMENT_IMAGE:
             images[f"{field}_image"] = Image2DModel.parse(

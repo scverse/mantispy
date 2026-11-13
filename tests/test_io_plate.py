@@ -14,6 +14,7 @@ from _testdata import BATCH, CELL_PAINTING_CHANNELS, EXPORT_SHAPE, FIELDS, OVERL
 from skimage.segmentation import find_boundaries
 
 import mantispy as mt
+from mantispy._core.frames import as_frame
 from mantispy.io._gallery import _fov_offsets, _labels_from_outlines, _parse_well
 
 
@@ -201,7 +202,7 @@ def test_a_table_in_the_modules_own_layout_links_every_row_to_its_own_instance(e
     read = {
         (str(region), int(number)): float(value)
         for region, number, value in zip(
-            cells.obs["region"], cells.obs["Metadata_ObjectNumber"], cells.X[:, 0], strict=True
+            cells.obs["region"], cells.obs["Metadata_ObjectNumber"], np.asarray(cells.X)[:, 0], strict=True
         )
     }
     assert read == truth
@@ -214,7 +215,8 @@ def test_region_and_object_number_address_a_real_label_instance(export: Path) ->
     cells = sdata.tables["cells"]
 
     region = f"{FIELDS[0]}__Cells"
-    numbers = cells.obs.loc[cells.obs["region"] == region, "Metadata_ObjectNumber"].to_numpy()
+    obs = as_frame(cells.obs)
+    numbers = obs.loc[obs["region"] == region, "Metadata_ObjectNumber"].to_numpy()
     present = np.unique(np.asarray(sdata.labels[region]))
     assert set(numbers.tolist()) == {1, 2}
     assert set(numbers.tolist()) <= set(present.tolist())
