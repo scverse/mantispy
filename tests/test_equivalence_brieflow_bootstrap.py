@@ -169,11 +169,12 @@ def _screen(seed: int = 0) -> ad.AnnData:
     return adata
 
 
-def test_pvalues_match_brieflow_on_the_same_seed():
-    """Every gene and guide p-value equals Brieflow's, drawn on the same seeds over two blocks."""
+def test_pvalues_match_brieflow_within_monte_carlo_error():
+    """The analytic p-values agree with Brieflow's simulation (same null, continuous data) within its
+    Monte-Carlo error: an exact p the simulation converges to, so the standardized deviation is small."""
     adata = _screen()
-    n_sims = 2500
-    mt.tl.bootstrap_features(adata, n_sims=n_sims)
+    n_sims = 40_000
+    mt.tl.bootstrap_features(adata)
     ours = adata.uns["mantispy"]["bootstrap"].pivot(index="group", columns="feature", values="pvalue")
     our_guides = adata.uns["mantispy"]["bootstrap_guides"].pivot(index="replicate", columns="feature", values="pvalue")
 
@@ -182,6 +183,7 @@ def test_pvalues_match_brieflow_on_the_same_seed():
     is_control = (obs["Metadata_Control_Type"] == "negcon").to_numpy()
     controls = np.column_stack([obs["Metadata_sgRNA"].to_numpy()[is_control].astype(object), values[is_control]])
     features = list(adata.var_names)
+    worst = 0.0
     for gene in sorted(set(obs["Metadata_Gene"][~is_control])):
         in_gene = (obs["Metadata_Gene"] == gene).to_numpy()
         constructs = sorted(set(obs["Metadata_sgRNA"][in_gene]))
@@ -195,6 +197,11 @@ def test_pvalues_match_brieflow_on_the_same_seed():
             n_sims,
             bootstrap_seed(gene),
         )
-        floor = 1 / n_sims
-        np.testing.assert_array_equal(ours.loc[gene, features].to_numpy(), np.maximum(gene_p, floor))
-        np.testing.assert_array_equal(our_guides.loc[constructs, features].to_numpy(), np.maximum(construct_p, floor))
+        for exact, sim in (
+            (ours.loc[gene, features].to_numpy(), gene_p),
+            (our_guides.loc[constructs, features].to_numpy().ravel(), construct_p.ravel()),
+        ):
+            q = np.clip(sim / 2.0, 0.0, 1.0)  # one-sided share the two-sided p came from
+            std = 2.0 * np.sqrt(q * (1.0 - q) / n_sims) + 1.0 / n_sims
+            worst = max(worst, float(np.max(np.abs(exact - sim) / std)))
+    assert worst < 6.0, f"largest standardized deviation from Brieflow {worst:.2f}"
