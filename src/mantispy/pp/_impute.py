@@ -6,7 +6,7 @@ import numpy as np
 from anndata import AnnData
 
 from mantispy._core._corr import chunk_rows
-from mantispy._core._numba import MEDIAN, grouped_stat
+from mantispy._core._numba import MEDIAN, grouped_stat, knn_distances
 from mantispy._core._reduce import get_matrix, group_rows
 from mantispy._core.logging import get_logger
 from mantispy._core.masks import reference_groups
@@ -31,19 +31,52 @@ def _any_missing(X: np.ndarray) -> bool:
 
 
 def _knn(block: np.ndarray, donors: np.ndarray, n_neighbors: int) -> np.ndarray:
-    """Fill ``block`` from its nearest ``donors``, leaving the features no donor measures missing."""
-    from sklearn.impute import KNNImputer
+    """Fill ``block`` from its nearest ``donors``, leaving the features no donor measures missing.
 
+    Reproduces sklearn's ``KNNImputer`` value for value: distances are the parallel numba
+    :func:`~mantispy._core._numba.knn_distances`, and the neighbour pick per feature is numpy's own
+    ``argpartition`` on those distances, so the tie-break matches ``KNNImputer`` on any machine.
+    """
     # sklearn drops a feature no donor measured, which would shift the columns, so those are left out here.
     measured = np.flatnonzero(~np.isnan(donors).all(axis=0))
     out = block.copy()
     if not measured.size:
         return out
-    imputer = KNNImputer(n_neighbors=n_neighbors).fit(donors[:, measured])
-    targets = np.flatnonzero(np.isnan(block[:, measured]).any(axis=1))
+    # Donors are the only float64 copy held for the whole call; receiver rows are upcast per batch.
+    fit = np.ascontiguousarray(donors[:, measured], dtype=np.float64)
+    missing_fit = np.isnan(fit)
+    measured_fit = ~missing_fit
+    missing_recv = np.isnan(block)[:, measured]
+
+    # KNNImputer imputes an all-nan-distance receiver with the masked column mean of the donors.
+    counts = measured_fit.sum(axis=0)
+    sums = np.where(missing_fit, 0.0, fit).sum(axis=0)
+    col_mean = np.divide(sums, counts, out=np.full(measured.size, np.nan), where=counts > 0)
+
+    targets = np.flatnonzero(missing_recv.any(axis=1))
     for start in range(0, targets.size, KNN_BATCH):
-        cells = np.ix_(targets[start : start + KNN_BATCH], measured)
-        out[cells] = imputer.transform(block[cells])
+        rows = targets[start : start + KNN_BATCH]
+        recv = np.ascontiguousarray(block[rows][:, measured], dtype=np.float64)
+        dist = knn_distances(recv, fit)  # (len(rows), n_donors)
+        batch_missing = missing_recv[rows]
+        filled = out[np.ix_(rows, measured)]
+        for col in np.flatnonzero(batch_missing.any(axis=0)):
+            local = np.flatnonzero(batch_missing[:, col])
+            pot = np.flatnonzero(measured_fit[:, col])  # donors that measured this feature
+            sub = dist[local][:, pot]
+            all_nan = np.isnan(sub).all(axis=1)
+            if all_nan.any():  # no shared coordinate with any donor of this feature
+                filled[local[all_nan], col] = col_mean[col]
+                if all_nan.all():
+                    continue
+                local, sub = local[~all_nan], sub[~all_nan]
+            k = min(n_neighbors, pot.size)
+            nearest = np.argpartition(sub, k - 1, axis=1)[:, :k]
+            near_dist = np.take_along_axis(sub, nearest, axis=1)
+            weight = ~np.isnan(near_dist)  # uniform weights, dropping donors too far to have a distance
+            values = fit[pot, col][nearest]
+            filled[local, col] = np.where(weight, values, 0.0).sum(axis=1) / weight.sum(axis=1)
+        out[np.ix_(rows, measured)] = filled
     return out
 
 
@@ -115,8 +148,9 @@ def impute(
             rows, columns = np.nonzero(missing)
             out[rows, columns] = median[codes[rows], columns]
         else:
-            # KNNImputer rejects inf, but the contract leaves inf in place, so it is fit and transformed on a
-            # copy that reads inf as NaN, and only the originally-NaN cells take the result back.
+            # An inf coordinate would poison the distances, and the contract leaves inf in place, so the
+            # neighbour search runs on a copy that reads inf as NaN and only the originally-NaN cells take
+            # the result back.
             finite = np.where(np.isinf(out), np.nan, out) if np.isinf(out).any() else out
             rng = np.random.default_rng(seed)
             for rows in group_rows(codes, len(keys)):

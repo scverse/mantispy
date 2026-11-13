@@ -1,12 +1,15 @@
 import logging
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 from anndata import AnnData
 from sklearn.impute import KNNImputer
+from sklearn.metrics.pairwise import nan_euclidean_distances
 
 import mantispy as mt
+from mantispy._core._numba import knn_distances
 
 
 def _with_gaps(n_obs=300, n_vars=12, fraction=0.05, seed=0):
@@ -144,6 +147,70 @@ def test_no_missing_values_still_writes_the_requested_layer():
     mt.pp.impute(adata, key_added="filled", n_donors=None)
     np.testing.assert_array_equal(adata.layers["filled"], X)
     np.testing.assert_array_equal(adata.var["n_imputed_filled"], np.zeros(adata.n_vars, dtype=np.int64))
+
+
+def test_knn_distances_match_nan_euclidean():
+    """The numba kernel reproduces sklearn's ``nan_euclidean``, including the all-missing-overlap NaN."""
+    rng = np.random.default_rng(0)
+    recv = rng.normal(size=(40, 15))
+    recv[rng.random(recv.shape) < 0.25] = np.nan
+    donors = rng.normal(size=(55, 15))
+    donors[rng.random(donors.shape) < 0.25] = np.nan
+    recv[3] = np.nan  # a receiver that shares no coordinate with some donors
+    np.testing.assert_allclose(
+        knn_distances(recv, donors), nan_euclidean_distances(recv, donors), rtol=1e-12, equal_nan=True
+    )
+
+
+@pytest.mark.parametrize("seed", range(12))
+def test_knn_equals_sklearn_with_ties_and_varied_missingness(seed):
+    """knn matches ``KNNImputer`` value for value on tie-heavy and continuous data at varied missingness.
+
+    Exact distance ties (small integers, duplicated rows) exercise the neighbour tie-break; a fully
+    missing feature exercises the drop-unmeasured path and an all-NaN row the column-mean fallback.
+    """
+    rng = np.random.default_rng(seed)
+    n_obs, n_vars, k = 70, 9, int(rng.integers(1, 7))
+    if seed % 3 == 0:
+        X = rng.integers(0, 3, size=(n_obs, n_vars)).astype(float)  # many exact distance ties
+    elif seed % 3 == 1:
+        base = rng.normal(size=(14, n_vars))  # duplicated rows give genuine distance ties
+        X = base[rng.integers(0, base.shape[0], n_obs)].astype(float)
+    else:
+        X = rng.normal(size=(n_obs, n_vars))
+    X[rng.random(X.shape) < rng.uniform(0.05, 0.3)] = np.nan
+    X[:, 0] = np.nan  # a feature no donor measures: dropped by sklearn, left missing here
+    X[1] = np.nan  # a row sharing no coordinate with any donor: filled with the column mean
+
+    valid = ~np.isnan(X).all(axis=0)
+    expected = KNNImputer(n_neighbors=k).fit_transform(X)
+    adata = AnnData(X=X.copy(), var=pd.DataFrame(index=[f"f{j}" for j in range(n_vars)]))
+    mt.pp.impute(adata, n_neighbors=k, n_donors=None)
+    np.testing.assert_allclose(adata.X[:, valid], expected, rtol=1e-9, atol=1e-9, equal_nan=True)
+    assert np.isnan(adata.X[:, 0]).all()
+
+
+_REAL_DATA = Path("/lustre/groups/ml01/workspace/tim.treis/brieflow-bench/data/aconcagua_interphase_s100k.parquet")
+
+
+@pytest.mark.skipif(not _REAL_DATA.exists(), reason="real screen data not available")
+def test_knn_matches_sklearn_on_real_data():
+    """On a real Aconcagua feature matrix with injected missingness, knn equals ``KNNImputer``."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    schema = pq.read_schema(_REAL_DATA)
+    feats = [c for c in schema.names if pa.types.is_floating(schema.field(c).type)][:40]
+    X = pq.ParquetFile(_REAL_DATA).read_row_group(0, columns=feats).to_pandas().to_numpy()[:2000]
+    X = np.ascontiguousarray(X, dtype=np.float64)
+    rng = np.random.default_rng(0)
+    X[rng.random(X.shape) < 0.02] = np.nan
+
+    valid = ~np.isnan(X).all(axis=0)
+    expected = KNNImputer(n_neighbors=5).fit_transform(X)
+    adata = AnnData(X=X.copy(), var=pd.DataFrame(index=feats))
+    mt.pp.impute(adata, n_donors=None)
+    np.testing.assert_allclose(adata.X[:, valid], expected, rtol=1e-9, atol=1e-9, equal_nan=True)
 
 
 def test_rejects_no_reference_rows_and_a_bad_method():
