@@ -12,11 +12,28 @@ import numpy as np
 import pandas as pd
 from anndata import AnnData
 
-from mantispy._core._reduce import get_matrix, group_codes
+from mantispy._core._reduce import _reads_from_disk, _source, get_matrix, group_codes
 from mantispy._core._stats import _is_object_resolution
 from mantispy._core.logging import get_logger
 from mantispy._core.masks import reference_mask
 from mantispy._core.mutation import inplace_or_copy
+
+
+def _roc_auc(y: np.ndarray, proba: np.ndarray) -> float:
+    """ROC AUC from the out-of-fold probabilities, equal to :func:`sklearn.metrics.roc_auc_score` for a binary label.
+
+    The AUC is the Mann-Whitney statistic, the mean rank of the positive scores standardised by the class sizes,
+    which is :func:`~sklearn.metrics.roc_auc_score` to floating-point precision, ties shared by the average rank as
+    that function also does, without its per-call validation of the label and the curve it never needs here.
+    """
+    from scipy.stats import rankdata
+
+    n_pos = int(y.sum())
+    n_neg = y.size - n_pos
+    if n_pos == 0 or n_neg == 0:
+        return float("nan")
+    ranks = rankdata(proba)
+    return float((ranks[y == 1].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg))
 
 
 def _score_group(
@@ -27,12 +44,15 @@ def _score_group(
     n_features: int,
     seed: int,
 ) -> tuple[np.ndarray, float, int]:
-    """Out-of-fold probability of the group class for every row of ``x``, the ROC AUC, and the folds used."""
+    """Out-of-fold probability of the group class for every row of ``x``, the ROC AUC, and the folds used.
+
+    The fold loop is :func:`~sklearn.model_selection.cross_val_predict` of a feature-selection-then-logistic-regression
+    pipeline, written out so each of the many small groups skips its per-call input validation. The splits, the
+    refitted in-fold feature selection and the solver are unchanged, so the probabilities match it to the bit.
+    """
     from sklearn.feature_selection import SelectKBest, f_classif
     from sklearn.linear_model import LogisticRegression
-    from sklearn.metrics import roc_auc_score
-    from sklearn.model_selection import StratifiedGroupKFold, StratifiedKFold, cross_val_predict
-    from sklearn.pipeline import make_pipeline
+    from sklearn.model_selection import StratifiedGroupKFold, StratifiedKFold
 
     # A feature constant over the sample has no F statistic and only draws a warning from f_classif.
     x = x[:, np.ptp(x, axis=0) > 0]
@@ -42,15 +62,25 @@ def _score_group(
         folds = min(n_folds, *(np.unique(replicates[y == side]).size for side in (0, 1)))
     if folds < 2 or x.shape[1] == 0:
         return np.full(int(y.sum()), np.nan), np.nan, 0
+
     splitter = StratifiedKFold if replicates is None else StratifiedGroupKFold
     cv = splitter(n_splits=folds, shuffle=True, random_state=seed)
+    k = min(n_features, x.shape[1])
+    select = k < x.shape[1]  # with every feature kept, SelectKBest is a no-op on the columns, in their own order
 
-    model = make_pipeline(
-        SelectKBest(score_func=f_classif, k=min(n_features, x.shape[1])),
-        LogisticRegression(max_iter=2000, class_weight="balanced", solver="liblinear"),
-    )
-    proba = cross_val_predict(model, x, y, cv=cv, groups=replicates, method="predict_proba")[:, 1]
-    return proba[y == 1], float(roc_auc_score(y, proba)), folds
+    proba = np.empty(x.shape[0], dtype=np.float64)
+    for train, test in cv.split(x, y, replicates):
+        x_train, y_train = x[train], y[train]
+        if select:
+            # The same f_classif ranking cross_val_predict refits per fold, so the held-out rows never pick features.
+            columns = SelectKBest(score_func=f_classif, k=k).fit(x_train, y_train).get_support()
+            x_train, x_test = x_train[:, columns], x[test][:, columns]
+        else:
+            x_test = x[test]
+        model = LogisticRegression(max_iter=2000, class_weight="balanced", solver="liblinear")
+        model.fit(x_train, y_train)
+        proba[test] = model.predict_proba(x_test)[:, 1]
+    return proba[y == 1], _roc_auc(y, proba), folds
 
 
 @inplace_or_copy(expects="object")
@@ -133,19 +163,37 @@ def perturbation_score(
     reference_rows = np.flatnonzero(is_reference)
     scored_codes = np.unique(codes[~is_reference])
 
-    def sample(code: int) -> tuple[np.ndarray, np.ndarray]:
-        rows = np.flatnonzero((codes == code) & ~is_reference)
-        rng = np.random.default_rng([seed, zlib.crc32(str(keys[code]).encode())])
-        drawn = np.sort(rng.choice(reference_rows, size=min(rows.size, reference_rows.size), replace=False))
-        return rows, drawn
+    # Group the scored rows by code once, in increasing row order, instead of scanning all cells per group.
+    not_reference = np.flatnonzero(~is_reference)
+    grouped_rows = not_reference[np.argsort(codes[not_reference], kind="stable")]
+    grouped_codes = codes[grouped_rows]
+    starts = np.r_[0, np.flatnonzero(np.diff(grouped_codes)) + 1]
+    blocks = np.split(grouped_rows, starts[1:])
+    rows_for = {int(grouped_codes[start]): rows for start, rows in zip(starts, blocks, strict=True) if rows.size}
+
+    # Read every row once into a dense float64 block when the matrix is in memory, so each group slices it instead
+    # of re-reading and re-casting its rows; a backed matrix keeps reading one group at a time, never loaded whole.
+    source = _source(adata, layer, use_rep)
+    matrix = (
+        None
+        if _reads_from_disk(source)
+        else np.asarray(get_matrix(adata, layer=layer, use_rep=use_rep), dtype=np.float64)
+    )
+
+    def read(both: np.ndarray) -> np.ndarray:
+        if matrix is not None:
+            return matrix[both]
+        return np.asarray(get_matrix(adata, layer=layer, rows=both, use_rep=use_rep), dtype=np.float64)
 
     def run(code: int) -> tuple[np.ndarray, np.ndarray, float, int, int]:
-        rows, drawn = sample(code)
+        rows = rows_for[code]
+        rng = np.random.default_rng([seed, zlib.crc32(str(keys[code]).encode())])
+        drawn = np.sort(rng.choice(reference_rows, size=min(rows.size, reference_rows.size), replace=False))
         if rows.size < min_cells:
             return rows, np.full(rows.size, np.nan), np.nan, drawn.size, 0
         # Rows in object order, as Brieflow takes them, so a seeded fold split matches its split.
         both = np.union1d(rows, drawn)
-        x = np.asarray(get_matrix(adata, layer=layer, rows=both, use_rep=use_rep), dtype=np.float64)
+        x = read(both)
         if not np.isfinite(x).all():
             raise ValueError(
                 f"perturbation_score: group {keys[code]!r} or its reference sample has missing or infinite feature "

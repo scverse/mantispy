@@ -123,8 +123,14 @@ def test_missing_values_and_an_empty_reference_raise():
 def test_threads_give_the_same_scores():
     adata = _cells()
     serial = mt.tl.perturbation_score(adata, copy=True)
-    threaded = mt.tl.perturbation_score(adata, n_jobs=2, copy=True)
-    np.testing.assert_array_equal(serial.obs["perturbation_score"], threaded.obs["perturbation_score"])
+    for n_jobs in (2, -1):
+        threaded = mt.tl.perturbation_score(adata, n_jobs=n_jobs, copy=True)
+        np.testing.assert_array_equal(serial.obs["perturbation_score"], threaded.obs["perturbation_score"])
+        # The per-group AUC table must not depend on n_jobs either.
+        np.testing.assert_array_equal(
+            serial.uns["mantispy"]["perturbation_score"]["auc"].to_numpy(),
+            threaded.uns["mantispy"]["perturbation_score"]["auc"].to_numpy(),
+        )
 
 
 def test_folds_over_cells_warn_at_object_resolution():
