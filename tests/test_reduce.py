@@ -95,6 +95,8 @@ def mixed_adata():
         ["Metadata_Plate", "Metadata_Well"],
         ["Metadata_Plate", "Metadata_Dose"],
         ["Metadata_Plate", "Metadata_Well", "Metadata_Dose"],
+        # A column named twice, as when a caller joins its own keys to a by= that already holds one of them.
+        ["Metadata_Plate", "Metadata_Well", "Metadata_Plate"],
     ],
 )
 def test_group_codes_matches_the_multiindex_path(mixed_adata, by):

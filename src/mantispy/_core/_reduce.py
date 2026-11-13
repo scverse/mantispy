@@ -194,7 +194,7 @@ def group_codes(adata: AnnData, by: str | Sequence[str] | None) -> tuple[np.ndar
 
     frame = as_frame(adata.obs)[columns]
     if frame.isna().to_numpy().any():
-        empty = [column for column in columns if frame[column].isna().any()]
+        empty = [column for position, column in enumerate(columns) if frame.iloc[:, position].isna().any()]
         raise ValueError(f"grouping column(s) contain missing values: {empty}. Filter or fill them first.")
 
     if len(columns) == 1:
@@ -212,7 +212,8 @@ def _multi_group_codes(frame: pd.DataFrame, columns: list[str]) -> tuple[np.ndar
     lexicographic order, so factorizing it reproduces ``MultiIndex.factorize(sort=True)``'s codes and key order.
     Materializing the tuples instead costs an object array per row, which dominates grouping at screen scale.
     """
-    per_column = [pd.factorize(frame[column], sort=True) for column in columns]
+    # By position, so a column named twice in ``columns`` is read as a Series rather than a two-column frame.
+    per_column = [pd.factorize(frame.iloc[:, position], sort=True) for position in range(len(columns))]
     sizes = [len(uniques) for _, uniques in per_column]
     product = 1
     for size in sizes:
