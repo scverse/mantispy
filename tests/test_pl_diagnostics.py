@@ -90,3 +90,34 @@ def test_control_drift_names_the_minimum_it_draws(diagnosed):
     """Regression test for #54: n_components=1 fitted, then failed on embedding[:, 1] with a bare IndexError."""
     with pytest.raises(ValueError, match="n_components must be at least 2"):
         mt.pl.control_drift(diagnosed, n_components=1)
+
+
+def _tall_controls(n_controls=600, n_features=20, seed=0):
+    """Far more control rows than features, so control_drift's auto solver takes the covariance path."""
+    import anndata as ad
+    import pandas as pd
+
+    rng = np.random.default_rng(seed)
+    values = rng.standard_normal((n_controls, n_features)) @ rng.standard_normal((n_features, n_features))
+    obs = pd.DataFrame(
+        {
+            "Metadata_Plate": np.where(np.arange(n_controls) % 2 == 0, "p0", "p1"),
+            "Metadata_Control_Type": "negcon",
+        },
+        index=[str(index) for index in range(n_controls)],
+    )
+    return ad.AnnData(X=values.astype(np.float32), obs=obs)
+
+
+def test_control_drift_auto_matches_the_full_solver_embedding():
+    """scikit-learn's covariance and full solvers share a sign convention, so the scatter is identical."""
+    from mantispy._core._pca import pca_solver
+
+    assert pca_solver(600, 20, fallback="auto") == "covariance_eigh"
+    adata = _tall_controls()
+    auto = mt.pl.control_drift(adata, ax=plt.subplots()[1])
+    full = mt.pl.control_drift(adata, svd_solver="full", ax=plt.subplots()[1])
+    # Same groups in the same order, so each scatter's points line up for a direct comparison.
+    for auto_group, full_group in zip(auto.collections, full.collections, strict=True):
+        np.testing.assert_allclose(auto_group.get_offsets().data, full_group.get_offsets().data, rtol=1e-4, atol=1e-4)
+    plt.close("all")

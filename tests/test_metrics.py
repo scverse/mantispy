@@ -632,3 +632,22 @@ def test_batch_variance_plot_matches_a_least_squares_fit_per_component():
         expected = [lstsq_r_squared(values[:, index], obs[key]) for index in range(values.shape[1])]
         np.testing.assert_allclose(line.get_ydata(), expected, atol=1e-9)
     plt.close(fig)
+
+
+def test_evaluate_integration_baseline_solver_auto_matches_arpack(monkeypatch):
+    """The unintegrated baseline PCA is tall and narrow, so auto takes the covariance path; scib's scores, built on distances, are unchanged by the solver."""
+    pytest.importorskip("scib_metrics")
+    from mantispy._core._pca import pca_solver
+
+    adata = _scib_ready()
+    assert pca_solver(adata.n_obs, adata.n_vars, fallback="arpack") == "covariance_eigh"
+    _block_imports(monkeypatch, "copairs")
+
+    auto = mt.metrics.evaluate_integration(_scib_ready(), reps=("X_pca",), svd_solver="auto")
+    arpack = mt.metrics.evaluate_integration(_scib_ready(), reps=("X_pca",), svd_solver="arpack")
+    np.testing.assert_allclose(
+        auto.drop(index="Metric Type", errors="ignore").to_numpy(dtype=float),
+        arpack.drop(index="Metric Type", errors="ignore").to_numpy(dtype=float),
+        rtol=1e-4,
+        atol=1e-4,
+    )

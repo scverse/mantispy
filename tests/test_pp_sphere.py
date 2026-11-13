@@ -360,3 +360,64 @@ def test_auto_epsilon_honours_label_and_batch():
         mt.pp.sphere(adata, method="ZCA", epsilon="auto", copy=True)
     out = mt.pp.sphere(adata, method="ZCA", epsilon="auto", label="Metadata_Gene", batch="Metadata_Batch", copy=True)
     assert "sphere_epsilon" in out.uns["mantispy"]
+
+
+def _tall_reference(n=1000, n_features=20, seed=0):
+    """Many more control rows than features, so the auto solver eigendecomposes their covariance."""
+    import anndata as ad
+    import pandas as pd
+
+    rng = np.random.default_rng(seed)
+    values = rng.standard_normal((n, n_features)) @ rng.standard_normal((n_features, n_features))
+    obs = pd.DataFrame(
+        {
+            "Metadata_Plate": np.where(np.arange(n) < n // 2, "p0", "p1"),
+            "Metadata_Control_Type": "negcon",
+        },
+        index=[str(index) for index in range(n)],
+    )
+    return ad.AnnData(X=values.astype(np.float64), obs=obs)
+
+
+def test_sphere_auto_eigendecomposes_a_tall_reference_matching_full_zca_exactly():
+    """ZCA is sign-free, so the covariance eigendecomposition and the full SVD must agree to the last digit."""
+    from mantispy._core._pca import pca_solver
+
+    assert pca_solver(1000, 20, fallback="full") == "covariance_eigh"  # the fixture is in the tall regime
+    auto = mt.pp.sphere(_tall_reference(), method="ZCA", reference="negcon", key_added="s", copy=True)
+    full = mt.pp.sphere(
+        _tall_reference(), method="ZCA", reference="negcon", key_added="s", svd_solver="full", copy=True
+    )
+    np.testing.assert_allclose(np.asarray(auto.layers["s"]), np.asarray(full.layers["s"]), rtol=1e-6, atol=1e-6)
+
+
+def test_sphere_auto_matches_full_pca_up_to_the_sign_of_each_component():
+    """PCA leaves the feature basis, so a component may flip sign between solvers, but nothing else moves."""
+    auto = mt.pp.sphere(_tall_reference(), method="PCA", reference="negcon", key_added="s", copy=True)
+    full = mt.pp.sphere(
+        _tall_reference(), method="PCA", reference="negcon", key_added="s", svd_solver="full", copy=True
+    )
+    a, f = np.asarray(auto.layers["s"]), np.asarray(full.layers["s"])
+    correlation = np.array([np.corrcoef(a[:, i], f[:, i])[0, 1] for i in range(a.shape[1])])
+    np.testing.assert_allclose(np.abs(correlation), 1.0, atol=1e-6)
+
+
+def test_tvn_auto_matches_the_full_solver_rotation():
+    """The control rotation is fitted with scikit-learn, whose covariance and full solvers are sign-identical."""
+    import anndata as ad
+    import pandas as pd
+
+    rng = np.random.default_rng(0)
+    n, k = 2000, 10
+    obs = pd.DataFrame(
+        {
+            "Metadata_Batch": np.where(np.arange(n) < n // 2, "b0", "b1"),
+            "Metadata_Control_Type": np.where(np.arange(n) % 3 == 0, "negcon", "trt"),
+        },
+        index=[str(index) for index in range(n)],
+    )
+    adata = ad.AnnData(X=np.zeros((n, 1), dtype=np.float32), obs=obs)
+    adata.obsm["X_pca"] = rng.standard_normal((n, k))
+    auto = mt.pp.tvn(adata, use_rep="X_pca", key_added="X_tvn", copy=True)
+    full = mt.pp.tvn(adata, use_rep="X_pca", key_added="X_tvn", svd_solver="full", copy=True)
+    np.testing.assert_allclose(auto.obsm["X_tvn"], full.obsm["X_tvn"], rtol=1e-5, atol=1e-5)

@@ -9,6 +9,7 @@ import numpy as np
 from anndata import AnnData
 
 from mantispy._core._numba import group_offsets
+from mantispy._core._pca import pca_solver
 from mantispy._core._reduce import get_matrix, group_codes, matrix_dtype, representation
 from mantispy._core.logging import get_logger
 from mantispy._core.masks import CONTROL_CLASSES, reference_mask
@@ -17,10 +18,28 @@ from mantispy._core.mutation import inplace_or_copy
 METHODS = ("ZCA", "ZCA-cor", "PCA", "PCA-cor")
 
 
-def _decompose(reference: np.ndarray, method: str) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, int]:
+def _flip_signs(right: np.ndarray) -> np.ndarray:
+    """Give each right-singular vector a deterministic sign, so a decomposition does not flip run to run.
+
+    The sign of a singular vector is free, and a different solver may return the opposite one. Making the
+    largest-magnitude entry of every vector positive is scikit-learn's convention, so the eigendecomposition
+    path lands on the same signs the sklearn-backed sites do.
+    """
+    columns = np.argmax(np.abs(right), axis=1)
+    signs = np.sign(right[np.arange(right.shape[0]), columns])
+    signs[signs == 0] = 1.0
+    return right * signs[:, np.newaxis]
+
+
+def _decompose(
+    reference: np.ndarray, method: str, svd_solver: str = "auto"
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, int]:
     """Return ``(centre, scale, singular, right, n_obs)``: the epsilon-independent part of :func:`_fit`.
 
     Factored out so a sweep over epsilon pays for the centre, scale and SVD once rather than per candidate.
+    ``svd_solver`` selects the decomposition: ``"auto"`` eigendecomposes the feature covariance when the
+    reference is tall and narrow and otherwise takes the full SVD, which ``"covariance_eigh"`` and ``"full"``
+    force directly.
     """
     # A missing value would otherwise surface as "LinAlgError: SVD did not converge".
     if not np.isfinite(reference).all():
@@ -64,6 +83,14 @@ def _decompose(reference: np.ndarray, method: str) -> tuple[np.ndarray, np.ndarr
             "Use more control wells, or reduce the feature set with mt.pp.feature_select."
         )
 
+    # A tall, narrow reference is full rank, so the null-direction padding below never applies and the small
+    # feature covariance can be eigendecomposed in place of the full matrix.
+    if pca_solver(n_obs, n_vars, svd_solver, fallback="full") == "covariance_eigh":
+        eigenvalues, vectors = np.linalg.eigh(centered.T @ centered)
+        singular = np.sqrt(np.clip(eigenvalues[::-1], 0.0, None))
+        right = _flip_signs(vectors[:, ::-1].T)
+        return centre, scale, singular, right, n_obs
+
     # Only an underdetermined reference needs the null directions; full_matrices allocates an (n_obs, n_obs) factor.
     _, singular, right = np.linalg.svd(centered, full_matrices=n_obs <= n_vars)
     if n_obs <= n_vars:
@@ -80,12 +107,14 @@ def _whiten(singular: np.ndarray, right: np.ndarray, n_obs: int, method: str, ep
     return W
 
 
-def _fit(reference: np.ndarray, method: str, epsilon: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _fit(
+    reference: np.ndarray, method: str, epsilon: float, svd_solver: str = "auto"
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Return ``(centre, scale, W)`` for the requested whitening.
 
     Follows pycytominer's ``Spherize``: epsilon is added to the singular values, and when there are no more rows than features the null directions are padded with the smallest non-zero singular value.
     """
-    centre, scale, singular, right, n_obs = _decompose(reference, method)
+    centre, scale, singular, right, n_obs = _decompose(reference, method, svd_solver)
     return centre, scale, _whiten(singular, right, n_obs, method, epsilon)
 
 
@@ -141,7 +170,7 @@ def _extend_epsilon(scored: dict[float, float], evaluate: Callable[[float], floa
 
 
 def _select_epsilon(
-    adata: AnnData, X: np.ndarray, method: str, reference: str | None, label: str, batch: str
+    adata: AnnData, X: np.ndarray, method: str, reference: str | None, label: str, batch: str, svd_solver: str = "auto"
 ) -> tuple[float, np.ndarray]:
     """Pick ``epsilon`` for ``epsilon="auto"``, returning it and the control mask it scored against.
 
@@ -199,7 +228,7 @@ def _select_epsilon(
         )
 
     # Everything that does not depend on the candidate is built once, so each score only re-whitens and re-scores.
-    centre, scale, singular, right, n_obs = _decompose(X[is_control], method)
+    centre, scale, singular, right, n_obs = _decompose(X[is_control], method, svd_solver)
     standardized = (X - centre) / scale
 
     def evaluate(candidate: float) -> float:
@@ -261,6 +290,7 @@ def sphere(
     key_added: str | None = None,
     label: str = "Metadata_Perturbation",
     batch: str = "Metadata_Plate",
+    svd_solver: str = "auto",
     copy: bool = False,
 ) -> AnnData | None:
     """Whiten profiles with a transform fitted on the reference rows.
@@ -280,6 +310,7 @@ def sphere(
         key_added: Write to ``layers[key_added]`` instead of overwriting ``X``.
         label: The ``obs`` column naming the perturbation, which ``epsilon="auto"`` groups replicates by.
         batch: The ``obs`` column naming the plate or batch, which ``epsilon="auto"`` draws negatives from.
+        svd_solver: How the reference is decomposed. ``"auto"`` eigendecomposes the feature covariance when the reference has many more rows than features and otherwise takes the full SVD; ``"covariance_eigh"`` or ``"full"`` force one. The components match either way, up to the sign of each.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
@@ -304,7 +335,7 @@ def sphere(
 
     auto = epsilon == "auto"
     if auto:
-        epsilon, mask = _select_epsilon(adata, X, method, reference, label, batch)
+        epsilon, mask = _select_epsilon(adata, X, method, reference, label, batch, svd_solver)
     elif isinstance(epsilon, bool) or not isinstance(epsilon, int | float):
         # bool is an int subclass, so reject it before the float path turns `singular + True` into a transform.
         raise ValueError(f"epsilon must be a float or 'auto', got {epsilon!r}")
@@ -331,7 +362,7 @@ def sphere(
                 f"reference={reference!r} selects {fit_rows.size}{where}. Leave by=None to fit across "
                 "groups, or check that the platemap labels the controls."
             )
-        centre, scale, W = _fit(X[fit_rows], method, epsilon)
+        centre, scale, W = _fit(X[fit_rows], method, epsilon, svd_solver)
         out[rows] = ((X[rows] - centre) / scale) @ W
 
     result = out.astype(matrix_dtype(adata))
@@ -410,6 +441,7 @@ def tvn(
     use_rep: str | None = "X_pca",
     key_added: str = "X_tvn",
     epsilon: float = 0.5,
+    svd_solver: str = "auto",
     copy: bool = False,
 ) -> AnnData | None:
     """Typical variation normalization, then align each batch's controls onto the pooled controls :cite:p:`Celik_2024`.
@@ -428,6 +460,7 @@ def tvn(
         key_added: ``obsm`` key for the result.
         epsilon: Added to the diagonal of every covariance before it is inverted.
             The profiles are on the controls' own scale by then, so their variances are near one and the reference value of 0.5 is a substantial shrink toward isotropy.
+        svd_solver: How the control rotation is decomposed. ``"auto"`` eigendecomposes the feature covariance when there are many more controls than components and otherwise uses scikit-learn's default; any scikit-learn solver name forces one. The rotation matches either way.
         copy: Return a modified copy instead of writing in place.
 
     Returns:
@@ -468,7 +501,8 @@ def tvn(
         )
 
     values = _centre_scale(values, controls)
-    values = PCA().fit(values[controls]).transform(values)
+    solver = pca_solver(int(controls.sum()), values.shape[1], svd_solver, fallback="auto")
+    values = PCA(svd_solver=solver).fit(values[controls]).transform(values)
 
     codes, keys = group_codes(adata, batch_key)
     # The two passes cannot be merged: the target below is taken from every control row after the first pass rewrote them.
