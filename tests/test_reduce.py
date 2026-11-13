@@ -1,13 +1,17 @@
+import anndata as ad
 import numpy as np
+import pandas as pd
 import pytest
 
 from mantispy._core._numba import (
     MAD,
+    MEAN,
     MEDIAN,
     QUANTILE,
     grouped_median_spread,
     grouped_stat,
 )
+from mantispy._core._reduce import group_codes, reduce_grouped, transform_grouped
 
 
 def test_median_spread_refuses_a_stat_that_is_not_a_spread():
@@ -67,3 +71,55 @@ def test_grouped_stat_quickselect_matches_a_full_sort(dtype, stat, q):
     got = grouped_stat(matrix, codes, n_groups, stat, q=q)
     expected = _reference(matrix, codes, n_groups, stat, q)
     assert np.array_equal(got, expected, equal_nan=True)
+
+
+@pytest.fixture
+def mixed_adata():
+    """An object whose obs mixes string and numeric grouping keys, with repeated leading keys."""
+    rng = np.random.default_rng(0)
+    n = 400
+    obs = pd.DataFrame(
+        {
+            "Metadata_Plate": rng.choice(["p10", "p2", "p1"], n),
+            "Metadata_Well": rng.choice(["A01", "B12", "A2", "H09"], n),
+            # A numeric key so 0.4 and 0.40 stay one group and the dtype is not stringified.
+            "Metadata_Dose": rng.choice([0.4, 10.0, 2.0], n),
+        }
+    )
+    return ad.AnnData(X=rng.standard_normal((n, 5)).astype(np.float32), obs=obs)
+
+
+@pytest.mark.parametrize(
+    "by",
+    [
+        ["Metadata_Plate", "Metadata_Well"],
+        ["Metadata_Plate", "Metadata_Dose"],
+        ["Metadata_Plate", "Metadata_Well", "Metadata_Dose"],
+    ],
+)
+def test_group_codes_matches_the_multiindex_path(mixed_adata, by):
+    """The multi-column fast path must reproduce MultiIndex.factorize(sort=True), codes and keys alike."""
+    codes, keys = group_codes(mixed_adata, by)
+    ref_codes, ref_uniques = pd.MultiIndex.from_frame(mixed_adata.obs[by]).factorize(sort=True)
+    assert np.array_equal(codes, ref_codes)
+    assert keys.equals(ref_uniques)
+
+
+def test_reduce_grouped_reuses_a_precomputed_grouping(mixed_adata):
+    """Passing grouping= must give the same statistic as letting reduce_grouped factorize itself."""
+    by = ["Metadata_Plate", "Metadata_Well"]
+    values, keys, counts = reduce_grouped(mixed_adata, by, MEAN)
+    grouping = group_codes(mixed_adata, by)
+    values2, keys2, counts2 = reduce_grouped(mixed_adata, by, MEAN, grouping=grouping)
+    assert np.array_equal(values, values2, equal_nan=True)
+    assert keys.equals(keys2)
+    assert np.array_equal(counts, counts2)
+
+
+def test_transform_grouped_reuses_a_precomputed_grouping(mixed_adata):
+    """Passing grouping= must rewrite the matrix identically to the self-factorizing path."""
+    by = ["Metadata_Plate", "Metadata_Dose"]
+    centred = transform_grouped(mixed_adata, by, lambda key, block: block - block.mean(axis=0))
+    grouping = group_codes(mixed_adata, by)
+    centred2 = transform_grouped(mixed_adata, by, lambda key, block: block - block.mean(axis=0), grouping=grouping)
+    assert np.array_equal(centred, centred2, equal_nan=True)
