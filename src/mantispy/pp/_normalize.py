@@ -76,9 +76,10 @@ def _center_and_scale(
     The two overlap: a feature can be constant in one group and unmeasured in another, and both facts have to reach the caller.
     """
     if method == "standardize":
-        centre, _, _ = reduce_grouped(adata, by, MEAN, layer=layer, mask=mask)
+        grouping = (codes, keys)
+        centre, _, _ = reduce_grouped(adata, by, MEAN, layer=layer, mask=mask, grouping=grouping)
         # ddof=0 matches pycytominer, which uses sklearn's StandardScaler (population SD).
-        scale, _, _ = reduce_grouped(adata, by, STD, layer=layer, mask=mask, ddof=0)
+        scale, _, _ = reduce_grouped(adata, by, STD, layer=layer, mask=mask, ddof=0, grouping=grouping)
     elif method == "mad_robustize":
         centre, mad = _median_and_spread(adata, MAD_STAT, codes, keys, layer, mask)
         scale = MAD_TO_SIGMA * mad + epsilon
@@ -107,13 +108,16 @@ def _centre_only(centre: np.ndarray, dtype: np.dtype) -> tuple[np.ndarray, np.nd
     return centre.astype(dtype), np.ones_like(centre, dtype=dtype), np.zeros(centre.shape, bool), uncentred
 
 
-def _erased_treatments(adata: AnnData, by: str | list[str] | None) -> list[str]:
+def _erased_treatments(adata: AnnData, by: str | list[str] | None, codes: np.ndarray) -> list[str]:
     """Treatment columns of obs that vary across groups of ``by`` but are constant within every group.
 
     Normalizing within such groups subtracts each group's own centre, and with it the treatment effect.
     The recorded perturbation column is checked first, then any column whose name is a known treatment name.
     A missing value counts as its own level: control wells often leave the concentration empty, and a plate
     whose treated wells share one concentration still holds two conditions, its controls and its treatment.
+
+    ``codes`` is the row grouping already computed for ``by``; constancy within a group is read off it with one
+    factorize per candidate instead of a pandas groupby per candidate, which scans every row each time.
     """
     if by is None:
         return []
@@ -122,13 +126,19 @@ def _erased_treatments(adata: AnnData, by: str | list[str] | None) -> list[str]:
     perturbation = resolve_perturbation_column(adata)
     candidates = [perturbation] if perturbation in obs else []
     candidates += [c for c in obs.columns if c != perturbation and _TREATMENT_COLUMN.fullmatch(str(c))]
+    group_codes64 = codes.astype(np.int64)
+    n_present = np.unique(codes).size
     erased = []
     for column in candidates:
         if column in keys:
             continue
-        if obs[column].nunique(dropna=False) < 2:
+        # Missing values are their own level (dropna=False): factorize keeps them with use_na_sentinel=False.
+        column_codes, uniques = pd.factorize(obs[column], use_na_sentinel=False)
+        if len(uniques) < 2:
             continue
-        if (obs.groupby(keys, observed=True)[column].nunique(dropna=False) <= 1).all():
+        # Constant within every present group iff the number of distinct (group, value) pairs equals the groups present.
+        pairs = np.unique(group_codes64 * len(uniques) + column_codes)
+        if pairs.size == n_present:
             erased.append(column)
     return erased
 
@@ -185,7 +195,7 @@ def normalize(
         empty = [str(keys[int(index)]) for index in np.flatnonzero(present == 0)]
         raise ValueError(f"no reference rows in group(s): {empty[:5]}")
 
-    erased = _erased_treatments(adata, by)
+    erased = _erased_treatments(adata, by, codes)
     if erased:
         get_logger().warning(
             "normalize: %s is constant within every %s group, so normalizing removes its differences",
@@ -236,7 +246,7 @@ def normalize(
     if keep_raw and "raw" not in adata.layers:
         adata.layers["raw"] = get_matrix(adata, layer).copy()
 
-    out = transform_grouped(adata, by, _rescale, layer=layer)
+    out = transform_grouped(adata, by, _rescale, layer=layer, grouping=(codes, keys))
     if key_added is None:
         adata.X = out
     else:

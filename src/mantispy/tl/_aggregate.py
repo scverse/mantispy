@@ -70,8 +70,10 @@ def aggregate(
     # use_rep/layer mutual exclusion and obsm validation are enforced once, in reduce_grouped's _obsm_source.
     columns = [by] if isinstance(by, str) else list(by)
 
-    values, keys, counts = reduce_grouped(adata, columns, FUNCTIONS[func], layer=layer, use_rep=use_rep)
-    codes, _ = group_codes(adata, columns)
+    codes, keys = group_codes(adata, columns)
+    values, _, counts = reduce_grouped(
+        adata, columns, FUNCTIONS[func], layer=layer, use_rep=use_rep, grouping=(codes, keys)
+    )
     frame = as_frame(adata.obs)
     tallies = {count_key: counts}
     # The recorded resolution, not the column, decides count handling: an object may carry its well's
@@ -118,8 +120,12 @@ def aggregate(
 
 def _group_names(obs: pd.DataFrame, columns: list[str]) -> pd.Index:
     """Row names built from the group keys, so aggregates from several screens concatenate without clashes."""
+    # Columns joined with vectorized string concatenation rather than a row-wise apply over every group.
+    joined = obs[columns[0]].astype(str)
+    for column in columns[1:]:
+        joined = joined + "_" + obs[column].astype(str)
     # Keys that join to the same text get a numbered suffix.
-    return ad.utils.make_index_unique(pd.Index(obs[columns].astype(str).agg("_".join, axis=1).to_numpy(dtype=str)))
+    return ad.utils.make_index_unique(pd.Index(joined.to_numpy(dtype=str)))
 
 
 def _warn_dropped_controls(obs: pd.DataFrame, keep: np.ndarray, control_col: str, min_cells: int) -> None:
