@@ -28,12 +28,18 @@ def _n_unique(X: np.ndarray, missing: np.ndarray) -> np.ndarray:
     n_obs, n_vars = X.shape
     out = np.empty(n_vars, dtype=np.int32)
     width = max(int(CHUNK_BYTES / max(n_obs, 1) / X.itemsize), 1)
-    position = np.arange(1, n_obs)[:, None]
+    position = None
     for start in range(0, n_vars, width):
         columns = slice(start, start + width)
         block = np.sort(X[:, columns], axis=0)
         finite = n_obs - missing[:, columns].sum(axis=0)
-        changed = (block[1:] != block[:-1]) & (position < finite)
+        changed = block[1:] != block[:-1]
+        if (finite != n_obs).any():
+            # A column with missing values keeps its finite prefix only; the rest sorted to the end and is not
+            # counted. Columns with no gaps need no mask, which is the common case and avoids the position array.
+            if position is None:
+                position = np.arange(1, n_obs)[:, None]
+            changed &= position < finite
         out[columns] = changed.sum(axis=0) + (finite > 0)
     return out
 
