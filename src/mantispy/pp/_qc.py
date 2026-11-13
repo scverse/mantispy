@@ -51,6 +51,7 @@ def calculate_qc_metrics(
     border_margin: int = 10,
     max_nan_fraction: float = 0.5,
     area_feature: str | None = None,
+    feature_metrics: bool = False,
     copy: bool = False,
 ) -> AnnData | None:
     """Compute per-cell and per-feature QC metrics.
@@ -64,11 +65,13 @@ def calculate_qc_metrics(
             Partial NaN is routine in CellProfiler output (Zernike and RadialDistribution features are undefined for small objects), so requiring no missing values would flag almost every cell.
         area_feature: The ``var`` name of the area measurement to score for outliers.
             By default the columns whose parsed ``feature`` is ``Area`` are used; pass this for a table whose names do not parse (``mt.io.stamp`` could not fill ``var["feature"]``).
+        feature_metrics: Also describe each feature's value spread, writing ``var["qc_variance"]`` and ``var["qc_n_unique"]``.
+            Off by default: computing ``qc_n_unique`` sorts every feature and dominates the runtime on large single-cell objects, while :func:`filter_cells` reads neither column.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
         ``None``, or the modified copy.
-        Writes the ``obs`` columns ``qc_n_nan_features``, ``qc_nan_fraction``, ``qc_is_border``, ``qc_area_outlier`` and ``qc_fail``, and the ``var`` columns ``qc_n_nan``, ``qc_variance`` and ``qc_n_unique``.
+        Writes the ``obs`` columns ``qc_n_nan_features``, ``qc_nan_fraction``, ``qc_is_border``, ``qc_area_outlier`` and ``qc_fail``, and the ``var`` column ``qc_n_nan``; with ``feature_metrics`` it also writes the ``var`` columns ``qc_variance`` and ``qc_n_unique``.
         Every ``qc_*`` boolean is ``True`` for a problem, matching the ecosystem convention; ``qc_fail`` is their union and the flag :func:`filter_cells` reads.
         When no area column is found and `area_feature` is not given, ``qc_area_outlier`` is skipped (left all ``False``) with a warning and the other metrics are still computed.
 
@@ -93,8 +96,9 @@ def calculate_qc_metrics(
     adata.obs["qc_n_nan_features"] = missing.sum(axis=1).astype(np.int32)
     adata.obs["qc_nan_fraction"] = nan_fraction
     adata.var["qc_n_nan"] = missing.sum(axis=0).astype(np.int32)
-    adata.var["qc_variance"] = nanvar(X)
-    adata.var["qc_n_unique"] = _n_unique(X, missing)
+    if feature_metrics:
+        adata.var["qc_variance"] = nanvar(X)
+        adata.var["qc_n_unique"] = _n_unique(X, missing)
 
     adata.obs["qc_is_border"] = border
     adata.obs["qc_area_outlier"] = area_outlier

@@ -40,6 +40,36 @@ def test_filter_cells_without_metrics_says_what_to_run(adata):
         mt.pp.filter_cells(adata)
 
 
+def test_feature_metrics_are_opt_in(adata):
+    """qc_variance and qc_n_unique are a per-feature pass filter_cells never reads, so they are written only on request; qc_n_nan comes free from the missingness pass and stays."""
+    mt.pp.calculate_qc_metrics(adata)
+    assert "qc_n_nan" in adata.var
+    assert "qc_variance" not in adata.var
+    assert "qc_n_unique" not in adata.var
+
+    mt.pp.calculate_qc_metrics(adata, feature_metrics=True)
+    assert "qc_variance" in adata.var
+    assert "qc_n_unique" in adata.var
+
+
+def test_feature_metrics_match_a_direct_computation(adata):
+    """Opt-in values equal computing them straight from the matrix."""
+    X = adata.X.astype(np.float64)
+    expected_variance = np.nanvar(X, axis=0)
+    expected_unique = np.array([len(np.unique(column[~np.isnan(column)])) for column in X.T], dtype=np.int32)
+
+    mt.pp.calculate_qc_metrics(adata, feature_metrics=True)
+    np.testing.assert_allclose(adata.var["qc_variance"].to_numpy(), expected_variance, rtol=1e-5)
+    np.testing.assert_array_equal(adata.var["qc_n_unique"].to_numpy(), expected_unique)
+
+
+def test_filter_cells_works_without_feature_metrics(adata):
+    """A default (feature-metric-free) qc run still drives filter_cells: qc_fail is unchanged."""
+    mt.pp.calculate_qc_metrics(adata)
+    passing = int((~adata.obs["qc_fail"]).sum())
+    assert mt.pp.filter_cells(adata, min_cells_per_well=0, copy=True).n_obs == passing
+
+
 def test_filter_features_drops_all_nan_constant_and_blocklisted(adata):
     values = adata.X.copy()
     values[:, 0] = np.nan
