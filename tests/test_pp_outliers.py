@@ -84,6 +84,54 @@ def test_lof_flags_what_sklearn_and_brieflow_flag():
     np.testing.assert_array_equal(adata.obs["qc_outlier"].to_numpy(), brieflow)
 
 
+def test_lof_n_jobs_does_not_change_the_result():
+    """n_jobs only parallelises the neighbour search; the flags and scores must be identical."""
+    adata = synthetic_plate(n_wells=25, n_cells=40, n_features=6, seed=1)
+    one = adata.copy()
+    many = adata.copy()
+    mt.pp.outliers(one, method="lof", contamination=0.01, n_jobs=None)
+    mt.pp.outliers(many, method="lof", contamination=0.01, n_jobs=-1)
+    np.testing.assert_array_equal(one.obs["qc_outlier"].to_numpy(), many.obs["qc_outlier"].to_numpy())
+    np.testing.assert_allclose(one.obs["qc_outlier_score"], many.obs["qc_outlier_score"], rtol=1e-12)
+
+
+def test_lof_sampled_fit_is_reproducible_and_agrees_with_the_full_fit():
+    """Fitting LOF on a seeded sample bounds its cost; it reflags the same clear outliers as a full fit,
+    and the same seed reflags the same cells."""
+    rng = np.random.default_rng(0)
+    core = rng.normal(size=(1000, 6))
+    # Isolated outliers, each far in its own direction, so neither mode masks them as a dense clump.
+    directions = rng.normal(size=(12, 6))
+    far = 12.0 * directions / np.linalg.norm(directions, axis=1, keepdims=True)
+    X = np.vstack([core, far])
+    outlier_rows = np.arange(1000, 1012)
+    make = lambda: AnnData(
+        X=X.copy(),
+        obs=pd.DataFrame(index=[f"c{i}" for i in range(X.shape[0])]),
+        var=pd.DataFrame(index=[f"f{j}" for j in range(6)]),
+    )
+
+    full = make()
+    mt.pp.outliers(full, method="lof", contamination=0.03, n_fit=None)
+    sampled = make()
+    mt.pp.outliers(sampled, method="lof", contamination=0.03, n_fit=200, seed=0)
+    again = make()
+    mt.pp.outliers(again, method="lof", contamination=0.03, n_fit=200, seed=0)
+
+    s_flag = sampled.obs["qc_outlier"].to_numpy()
+    f_flag = full.obs["qc_outlier"].to_numpy()
+    np.testing.assert_array_equal(s_flag, again.obs["qc_outlier"].to_numpy())  # reproducible
+    assert s_flag[outlier_rows].all() and f_flag[outlier_rows].all()  # both catch the obvious outliers
+    jaccard = (s_flag & f_flag).sum() / (s_flag | f_flag).sum()
+    assert jaccard > 0.7
+
+
+def test_lof_rejects_a_bad_n_fit():
+    adata = synthetic_plate(n_wells=4, n_cells=10, n_features=5, seed=0)
+    with pytest.raises(ValueError, match="n_fit"):
+        mt.pp.outliers(adata, method="lof", n_fit=1)
+
+
 def test_lof_scores_a_group_of_one_or_two_rows():
     # One well of one cell and one of two, so both the single-row path and the real two-row (n_neighbors=1) path run.
     X = np.random.default_rng(0).normal(size=(3, 4))

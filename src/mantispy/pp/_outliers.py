@@ -18,25 +18,47 @@ from mantispy._core.mutation import inplace_or_copy
 METHODS = ("ecod", "isolation_forest", "lof", "mad")
 
 
-def _scores(X: np.ndarray, method: str, seed: int, ecod_aggregation: str) -> np.ndarray:
+def _lof_scores(X: np.ndarray, n_jobs: int | None, n_fit: int | None, rng: np.random.Generator) -> np.ndarray:
+    """LOF score per row, higher meaning more outlying."""
+    from sklearn.neighbors import LocalOutlierFactor
+
+    scores = np.full(X.shape[0], np.nan)
+    # LOF needs complete input; a row missing every selected feature, filled with zero, would collapse onto
+    # the origin and inflate the density of nearby cells, so those rows are left out of the fit and unscored.
+    present = ~np.isnan(X).all(axis=1)
+    # X[present] already copies, so clean it in place rather than allocating a second array.
+    fitted = np.nan_to_num(X[present], nan=0.0, posinf=0.0, neginf=0.0, copy=False)
+    n = fitted.shape[0]
+    if n < 2:
+        scores[present] = 0.0
+        return scores
+    if n_fit is not None and n > n_fit:
+        # Fit the density on a seeded random sample and score every present row against it in novelty mode,
+        # so cost tracks the sample rather than the whole group.
+        sample = np.sort(rng.choice(n, size=n_fit, replace=False))
+        model = LocalOutlierFactor(n_neighbors=min(20, n_fit - 1), novelty=True, n_jobs=n_jobs).fit(fitted[sample])
+        scores[present] = -model.score_samples(fitted)
+    else:
+        # Cap neighbours at group size - 1 so sklearn never raises on a small group.
+        model = LocalOutlierFactor(n_neighbors=min(20, n - 1), n_jobs=n_jobs).fit(fitted)
+        scores[present] = -model.negative_outlier_factor_
+    return scores
+
+
+def _scores(
+    X: np.ndarray,
+    method: str,
+    seed: int,
+    ecod_aggregation: str,
+    n_jobs: int | None,
+    n_fit: int | None,
+    rng: np.random.Generator,
+) -> np.ndarray:
     """Outlier score per row, higher meaning more outlying."""
     if method == "ecod":
         return ecod_scores(X, ecod_aggregation)
     if method == "lof":
-        from sklearn.neighbors import LocalOutlierFactor
-
-        scores = np.full(X.shape[0], np.nan)
-        # LOF needs complete input; a row missing every selected feature, filled with zero, would collapse onto
-        # the origin and inflate the density of nearby cells, so those rows are left out of the fit and unscored.
-        present = ~np.isnan(X).all(axis=1)
-        fitted = np.nan_to_num(X[present], nan=0.0, posinf=0.0, neginf=0.0)
-        if fitted.shape[0] < 2:
-            scores[present] = 0.0
-            return scores
-        # Cap neighbours at group size - 1 so sklearn never raises on a small group.
-        model = LocalOutlierFactor(n_neighbors=min(20, fitted.shape[0] - 1)).fit(fitted)
-        scores[present] = -model.negative_outlier_factor_
-        return scores
+        return _lof_scores(X, n_jobs, n_fit, rng)
     if method == "isolation_forest":
         from sklearn.ensemble import IsolationForest
 
@@ -57,6 +79,8 @@ def outliers(
     by: str | None = None,
     seed: int = 0,
     ecod_aggregation: str = "pyod",
+    n_fit: int | None = None,
+    n_jobs: int | None = None,
     key_added: str = "qc_outlier",
     copy: bool = False,
 ) -> AnnData | None:
@@ -76,10 +100,16 @@ def outliers(
             Falls back to every feature when the column is absent.
             Not the output name, which is ``key_added``.
         by: Threshold within each group of this ``obs`` column, e.g. per plate, rather than globally.
-        seed: Seed for ``isolation_forest``.
+        seed: Seed for ``isolation_forest`` and the ``n_fit`` sample.
         ecod_aggregation: How ``"ecod"`` combines features.
             ``"pyod"`` sums each feature's larger tail, or both tails where its skewness is zero or undefined, as pyod and scmorph do, so no score depends on which way round a feature is measured.
             ``"paper"`` is Algorithm 1 of :cite:t:`Li_2023`, the largest of the left-tail, right-tail and skew-directed sums.
+        n_fit: ``"lof"`` fits its density on a random sample of at most this many rows per ``by`` group and scores every row against that sample, rather than fitting on all of them, so its time and memory grow with the sample rather than the whole screen and stay bounded however large the screen is.
+            A smaller sample sets a coarser scale for "normal" density, measuring each cell against a sparser neighbourhood than a full fit would, so the sampled run flags its most outlying cells by a different standard and can disagree substantially over which cells those are, more so the smaller the sample and the denser the data; it trades that fidelity for a run whose cost no longer rises with the number of cells.
+            ``None``, the default, fits on every row, the exact local outlier factor, and parallelises across ``n_jobs``.
+            A group with no more than ``n_fit`` rows is fit in full either way.
+        n_jobs: Threads for the ``"lof"`` neighbour search (sklearn's ``n_jobs``).
+            ``None`` runs on one core; ``-1`` uses every core, as Brieflow's intensity filter does, and makes the full fit scale to large screens without changing which cells it flags.
         key_added: Output: the prefix for the results, written to ``obs[key_added]`` and ``obs[key_added + "_score"]``.
         copy: Return a modified copy instead of mutating in place.
 
@@ -89,7 +119,7 @@ def outliers(
         The flagged cells are also added to ``obs["qc_fail"]``, the union of the ``qc_*`` flags that :func:`~mantispy.pp.filter_cells` drops, which is created if absent; a cell already failing keeps failing.
 
     Raises:
-        ValueError: If ``method`` or ``ecod_aggregation`` is unknown, or ``contamination`` is outside ``(0, 1)`` and no ``score_cutoff`` is given.
+        ValueError: If ``method`` or ``ecod_aggregation`` is unknown, ``contamination`` is outside ``(0, 1)`` and no ``score_cutoff`` is given, or ``n_fit`` is below 2.
     """
     if method not in METHODS:
         raise ValueError(f"method must be one of {METHODS}, got {method!r}")
@@ -97,12 +127,15 @@ def outliers(
         raise ValueError(f"contamination must be between 0 and 1, got {contamination}")
     if ecod_aggregation not in AGGREGATIONS:
         raise ValueError(f"ecod_aggregation must be one of {AGGREGATIONS}, got {ecod_aggregation!r}")
+    if n_fit is not None and n_fit < 2:
+        raise ValueError(f"n_fit must be at least 2, got {n_fit}")
 
     selected = feature_mask(adata, key)
     X = get_matrix(adata)[:, selected]
 
     scores = np.empty(adata.n_obs, dtype=np.float64)
     flagged = np.zeros(adata.n_obs, dtype=bool)
+    rng = np.random.default_rng(seed)
     codes, keys = group_codes(adata, by)
     order, offsets = group_offsets(codes, len(keys))
     for group in range(len(keys)):
@@ -110,7 +143,7 @@ def outliers(
         if not rows.size:
             continue
         # One group is the whole matrix, so it is scored in place rather than copied.
-        block = _scores(X if len(keys) == 1 else X[rows], method, seed, ecod_aggregation)
+        block = _scores(X if len(keys) == 1 else X[rows], method, seed, ecod_aggregation, n_jobs, n_fit, rng)
         scores[rows] = block
         if score_cutoff is not None:
             flagged[rows] = block > score_cutoff
