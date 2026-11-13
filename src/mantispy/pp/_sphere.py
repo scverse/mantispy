@@ -424,6 +424,7 @@ def tvn(
         reference: Rows the transform is fitted on: ``"negcon"`` for the controls, ``None`` for everything, or the name of a boolean ``obs`` column.
         use_rep: Embedding to align, as :func:`~mantispy.pp.harmony` takes one, or ``None`` to align ``X`` itself.
             Fitting the rotation on the controls of a wide feature matrix is expensive, so the default expects a reduction first, normally :func:`scanpy.pp.pca`.
+            On a large screen give that call ``svd_solver="covariance_eigh"``: with many more cells than features it decomposes the small feature covariance and keeps the reduction bounded in memory, where the default solver decomposes the whole matrix.
         key_added: ``obsm`` key for the result.
         epsilon: Added to the diagonal of every covariance before it is inverted.
             The profiles are on the controls' own scale by then, so their variances are near one and the reference value of 0.5 is a substantial shrink toward isotropy.

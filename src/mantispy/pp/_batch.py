@@ -633,6 +633,7 @@ def harmony(
         adata: Object holding the embedding to correct.
         batch_key: ``obs`` column naming the nuisance grouping, such as the batch, plate or imaging site.
         use_rep: Embedding to correct, normally the output of :func:`scanpy.pp.pca`.
+            On a large screen give that call ``svd_solver="covariance_eigh"``, which decomposes the small feature covariance and keeps the reduction bounded in memory.
         key_added: ``obsm`` key for the corrected embedding.
         max_iter: Harmony iterations.
         seed: Seed, passed through as ``rng``.
