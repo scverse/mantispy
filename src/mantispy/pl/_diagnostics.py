@@ -118,7 +118,7 @@ def control_drift(
     adata: AnnData,
     groupby: str = "Metadata_Plate",
     n_components: int = 2,
-    svd_solver: str = "auto",
+    svd_solver: str | None = None,
     ax: Axes | None = None,
 ) -> Axes | None:
     """Control wells projected onto principal components fitted on the controls alone.
@@ -130,7 +130,7 @@ def control_drift(
         groupby: ``obs`` column that colors the control wells, normally the plate or the batch.
         n_components: Components fitted on the controls.
             The first two are the ones drawn.
-        svd_solver: How the controls are decomposed. ``"auto"`` eigendecomposes the feature covariance when there are many more controls than features and otherwise uses scikit-learn's default; any scikit-learn solver name forces one. The embedding matches either way.
+        svd_solver: How the controls are decomposed. ``None`` eigendecomposes the feature covariance when there are many more controls than features and otherwise uses scikit-learn's default; any scikit-learn solver name forces one. The embedding matches either way.
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:

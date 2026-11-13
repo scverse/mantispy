@@ -643,7 +643,7 @@ def test_evaluate_integration_baseline_solver_auto_matches_arpack(monkeypatch):
     assert pca_solver(adata.n_obs, adata.n_vars, fallback="arpack") == "covariance_eigh"
     _block_imports(monkeypatch, "copairs")
 
-    auto = mt.metrics.evaluate_integration(_scib_ready(), reps=("X_pca",), svd_solver="auto")
+    auto = mt.metrics.evaluate_integration(_scib_ready(), reps=("X_pca",), svd_solver=None)
     arpack = mt.metrics.evaluate_integration(_scib_ready(), reps=("X_pca",), svd_solver="arpack")
     np.testing.assert_allclose(
         auto.drop(index="Metric Type", errors="ignore").to_numpy(dtype=float),

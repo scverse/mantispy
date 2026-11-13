@@ -22,7 +22,7 @@ def test_auto_keeps_the_fallback_when_there_are_too_many_columns():
 
 @pytest.mark.parametrize("override", ["arpack", "full", "covariance_eigh", "randomized"])
 def test_a_named_solver_is_returned_unchanged(override):
-    """Anything but "auto" is the caller forcing a solver, which the picker must not second-guess."""
+    """Anything but None is the caller forcing a solver, which the picker must not second-guess."""
     assert pca_solver(100_000, 50, override, fallback="arpack") == override
     # Even when the shape would otherwise keep the fallback.
     assert pca_solver(60, 50, override, fallback="arpack") == override

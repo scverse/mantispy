@@ -32,12 +32,12 @@ def _flip_signs(right: np.ndarray) -> np.ndarray:
 
 
 def _decompose(
-    reference: np.ndarray, method: str, svd_solver: str = "auto"
+    reference: np.ndarray, method: str, svd_solver: str | None = None
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, int]:
     """Return ``(centre, scale, singular, right, n_obs)``: the epsilon-independent part of :func:`_fit`.
 
     Factored out so a sweep over epsilon pays for the centre, scale and SVD once rather than per candidate.
-    ``svd_solver`` selects the decomposition: ``"auto"`` eigendecomposes the feature covariance when the
+    ``svd_solver`` selects the decomposition: ``None`` eigendecomposes the feature covariance when the
     reference is tall and narrow and otherwise takes the full SVD, which ``"covariance_eigh"`` and ``"full"``
     force directly.
     """
@@ -108,7 +108,7 @@ def _whiten(singular: np.ndarray, right: np.ndarray, n_obs: int, method: str, ep
 
 
 def _fit(
-    reference: np.ndarray, method: str, epsilon: float, svd_solver: str = "auto"
+    reference: np.ndarray, method: str, epsilon: float, svd_solver: str | None = None
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Return ``(centre, scale, W)`` for the requested whitening.
 
@@ -170,7 +170,13 @@ def _extend_epsilon(scored: dict[float, float], evaluate: Callable[[float], floa
 
 
 def _select_epsilon(
-    adata: AnnData, X: np.ndarray, method: str, reference: str | None, label: str, batch: str, svd_solver: str = "auto"
+    adata: AnnData,
+    X: np.ndarray,
+    method: str,
+    reference: str | None,
+    label: str,
+    batch: str,
+    svd_solver: str | None = None,
 ) -> tuple[float, np.ndarray]:
     """Pick ``epsilon`` for ``epsilon="auto"``, returning it and the control mask it scored against.
 
@@ -290,7 +296,7 @@ def sphere(
     key_added: str | None = None,
     label: str = "Metadata_Perturbation",
     batch: str = "Metadata_Plate",
-    svd_solver: str = "auto",
+    svd_solver: str | None = None,
     copy: bool = False,
 ) -> AnnData | None:
     """Whiten profiles with a transform fitted on the reference rows.
@@ -302,15 +308,15 @@ def sphere(
             ``"PCA"`` and ``"PCA-cor"`` return principal components, which ``var`` no longer describes, and warn about it unless ``key_added`` is set.
             The ``-cor`` variants whiten the correlation instead of the covariance, so high-variance features do not dominate.
         reference: Rows to fit on: ``"negcon"`` for the controls, ``None`` for everything, or the name of a boolean ``obs`` column.
-        epsilon: Regularization added to the singular values, or ``"auto"`` to pick it from the data.
-            ``"auto"`` scores each candidate by the mean of its activity and replicability mAP on the transformed profiles and keeps the argmax, starting from the jump-profiling-recipe grid and then sampling past both ends and between points when the best sits there, so the chosen value can fall outside the recipe's range.
+        epsilon: Regularization added to the singular values, or ``None`` to pick it from the data.
+            ``None`` scores each candidate by the mean of its activity and replicability mAP on the transformed profiles and keeps the argmax, starting from the jump-profiling-recipe grid and then sampling past both ends and between points when the best sits there, so the chosen value can fall outside the recipe's range.
             It needs copairs, the ``label`` and ``batch`` columns and a negcon reference; the search is global, so ``by`` only changes how the chosen value is applied.
             Every candidate, its score and the chosen value are written to ``uns["mantispy"]["sphere_epsilon"]``.
         by: Fit and apply separately within each group of this column, e.g. per batch.
         key_added: Write to ``layers[key_added]`` instead of overwriting ``X``.
         label: The ``obs`` column naming the perturbation, which ``epsilon="auto"`` groups replicates by.
         batch: The ``obs`` column naming the plate or batch, which ``epsilon="auto"`` draws negatives from.
-        svd_solver: How the reference is decomposed. ``"auto"`` eigendecomposes the feature covariance when the reference has many more rows than features and otherwise takes the full SVD; ``"covariance_eigh"`` or ``"full"`` force one. The components match either way, up to the sign of each.
+        svd_solver: How the reference is decomposed. ``None`` eigendecomposes the feature covariance when the reference has many more rows than features and otherwise takes the full SVD; ``"covariance_eigh"`` or ``"full"`` force one. The components match either way, up to the sign of each.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
@@ -319,7 +325,7 @@ def sphere(
 
     Raises:
         ImportError: ``epsilon="auto"`` was asked but copairs, the extra the sweep scores with, is not installed.
-        ValueError: If ``method`` is unknown, ``epsilon`` is neither a float nor ``"auto"``, ``reference`` selects no rows, a group has fewer than two reference rows, the reference holds missing or infinite values, a ``-cor`` method meets a zero-variance feature, the reference matrix is not full rank, ``epsilon="auto"`` is asked without the columns and reference the sweep needs, or every ``epsilon="auto"`` candidate scored non-finite.
+        ValueError: If ``method`` is unknown, ``epsilon`` is neither a float nor ``None``, ``reference`` selects no rows, a group has fewer than two reference rows, the reference holds missing or infinite values, a ``-cor`` method meets a zero-variance feature, the reference matrix is not full rank, ``epsilon="auto"`` is asked without the columns and reference the sweep needs, or every ``epsilon="auto"`` candidate scored non-finite.
     """
     if method not in METHODS:
         raise ValueError(f"method must be one of {METHODS}, got {method!r}")
@@ -441,7 +447,7 @@ def tvn(
     use_rep: str | None = "X_pca",
     key_added: str = "X_tvn",
     epsilon: float = 0.5,
-    svd_solver: str = "auto",
+    svd_solver: str | None = None,
     copy: bool = False,
 ) -> AnnData | None:
     """Typical variation normalization, then align each batch's controls onto the pooled controls :cite:p:`Celik_2024`.
@@ -460,7 +466,7 @@ def tvn(
         key_added: ``obsm`` key for the result.
         epsilon: Added to the diagonal of every covariance before it is inverted.
             The profiles are on the controls' own scale by then, so their variances are near one and the reference value of 0.5 is a substantial shrink toward isotropy.
-        svd_solver: How the control rotation is decomposed. ``"auto"`` eigendecomposes the feature covariance when there are many more controls than components and otherwise uses scikit-learn's default; any scikit-learn solver name forces one. The rotation matches either way.
+        svd_solver: How the control rotation is decomposed. ``None`` eigendecomposes the feature covariance when there are many more controls than components and otherwise uses scikit-learn's default; any scikit-learn solver name forces one. The rotation matches either way.
         copy: Return a modified copy instead of writing in place.
 
     Returns:

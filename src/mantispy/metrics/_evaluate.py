@@ -141,7 +141,7 @@ def _benchmark(
     batch_key: str,
     min_max_scale: bool,
     scib_names: list[str] | None = None,
-    svd_solver: str = "auto",
+    svd_solver: str | None = None,
 ) -> pd.DataFrame:
     """scib-metrics' public ``get_results`` frame for the representations, kept as a seam a test can read directly.
 
@@ -184,7 +184,7 @@ def evaluate_integration(
     metrics: Sequence[str] | None = None,
     map_mode: str = "replicability",
     map_kwargs: dict[str, Any] | None = None,
-    svd_solver: str = "auto",
+    svd_solver: str | None = None,
     ax: Axes | None = None,
 ) -> pd.DataFrame:
     """Score one or more representations against a batch and draw the integration benchmark as a heatmap.
@@ -235,7 +235,7 @@ def evaluate_integration(
         map_mode: The copairs pairing for mAP, ``"replicability"`` (the Arevalo ``mAP-nonrep`` default) or
             ``"cross_plate"``. See ``_map_settings``.
         map_kwargs: Overrides for any of the four copairs pair arguments, on top of ``map_mode``.
-        svd_solver: How the unintegrated baseline PCA is decomposed. ``"auto"`` eigendecomposes the feature covariance when the screen has many more wells than features and otherwise uses arpack; any scanpy solver name forces one. The baseline matches either way.
+        svd_solver: How the unintegrated baseline PCA is decomposed. ``None`` eigendecomposes the feature covariance when the screen has many more wells than features and otherwise uses arpack; any scanpy solver name forces one. The baseline matches either way.
         ax: Axes to draw the heatmap on, or ``None`` for a new figure.
 
     Returns:
