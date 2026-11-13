@@ -7,6 +7,7 @@ import warnings
 import zlib
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -90,7 +91,8 @@ def perturbation_score(
     reference: str = "negcon",
     use_rep: str | None = None,
     layer: str | None = None,
-    replicate: str | Sequence[str] | None = None,
+    replicate: str | Sequence[str] | None = "Metadata_sgRNA",
+    by: str | None = None,
     n_features: int = 200,
     n_folds: int = 5,
     min_cells: int = 50,
@@ -117,9 +119,13 @@ def perturbation_score(
         reference: The cells every group is told apart from: ``"negcon"`` for the rows whose ``Metadata_Control_Type`` is ``"negcon"``, or the name of a boolean ``obs`` column.
         use_rep: Read ``obsm[use_rep]`` instead of ``X``; cannot be combined with `layer`.
         layer: Read this layer instead of ``X``.
-        replicate: ``obs`` column, or columns, whose groups are kept whole within a cross-validation fold, usually the guide (``"Metadata_sgRNA"``).
+        replicate: ``obs`` column, or columns, whose groups are kept whole within a cross-validation fold, the guide by default (``"Metadata_sgRNA"``, as :func:`~mantispy.tl.composition_shift` also defaults to).
             The model is then always tested on guides it was not trained on, so a phenotype one guide carries alone, such as an off-target effect, does not raise the group's score.
+            A named column that ``obs`` lacks raises, naming the argument.
             ``None`` draws folds over cells, as Brieflow does, and warns on an object stamped object resolution, since non-targeting guides grouped into pseudo-genes can then score above one half.
+        by: ``obs`` column whose levels are scored apart, for example ``"Metadata_Class"`` to score interphase and mitotic cells separately, as Brieflow does.
+            Each group is scored within each level against a reference sample drawn from that level, so a cell's score and its group's AUC come from its own level; a group too small within a level is left unscored there.
+            ``None`` scores every cell in one pass.
         n_features: How many features, ranked by the ANOVA F statistic within each fold, the model reads.
         n_folds: Cross-validation folds, capped by the cells, or with `replicate` the replicates, on the smaller side.
         min_cells: Groups with fewer cells than this are left unscored.
@@ -132,11 +138,11 @@ def perturbation_score(
     Returns:
         ``None``, or the modified copy.
         Writes ``obs[key_added]``, each cell's out-of-fold probability of its group, missing for the reference cells and for unscored groups.
-        Writes ``uns["mantispy"][key_added]``, one row per group with ``group``, ``n_cells``, ``n_reference`` (the size of its reference sample), ``n_folds`` and ``auc``, which is missing for an unscored group.
+        Writes ``uns["mantispy"][key_added]``, one row per group with ``group``, ``n_cells``, ``n_reference`` (the size of its reference sample), ``n_folds`` and ``auc``, which is missing for an unscored group; with `by`, one row per group and level and a column named for `by` holding the level.
 
     Raises:
         ValueError: `reference` selects no cells, or a scored cell or a reference cell has a missing feature value.
-        KeyError: `groupby` is not an ``obs`` column.
+        KeyError: `groupby`, `replicate` or `by` names a column that ``obs`` lacks.
 
     Notes:
         The reference cells set the null each group is tested against and are not scored themselves.
@@ -151,6 +157,14 @@ def perturbation_score(
     is_reference = reference_mask(adata, reference)
     if not is_reference.any():
         raise ValueError(f"reference={reference!r} selects no cells")
+    if replicate is not None:
+        columns = [replicate] if isinstance(replicate, str) else list(replicate)
+        missing = [column for column in columns if column not in adata.obs]
+        if missing:
+            raise KeyError(
+                f"perturbation_score: replicate column(s) {missing} are not in obs; pass an existing column "
+                "as replicate=, or replicate=None for Brieflow's random folds over cells"
+            )
     if replicate is None and _is_object_resolution(adata):
         warnings.warn(
             "replicate=None draws folds over cells, so the model can learn what one guide's cells share and score it "
@@ -160,34 +174,57 @@ def perturbation_score(
         )
     codes, keys = group_codes(adata, groupby)
     replicate_codes = group_codes(adata, replicate)[0] if replicate is not None else None
-    reference_rows = np.flatnonzero(is_reference)
-    scored_codes = np.unique(codes[~is_reference])
+    # One level per distinct value of `by`, scored on its own cells and its own reference sample; without
+    # `by` the whole object is one level, with the seed and reference set it had before `by` existed.
+    level_codes, level_keys = group_codes(adata, by) if by is not None else (None, None)
 
-    # Group the scored rows by code once, in increasing row order, instead of scanning all cells per group.
-    not_reference = np.flatnonzero(~is_reference)
-    grouped_rows = not_reference[np.argsort(codes[not_reference], kind="stable")]
-    grouped_codes = codes[grouped_rows]
-    starts = np.r_[0, np.flatnonzero(np.diff(grouped_codes)) + 1]
-    blocks = np.split(grouped_rows, starts[1:])
-    rows_for = {int(grouped_codes[start]): rows for start, rows in zip(starts, blocks, strict=True) if rows.size}
-
-    # Read every row once into a dense float64 block when the matrix is in memory, so each group slices it instead
-    # of re-reading and re-casting its rows; a backed matrix keeps reading one group at a time, never loaded whole.
+    # Read every row once into a dense block when the matrix is in memory, so each group slices it instead of
+    # re-reading and re-casting its rows; a backed matrix keeps reading one group at a time, never loaded whole.
+    # The block keeps its own float dtype rather than being widened to float64: liblinear casts each fold back up
+    # to float64 from the same values, so a float32 screen scores identically from half the memory and bandwidth.
     source = _source(adata, layer, use_rep)
-    matrix = (
-        None
-        if _reads_from_disk(source)
-        else np.asarray(get_matrix(adata, layer=layer, use_rep=use_rep), dtype=np.float64)
-    )
+    matrix = None if _reads_from_disk(source) else np.asarray(get_matrix(adata, layer=layer, use_rep=use_rep))
 
     def read(both: np.ndarray) -> np.ndarray:
         if matrix is not None:
             return matrix[both]
-        return np.asarray(get_matrix(adata, layer=layer, rows=both, use_rep=use_rep), dtype=np.float64)
+        return np.asarray(get_matrix(adata, layer=layer, rows=both, use_rep=use_rep))
 
-    def run(code: int) -> tuple[np.ndarray, np.ndarray, float, int, int]:
-        rows = rows_for[code]
-        rng = np.random.default_rng([seed, zlib.crc32(str(keys[code]).encode())])
+    def group_rows(pool: np.ndarray) -> dict[int, np.ndarray]:
+        """Map each group's code to its non-reference rows within ``pool``, in increasing row order."""
+        scored = pool[~is_reference[pool]]
+        scored = scored[np.argsort(codes[scored], kind="stable")]
+        if scored.size == 0:
+            return {}
+        scored_codes = codes[scored]
+        starts = np.r_[0, np.flatnonzero(np.diff(scored_codes)) + 1]
+        return {
+            int(scored_codes[start]): rows for start, rows in zip(starts, np.split(scored, starts[1:]), strict=True)
+        }
+
+    # (level key, group code, the group's rows, the level's reference rows); without `by`, one level over all rows.
+    Task = tuple[Any, int, np.ndarray, np.ndarray]
+    tasks: list[Task] = []
+    if by is None:
+        rows_for = group_rows(np.arange(adata.n_obs))
+        reference_rows = np.flatnonzero(is_reference)
+        tasks = [(None, code, rows, reference_rows) for code, rows in rows_for.items()]
+    else:
+        assert level_codes is not None and level_keys is not None
+        for level, level_key in enumerate(level_keys):
+            in_level = level_codes == level
+            rows_for = group_rows(np.flatnonzero(in_level))
+            reference_rows = np.flatnonzero(is_reference & in_level)
+            tasks += [(level_key, code, rows, reference_rows) for code, rows in rows_for.items()]
+
+    def run(task: Task) -> tuple[np.ndarray, np.ndarray, float, int, int]:
+        level_key, code, rows, reference_rows = task
+        # Seed on the group's name, and on the level's when `by` splits, so a score depends on neither which
+        # other groups nor which other levels are present; without `by` the entropy is what it was before.
+        entropy = [seed, zlib.crc32(str(keys[code]).encode())]
+        if by is not None:
+            entropy.insert(1, zlib.crc32(str(level_key).encode()))
+        rng = np.random.default_rng(entropy)
         drawn = np.sort(rng.choice(reference_rows, size=min(rows.size, reference_rows.size), replace=False))
         if rows.size < min_cells:
             return rows, np.full(rows.size, np.nan), np.nan, drawn.size, 0
@@ -205,18 +242,22 @@ def perturbation_score(
         return both[y == 1], proba, auc, drawn.size, folds
 
     if n_jobs is None or n_jobs == 1:
-        results = [run(int(code)) for code in scored_codes]
+        results = [run(task) for task in tasks]
     else:
         # liblinear and the BLAS calls release the GIL, so threads share the matrix instead of copying it.
         with ThreadPoolExecutor(max_workers=os.cpu_count() if n_jobs == -1 else n_jobs) as pool:
-            results = list(pool.map(run, (int(code) for code in scored_codes)))
+            results = list(pool.map(run, tasks))
 
     score = np.full(adata.n_obs, np.nan)
     records = []
-    for code, (rows, proba, auc, n_reference, folds) in zip(scored_codes, results, strict=True):
+    for (level_key, code, _, _), (rows, proba, auc, n_reference, folds) in zip(tasks, results, strict=True):
         score[rows] = proba
-        records.append((str(keys[code]), rows.size, n_reference, folds, auc))
-    table = pd.DataFrame(records, columns=["group", "n_cells", "n_reference", "n_folds", "auc"])
+        row = (str(keys[code]), rows.size, n_reference, folds, auc)
+        records.append(row if by is None else (row[0], level_key, *row[1:]))
+    columns = ["group", "n_cells", "n_reference", "n_folds", "auc"]
+    if by is not None:
+        columns.insert(1, by)
+    table = pd.DataFrame(records, columns=columns)
 
     small = int((table["n_cells"] < min_cells).sum())
     unfolded = int(((table["n_cells"] >= min_cells) & (table["n_folds"] == 0)).sum())

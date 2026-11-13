@@ -54,7 +54,8 @@ def test_scores_and_auc_match_brieflow_on_the_same_sample():
     frame = pd.DataFrame(x, columns=[f"f{j}" for j in range(p)]).assign(gene=labels)
     expected, expected_auc = _brieflow_scores(frame, "GENE", [f"f{j}" for j in range(p)], "gene")
 
-    mt.tl.perturbation_score(adata, n_folds=10)
+    # replicate=None reproduces Brieflow's random folds over cells (its sample has no guide column).
+    mt.tl.perturbation_score(adata, n_folds=10, replicate=None)
     gene = labels == "GENE"
     np.testing.assert_allclose(adata.obs["perturbation_score"].to_numpy()[gene], expected.to_numpy()[gene], atol=1e-10)
     table = adata.uns["mantispy"]["perturbation_score"].set_index("group")
