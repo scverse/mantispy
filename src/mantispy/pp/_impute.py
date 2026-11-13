@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 from anndata import AnnData
 
+from mantispy._core._corr import chunk_rows
 from mantispy._core._numba import MEDIAN, grouped_stat
 from mantispy._core._reduce import get_matrix, group_rows
 from mantispy._core.logging import get_logger
@@ -14,6 +15,19 @@ from mantispy._core.mutation import inplace_or_copy
 METHODS = ("knn", "reference_median", "zero")
 #: Rows imputed per KNN call, which bounds the distance block sklearn holds at once.
 KNN_BATCH = 1_000
+
+
+def _any_missing(X: np.ndarray) -> bool:
+    """Whether any value is ``NaN``.
+
+    Scanned in row chunks so a matrix with no missing value is checked without materialising a full-size
+    boolean mask, and a matrix that has one returns as soon as the first chunk with a ``NaN`` is reached.
+    """
+    step = chunk_rows(X.shape[1])
+    for start in range(0, X.shape[0], step):
+        if np.isnan(X[start : start + step]).any():
+            return True
+    return False
 
 
 def _knn(block: np.ndarray, donors: np.ndarray, n_neighbors: int) -> np.ndarray:
@@ -84,11 +98,17 @@ def impute(
     if n_neighbors < 1 or (n_donors is not None and n_donors < 1):
         raise ValueError(f"n_neighbors and n_donors must be at least 1, got {n_neighbors} and {n_donors}")
 
-    out = np.array(get_matrix(adata, layer), copy=True)
-    missing = np.isnan(out)
+    source = get_matrix(adata, layer)
+    column = "n_imputed" if key_added is None else f"n_imputed_{key_added}"
+
     if method == "zero":
+        out = np.array(source, copy=True)
+        missing = np.isnan(out)
         out[missing] = 0.0
-    elif missing.any():
+        filled = missing  # a filled NaN is no longer NaN, so every missing value is counted as imputed
+    elif _any_missing(source):
+        out = np.array(source, copy=True)
+        missing = np.isnan(out)
         mask, codes, keys = reference_groups(adata, reference, by)
         if method == "reference_median":
             median = grouped_stat(out[mask], codes[mask], len(keys), MEDIAN)
@@ -110,29 +130,43 @@ def impute(
                 updated = out[rows]
                 updated[target] = block[target]
                 out[rows] = updated
-
-    filled = missing & ~np.isnan(out)
-    column = "n_imputed" if key_added is None else f"n_imputed_{key_added}"
-    adata.var[column] = filled.sum(axis=0).astype(np.int64)
-    if key_added is None:
-        adata.X = out
+        filled = missing & ~np.isnan(out)
     else:
-        adata.layers[key_added] = out
+        # Nothing is missing: no value is filled, so skip the matrix copy, the grouping and the neighbour
+        # search entirely. X already holds the final values and is left untouched.
+        out = None
+        missing = None
+        filled = None
 
-    left = missing & ~filled
-    if left.any():
-        unfilled = left.any(axis=0)
-        get_logger().warning(
-            "impute: %d values in %d features stay missing, because no reference row of their group measured them",
-            int(left.sum()),
-            int(unfilled.sum()),
-            deep=f"drop those features, e.g. {', '.join(map(str, adata.var_names[unfilled][:5]))}",
-        )
+    if filled is None:
+        adata.var[column] = np.zeros(adata.n_vars, dtype=np.int64)
+    else:
+        adata.var[column] = filled.sum(axis=0).astype(np.int64)
+
+    if out is not None:
+        if key_added is None:
+            adata.X = out
+        else:
+            adata.layers[key_added] = out
+    elif key_added is not None:
+        # No value changed, but the documented layer must still exist.
+        adata.layers[key_added] = np.array(source, copy=True)
+
+    if filled is not None:
+        left = missing & ~filled
+        if left.any():
+            unfilled = left.any(axis=0)
+            get_logger().warning(
+                "impute: %d values in %d features stay missing, because no reference row of their group measured them",
+                int(left.sum()),
+                int(unfilled.sum()),
+                deep=f"drop those features, e.g. {', '.join(map(str, adata.var_names[unfilled][:5]))}",
+            )
     get_logger().info(
         "impute(%s) filled %d values in %d of %d features",
         method,
-        int(filled.sum()),
-        int(filled.any(axis=0).sum()),
+        0 if filled is None else int(filled.sum()),
+        0 if filled is None else int(filled.any(axis=0).sum()),
         adata.n_vars,
     )
     return None

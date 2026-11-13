@@ -116,6 +116,36 @@ def test_a_single_row_cannot_donate_to_itself(method, caplog):
     assert "stay missing" in caplog.text
 
 
+def test_no_missing_values_leaves_x_untouched_without_copying():
+    """With nothing to fill, impute must not copy X or rewrite it; n_imputed is still written as all zeros."""
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(300, 12)).astype(np.float32)
+    adata = AnnData(
+        X=X,
+        obs=pd.DataFrame(
+            {"Metadata_Plate": np.repeat(["p1", "p2", "p3"], 100), "is_ref": np.arange(300) % 4 == 0},
+            index=[f"c{i}" for i in range(300)],
+        ),
+        var=pd.DataFrame(index=[f"f{j}" for j in range(12)]),
+    )
+    before = adata.X
+    assert not np.isnan(before).any()
+    mt.pp.impute(adata, n_donors=None)
+    assert np.shares_memory(adata.X, before)  # no copy of the matrix was made
+    np.testing.assert_array_equal(adata.X, X)  # the values are exactly as they were
+    np.testing.assert_array_equal(adata.var["n_imputed"], np.zeros(adata.n_vars, dtype=np.int64))
+
+
+def test_no_missing_values_still_writes_the_requested_layer():
+    """key_added must create the documented layer even when nothing is filled."""
+    rng = np.random.default_rng(1)
+    X = rng.normal(size=(120, 6)).astype(np.float32)
+    adata = AnnData(X=X, var=pd.DataFrame(index=[f"f{j}" for j in range(6)]))
+    mt.pp.impute(adata, key_added="filled", n_donors=None)
+    np.testing.assert_array_equal(adata.layers["filled"], X)
+    np.testing.assert_array_equal(adata.var["n_imputed_filled"], np.zeros(adata.n_vars, dtype=np.int64))
+
+
 def test_rejects_no_reference_rows_and_a_bad_method():
     adata = _with_gaps()
     adata.obs["none"] = False
