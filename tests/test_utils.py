@@ -63,3 +63,16 @@ def test_modifying_a_view_in_place_is_refused():
     with pytest.raises(ValueError, match="cannot modify a view in place"):
         _double(adata[adata.obs["g"] == "a"])
     assert _double(adata[adata.obs["g"] == "a"], copy=True) is not None
+
+
+@pytest.mark.parametrize(
+    ("dropped", "total", "level"), [(1, 3, "INFO"), (2, 3, "WARNING"), (2, 4, "WARNING"), (1, 4, "INFO")]
+)
+def test_report_drop_warns_only_from_half(caplog, dropped, total, level):
+    import logging
+
+    from mantispy._core.logging import report_drop
+
+    with caplog.at_level(logging.DEBUG, logger="scverse.mantispy"):
+        report_drop("rows", dropped, total)
+    assert [record.levelname for record in caplog.records] == [level]

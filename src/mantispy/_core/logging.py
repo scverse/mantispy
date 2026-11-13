@@ -25,6 +25,6 @@ def report_drop(what: str, dropped: int, total: int, remedy: str = "", escalate:
     """
     if dropped <= 0:
         return
-    heavy = escalate and total and dropped >= max(total // 2, 1)
+    heavy = escalate and 2 * dropped >= total
     log = get_logger().warning if heavy else get_logger().info
     log("dropped %d of %d %s", dropped, total, what, deep=remedy or None)
