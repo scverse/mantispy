@@ -17,11 +17,66 @@ from mantispy._core.mutation import inplace_or_copy
 
 METHODS = ("ecod", "isolation_forest", "lof", "mad")
 
+#: Default neighbour count, matching sklearn's :class:`~sklearn.neighbors.LocalOutlierFactor`.
+_LOF_NEIGHBORS = 20
+#: A :class:`scipy.spatial.cKDTree` stays exact in any dimension but loses to sklearn's optimised
+#: brute-force search as dimension grows, so the fast path is kept to the few-feature regime the
+#: intensity filter actually uses and anything wider falls back to sklearn.
+_LOF_FAST_MAX_FEATURES = 16
+
+
+def _lof_negative_outlier_factor(fitted: np.ndarray, n_neighbors: int, n_jobs: int | None) -> np.ndarray | None:
+    """Exact LOF ``negative_outlier_factor_`` via :class:`scipy.spatial.cKDTree`, or ``None`` to fall back.
+
+    Replaces sklearn's tree-and-joblib neighbour search with a single multithreaded cKDTree query and
+    computes the local reachability density and LOF in numpy, reproducing
+    :mod:`sklearn.neighbors._lof` bit for bit (self-exclusion, the k-th-distance reachability, the
+    ``1e-10`` guard against duplicates, and the float32 distance cast).
+
+    Returns ``None`` when equidistant neighbours straddle the k-th position: there cKDTree and sklearn
+    may keep different ties, so the caller runs sklearn to stay identical. Float32 rounding ties are
+    benign because the underlying float64 ordering is still unique.
+    """
+    from scipy.spatial import cKDTree
+
+    n = fitted.shape[0]
+    is_float32 = fitted.dtype == np.float32
+    coords = np.ascontiguousarray(fitted, dtype=np.float64)
+    k = max(1, min(n_neighbors, n - 1))
+    workers = 1 if n_jobs is None else n_jobs
+    # One neighbour past what LOF needs: one for the point itself, one to spot a tie at the k-th distance.
+    width = min(k + 2, n)
+    distances, indices = cKDTree(coords).query(coords, k=width, workers=workers)
+    distances = distances.reshape(n, width)
+    indices = indices.reshape(n, width)
+
+    # Drop each point from its own neighbour list exactly as sklearn's kneighbors does: remove the self
+    # match, or the first neighbour when duplicates pushed the point out of its own neighbourhood.
+    sample_range = np.arange(n)[:, None]
+    keep = indices != sample_range
+    pushed_out = np.all(keep, axis=1)
+    keep[:, 0][pushed_out] = False
+    kept = width - 1
+    neigh_idx = indices[keep].reshape(n, kept)
+    neigh_dist = distances[keep].reshape(n, kept)
+
+    if kept > k and np.any(neigh_dist[:, k - 1] == neigh_dist[:, k]):
+        return None
+    neigh_idx = neigh_idx[:, :k]
+    neigh_dist = neigh_dist[:, :k]
+    if is_float32:
+        # sklearn casts its neighbour distances back to float32 for float32 input; match it.
+        neigh_dist = neigh_dist.astype(np.float32)
+
+    dist_k = neigh_dist[neigh_idx, k - 1]
+    reach = np.maximum(neigh_dist, dist_k)
+    lrd = 1.0 / (np.mean(reach, axis=1) + 1e-10)
+    ratios = lrd[neigh_idx] / lrd[:, None]
+    return -np.mean(ratios, axis=1)
+
 
 def _lof_scores(X: np.ndarray, n_jobs: int | None, n_fit: int | None, rng: np.random.Generator) -> np.ndarray:
     """LOF score per row, higher meaning more outlying."""
-    from sklearn.neighbors import LocalOutlierFactor
-
     scores = np.full(X.shape[0], np.nan)
     # LOF needs complete input; a row missing every selected feature, filled with zero, would collapse onto
     # the origin and inflate the density of nearby cells, so those rows are left out of the fit and unscored.
@@ -35,13 +90,22 @@ def _lof_scores(X: np.ndarray, n_jobs: int | None, n_fit: int | None, rng: np.ra
     if n_fit is not None and n > n_fit:
         # Fit the density on a seeded random sample and score every present row against it in novelty mode,
         # so cost tracks the sample rather than the whole group.
+        from sklearn.neighbors import LocalOutlierFactor
+
         sample = np.sort(rng.choice(n, size=n_fit, replace=False))
         model = LocalOutlierFactor(n_neighbors=min(20, n_fit - 1), novelty=True, n_jobs=n_jobs).fit(fitted[sample])
         scores[present] = -model.score_samples(fitted)
-    else:
+        return scores
+    nof = None
+    if fitted.shape[1] <= _LOF_FAST_MAX_FEATURES:
+        nof = _lof_negative_outlier_factor(fitted, _LOF_NEIGHBORS, n_jobs)
+    if nof is None:
+        from sklearn.neighbors import LocalOutlierFactor
+
         # Cap neighbours at group size - 1 so sklearn never raises on a small group.
         model = LocalOutlierFactor(n_neighbors=min(20, n - 1), n_jobs=n_jobs).fit(fitted)
-        scores[present] = -model.negative_outlier_factor_
+        nof = model.negative_outlier_factor_
+    scores[present] = -nof
     return scores
 
 
@@ -108,7 +172,7 @@ def outliers(
             A smaller sample sets a coarser scale for "normal" density, measuring each cell against a sparser neighbourhood than a full fit would, so the sampled run flags its most outlying cells by a different standard and can disagree substantially over which cells those are, more so the smaller the sample and the denser the data; it trades that fidelity for a run whose cost no longer rises with the number of cells.
             ``None``, the default, fits on every row, the exact local outlier factor, and parallelises across ``n_jobs``.
             A group with no more than ``n_fit`` rows is fit in full either way.
-        n_jobs: Threads for the ``"lof"`` neighbour search (sklearn's ``n_jobs``).
+        n_jobs: Threads for the ``"lof"`` neighbour search.
             ``None`` runs on one core; ``-1`` uses every core, as Brieflow's intensity filter does, and makes the full fit scale to large screens without changing which cells it flags.
         key_added: Output: the prefix for the results, written to ``obs[key_added]`` and ``obs[key_added + "_score"]``.
         copy: Return a modified copy instead of mutating in place.

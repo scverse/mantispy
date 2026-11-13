@@ -84,6 +84,58 @@ def test_lof_flags_what_sklearn_and_brieflow_flag():
     np.testing.assert_array_equal(adata.obs["qc_outlier"].to_numpy(), brieflow)
 
 
+@pytest.mark.parametrize("dtype", [np.float64, np.float32])
+@pytest.mark.parametrize("shape", [(1000, 4), (500, 8), (40, 6), (3, 5)])
+def test_lof_fast_path_matches_sklearn_exactly(dtype, shape):
+    """The cKDTree fast path reproduces sklearn's negative_outlier_factor_ on ordinary data."""
+    from sklearn.neighbors import LocalOutlierFactor
+
+    from mantispy.pp._outliers import _LOF_NEIGHBORS, _lof_negative_outlier_factor
+
+    n = shape[0]
+    X = np.ascontiguousarray(np.random.default_rng(0).normal(size=shape), dtype=dtype)
+    fast = _lof_negative_outlier_factor(X, _LOF_NEIGHBORS, n_jobs=None)
+    assert fast is not None  # continuous data has no ties, so the fast path is taken
+    truth = LocalOutlierFactor(n_neighbors=min(_LOF_NEIGHBORS, n - 1)).fit(X).negative_outlier_factor_
+    # float64 is bit-exact; float32 distances differ from sklearn's by a rounding step cKDTree (float64)
+    # cannot avoid, far below anything that moves a flag.
+    rtol, atol = (1e-12, 1e-12) if dtype is np.float64 else (1e-5, 1e-6)
+    np.testing.assert_allclose(fast, truth, rtol=rtol, atol=atol)
+
+
+def test_lof_matches_sklearn_on_duplicates_and_ties():
+    """Duplicate rows and gridded ties make the neighbour set ambiguous; the result must still equal
+    sklearn's, via the fall-back, end to end through pp.outliers."""
+    from sklearn.neighbors import LocalOutlierFactor
+
+    rng = np.random.default_rng(1)
+    base = rng.normal(size=(300, 5))
+    duplicated = np.vstack([base, base[:40]])  # 40 exact duplicate rows
+    gridded = rng.integers(0, 5, size=(400, 4)).astype(np.float64)  # many equidistant ties
+    for X in (duplicated, gridded):
+        n = X.shape[0]
+        truth = -LocalOutlierFactor(n_neighbors=min(20, n - 1)).fit(X).negative_outlier_factor_
+        adata = AnnData(
+            X=X.copy(),
+            obs=pd.DataFrame(index=[f"c{i}" for i in range(n)]),
+            var=pd.DataFrame(index=[f"f{j}" for j in range(X.shape[1])]),
+        )
+        mt.pp.outliers(adata, method="lof", contamination=0.05)
+        np.testing.assert_allclose(adata.obs["qc_outlier_score"].to_numpy(), truth, rtol=1e-12, atol=1e-12)
+
+
+def test_lof_outliers_scores_match_sklearn_on_a_realistic_dataset():
+    """End to end: pp.outliers(lof) equals a direct sklearn LOF on a synthetic plate."""
+    from sklearn.neighbors import LocalOutlierFactor
+
+    adata = synthetic_plate(n_wells=25, n_cells=80, n_features=8, seed=3)
+    X = np.ascontiguousarray(adata.X)
+    truth = -LocalOutlierFactor(n_neighbors=20).fit(X).negative_outlier_factor_
+    mt.pp.outliers(adata, method="lof", contamination=0.01)
+    rtol, atol = (1e-12, 1e-12) if X.dtype == np.float64 else (1e-5, 1e-6)
+    np.testing.assert_allclose(adata.obs["qc_outlier_score"].to_numpy(), truth, rtol=rtol, atol=atol)
+
+
 def test_lof_n_jobs_does_not_change_the_result():
     """n_jobs only parallelises the neighbour search; the flags and scores must be identical."""
     adata = synthetic_plate(n_wells=25, n_cells=40, n_features=6, seed=1)
