@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 import anndata as ad
 import numpy as np
@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     import numpy.typing as npt
     from geopandas import GeoDataFrame
     from spatialdata import SpatialData
+    from spatialdata.transformations import BaseTransformation
 
 
 class PlateFormat(NamedTuple):
@@ -460,11 +461,13 @@ def read_gallery_plate(
         present = present[present.index.get_level_values("well").isin(requested)]
     wells = list(dict.fromkeys(present.index.get_level_values("well").astype(str)))
 
-    images, labels, masks, analysed, unnamed = {}, {}, {}, [], []
+    images: dict[str, Any] = {}
+    labels: dict[str, Any] = {}
+    masks, analysed, unnamed = {}, [], []
     for well in wells:
         for site in sorted(present.loc[well].index):
             fov = f"{plate}_{well}_s{site}"
-            transformations: dict[str, Identity | Translation] = {fov: Identity()}
+            transformations: dict[str, BaseTransformation] = {fov: Identity()}
             if located:
                 offset = offsets.loc[(well, site)]
                 transformations[f"{plate}_{well}"] = Translation([offset["well_y"], offset["well_x"]], axes=("y", "x"))
@@ -486,7 +489,8 @@ def read_gallery_plate(
             analysed.append(directory / "Cells.csv")
             for name, mask in site_labels.items():
                 masks[f"{fov}_{name}"] = mask
-                labels[f"{fov}_{name}"] = Labels2DModel.parse(mask, dims=("y", "x"), transformations=transformations)
+                # spatialdata types the array of any raster element as floating, though labels are integers.
+                labels[f"{fov}_{name}"] = Labels2DModel.parse(mask, dims=("y", "x"), transformations=transformations)  # type: ignore[arg-type]
 
     if not images:
         raise FileNotFoundError(f"no images for well(s) {requested or 'on the plate'} of {plate} under {root}")
