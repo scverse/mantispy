@@ -6,8 +6,10 @@ import math
 
 import numpy as np
 from anndata import AnnData
+from numba import get_num_threads
 
 from mantispy._core._ecod import AGGREGATIONS, ecod_scores
+from mantispy._core._lof import lof_negative_outlier_factor
 from mantispy._core._reduce import get_matrix, group_codes, group_offsets
 from mantispy._core._stats import robust_zscore
 from mantispy._core.frames import as_frame
@@ -19,64 +21,16 @@ METHODS = ("ecod", "isolation_forest", "lof", "mad")
 
 #: Default neighbour count, matching sklearn's :class:`~sklearn.neighbors.LocalOutlierFactor`.
 _LOF_NEIGHBORS = 20
-#: A :class:`scipy.spatial.cKDTree` stays exact in any dimension but loses to sklearn's optimised
-#: brute-force search as dimension grows, so the fast path is kept to the few-feature regime the
-#: intensity filter actually uses and anything wider falls back to sklearn.
+#: The KD-tree stays exact in any dimension but loses to sklearn's optimised brute-force search as dimension
+#: grows, so the fast path is kept to the few-feature regime the intensity filter actually uses and anything
+#: wider falls back to sklearn.
 _LOF_FAST_MAX_FEATURES = 16
 
 
-def _lof_negative_outlier_factor(fitted: np.ndarray, n_neighbors: int, n_jobs: int | None) -> np.ndarray | None:
-    """Exact LOF ``negative_outlier_factor_`` via :class:`scipy.spatial.cKDTree`, or ``None`` to fall back.
-
-    Replaces sklearn's tree-and-joblib neighbour search with a single multithreaded cKDTree query and
-    computes the local reachability density and LOF in numpy, reproducing
-    :mod:`sklearn.neighbors._lof` bit for bit (self-exclusion, the k-th-distance reachability, the
-    ``1e-10`` guard against duplicates, and the float32 distance cast).
-
-    Returns ``None`` when equidistant neighbours straddle the k-th position: there cKDTree and sklearn
-    may keep different ties, so the caller runs sklearn to stay identical. Float32 rounding ties are
-    benign because the underlying float64 ordering is still unique.
-    """
-    from scipy.spatial import cKDTree
-
-    n = fitted.shape[0]
-    is_float32 = fitted.dtype == np.float32
-    coords = np.ascontiguousarray(fitted, dtype=np.float64)
-    k = max(1, min(n_neighbors, n - 1))
-    workers = 1 if n_jobs is None else n_jobs
-    # One neighbour past what LOF needs: one for the point itself, one to spot a tie at the k-th distance.
-    width = min(k + 2, n)
-    distances, indices = cKDTree(coords).query(coords, k=width, workers=workers)
-    distances = distances.reshape(n, width)
-    indices = indices.reshape(n, width)
-
-    # Drop each point from its own neighbour list exactly as sklearn's kneighbors does: remove the self
-    # match, or the first neighbour when duplicates pushed the point out of its own neighbourhood.
-    sample_range = np.arange(n)[:, None]
-    keep = indices != sample_range
-    pushed_out = np.all(keep, axis=1)
-    keep[:, 0][pushed_out] = False
-    kept = width - 1
-    neigh_idx = indices[keep].reshape(n, kept)
-    neigh_dist = distances[keep].reshape(n, kept)
-
-    if kept > k and np.any(neigh_dist[:, k - 1] == neigh_dist[:, k]):
-        return None
-    neigh_idx = neigh_idx[:, :k]
-    neigh_dist = neigh_dist[:, :k]
-    if is_float32:
-        # sklearn casts its neighbour distances back to float32 for float32 input; match it.
-        neigh_dist = neigh_dist.astype(np.float32)
-
-    dist_k = neigh_dist[neigh_idx, k - 1]
-    reach = np.maximum(neigh_dist, dist_k)
-    lrd = 1.0 / (np.mean(reach, axis=1) + 1e-10)
-    ratios = lrd[neigh_idx] / lrd[:, None]
-    return -np.mean(ratios, axis=1)
-
-
-def _lof_scores(X: np.ndarray, n_jobs: int | None, n_fit: int | None, rng: np.random.Generator) -> np.ndarray:
+def _lof_scores(X: np.ndarray, n_fit: int | None, rng: np.random.Generator) -> np.ndarray:
     """LOF score per row, higher meaning more outlying."""
+    # sklearn, where it still runs, gets the same threads as the numba kernels.
+    n_jobs = get_num_threads()
     scores = np.full(X.shape[0], np.nan)
     # LOF needs complete input; a row missing every selected feature, filled with zero, would collapse onto
     # the origin and inflate the density of nearby cells, so those rows are left out of the fit and unscored.
@@ -98,7 +52,7 @@ def _lof_scores(X: np.ndarray, n_jobs: int | None, n_fit: int | None, rng: np.ra
         return scores
     nof = None
     if fitted.shape[1] <= _LOF_FAST_MAX_FEATURES:
-        nof = _lof_negative_outlier_factor(fitted, _LOF_NEIGHBORS, n_jobs)
+        nof = lof_negative_outlier_factor(fitted, _LOF_NEIGHBORS)
     if nof is None:
         from sklearn.neighbors import LocalOutlierFactor
 
@@ -114,7 +68,6 @@ def _scores(
     method: str,
     seed: int,
     ecod_aggregation: str,
-    n_jobs: int | None,
     n_fit: int | None,
     rng: np.random.Generator,
 ) -> np.ndarray:
@@ -122,7 +75,7 @@ def _scores(
     if method == "ecod":
         return ecod_scores(X, ecod_aggregation)
     if method == "lof":
-        return _lof_scores(X, n_jobs, n_fit, rng)
+        return _lof_scores(X, n_fit, rng)
     if method == "isolation_forest":
         from sklearn.ensemble import IsolationForest
 
@@ -144,7 +97,6 @@ def outliers(
     seed: int = 0,
     ecod_aggregation: str = "pyod",
     n_fit: int | None = None,
-    n_jobs: int | None = None,
     key_added: str = "qc_outlier",
     copy: bool = False,
 ) -> AnnData | None:
@@ -170,10 +122,8 @@ def outliers(
             ``"paper"`` is Algorithm 1 of :cite:t:`Li_2023`, the largest of the left-tail, right-tail and skew-directed sums.
         n_fit: ``"lof"`` fits its density on a random sample of at most this many rows per ``by`` group and scores every row against that sample, rather than fitting on all of them, so its time and memory grow with the sample rather than the whole screen and stay bounded however large the screen is.
             A smaller sample sets a coarser scale for "normal" density, measuring each cell against a sparser neighbourhood than a full fit would, so the sampled run flags its most outlying cells by a different standard and can disagree substantially over which cells those are, more so the smaller the sample and the denser the data; it trades that fidelity for a run whose cost no longer rises with the number of cells.
-            ``None``, the default, fits on every row, the exact local outlier factor, and parallelises across ``n_jobs``.
+            ``None``, the default, fits on every row, the exact local outlier factor, which runs on every thread numba is allowed.
             A group with no more than ``n_fit`` rows is fit in full either way.
-        n_jobs: Threads for the ``"lof"`` neighbour search.
-            ``None`` runs on one core; ``-1`` uses every core, as Brieflow's intensity filter does, and makes the full fit scale to large screens without changing which cells it flags.
         key_added: Output: the prefix for the results, written to ``obs[key_added]`` and ``obs[key_added + "_score"]``.
         copy: Return a modified copy instead of mutating in place.
 
@@ -207,7 +157,7 @@ def outliers(
         if not rows.size:
             continue
         # One group is the whole matrix, so it is scored in place rather than copied.
-        block = _scores(X if len(keys) == 1 else X[rows], method, seed, ecod_aggregation, n_jobs, n_fit, rng)
+        block = _scores(X if len(keys) == 1 else X[rows], method, seed, ecod_aggregation, n_fit, rng)
         scores[rows] = block
         if score_cutoff is not None:
             flagged[rows] = block > score_cutoff
