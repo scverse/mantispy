@@ -528,7 +528,7 @@ def _even_side(memb, nmem, lo_c, hi_c, vals, cum, obs, s, ple, fs, ints, pats, p
     atom list is read once. ``fs``/``ints`` are float/int scratch rows, ``pats``/``patw``/``bg`` hold
     one entry per split.
     """
-    f_low, f_high, rle, rlt, rh = fs[0], fs[1], fs[2], fs[3], fs[4]
+    f_low, f_high, rle, rlt, rh, inv_low, inv_high, top = fs[0], fs[1], fs[2], fs[3], fs[4], fs[5], fs[6], fs[7]
     le_end, gt_start, lptr, cut = ints[0], ints[1], ints[2], ints[3]
     g = _poisbin_cdf(s - 1, ple, nmem, dp)
     for a in range(nmem):
@@ -538,7 +538,12 @@ def _even_side(memb, nmem, lo_c, hi_c, vals, cum, obs, s, ple, fs, ints, pats, p
         cnt_le = np.searchsorted(vals[lo:hi], obs, side="right")
         at_obs = cum[lo + cnt_le - 1] if cnt_le > 0 else 0.0
         f_low[a] = at_obs  # mass at most obs, for the guide as a low one
-        f_high[a] = (cum[hi - 1] if hi > lo else 0.0) - at_obs  # mass above obs, as a high one
+        top[a] = cum[hi - 1] if hi > lo else 0.0
+        f_high[a] = top[a] - at_obs  # mass above obs, as a high one
+        inv_low[a] = 1.0 / at_obs if at_obs > 0.0 else 0.0
+        inv_high[a] = 1.0 / f_high[a] if f_high[a] > 0.0 else 0.0
+        rle[a] = 0.0
+        rh[a] = 0.0
         le_end[a] = lo + cnt_le  # one past the last atom <= obs
         gt_start[a] = lo + cnt_le  # first atom > obs
         lptr[a] = lo  # next atom <= obs not yet swept
@@ -579,26 +584,27 @@ def _even_side(memb, nmem, lo_c, hi_c, vals, cum, obs, s, ple, fs, ints, pats, p
             break
         hit = 0  # the guides with an atom at aval
         for a in range(nmem):
-            c = memb[a]
-            lo = lo_c[c]
-            hi = hi_c[c]
             p = lptr[a]
-            f_lt = cum[p - 1] if p > lo else 0.0
             if p < le_end[a] and vals[p] == aval:
-                p += 1
                 hit |= 1 << a
-            f_le = cum[p - 1] if p > lo else 0.0
-            lptr[a] = p
+                lo = lo_c[memb[a]]
+                rlt[a] = (cum[p - 1] if p > lo else 0.0) * inv_low[a]
+                rle[a] = cum[p] * inv_low[a]
+                lptr[a] = p + 1
+        for a in range(nmem):
+            if (hit >> a) & 1:
+                # a guide at its own atom is low in every split scored here, unless another guide ties
+                # with it; its cut catches up on the next atom that needs it
+                if hit == 1 << a:
+                    continue
             k = cut[a]
-            while k > gt_start[a] and (aval + vals[k - 1]) / 2.0 > obs:
+            if k > gt_start[a] and (aval + vals[k - 1]) / 2.0 > obs:
                 k -= 1
-            cut[a] = k
-            gt_mass = cum[hi - 1] - (cum[k - 1] if k > lo else 0.0) if k < hi else 0.0
-            if f_low[a] > 0.0:
-                rlt[a] = f_lt / f_low[a]
-                rle[a] = f_le / f_low[a]
-            if f_high[a] > 0.0:
-                rh[a] = gt_mass / f_high[a]
+                while k > gt_start[a] and (aval + vals[k - 1]) / 2.0 > obs:
+                    k -= 1
+                cut[a] = k
+                lo = lo_c[memb[a]]
+                rh[a] = (top[a] - (cum[k - 1] if k > lo else 0.0)) * inv_high[a]
         for q in range(npat):
             lowmask = pats[q]
             if not lowmask & hit:  # no low guide's maximum can be at aval
@@ -608,7 +614,7 @@ def _even_side(memb, nmem, lo_c, hi_c, vals, cum, obs, s, ple, fs, ints, pats, p
             prod_s = 1.0
             for a in range(nmem):
                 if (lowmask >> a) & 1:
-                    prod_lt *= rlt[a]
+                    prod_lt *= rlt[a] if (hit >> a) & 1 else rle[a]
                     prod_le *= rle[a]
                 else:
                     prod_s *= rh[a]
@@ -629,7 +635,7 @@ def _gene_core(
     Sums over which guides come out nan, with the odd case a Poisson-binomial count and the even
     case handled via :func:`_even_side` and reflection. ``le_arr``/``lt_arr`` are the exact
     ``P(guide <= obs)`` / ``P(guide < obs)`` (from the sub-tail mixture), so the count that decides
-    significance is exact; the atoms serve only the boundary shape. ``scratch`` (8 rows) and
+    significance is exact; the atoms serve only the boundary shape. ``scratch`` (11 rows) and
     ``iscratch`` (5 rows) have at least ``k_all + 1`` columns, ``pats``/``patw``/``bg`` ``2 ** k_all``.
     """
     p_gt = 0.0
@@ -737,7 +743,7 @@ def _gene_pvalues(
     row_k = max_k + 1 + 8
     lohi_t = np.empty((n_slots, 2, row_k), dtype=np.int64)
     small_t = np.empty((n_slots, 4, row_k), dtype=np.float64)
-    scratch_t = np.empty((n_slots, 8, row_k), dtype=np.float64)
+    scratch_t = np.empty((n_slots, 11, row_k), dtype=np.float64)
     iscratch_t = np.empty((n_slots, 5, row_k), dtype=np.int64)
     pats_t = np.empty((n_slots, (1 << max_k) + 8), dtype=np.int64)
     patw_t = np.empty((n_slots, (1 << max_k) + 8), dtype=np.float64)
