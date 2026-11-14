@@ -11,11 +11,11 @@ datasets:
         files:
             - name: aconcagua_guide_well.h5ad
               url: https://exampledata.scverse.org/mantispy/aconcagua/aconcagua_guide_well.h5ad
-              sha256: cd3babb1e0793f3423081a26c815f8ff1bd43b2e75d277309ec069d67890ffea
+              sha256: de77af770d87a09f817275da846bfeb583f201a40c552db59dfe6c6c62f93bee
             # The single cells of eight of its genes and the non-targeting controls, raw intensities, staged alongside: 38,674 cells x 1,483 features.
             - name: aconcagua_cells.h5ad
               url: https://exampledata.scverse.org/mantispy/aconcagua/aconcagua_cells.h5ad
-              sha256: fdb5a51e75a9e301089acda70761add79de4cbf53460188d7cce48a530346944
+              sha256: 1a749398c9b51136d580dffeacd06aa933c0b31b58dd702926a05551018af1fc
     bbbc021:
         type: mantispy
         doc_header: BBBC021, 632 wells of 38 compounds and DMSO annotated with a mechanism of action.

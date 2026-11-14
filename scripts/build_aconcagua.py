@@ -47,6 +47,7 @@ import pyarrow.parquet as pq
 from anndata import AnnData
 
 import mantispy as mt
+from mantispy._core.features import parse_feature_names
 
 DATA = Path(__file__).parent / "data" / "aconcagua"
 BUCKET = "ops-explorer-public"
@@ -217,7 +218,11 @@ def _convert(frame: pd.DataFrame, tiers: pd.Series) -> AnnData:
             obs[name] = frame[source].to_numpy()
     table = pd.concat([obs, frame[list(features)].rename(columns=features).astype(np.float32)], axis=1)
     # Through mantispy's own reader, so the result carries the schema stamp and the parsed var annotation.
-    return mt.io.from_dataframe(table, channels=list(CHANNELS), resolution="object")
+    adata = mt.io.from_dataframe(table, channels=list(CHANNELS), resolution="object")
+    # The PFTAS and foci measurements belong to no CellProfiler group, so the reader keeps them as unannotated
+    # embedding features. They are per-channel measurements of an object like the rest, so parse every name.
+    adata.var = parse_feature_names(adata.var_names, channels=list(CHANNELS))
+    return adata
 
 
 def _uniform(*arrays: np.ndarray) -> np.ndarray:
