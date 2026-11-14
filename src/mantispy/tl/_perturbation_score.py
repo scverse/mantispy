@@ -2,86 +2,207 @@
 
 from __future__ import annotations
 
-import os
 import warnings
 import zlib
 from collections.abc import Sequence
-from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
 from anndata import AnnData
+from numba import njit
 
+from mantispy._core._liblinear import fit_l2_logistic
+from mantispy._core._numba import _kernel_input
 from mantispy._core._reduce import _reads_from_disk, _source, get_matrix, group_codes
 from mantispy._core._stats import _is_object_resolution
 from mantispy._core.logging import get_logger
 from mantispy._core.masks import reference_mask
 from mantispy._core.mutation import inplace_or_copy
 
+if TYPE_CHECKING:
+    # numba's prange iterates like range, but its own type says nothing about that.
+    from builtins import range as prange
+else:
+    from numba import prange
 
+#: A backed matrix is read this many rows at a time, a batch of whole groups and their reference samples.
+_BACKED_BATCH_ROWS = 1 << 20
+
+
+@njit(cache=True, nogil=True, error_model="numpy")
+def _top_columns(
+    x: np.ndarray, rows: np.ndarray, y: np.ndarray, train: np.ndarray, columns: np.ndarray, k: int
+) -> np.ndarray:
+    """The ``k`` of ``columns`` with the largest ANOVA F statistic over the training rows, in column order.
+
+    The statistic is :func:`~sklearn.feature_selection.f_classif`'s sums-of-squares formula, a missing one ranks
+    lowest as in :func:`~sklearn.feature_selection.SelectKBest`, and ties keep the later column, as its stable sort does.
+    """
+    scores = np.empty(columns.size)
+    for c in range(columns.size):
+        j = columns[c]
+        n = np.zeros(2)
+        sums = np.zeros(2)
+        squares = 0.0
+        for i in range(rows.size):
+            if train[i]:
+                value = np.float64(x[rows[i], j])
+                n[y[i]] += 1
+                sums[y[i]] += value
+                squares += value * value
+        total = sums[0] + sums[1]
+        n_all = n[0] + n[1]
+        between = sums[0] ** 2 / n[0] + sums[1] ** 2 / n[1] - total**2 / n_all
+        within = (squares - total**2 / n_all) - between
+        f = between / (within / (n_all - 2))
+        scores[c] = np.finfo(np.float64).min if np.isnan(f) else f
+    keep = np.zeros(columns.size, dtype=np.bool_)
+    keep[np.argsort(scores, kind="mergesort")[columns.size - k :]] = True
+    return columns[keep]
+
+
+@njit(cache=True, nogil=True)
+def _fit_fold(
+    x: np.ndarray, rows: np.ndarray, y: np.ndarray, fold: np.ndarray, held_out: int, n_features: int, proba: np.ndarray
+) -> bool:
+    """Fit one fold of a group and write the held-out rows' probability of the group class into ``proba``.
+
+    The fit is ``SelectKBest(f_classif, k=n_features)`` then ``LogisticRegression(class_weight="balanced",
+    solver="liblinear", max_iter=2000)`` on the rows outside ``held_out``, over the features that vary across the
+    group's rows. Returns ``False``, leaving ``proba`` untouched, when no feature varies or the training rows lack a class.
+    """
+    n_columns = x.shape[1]
+    varying = np.zeros(n_columns, dtype=np.bool_)
+    for j in range(n_columns):
+        first = x[rows[0], j]
+        for i in range(1, rows.size):
+            if x[rows[i], j] != first:
+                varying[j] = True
+                break
+    columns = np.flatnonzero(varying)
+    train = fold != held_out
+    n_train = 0
+    n_pos = 0
+    for i in range(rows.size):
+        if train[i]:
+            n_train += 1
+            n_pos += y[i]
+    if columns.size == 0 or n_pos == 0 or n_pos == n_train:
+        return False
+    k = min(n_features, columns.size)
+    if k < columns.size:
+        columns = _top_columns(x, rows, y, train, columns, k)
+
+    # liblinear's layout: the negative class's rows first, each class in row order, and a bias column of ones.
+    weight = (n_train / (2.0 * (n_train - n_pos)), n_train / (2.0 * n_pos))  # class_weight="balanced"
+    xt = np.empty((n_train, k + 1))
+    yt = np.empty(n_train)
+    cost = np.empty(n_train)
+    r = 0
+    for side in range(2):
+        for i in range(rows.size):
+            if train[i] and y[i] == side:
+                for c in range(k):
+                    xt[r, c] = x[rows[i], columns[c]]
+                xt[r, k] = 1.0
+                yt[r] = 2.0 * side - 1.0
+                cost[r] = weight[side]
+                r += 1
+    w = fit_l2_logistic(xt, yt, cost, 1e-4, 2000)
+    for i in range(rows.size):
+        if not train[i]:
+            margin = 0.0
+            for c in range(k):
+                margin += x[rows[i], columns[c]] * w[c]
+            proba[i] = 1 / (1 + np.exp(-(margin + w[k])))
+    return True
+
+
+@njit(cache=True, nogil=True)
 def _roc_auc(y: np.ndarray, proba: np.ndarray) -> float:
-    """ROC AUC from the out-of-fold probabilities, equal to :func:`sklearn.metrics.roc_auc_score` for a binary label.
+    """ROC AUC as the Mann-Whitney statistic, ties sharing the average rank, as :func:`sklearn.metrics.roc_auc_score`."""
+    order = np.argsort(proba, kind="mergesort")
+    n_pos = 0
+    rank_sum = 0.0
+    start = 0
+    while start < order.size:
+        stop = start + 1
+        while stop < order.size and proba[order[stop]] == proba[order[start]]:
+            stop += 1
+        rank = (start + 1 + stop) / 2.0
+        for i in range(start, stop):
+            if y[order[i]]:
+                n_pos += 1
+                rank_sum += rank
+        start = stop
+    n_neg = order.size - n_pos
+    return (rank_sum - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg)
 
-    The AUC is the Mann-Whitney statistic, the mean rank of the positive scores standardised by the class sizes,
-    which is :func:`~sklearn.metrics.roc_auc_score` to floating-point precision, ties shared by the average rank as
-    that function also does, without its per-call validation of the label and the curve it never needs here.
-    """
-    from scipy.stats import rankdata
 
-    n_pos = int(y.sum())
-    n_neg = y.size - n_pos
-    if n_pos == 0 or n_neg == 0:
-        return float("nan")
-    ranks = rankdata(proba)
-    return float((ranks[y == 1].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg))
-
-
-def _score_group(
+@njit(parallel=True, cache=True, nogil=True)
+def _score_groups(
     x: np.ndarray,
+    rows: np.ndarray,
     y: np.ndarray,
-    replicates: np.ndarray | None,
-    n_folds: int,
+    fold: np.ndarray,
+    starts: np.ndarray,
+    n_folds: np.ndarray,
     n_features: int,
-    seed: int,
-) -> tuple[np.ndarray, float, int]:
-    """Out-of-fold probability of the group class for every row of ``x``, the ROC AUC, and the folds used.
+) -> tuple[np.ndarray, np.ndarray]:
+    """Out-of-fold probabilities over the concatenated groups and each group's AUC, every fold of every group a thread task.
 
-    The fold loop is :func:`~sklearn.model_selection.cross_val_predict` of a feature-selection-then-logistic-regression
-    pipeline, written out so each of the many small groups skips its per-call input validation. The splits, the
-    refitted in-fold feature selection and the solver are unchanged, so the probabilities match it to the bit.
+    Group ``g`` holds ``rows[starts[g]:starts[g + 1]]`` of ``x``, its labels ``y`` and fold numbers ``fold``. A group
+    with a fold that could not be fitted is left missing throughout.
     """
-    from sklearn.feature_selection import SelectKBest, f_classif
-    from sklearn.linear_model import LogisticRegression
+    n_groups = n_folds.size
+    jobs = np.zeros(n_groups + 1, dtype=np.int64)
+    for g in range(n_groups):
+        jobs[g + 1] = jobs[g] + n_folds[g]
+    proba = np.full(rows.size, np.nan)
+    fitted = np.zeros(jobs[n_groups], dtype=np.bool_)
+    for job in prange(jobs[n_groups]):
+        group = np.searchsorted(jobs, job, side="right") - 1
+        a, b = starts[group], starts[group + 1]
+        fitted[job] = _fit_fold(x, rows[a:b], y[a:b], fold[a:b], job - jobs[group], n_features, proba[a:b])
+    auc = np.full(n_groups, np.nan)
+    for g in prange(n_groups):
+        a, b = starts[g], starts[g + 1]
+        if fitted[jobs[g] : jobs[g + 1]].all():
+            auc[g] = _roc_auc(y[a:b], proba[a:b])
+        else:
+            proba[a:b] = np.nan
+    return proba, auc
+
+
+@njit(parallel=True, cache=True, nogil=True)
+def _finite_rows(x: np.ndarray) -> np.ndarray:
+    """Whether every value of each row is finite."""
+    out = np.ones(x.shape[0], dtype=np.bool_)
+    for i in prange(x.shape[0]):
+        for j in range(x.shape[1]):
+            if not np.isfinite(x[i, j]):
+                out[i] = False
+                break
+    return out
+
+
+def _folds(y: np.ndarray, replicates: np.ndarray | None, n_folds: int, seed: int) -> tuple[np.ndarray, int]:
+    """Each row's cross-validation fold, from the splitter :func:`~sklearn.model_selection.cross_val_predict` would use."""
     from sklearn.model_selection import StratifiedGroupKFold, StratifiedKFold
 
-    # A feature constant over the sample has no F statistic and only draws a warning from f_classif.
-    x = x[:, np.ptp(x, axis=0) > 0]
     if replicates is None:
         folds = min(n_folds, int(np.bincount(y).min()))
     else:
         folds = min(n_folds, *(np.unique(replicates[y == side]).size for side in (0, 1)))
-    if folds < 2 or x.shape[1] == 0:
-        return np.full(int(y.sum()), np.nan), np.nan, 0
-
+    fold = np.empty(y.size, dtype=np.int8)
+    if folds < 2:
+        return fold, 0
     splitter = StratifiedKFold if replicates is None else StratifiedGroupKFold
     cv = splitter(n_splits=folds, shuffle=True, random_state=seed)
-    k = min(n_features, x.shape[1])
-    select = k < x.shape[1]  # with every feature kept, SelectKBest is a no-op on the columns, in their own order
-
-    proba = np.empty(x.shape[0], dtype=np.float64)
-    for train, test in cv.split(x, y, replicates):
-        x_train, y_train = x[train], y[train]
-        if select:
-            # The same f_classif ranking cross_val_predict refits per fold, so the held-out rows never pick features.
-            columns = SelectKBest(score_func=f_classif, k=k).fit(x_train, y_train).get_support()
-            x_train, x_test = x_train[:, columns], x[test][:, columns]
-        else:
-            x_test = x[test]
-        model = LogisticRegression(max_iter=2000, class_weight="balanced", solver="liblinear")
-        model.fit(x_train, y_train)
-        proba[test] = model.predict_proba(x_test)[:, 1]
-    return proba[y == 1], _roc_auc(y, proba), folds
+    for number, (_, test) in enumerate(cv.split(np.empty((y.size, 1)), y, replicates)):
+        fold[test] = number
+    return fold, folds
 
 
 @inplace_or_copy(expects="object")
@@ -96,7 +217,6 @@ def perturbation_score(
     n_features: int = 200,
     n_folds: int = 5,
     min_cells: int = 50,
-    n_jobs: int | None = None,
     seed: int = 0,
     key_added: str = "perturbation_score",
     copy: bool = False,
@@ -130,7 +250,6 @@ def perturbation_score(
         n_folds: Cross-validation folds, capped by the cells, or with `replicate` the replicates, on the smaller side.
         min_cells: Groups with fewer cells than this are left unscored.
             Brieflow's minimum of 100 counts the group and its equal-sized reference sample together.
-        n_jobs: Groups scored in parallel threads; ``None`` scores them one at a time and ``-1`` uses every core.
         seed: Seeds the reference sample and the fold split, together with the group's name, so a group's score does not depend on which other groups are present.
         key_added: ``obs`` column for the per-cell score and the ``uns["mantispy"]`` key for the per-group table.
         copy: Return a modified copy instead of mutating in place.
@@ -152,7 +271,9 @@ def perturbation_score(
         The guide does: random folds let the model learn what a guide's own cells share, and pass that off as the gene's phenotype.
 
         The cost grows with the number of cells, not with the number of groups, since each group's fit sees its own cells and as many reference cells.
-        Each group reads only its own rows and its reference sample, so a backed object is never loaded whole.
+        Every fold of every group is fitted in parallel on numba's threads, which :func:`numba.set_num_threads` caps.
+        The fit is a port of the liblinear solver ``LogisticRegression(solver="liblinear")`` runs, so the scores match scikit-learn's to rounding.
+        A backed object is read a batch of groups at a time, each group's rows and its reference sample, so it is never loaded whole.
     """
     is_reference = reference_mask(adata, reference)
     if not is_reference.any():
@@ -177,18 +298,6 @@ def perturbation_score(
     # One level per distinct value of `by`, scored on its own cells and its own reference sample; without
     # `by` the whole object is one level, with the seed and reference set it had before `by` existed.
     level_codes, level_keys = group_codes(adata, by) if by is not None else (None, None)
-
-    # Read every row once into a dense block when the matrix is in memory, so each group slices it instead of
-    # re-reading and re-casting its rows; a backed matrix keeps reading one group at a time, never loaded whole.
-    # The block keeps its own float dtype rather than being widened to float64: liblinear casts each fold back up
-    # to float64 from the same values, so a float32 screen scores identically from half the memory and bandwidth.
-    source = _source(adata, layer, use_rep)
-    matrix = None if _reads_from_disk(source) else np.asarray(get_matrix(adata, layer=layer, use_rep=use_rep))
-
-    def read(both: np.ndarray) -> np.ndarray:
-        if matrix is not None:
-            return matrix[both]
-        return np.asarray(get_matrix(adata, layer=layer, rows=both, use_rep=use_rep))
 
     def group_rows(pool: np.ndarray) -> dict[int, np.ndarray]:
         """Map each group's code to its non-reference rows within ``pool``, in increasing row order."""
@@ -217,8 +326,12 @@ def perturbation_score(
             reference_rows = np.flatnonzero(is_reference & in_level)
             tasks += [(level_key, code, rows, reference_rows) for code, rows in rows_for.items()]
 
-    def run(task: Task) -> tuple[np.ndarray, np.ndarray, float, int, int]:
-        level_key, code, rows, reference_rows = task
+    # Python draws each group's reference sample and its folds; the fits run in one numba kernel over every
+    # (group, fold), reading the matrix in place in its own float dtype, as liblinear casts each fold up to float64.
+    Prepared = tuple[np.ndarray, np.ndarray, np.ndarray, int]  # rows, labels, folds, number of folds
+    prepared: dict[int, Prepared] = {}
+    n_reference = np.empty(len(tasks), dtype=np.int64)
+    for t, (level_key, code, rows, reference_rows) in enumerate(tasks):
         # Seed on the group's name, and on the level's when `by` splits, so a score depends on neither which
         # other groups nor which other levels are present; without `by` the entropy is what it was before.
         entropy = [seed, zlib.crc32(str(keys[code]).encode())]
@@ -226,33 +339,67 @@ def perturbation_score(
             entropy.insert(1, zlib.crc32(str(level_key).encode()))
         rng = np.random.default_rng(entropy)
         drawn = np.sort(rng.choice(reference_rows, size=min(rows.size, reference_rows.size), replace=False))
+        n_reference[t] = drawn.size
         if rows.size < min_cells:
-            return rows, np.full(rows.size, np.nan), np.nan, drawn.size, 0
+            continue
         # Rows in object order, as Brieflow takes them, so a seeded fold split matches its split.
         both = np.union1d(rows, drawn)
-        x = read(both)
-        if not np.isfinite(x).all():
-            raise ValueError(
-                f"perturbation_score: group {keys[code]!r} or its reference sample has missing or infinite feature "
-                "values; drop or fill them first, for example with mt.pp.feature_select"
-            )
-        y = np.isin(both, rows).astype(int)
-        groups = replicate_codes[both] if replicate_codes is not None else None
-        proba, auc, folds = _score_group(x, y, groups, n_folds, n_features, seed)
-        return both[y == 1], proba, auc, drawn.size, folds
-
-    if n_jobs is None or n_jobs == 1:
-        results = [run(task) for task in tasks]
-    else:
-        # liblinear and the BLAS calls release the GIL, so threads share the matrix instead of copying it.
-        with ThreadPoolExecutor(max_workers=os.cpu_count() if n_jobs == -1 else n_jobs) as pool:
-            results = list(pool.map(run, tasks))
+        y = np.isin(both, rows).astype(np.int8)
+        fold, folds = _folds(y, replicate_codes[both] if replicate_codes is not None else None, n_folds, seed)
+        if folds:
+            prepared[t] = (both, y, fold, folds)
 
     score = np.full(adata.n_obs, np.nan)
+    auc = np.full(len(tasks), np.nan)
+    source = _source(adata, layer, use_rep)
+    backed = _reads_from_disk(source)
+    # In memory the whole matrix is one batch, read in place; a backed one is read a batch of groups at a time.
+    batches, batch, size = [], [], 0
+    for t, (both, *_) in prepared.items():
+        batch.append(t)
+        size += both.size
+        if backed and size >= _BACKED_BATCH_ROWS:
+            batches.append(batch)
+            batch, size = [], 0
+    if batch:
+        batches.append(batch)
+    matrix = None if backed else np.asarray(get_matrix(adata, layer=layer, use_rep=use_rep))
+    for batch in batches:
+        parts = [prepared[t] for t in batch]
+        rows = np.concatenate([p[0] for p in parts])
+        if matrix is None:
+            needed = np.unique(rows)
+            x = np.asarray(get_matrix(adata, layer=layer, rows=needed, use_rep=use_rep))
+            local = np.searchsorted(needed, rows)
+        else:
+            x, local = matrix, rows
+        x = _kernel_input(x)
+        finite = _finite_rows(x)
+        starts = np.r_[0, np.cumsum([p[0].size for p in parts])]
+        for t, a, b in zip(batch, starts[:-1], starts[1:], strict=True):
+            if not finite[local[a:b]].all():
+                raise ValueError(
+                    f"perturbation_score: group {keys[tasks[t][1]]!r} or its reference sample has missing or "
+                    "infinite feature values; drop or fill them first, for example with mt.pp.feature_select"
+                )
+        proba, batch_auc = _score_groups(
+            x,
+            local.astype(np.int64),
+            np.concatenate([p[1] for p in parts]),
+            np.concatenate([p[2] for p in parts]),
+            starts.astype(np.int64),
+            np.array([p[3] for p in parts], dtype=np.int64),
+            int(n_features),
+        )
+        auc[batch] = batch_auc
+        for (both, y, _, _), a, b in zip(parts, starts[:-1], starts[1:], strict=True):
+            score[both[y == 1]] = proba[a:b][y == 1]
+
     records = []
-    for (level_key, code, _, _), (rows, proba, auc, n_reference, folds) in zip(tasks, results, strict=True):
-        score[rows] = proba
-        row = (str(keys[code]), rows.size, n_reference, folds, auc)
+    for t, (level_key, code, rows, _) in enumerate(tasks):
+        # A group whose folds could not all be fitted, for want of a varying feature or a class, has no AUC.
+        folds = prepared[t][3] if t in prepared and np.isfinite(auc[t]) else 0
+        row = (str(keys[code]), rows.size, int(n_reference[t]), folds, auc[t])
         records.append(row if by is None else (row[0], level_key, *row[1:]))
     columns = ["group", "n_cells", "n_reference", "n_folds", "auc"]
     if by is not None:

@@ -56,7 +56,9 @@ def test_scores_and_auc_match_brieflow_on_the_same_sample():
 
     # replicate=None reproduces Brieflow's random folds over cells (its sample has no guide column).
     mt.tl.perturbation_score(adata, n_folds=10, replicate=None)
+    # The fit is a port of liblinear's solver, on the same iterates, so it agrees to rounding; 1e-6 leaves room for a
+    # different BLAS rounding to flip one of its trust-region decisions, which moves the fit within its own tolerance.
     gene = labels == "GENE"
-    np.testing.assert_allclose(adata.obs["perturbation_score"].to_numpy()[gene], expected.to_numpy()[gene], atol=1e-10)
+    np.testing.assert_allclose(adata.obs["perturbation_score"].to_numpy()[gene], expected.to_numpy()[gene], atol=1e-6)
     table = adata.uns["mantispy"]["perturbation_score"].set_index("group")
-    np.testing.assert_allclose(table.loc["GENE", "auc"], expected_auc, atol=1e-12)
+    np.testing.assert_allclose(table.loc["GENE", "auc"], expected_auc, atol=1e-6)

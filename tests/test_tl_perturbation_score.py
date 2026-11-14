@@ -200,17 +200,78 @@ def test_missing_values_and_an_empty_reference_raise():
         mt.tl.perturbation_score(adata)
 
 
-def test_threads_give_the_same_scores():
+@pytest.mark.parametrize("seed", range(4))
+def test_the_fit_is_liblinears(seed):
+    from sklearn.linear_model import LogisticRegression
+
+    from mantispy._core._liblinear import fit_l2_logistic
+
+    rng = np.random.default_rng(seed)
+    n0, n1, p = rng.integers(30, 400, size=2).tolist() + [int(rng.integers(2, 40))]
+    x = rng.normal(1.0, 2.0, (n0 + n1, p))
+    y = rng.permutation(np.r_[np.zeros(n0, int), np.ones(n1, int)])
+    x[y == 1, :2] += 0.8
+    model = LogisticRegression(max_iter=2000, class_weight="balanced", solver="liblinear").fit(x, y)
+
+    order = np.argsort(y, kind="stable")  # liblinear's row order, the negative class first
+    weight = y.size / (2 * np.bincount(y))
+    w = fit_l2_logistic(np.c_[x[order], np.ones(y.size)], 2.0 * y[order] - 1, weight[y[order]], 1e-4, 2000)
+    np.testing.assert_allclose(w, np.r_[model.coef_.ravel(), model.intercept_], atol=1e-6)
+
+
+def test_scores_match_scikit_learn_with_folds_by_guide_and_unequal_classes():
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.model_selection import StratifiedGroupKFold, cross_val_predict
+
+    adata = _cells(n_ref=120)  # every reference cell is drawn, so the sample is known
+    mt.tl.perturbation_score(adata)
+    for gene in ("HIT", "QUIET"):
+        rows = adata.obs["Metadata_Gene"].isin([gene, "nontargeting"]).to_numpy()
+        y = (adata.obs["Metadata_Gene"][rows] == gene).to_numpy().astype(int)
+        guides = adata.obs["Metadata_sgRNA"][rows].to_numpy()
+        expected = cross_val_predict(
+            LogisticRegression(max_iter=2000, class_weight="balanced", solver="liblinear"),
+            adata.X[rows],
+            y,
+            groups=guides,
+            cv=StratifiedGroupKFold(n_splits=4, shuffle=True, random_state=0),
+            method="predict_proba",
+        )[:, 1]
+        score = adata.obs["perturbation_score"].to_numpy()[rows]
+        np.testing.assert_allclose(score[y == 1], expected[y == 1], atol=1e-6)
+
+
+def test_a_constant_feature_changes_nothing_and_an_all_constant_group_is_unscored():
     adata = _cells()
-    serial = mt.tl.perturbation_score(adata, copy=True)
-    for n_jobs in (2, -1):
-        threaded = mt.tl.perturbation_score(adata, n_jobs=n_jobs, copy=True)
-        np.testing.assert_array_equal(serial.obs["perturbation_score"], threaded.obs["perturbation_score"])
-        # The per-group AUC table must not depend on n_jobs either.
-        np.testing.assert_array_equal(
-            serial.uns["mantispy"]["perturbation_score"]["auc"].to_numpy(),
-            threaded.uns["mantispy"]["perturbation_score"]["auc"].to_numpy(),
-        )
+    mt.tl.perturbation_score(adata)
+    padded = AnnData(np.c_[adata.X, np.full(adata.n_obs, 3.0, dtype="float32")], obs=adata.obs.copy())
+    mt.tl.perturbation_score(padded)
+    np.testing.assert_array_equal(padded.obs["perturbation_score"], adata.obs["perturbation_score"])
+
+    flat = AnnData(np.ones_like(adata.X), obs=adata.obs.copy())
+    mt.tl.perturbation_score(flat)
+    table = flat.uns["mantispy"]["perturbation_score"]
+    assert table["auc"].isna().all() and (table["n_folds"] == 0).all()
+    assert flat.obs["perturbation_score"].isna().all()
+
+
+def test_a_backed_object_scores_as_in_memory_in_batches(tmp_path, monkeypatch):
+    import anndata as ad
+
+    from mantispy.tl import _perturbation_score
+
+    _cells().write_h5ad(tmp_path / "cells.h5ad")
+    adata = ad.read_h5ad(tmp_path / "cells.h5ad")
+    mt.tl.perturbation_score(adata)
+    backed = ad.read_h5ad(tmp_path / "cells.h5ad", backed="r")
+    monkeypatch.setattr(_perturbation_score, "_BACKED_BATCH_ROWS", 100)  # one group per batch
+    mt.tl.perturbation_score(backed, key_added="backed")
+    np.testing.assert_array_equal(backed.obs["backed"], adata.obs["perturbation_score"])
+
+
+def test_n_jobs_is_gone():
+    with pytest.raises(TypeError, match="n_jobs"):
+        mt.tl.perturbation_score(_cells(), n_jobs=2)
 
 
 def test_folds_over_cells_warn_at_object_resolution():
