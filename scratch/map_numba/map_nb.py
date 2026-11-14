@@ -113,54 +113,84 @@ def _differs(diff, i, j):
     return True
 
 
+#: Queries scored together against each candidate, so a candidate row is read once per block, not once per query.
+BLOCK = 32
+
+
 @njit(parallel=True, nogil=True, cache=True)
-def _ap_kernel(xn, pos_same, pos_order, pos_off, pos_diff, neg_same, neg_order, neg_off, neg_diff, max_pos, max_neg):
+def _ap_kernel(xn, pos_same, pos_order, pos_off, pos_diff, neg_diff, q_order, items, max_pos, max_neg):
+    """``items[k] = (q_lo, q_hi, c_lo, c_hi)``: queries ``q_order[q_lo:q_hi]`` share the negative candidates
+    ``q_order[c_lo:c_hi]`` (their ``neg_sameby`` bucket). Positives are few and scored per query."""
     n = xn.shape[0]
+    f = xn.shape[1]
     ap = np.full(n, np.nan)
     npos = np.zeros(n, np.int64)
     ntot = np.zeros(n, np.int64)
-    n_chunks = min(n, 4 * get_num_threads())
+    n_items = items.shape[0]
+    n_chunks = min(n_items, get_num_threads())
     for chunk in prange(n_chunks):
         pkeys = np.empty(max_pos, np.float32)
-        nkeys = np.empty(max_neg, np.float32)
+        nkeys = np.empty((BLOCK, max_neg), np.float32)
+        cnt = np.zeros(BLOCK, np.int64)
         bins = np.empty(max_pos + 1, np.int64)
         one = np.float32(1.0)
-        for i in range(chunk, n, n_chunks):
-            xi = xn[i]
-            p = 0
-            g = pos_same[i]
-            if g >= 0:
-                for t in range(pos_off[g], pos_off[g + 1]):
-                    j = pos_order[t]
-                    if j != i and _differs(pos_diff, i, j):
-                        pkeys[p] = one - _dot_rec(xi, xn[j], 0, xi.shape[0])
-                        p += 1
-            q = 0
-            g = neg_same[i]
-            if g >= 0:
-                for t in range(neg_off[g], neg_off[g + 1]):
-                    j = neg_order[t]
+        for k in range(chunk, n_items, n_chunks):
+            q_lo, q_hi, c_lo, c_hi = items[k, 0], items[k, 1], items[k, 2], items[k, 3]
+            nb = q_hi - q_lo
+            for b in range(nb):
+                cnt[b] = 0
+            for t in range(c_lo, c_hi):
+                j = q_order[t]
+                xj = xn[j]
+                for b in range(nb):
+                    i = q_order[q_lo + b]
                     if j != i and _differs(neg_diff, i, j):
-                        nkeys[q] = one - _dot_rec(xi, xn[j], 0, xi.shape[0])
-                        q += 1
-            npos[i] = p
-            ntot[i] = p + q
-            if p == 0:
-                continue
-            ps = pkeys[:p]
-            ps.sort()
-            for m in range(p + 1):
-                bins[m] = 0
-            for t in range(q):
-                # ties rank positives first: a negative sits after every positive with key <= its key
-                bins[np.searchsorted(ps, nkeys[t], side="right")] += 1
-            above = 0
-            s = 0.0
-            for r in range(p):
-                above += bins[r]
-                s += (r + 1) / (r + 1 + above)
-            ap[i] = s / p
+                        nkeys[b, cnt[b]] = one - _dot_rec(xn[i], xj, 0, f)
+                        cnt[b] += 1
+            for b in range(nb):
+                i = q_order[q_lo + b]
+                xi = xn[i]
+                p = 0
+                g = pos_same[i]
+                if g >= 0:
+                    for t in range(pos_off[g], pos_off[g + 1]):
+                        j = pos_order[t]
+                        if j != i and _differs(pos_diff, i, j):
+                            pkeys[p] = one - _dot_rec(xi, xn[j], 0, f)
+                            p += 1
+                q = cnt[b]
+                npos[i] = p
+                ntot[i] = p + q
+                if p == 0:
+                    continue
+                ps = pkeys[:p]
+                ps.sort()
+                for m in range(p + 1):
+                    bins[m] = 0
+                for t in range(q):
+                    # ties rank positives first: a negative sits after every positive with key <= its key
+                    bins[np.searchsorted(ps, nkeys[b, t], side="right")] += 1
+                above = 0
+                s = 0.0
+                for r in range(p):
+                    above += bins[r]
+                    s += (r + 1) / (r + 1 + above)
+                ap[i] = s / p
     return ap, npos, ntot
+
+
+def _work_items(neg_codes: np.ndarray, n_groups: int) -> tuple[np.ndarray, np.ndarray]:
+    """Query order (rows bucketed by negative code, rows without one last) and blocks of BLOCK queries per bucket."""
+    order, off = _bucket(neg_codes, n_groups)
+    lone = np.flatnonzero(neg_codes < 0)
+    q_order = np.concatenate([order, lone]).astype(np.int64)
+    items = []
+    for g in range(n_groups):
+        for lo in range(off[g], off[g + 1], BLOCK):
+            items.append((lo, min(lo + BLOCK, off[g + 1]), off[g], off[g + 1]))
+    for lo in range(len(order), len(q_order), BLOCK):
+        items.append((lo, min(lo + BLOCK, len(q_order)), 0, 0))
+    return q_order, np.array(items, dtype=np.int64).reshape(-1, 4)
 
 
 def _codes(meta: pd.DataFrame, columns: list[str]) -> tuple[np.ndarray, int]:
@@ -186,11 +216,11 @@ def average_precision(meta, feats, pos_sameby, pos_diffby, neg_sameby, neg_diffb
     ps, n_ps = _codes(meta, list(pos_sameby))
     ns, n_ns = _codes(meta, list(neg_sameby))
     po, poff = _bucket(ps, n_ps)
-    no, noff = _bucket(ns, n_ns)
+    q_order, items = _work_items(ns, n_ns)
     max_pos = int(np.diff(poff).max()) if n_ps else 1
-    max_neg = int(np.diff(noff).max()) if n_ns else 1
+    max_neg = int((items[:, 3] - items[:, 2]).max()) if len(items) else 1
     ap, npos, ntot = _ap_kernel(
-        xn, ps, po, poff, _diff_codes(meta, list(pos_diffby)), ns, no, noff, _diff_codes(meta, list(neg_diffby)),
+        xn, ps, po, poff, _diff_codes(meta, list(pos_diffby)), _diff_codes(meta, list(neg_diffby)), q_order, items,
         max(max_pos, 1), max(max_neg, 1),
     )  # fmt: skip
     out = meta.copy()
