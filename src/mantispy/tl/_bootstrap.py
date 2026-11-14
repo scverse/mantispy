@@ -30,6 +30,10 @@ else:
 #: Where each guide's null is drawn from; see :func:`bootstrap_features`.
 CONTROL_SCOPES = ("pooled", "within_group", "reference_group", "within_perturbation")
 
+#: The label :func:`~mantispy.pp.pseudogenes` gives a group of control guides; such a group is tested, and its
+#: guides leave only its own null.
+PSEUDOGENE_PREFIX = "pseudogene_"
+
 #: Atoms of a guide null whose probability is below this are dropped when the gene null needs
 #: them. The dropped mass is a far order-statistic tail of comparable size, well under the
 #: Monte-Carlo error of any feasible simulation; small problems keep every atom, so the result
@@ -210,6 +214,7 @@ def _guide_pvalues(
     sub_nn: np.ndarray,
     sub_start: np.ndarray,
     sub_stop: np.ndarray,
+    pool_subs: np.ndarray,
     pool_sub_start: np.ndarray,
     pool_sub_stop: np.ndarray,
     pool_width: np.ndarray,
@@ -235,7 +240,8 @@ def _guide_pvalues(
             gt = 0.0
             lt = 0.0
             nanp = 0.0
-            for sub in range(s0, s1):
+            for si in range(s0, s1):
+                sub = pool_subs[si]
                 a = sub_start[sub]
                 width = sub_stop[sub] - a
                 nn = sub_nn[j, sub]
@@ -449,6 +455,7 @@ def _build_construct(
     sub_nn_row,
     sub_start,
     sub_stop,
+    pool_subs,
     s0,
     s1,
     width_total,
@@ -464,12 +471,13 @@ def _build_construct(
 ):
     """Build one guide null as merged, sorted atoms in ``val_buf``/``prob_buf`` from ``start``.
 
-    Mixes every control guide's exact median-atom distribution, then sorts and merges equal values.
+    Mixes the exact median-atom distributions of the control guides ``pool_subs[s0:s1]``, then sorts and merges equal values.
     Returns ``(end, nan_prob)``; the atom probabilities sum to ``1 - nan_prob``.
     """
     cnt = start
     nan_prob = 0.0
-    for sub in range(s0, s1):
+    for si in range(s0, s1):
+        sub = pool_subs[si]
         a = sub_start[sub]
         width = sub_stop[sub] - a
         nn = sub_nn_row[sub]
@@ -706,6 +714,7 @@ def _gene_pvalues(
     sub_nn,
     sub_start,
     sub_stop,
+    pool_subs,
     pool_sub_start,
     pool_sub_stop,
     pool_width,
@@ -766,6 +775,7 @@ def _gene_pvalues(
                     sub_nn[j],
                     sub_start,
                     sub_stop,
+                    pool_subs,
                     pool_sub_start[p],
                     pool_sub_stop[p],
                     pool_width[p],
@@ -795,6 +805,7 @@ def _gene_pvalues(
                     sub_nn[j],
                     sub_start,
                     sub_stop,
+                    pool_subs,
                     pool_sub_start[p],
                     pool_sub_stop[p],
                     pool_width[p],
@@ -853,7 +864,8 @@ def _gene_pvalues(
                     m = construct_size[c]
                     le = 0.0
                     lt = 0.0
-                    for sub in range(pool_sub_start[p], pool_sub_stop[p]):
+                    for si in range(pool_sub_start[p], pool_sub_stop[p]):
+                        sub = pool_subs[si]
                         aa = sub_start[sub]
                         width = sub_stop[sub] - aa
                         w = width / pool_width[p]
@@ -886,12 +898,73 @@ def _gene_pvalues(
     return out
 
 
+def _leave_own_out(
+    values,
+    unit_codes,
+    unit_keys,
+    pool_rows,
+    sub_start,
+    sub_stop,
+    pool_subs,
+    pool_sub_start,
+    pool_sub_stop,
+    pool_width,
+    pool_median,
+    construct_unit,
+    construct_pool,
+):
+    """Give each tested group whose own guides sit in its pool a copy of that pool without them.
+
+    Only pseudo-genes, made of control guides, have guides in a pool; for them each new pool is appended
+    and ``construct_pool`` is repointed to it in place. Every other group keeps its pool untouched.
+    Returns the pool arrays, extended.
+    """
+    sub_of_position = np.repeat(np.arange(sub_start.size), sub_stop - sub_start)
+    tested_units = np.unique(construct_unit)
+    in_tested = np.isin(unit_codes[pool_rows], tested_units)
+    if not in_tested.any():
+        return pool_subs, pool_sub_start, pool_sub_stop, pool_width, pool_median
+    own_unit, own_sub = unit_codes[pool_rows][in_tested], sub_of_position[in_tested]
+
+    subs, starts, stops, widths, medians = [pool_subs], [pool_sub_start], [pool_sub_stop], [pool_width], [pool_median]
+    n_pools, n_entries = pool_sub_start.size, pool_subs.size
+    sub_width = (sub_stop - sub_start).astype(np.int64)
+    new_pool: dict[tuple[int, int], int] = {}
+    for c in np.flatnonzero(np.isin(construct_unit, own_unit)):
+        key = (int(construct_unit[c]), int(construct_pool[c]))
+        if key not in new_pool:
+            unit, pool = key
+            base = pool_subs[pool_sub_start[pool] : pool_sub_stop[pool]]
+            keep = base[~np.isin(base, own_sub[own_unit == unit])]
+            if keep.size == 0:
+                raise ValueError(
+                    f"group {unit_keys[unit]!r} holds every control guide its null is drawn from, so leaving "
+                    "its own guides out leaves no null"
+                )
+            positions = np.concatenate([np.arange(sub_start[s], sub_stop[s]) for s in keep])
+            subs.append(keep)
+            starts.append(np.array([n_entries], dtype=np.int64))
+            stops.append(np.array([n_entries + keep.size], dtype=np.int64))
+            widths.append(np.array([sub_width[keep].sum()], dtype=np.int64))
+            medians.append(grouped_stat(values[pool_rows[positions]], np.zeros(positions.size, np.int64), 1, MEDIAN))
+            new_pool[key] = n_pools + len(new_pool)
+            n_entries += keep.size
+        construct_pool[c] = new_pool[key]
+    return (
+        np.concatenate(subs),
+        np.concatenate(starts),
+        np.concatenate(stops),
+        np.concatenate(widths),
+        np.concatenate(medians),
+    )
+
+
 #: Hard limit on a guide null's per-thread atom buffer, so a huge screen cannot ask for unbounded memory;
 #: the probability pruning keeps the real count far below this, and small problems never approach it.
 _ATOM_CAP_MAX = 40_000_000
 
 
-def _null_caps(sub_start, sub_stop, pool_sub_start, pool_sub_stop, null_pool, null_size):
+def _null_caps(sub_start, sub_stop, pool_subs, pool_sub_start, pool_sub_stop, null_pool, null_size):
     """Per-null atom-buffer size: an upper bound on the atoms a guide null generates before merging.
 
     A control guide of ``w`` cells resampled ``m`` at a time produces median atoms only where the
@@ -899,7 +972,7 @@ def _null_caps(sub_start, sub_stop, pool_sub_start, pool_sub_stop, null_pool, nu
     its marginal exceeds ``_ATOM_EPS``; that band holds at most ``nw = min(w, 7*w/sqrt(m))`` distinct
     values, so at most ``nw^2 + nw`` even-median atoms, never more than the ``w(w+1)/2 + w`` pairs.
     """
-    widths = (sub_stop - sub_start).astype(np.int64)
+    widths = (sub_stop - sub_start).astype(np.int64)[pool_subs]
     full = widths * (widths + 1) // 2 + widths
     caps = np.empty(null_pool.size, dtype=np.int64)
     for u, (p, m) in enumerate(zip(null_pool, null_size, strict=True)):
@@ -942,7 +1015,7 @@ def bootstrap_features(
         groupby: ``obs`` column, or columns, naming the gene each cell's guide targets; each group is tested.
         replicate: ``obs`` column naming the guide, the unit the null resamples.
         reference: The control cells: ``"negcon"``, or the name of a boolean ``obs`` column.
-            Their guides form the null and are not tested.
+            Their guides form the null and are not tested, except those relabelled as pseudo-genes (see Notes).
             Unused under ``control_scope="within_perturbation"``.
         control_scope: Which control cells a guide's null is drawn from.
             ``"pooled"`` uses every control cell.
@@ -973,7 +1046,8 @@ def bootstrap_features(
 
         The null resamples a control guide's own cells, so it carries that sample's error on top of the spread between control guides, while a tested guide carries only its own.
         The test therefore runs conservative when guides barely differ from one another, and near the nominal rate when they differ by more than the error of a guide's median.
-        Check the rate on your own screen with :func:`~mantispy.pp.pseudogenes`, which groups held-out control guides into pseudo-genes to test against the other control guides.
+        To check the rate on your own screen, group the control guides into pseudo-genes with :func:`~mantispy.pp.pseudogenes` and pass its column as ``groupby``.
+        A group whose label starts with ``"pseudogene_"`` is tested even though its cells are controls, against every control guide but its own; its guides stay in the null of every other group, so the real genes get the p-values they get without pseudo-genes.
     """
     if control_scope not in CONTROL_SCOPES:
         raise ValueError(f"control_scope must be one of {CONTROL_SCOPES}, got {control_scope!r}")
@@ -1008,7 +1082,11 @@ def bootstrap_features(
         pool_of_row = np.where(in_reference, perturbation_codes, -1)
     else:
         is_control = reference_mask(adata, reference)
-        tested = ~is_control
+        # Control cells relabelled as pseudo-genes (mt.pp.pseudogenes) are tested as well as pooled.
+        pseudo = np.zeros(adata.n_obs, dtype=bool)
+        for column in by:
+            pseudo |= obs[column].astype(str).str.startswith(PSEUDOGENE_PREFIX).to_numpy()
+        tested = ~is_control | (is_control & pseudo)
         if control_scope == "pooled":
             pool_of_row = np.where(is_control, 0, -1)
         else:
@@ -1085,6 +1163,22 @@ def bootstrap_features(
     pool_sub_start = np.searchsorted(sub_pool_idx, np.arange(pool_keys.size), side="left").astype(np.int64)
     pool_sub_stop = np.searchsorted(sub_pool_idx, np.arange(pool_keys.size), side="right").astype(np.int64)
     pool_width = (pool_stops - pool_starts).astype(np.int64)
+    pool_subs = np.arange(n_subs_total, dtype=np.int64)
+    pool_subs, pool_sub_start, pool_sub_stop, pool_width, pool_median = _leave_own_out(
+        values,
+        unit_codes,
+        unit_keys,
+        pool_rows,
+        sub_start,
+        sub_stop,
+        pool_subs,
+        pool_sub_start,
+        pool_sub_stop,
+        pool_width,
+        pool_median,
+        construct_unit,
+        construct_pool,
+    )
 
     genes, gene_starts = np.unique(construct_unit, return_index=True)
     gene_offsets = np.append(gene_starts, construct_unit.size).astype(np.int64)
@@ -1097,6 +1191,7 @@ def bootstrap_features(
         sub_nn,
         sub_start,
         sub_stop,
+        pool_subs,
         pool_sub_start,
         pool_sub_stop,
         pool_width,
@@ -1114,6 +1209,7 @@ def bootstrap_features(
         sub_nn,
         sub_start,
         sub_stop,
+        pool_subs,
         pool_sub_start,
         pool_sub_stop,
         pool_width,
@@ -1121,7 +1217,7 @@ def bootstrap_features(
         construct_null.astype(np.int64),
         null_pool.astype(np.int64),
         null_size.astype(np.int64),
-        _null_caps(sub_start, sub_stop, pool_sub_start, pool_sub_stop, null_pool, null_size),
+        _null_caps(sub_start, sub_stop, pool_subs, pool_sub_start, pool_sub_stop, null_pool, null_size),
         gene_offsets,
         gene_observed,
         _ATOM_EPS,
