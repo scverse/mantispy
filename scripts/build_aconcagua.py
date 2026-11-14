@@ -11,11 +11,10 @@ aggregates to guide-by-well profiles. It writes the two files the registry rehos
 * ``aconcagua_guide_well.h5ad`` -- 84,125 guide x well profiles over 1,483 features (``mt.ds.aconcagua``);
 * ``aconcagua_cells.h5ad`` -- the raw single cells of eight genes and the non-targeting controls (``mt.ds.aconcagua_cells``).
 
-The cells file keeps the eight interpretation genes (RRM1, DTL, SKA2, HAUS6, ITGAV, TLN1, PSMB7, SF3B3) and
-every non-targeting control, taken from the converted cells before normalization. The hosted cells file was
-cut down further by an extra subsample of the non-targeting controls (to 24,166 cells, about a fifth) under a
-step that is not in the source bundle, so this script reproduces the guide-by-well file exactly but emits the
-full, un-subsampled set of non-targeting controls; its treatment cells match the hosted ones cell for cell.
+The cells file keeps every treatment cell of the eight interpretation genes (RRM1, DTL, SKA2, HAUS6, ITGAV,
+TLN1, PSMB7, SF3B3) and a seeded random sample of the non-targeting controls, taken from the converted cells
+before normalization, down to 38,674 rows in total. The subsample step is not in the source bundle, so its
+seed (0) is fixed here; the original hosted file's exact non-targeting rows cannot be recovered.
 
 Prints each file's size and sha256 (to pin in the registry) and a content fingerprint; a rebuild is checked
 against the fingerprint, not the sha256, because anndata or h5py releases can write the same object as
@@ -56,8 +55,12 @@ REGION = "us-west-2"
 CHANNELS = ("DAPI", "TUBULIN", "GH2AX", "PHALLOIDIN")
 POSITIVE_CONTROLS = ("H2AX", "ECT2", "TUBB", "CFL1")
 PLATES = range(1, 9)
-# The eight genes the single-cell file keeps, beside every non-targeting control.
+# The eight genes the single-cell file keeps, beside a sample of the non-targeting controls.
 CELLS_GENES = ("RRM1", "DTL", "SKA2", "HAUS6", "ITGAV", "TLN1", "PSMB7", "SF3B3")
+# The single-cell file keeps every treatment cell of the eight genes and subsamples the non-targeting
+# controls down to this total, matching the size of the originally hosted file.
+CELLS_TOTAL = 38674
+CELLS_SEED = 0
 
 # Coordinates and bounding boxes are positions, not phenotypes (94 columns); they stay out of the subset.
 COORD = re.compile(
@@ -358,6 +361,21 @@ def _report(path: Path, adata: AnnData) -> None:
     print(f"fingerprint  {fingerprint(adata)}")
 
 
+def _subsample_controls(cells: AnnData) -> AnnData:
+    """Keep every treatment cell and a seeded random sample of non-targeting cells, to ``CELLS_TOTAL`` rows."""
+    negcon = (cells.obs["Metadata_Control_Type"] == "negcon").to_numpy()
+    keep_negcon = CELLS_TOTAL - int((~negcon).sum())
+    if keep_negcon < 0 or keep_negcon > int(negcon.sum()):
+        raise ValueError(
+            f"cannot reach {CELLS_TOTAL} cells: {int((~negcon).sum())} treatment, {int(negcon.sum())} non-targeting"
+        )
+    negcon_rows = np.flatnonzero(negcon)
+    chosen = np.random.default_rng(CELLS_SEED).choice(negcon_rows, size=keep_negcon, replace=False)
+    keep = ~negcon
+    keep[chosen] = True
+    return cells[keep].copy()
+
+
 def main() -> None:
     """Extract the subset, build both files and print each one's size, sha256 and fingerprint."""
     parser = argparse.ArgumentParser(description="Build the Aconcagua files from the Brieflow public outputs.")
@@ -393,6 +411,7 @@ def main() -> None:
     guide_well.obs_names = [str(i) for i in range(guide_well.n_obs)]
 
     cells = ad.concat(cells_parts, merge="same", uns_merge="first")
+    cells = _subsample_controls(cells)
     cells.obs_names = [str(i) for i in range(cells.n_obs)]
 
     guide_well_path = args.out / "aconcagua_guide_well.h5ad"
