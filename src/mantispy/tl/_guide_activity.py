@@ -10,6 +10,7 @@ from mantispy._core._stats import MAD_TO_SIGMA
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy._core.mutation import inplace_or_copy
+from mantispy.pp._pseudogenes import check_control_label
 
 
 @inplace_or_copy()
@@ -46,7 +47,7 @@ def guide_activity(
         Writes ``obs[key_added]``, the one-sided per-guide p-value, with the reference guides left missing since they set the scale rather than being scored.
 
     Raises:
-        ValueError: `reference` is absent from ``obs[group]``, or every feature is constant across the reference guides.
+        ValueError: `reference` is absent from ``obs[group]``, every feature is constant across the reference guides, or `group` is a :func:`~mantispy.pp.pseudogenes` column that left `reference` fewer guides than a pseudo-gene.
         KeyError: `group` is not an ``obs`` column.
 
     Notes:
@@ -57,6 +58,7 @@ def guide_activity(
     obs = as_frame(adata.obs)
     if group not in obs:
         raise KeyError(f"group={group!r} is not an obs column")
+    check_control_label(adata, group, reference)
     labels = obs[group].astype(str).to_numpy()
     is_reference = labels == str(reference)
     if not is_reference.any():

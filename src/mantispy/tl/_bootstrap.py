@@ -14,7 +14,7 @@ import pandas as pd
 from anndata import AnnData
 from numba import njit
 
-from mantispy._core._numba import MEDIAN, _kernel_input, grouped_stat
+from mantispy._core._numba import MEDIAN, N_CHUNKS, _kernel_input, _median_select, grouped_stat
 from mantispy._core._reduce import get_matrix, group_codes
 from mantispy._core._stats import benjamini_hochberg
 from mantispy._core.frames import as_frame
@@ -894,8 +894,37 @@ def _gene_pvalues(
     return out
 
 
+@njit(parallel=True, cache=True, nogil=True)
+def _pool_medians(pool_t, sub_start, sub_stop, pool_subs, pool_sub_start, pool_sub_stop, first, longest):
+    """Median of each feature over the cells of pools ``first`` onwards, ``(n_new_pools, n_features)``.
+
+    A pool's cells are those of its guides ``pool_subs[pool_sub_start[p]:pool_sub_stop[p]]``, read straight
+    from ``pool_t`` (features by pool cells) without gathering a pool's rows out. The median is the selection
+    :func:`~mantispy._core._numba.grouped_stat` uses, so the value is the same; ``NaN`` is skipped.
+    """
+    n_features = pool_t.shape[0]
+    n_new = pool_sub_start.size - first
+    out = np.empty((n_new, n_features), dtype=np.float64)
+    n_tasks = n_new * n_features
+    n_chunks = min(N_CHUNKS, n_tasks)
+    for chunk in prange(n_chunks):
+        buffer = np.empty(longest, dtype=np.float64)
+        for task in range(chunk, n_tasks, n_chunks):
+            p, j = divmod(task, n_features)
+            n = 0
+            for si in range(pool_sub_start[first + p], pool_sub_stop[first + p]):
+                sub = pool_subs[si]
+                for i in range(sub_start[sub], sub_stop[sub]):
+                    value = pool_t[j, i]
+                    if not np.isnan(value):
+                        buffer[n] = value
+                        n += 1
+            out[p, j] = _median_select(buffer, n)
+    return out
+
+
 def _leave_own_out(
-    values,
+    pool_t,
     unit_codes,
     unit_keys,
     pool_rows,
@@ -922,7 +951,7 @@ def _leave_own_out(
         return pool_subs, pool_sub_start, pool_sub_stop, pool_width, pool_median
     own_unit, own_sub = unit_codes[pool_rows][in_tested], sub_of_position[in_tested]
 
-    subs, starts, stops, widths, medians = [pool_subs], [pool_sub_start], [pool_sub_stop], [pool_width], [pool_median]
+    subs, starts, stops, widths = [pool_subs], [pool_sub_start], [pool_sub_stop], [pool_width]
     n_pools, n_entries = pool_sub_start.size, pool_subs.size
     sub_width = (sub_stop - sub_start).astype(np.int64)
     new_pool: dict[tuple[int, int], int] = {}
@@ -937,21 +966,60 @@ def _leave_own_out(
                     f"group {unit_keys[unit]!r} holds every control guide its null is drawn from, so leaving "
                     "its own guides out leaves no null"
                 )
-            positions = np.concatenate([np.arange(sub_start[s], sub_stop[s]) for s in keep])
             subs.append(keep)
             starts.append(np.array([n_entries], dtype=np.int64))
             stops.append(np.array([n_entries + keep.size], dtype=np.int64))
             widths.append(np.array([sub_width[keep].sum()], dtype=np.int64))
-            medians.append(grouped_stat(values[pool_rows[positions]], np.zeros(positions.size, np.int64), 1, MEDIAN))
             new_pool[key] = n_pools + len(new_pool)
             n_entries += keep.size
         construct_pool[c] = new_pool[key]
+    pool_subs, pool_sub_start, pool_sub_stop, pool_width = (
+        np.concatenate(parts) for parts in (subs, starts, stops, widths)
+    )
+    new_medians = _pool_medians(
+        pool_t, sub_start, sub_stop, pool_subs, pool_sub_start, pool_sub_stop, n_pools, int(pool_width[n_pools:].max())
+    )
+    return pool_subs, pool_sub_start, pool_sub_stop, pool_width, np.concatenate([pool_median, new_medians])
+
+
+#: The q-value cutoff the summary log and the pseudo-gene calibration read.
+_ALPHA = 0.05
+
+
+def _family_qvalues(pvalues: np.ndarray, is_pseudo: np.ndarray) -> np.ndarray:
+    """Benjamini-Hochberg q-values of the real genes among themselves, and of the pseudo-genes among themselves."""
+    qvalues = np.full(pvalues.shape, np.nan)
+    for family in (~is_pseudo, is_pseudo):
+        qvalues[family] = benjamini_hochberg(pvalues[family])
+    return qvalues
+
+
+def _calibration(table: pd.DataFrame, alpha: float) -> str:
+    """One line on how often the pseudo-genes are called at the p-value cutoff the real genes get at ``alpha``.
+
+    Benjamini-Hochberg calls a real gene-feature pair at ``q < alpha`` exactly when its p-value is at most the
+    largest p-value it calls, so that p-value is the real genes' cutoff, and the pseudo-genes are judged by it.
+    """
+    from scipy.stats import binomtest
+
+    real, pseudo = table[~table["is_pseudogene"]], table[table["is_pseudogene"] & table["pvalue"].notna()]
+    n_genes = table.loc[table["is_pseudogene"], "group"].nunique()
+    called_real = real["qvalue"] < alpha
+    if not called_real.any():
+        return (
+            f"no real gene-feature pair is at q < {alpha:g}, so there is no cutoff to call the "
+            f"{n_genes} pseudo-gene(s) at"
+        )
+    cutoff = float(real.loc[called_real, "pvalue"].max())
+    called = pseudo["pvalue"] <= cutoff
+    n_called, n_tests = int(called.sum()), len(pseudo)
+    genes_called = int(called.groupby(pseudo["group"]).any().sum())
+    interval = binomtest(n_called, n_tests).proportion_ci(0.95) if n_tests else None
+    low, high = (np.nan, np.nan) if interval is None else (interval.low, interval.high)
     return (
-        np.concatenate(subs),
-        np.concatenate(starts),
-        np.concatenate(stops),
-        np.concatenate(widths),
-        np.concatenate(medians),
+        f"at p <= {cutoff:.3g}, the real genes' cutoff for q < {alpha:g}, {genes_called} of {n_genes} pseudo-gene(s) "
+        f"have a feature called ({genes_called / n_genes:.1%}), and {n_called} of {n_tests} pseudo-gene test(s) are "
+        f"called ({n_called / max(n_tests, 1):.2%}, 95% interval {low:.2%} to {high:.2%})"
     )
 
 
@@ -1028,8 +1096,9 @@ def bootstrap_features(
 
     Returns:
         ``None``, or the modified copy.
-        Writes ``uns["mantispy"][key_added]``, a tidy frame of ``group``, ``feature``, ``effect`` (the gene's median minus the median of its guides' control pools, in the units of ``X``), ``pvalue`` and ``qvalue`` (Benjamini-Hochberg over every gene and feature at once).
+        Writes ``uns["mantispy"][key_added]``, a tidy frame of ``group``, ``feature``, ``effect`` (the gene's median minus the median of its guides' control pools, in the units of ``X``), ``pvalue``, ``qvalue`` (Benjamini-Hochberg over every gene and feature at once) and ``is_pseudogene``.
         Also writes ``uns["mantispy"][key_added + "_guides"]``, the same per guide, with ``replicate`` and ``n_cells`` columns and its own q-values.
+        Pseudo-genes get their q-values among themselves, so the real genes' q-values are the ones they get without pseudo-genes.
 
     Raises:
         ValueError: ``control_scope`` is unknown, a scope that needs ``condition`` or ``reference_condition`` lacks it, ``"within_perturbation"`` is used without ``condition`` in ``groupby``, the controls in ``reference_condition`` are empty, or no guide has a null to draw from.
@@ -1044,6 +1113,9 @@ def bootstrap_features(
         The test therefore runs conservative when guides barely differ from one another, and near the nominal rate when they differ by more than the error of a guide's median.
         To check the rate on your own screen, group the control guides into pseudo-genes with :func:`~mantispy.pp.pseudogenes` and pass its column as ``groupby``.
         A pseudo-gene that function records for a ``groupby`` column is tested even though its cells are controls, against every control guide but its own; its guides stay in the null of every other group, so the real genes get the p-values they get without pseudo-genes.
+        The pseudo-genes are judged at the real genes' operating point: the largest p-value Benjamini-Hochberg calls among the real genes at ``q < 0.05``.
+        A log line gives the per-gene rate, the share of pseudo-genes with any feature at or below that cutoff, and the per-test rate, the share of pseudo-gene features there, with a binomial 95% interval.
+        A calibrated test calls a share of the pseudo-gene tests close to the cutoff itself.
     """
     if control_scope not in CONTROL_SCOPES:
         raise ValueError(f"control_scope must be one of {CONTROL_SCOPES}, got {control_scope!r}")
@@ -1064,6 +1136,8 @@ def bootstrap_features(
     unit_codes, unit_keys = group_codes(adata, by)
     sub_codes, sub_keys = group_codes(adata, [replicate] if condition is None else [replicate, condition])
 
+    # Control cells that mt.pp.pseudogenes relabelled, as it records, are tested as well as pooled.
+    pseudo = np.zeros(adata.n_obs, dtype=bool)
     if control_scope == "within_perturbation":
         in_reference = (obs[condition].astype(str) == str(reference_condition)).to_numpy()
         perturbation_codes = group_codes(adata, [column for column in by if column != condition] or None)[0]
@@ -1078,9 +1152,7 @@ def bootstrap_features(
         pool_of_row = np.where(in_reference, perturbation_codes, -1)
     else:
         is_control = reference_mask(adata, reference)
-        # Control cells that mt.pp.pseudogenes relabelled, as it records, are tested as well as pooled.
         recorded = adata.uns.get("mantispy", {}).get("pseudogenes", {})
-        pseudo = np.zeros(adata.n_obs, dtype=bool)
         for column in by:
             if column in recorded:
                 pseudo |= obs[column].astype(str).isin([str(label) for label in recorded[column]]).to_numpy()
@@ -1163,7 +1235,7 @@ def bootstrap_features(
     pool_width = (pool_stops - pool_starts).astype(np.int64)
     pool_subs = np.arange(n_subs_total, dtype=np.int64)
     pool_subs, pool_sub_start, pool_sub_stop, pool_width, pool_median = _leave_own_out(
-        values,
+        pool_t,
         unit_codes,
         unit_keys,
         pool_rows,
@@ -1225,6 +1297,9 @@ def bootstrap_features(
     features = adata.var_names.to_numpy()
     n_features = features.size
     gene_labels = [str(unit_keys[unit]) for unit in genes]
+    unit_is_pseudo = np.zeros(len(unit_keys), dtype=bool)
+    unit_is_pseudo[unit_codes[pseudo & tested]] = True
+    gene_is_pseudo = unit_is_pseudo[genes]
     table = pd.DataFrame(
         {
             "group": np.repeat(gene_labels, n_features),
@@ -1233,7 +1308,7 @@ def bootstrap_features(
             "pvalue": np.where(np.isfinite(gene_observed), gene_p, np.nan).ravel(),
         }
     )
-    table["qvalue"] = benjamini_hochberg(table["pvalue"].to_numpy())
+    table["qvalue"] = _family_qvalues(table["pvalue"].to_numpy(), np.repeat(gene_is_pseudo, n_features))
 
     sub_labels = [str(key[0] if isinstance(key, tuple) else key) for key in sub_keys]
     guides = pd.DataFrame(
@@ -1248,14 +1323,21 @@ def bootstrap_features(
     )
     if condition is not None:
         guides.insert(2, condition, np.repeat([str(sub_keys[s][1]) for s in construct_sub], n_features))
-    guides["qvalue"] = benjamini_hochberg(guides["pvalue"].to_numpy())
+    guides["qvalue"] = _family_qvalues(
+        guides["pvalue"].to_numpy(), np.repeat(gene_is_pseudo[gene_of_construct], n_features)
+    )
+    table["is_pseudogene"] = np.repeat(gene_is_pseudo, n_features)
+    guides["is_pseudogene"] = np.repeat(gene_is_pseudo[gene_of_construct], n_features)
 
+    real = table[~table["is_pseudogene"]]
     logger.info(
         "bootstrap_features: %d of %d gene-feature pair(s) at q < 0.05 over %d gene(s)",
-        int((table["qvalue"] < 0.05).sum()),
-        len(table),
-        genes.size,
+        int((real["qvalue"] < 0.05).sum()),
+        len(real),
+        genes.size - int(gene_is_pseudo.sum()),
     )
+    if gene_is_pseudo.any():
+        logger.info("bootstrap_features: %s", _calibration(table, _ALPHA))
     store = adata.uns.setdefault("mantispy", {})
     store[key_added] = table
     store[f"{key_added}_guides"] = guides
