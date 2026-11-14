@@ -6,6 +6,7 @@ import math
 
 import numpy as np
 from anndata import AnnData
+from numba import get_num_threads
 
 from mantispy._core._ecod import AGGREGATIONS, ecod_scores
 from mantispy._core._lof import lof_negative_outlier_factor
@@ -26,8 +27,10 @@ _LOF_NEIGHBORS = 20
 _LOF_FAST_MAX_FEATURES = 16
 
 
-def _lof_scores(X: np.ndarray, n_jobs: int | None, n_fit: int | None, rng: np.random.Generator) -> np.ndarray:
+def _lof_scores(X: np.ndarray, n_fit: int | None, rng: np.random.Generator) -> np.ndarray:
     """LOF score per row, higher meaning more outlying."""
+    # sklearn, where it still runs, gets the same threads as the numba kernels.
+    n_jobs = get_num_threads()
     scores = np.full(X.shape[0], np.nan)
     # LOF needs complete input; a row missing every selected feature, filled with zero, would collapse onto
     # the origin and inflate the density of nearby cells, so those rows are left out of the fit and unscored.
@@ -65,7 +68,6 @@ def _scores(
     method: str,
     seed: int,
     ecod_aggregation: str,
-    n_jobs: int | None,
     n_fit: int | None,
     rng: np.random.Generator,
 ) -> np.ndarray:
@@ -73,7 +75,7 @@ def _scores(
     if method == "ecod":
         return ecod_scores(X, ecod_aggregation)
     if method == "lof":
-        return _lof_scores(X, n_jobs, n_fit, rng)
+        return _lof_scores(X, n_fit, rng)
     if method == "isolation_forest":
         from sklearn.ensemble import IsolationForest
 
@@ -95,7 +97,6 @@ def outliers(
     seed: int = 0,
     ecod_aggregation: str = "pyod",
     n_fit: int | None = None,
-    n_jobs: int | None = None,
     key_added: str = "qc_outlier",
     copy: bool = False,
 ) -> AnnData | None:
@@ -121,10 +122,8 @@ def outliers(
             ``"paper"`` is Algorithm 1 of :cite:t:`Li_2023`, the largest of the left-tail, right-tail and skew-directed sums.
         n_fit: ``"lof"`` fits its density on a random sample of at most this many rows per ``by`` group and scores every row against that sample, rather than fitting on all of them, so its time and memory grow with the sample rather than the whole screen and stay bounded however large the screen is.
             A smaller sample sets a coarser scale for "normal" density, measuring each cell against a sparser neighbourhood than a full fit would, so the sampled run flags its most outlying cells by a different standard and can disagree substantially over which cells those are, more so the smaller the sample and the denser the data; it trades that fidelity for a run whose cost no longer rises with the number of cells.
-            ``None``, the default, fits on every row, the exact local outlier factor, and parallelises across ``n_jobs``.
+            ``None``, the default, fits on every row, the exact local outlier factor, which runs on every thread numba is allowed.
             A group with no more than ``n_fit`` rows is fit in full either way.
-        n_jobs: Threads for the ``"lof"`` neighbour search.
-            ``None`` runs on one core; ``-1`` uses every core, as Brieflow's intensity filter does, and makes the full fit scale to large screens without changing which cells it flags.
         key_added: Output: the prefix for the results, written to ``obs[key_added]`` and ``obs[key_added + "_score"]``.
         copy: Return a modified copy instead of mutating in place.
 
@@ -158,7 +157,7 @@ def outliers(
         if not rows.size:
             continue
         # One group is the whole matrix, so it is scored in place rather than copied.
-        block = _scores(X if len(keys) == 1 else X[rows], method, seed, ecod_aggregation, n_jobs, n_fit, rng)
+        block = _scores(X if len(keys) == 1 else X[rows], method, seed, ecod_aggregation, n_fit, rng)
         scores[rows] = block
         if score_cutoff is not None:
             flagged[rows] = block > score_cutoff

@@ -189,15 +189,27 @@ def test_lof_outliers_scores_match_sklearn_on_a_realistic_dataset():
     np.testing.assert_allclose(adata.obs["qc_outlier_score"].to_numpy(), truth, rtol=rtol, atol=atol)
 
 
-def test_lof_n_jobs_does_not_change_the_result():
-    """n_jobs only parallelises the neighbour search; the flags and scores must be identical."""
+def test_lof_does_not_depend_on_the_thread_count():
+    """Threads come from numba's pool and the work is split into a fixed number of chunks, so scores are identical."""
+    import numba
+
     adata = synthetic_plate(n_wells=25, n_cells=40, n_features=6, seed=1)
     one = adata.copy()
     many = adata.copy()
-    mt.pp.outliers(one, method="lof", contamination=0.01, n_jobs=None)
-    mt.pp.outliers(many, method="lof", contamination=0.01, n_jobs=-1)
+    threads = numba.get_num_threads()
+    numba.set_num_threads(1)
+    try:
+        mt.pp.outliers(one, method="lof", contamination=0.01)
+    finally:
+        numba.set_num_threads(threads)
+    mt.pp.outliers(many, method="lof", contamination=0.01)
     np.testing.assert_array_equal(one.obs["qc_outlier"].to_numpy(), many.obs["qc_outlier"].to_numpy())
-    np.testing.assert_allclose(one.obs["qc_outlier_score"], many.obs["qc_outlier_score"], rtol=1e-12)
+    np.testing.assert_array_equal(one.obs["qc_outlier_score"].to_numpy(), many.obs["qc_outlier_score"].to_numpy())
+
+
+def test_outliers_has_no_n_jobs(adata):
+    with pytest.raises(TypeError, match="n_jobs"):
+        mt.pp.outliers(adata, method="lof", n_jobs=-1)
 
 
 def test_lof_sampled_fit_is_reproducible_and_agrees_with_the_full_fit():
