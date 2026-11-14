@@ -371,23 +371,51 @@ def test_tvn_of_a_lazy_representation_matches_in_memory(lazy_pair):
     np.testing.assert_allclose(np.asarray(lazy.obsm["X_tvn"]), in_memory.obsm["X_tvn"], rtol=1e-10, atol=1e-10)
 
 
-def test_aggregating_a_lazy_representation_by_a_scattered_column(lazy_pair, reads, monkeypatch):
-    """The perturbations are spread over every plate and chunk, so each read gathers rows from all of them."""
+def test_aggregating_a_lazy_representation_computes_it_once(lazy_pair, monkeypatch):
+    """The perturbations are spread over every chunk, so streaming them in waves ran the representation's whole graph once per wave.
+
+    A representation is as narrow as an in-memory one, so it is computed once instead, however small the read budget.
+    """
     import dask.array as da
 
     _, in_memory = lazy_pair(np.float64)
     in_memory.obsm["X_tvn"] = np.random.default_rng(1).normal(size=(in_memory.n_obs, 5))
-    lazy = in_memory.copy()
-    lazy.obsm["X_tvn"] = da.from_array(in_memory.obsm["X_tvn"], chunks=(100, -1))
     expected = mt.tl.aggregate(in_memory, by=["Metadata_Perturbation"], use_rep="X_tvn", min_cells=0)
-    reads.clear()
+    computed = []
+
+    def counted(block):
+        computed.append(block.shape[0])
+        return block
+
+    lazy = in_memory.copy()
+    lazy.obsm["X_tvn"] = da.from_array(in_memory.obsm["X_tvn"], chunks=(100, -1)).map_blocks(
+        counted, meta=np.array((), dtype=np.float64)
+    )
     monkeypatch.setattr(mt.settings, "stream_bytes", 5 * 8 * 100)
 
     result = mt.tl.aggregate(lazy, by=["Metadata_Perturbation"], use_rep="X_tvn", min_cells=0)
 
     np.testing.assert_array_equal(result.X, expected.X)
-    assert len(reads) > 1
-    assert all(rows is not None and rows.size < lazy.n_obs for rows in reads)
+    assert sum(computed) == lazy.n_obs, f"{sum(computed)} rows computed for {lazy.n_obs}"
+
+
+def test_lazy_chunks_fit_one_per_worker_in_the_read_budget(tmp_path, monkeypatch):
+    """Every dask worker holds a chunk and what a step computes from it, so chunks sized for the file alone multiplied the peak by the worker count."""
+    import dask
+
+    n_obs, n_vars, workers = 6000, 20, 2
+    obs = pd.DataFrame({"g": np.repeat(["a", "b"], n_obs // 2)}, index=[str(index) for index in range(n_obs)])
+    path = tmp_path / "wide.h5ad"
+    ad.AnnData(X=np.zeros((n_obs, n_vars), dtype=np.float32), obs=obs).write_h5ad(path)
+    monkeypatch.setattr(mt.settings, "stream_bytes", workers * n_vars * 8 * 1500)
+
+    from mantispy.io._profiles import _read_lazy
+
+    with dask.config.set(num_workers=workers):
+        lazy = _read_lazy(path)
+
+    assert max(lazy.X.chunks[0]) * workers * n_vars * 8 <= mt.settings.stream_bytes
+    assert len(lazy.X.chunks[0]) > 1
 
 
 def test_a_lazy_screen_aligns_end_to_end_without_loading_x(lazy_pair, tmp_path):

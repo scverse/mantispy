@@ -20,6 +20,7 @@ class MantispySettings(Settings):
 
     Groups are packed into reads of about this size, so a smaller value lowers the peak memory and a larger one reads the file in fewer passes.
     A single group larger than this is still read whole.
+    :func:`mantispy.io.read` with ``lazy=True`` also sizes its chunks so that one per dask worker fits in this many bytes.
     """
 
 

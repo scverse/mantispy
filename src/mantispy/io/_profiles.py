@@ -16,7 +16,6 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
-from mantispy._core._corr import chunk_rows
 from mantispy._core.features import (
     _BARE_NON_FEATURES,
     _KNOWN_GROUPS,
@@ -46,6 +45,7 @@ from mantispy._core.schema import (
     validate,
 )
 from mantispy._core.schema import stamp as _record
+from mantispy._settings import settings
 from mantispy.io._cellprofiler import export_prefix, read_export
 
 #: Real accessions use all four.
@@ -570,6 +570,18 @@ def read(
     )
 
 
+def _lazy_chunk_rows(n_vars: int) -> int:
+    """Rows per dask chunk, so that one chunk per dask worker, in ``float64``, fits in ``mt.settings.stream_bytes`` together.
+
+    Every worker holds a chunk and the arrays a step computes from it, so the chunk size times the workers is what sets the peak memory of a lazy step.
+    """
+    import dask
+    from dask.system import CPU_COUNT
+
+    workers = dask.config.get("num_workers", None) or CPU_COUNT
+    return max(settings.stream_bytes // (workers * max(n_vars, 1) * 8), 1024)
+
+
 def _read_lazy(path: Path) -> ad.AnnData:
     """The object at ``path``, with ``X`` and the layers as dask arrays chunked by rows and everything else in memory."""
     if importlib.util.find_spec("dask") is None:
@@ -590,7 +602,7 @@ def _read_lazy(path: Path) -> ad.AnnData:
     elems: dict[str, Any] = {
         key: read_elem(store[key]) for key in ("obs", "var", "obsm", "varm", "obsp", "varp", "uns") if key in store
     }
-    chunks = (chunk_rows(len(elems["var"])), -1)
+    chunks = (_lazy_chunk_rows(len(elems["var"])), -1)
     X = read_elem_lazy(store["X"], chunks=chunks) if "X" in store else None
     layers = {key: read_elem_lazy(store["layers"][key], chunks=chunks) for key in store.get("layers", {})}
     return ad.AnnData(X=X, layers=layers, **elems)

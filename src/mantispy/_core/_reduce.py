@@ -386,6 +386,7 @@ def reduce_grouped(
         q: Quantile to compute for :data:`QUANTILE`.
         ddof: Delta degrees of freedom for :data:`STD`.
         use_rep: Reduce ``adata.obsm[use_rep]`` instead of ``X``; ``values`` then has one column per axis of that representation.
+            A lazy representation is computed whole, once, rather than streamed group by group like ``X``.
             Mutually exclusive with ``layer``.
         grouping: Reuse a ``(codes, keys)`` pair already computed with :func:`group_codes` for ``by``, so a caller that reduces the same object twice factorizes it once.
 
@@ -407,7 +408,9 @@ def reduce_grouped(
     if selected is not None and selected.shape != (adata.n_obs,):
         raise ValueError(f"mask must be one boolean per row: got shape {selected.shape} for {adata.n_obs} rows")
 
-    if _reads_from_disk(source):
+    # A lazy representation is computed once: it is as narrow as an in-memory one, and each wave over it would run its whole graph again.
+    lazy_rep = use_rep is not None and _is_dask(source)
+    if _reads_from_disk(source) and not lazy_rep:
         # A group with no contributing rows is NaN, as in the in-memory kernel.
         values = np.full((len(keys), n_cols), np.nan)
         counts = np.zeros(len(keys), dtype=np.int64)
@@ -417,7 +420,14 @@ def reduce_grouped(
             counts[groups] = np.bincount(wave_codes, minlength=groups.size)
         return values, keys, counts
 
-    matrix = get_matrix(adata, layer, use_rep=use_rep)
+    if lazy_rep:
+        import dask.array as da
+
+        # Stored chunk by chunk into one array, where computing it would also hold the chunks to concatenate.
+        matrix = np.empty(source.shape, dtype=float_dtype(source.dtype))
+        da.store(source, matrix, lock=False)
+    else:
+        matrix = get_matrix(adata, layer, use_rep=use_rep)
     if selected is not None:
         codes, matrix = codes[selected], matrix[selected]
     values = grouped_stat(matrix, codes, len(keys), stat, q=q, ddof=ddof)
