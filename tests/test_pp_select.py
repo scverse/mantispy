@@ -396,6 +396,22 @@ def test_a_kept_feature_far_outside_its_own_spread_warns(caplog):
     assert not caplog.records
 
 
+def test_extreme_warning_skips_nan_and_reads_a_fortran_matrix(caplog):
+    # The scan reads each column straight from the matrix and skips its missing values; a partial-NaN,
+    # Fortran-ordered screen (the on-disk layout) must still flag exactly the feature far from its own median.
+    rng = np.random.default_rng(1)
+    values = rng.normal(size=(300, 3))
+    values[:150, 1] = np.nan  # partial missing, still a tight finite spread
+    values[0, 2] = 1e9  # the one extreme feature
+    fortran = np.asfortranarray(values)
+    adata = ad.AnnData(fortran, obs=pd.DataFrame(index=[str(i) for i in range(300)]))
+    adata.var_names = ["f0", "f1_partial_nan", "f2_extreme"]
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
+        mt.pp.feature_select(adata, operations=("variance_threshold",))
+    assert "f2_extreme" in caplog.text
+    assert "f1_partial_nan" not in caplog.text
+
+
 def test_the_default_blocklist_also_matches_cp_measure_names():
     # cp_measure writes no object prefix, so the CellProfiler-named list silently dropped nothing (#287).
     cp = ["Granularity_14__DNA", "Granularity_2__DNA", "Correlation_Manders__AGP__DNA", "Intensity_MeanIntensity__DNA"]
