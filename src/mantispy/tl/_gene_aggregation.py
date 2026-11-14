@@ -10,6 +10,7 @@ from scipy import stats
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy._core.mutation import inplace_or_copy
+from mantispy.pp._pseudogenes import check_control_label
 
 METHODS = ("stouffer", "fisher")
 
@@ -76,7 +77,7 @@ def aggregate_guides(
         Non-targeting guides, guides with a missing score, and genes left with no scored guide get a missing ``pvalue`` and ``qvalue`` and are never hits.
 
     Raises:
-        ValueError: `method` is not one of ``METHODS``, `weight` or `direction` is given with ``"fisher"``, `alpha` is not in ``(0, 1)``, `n_null` is below one, a finite `score` falls outside ``[0, 1]`` (so it is not a p-value), no control guide is present, or no gene has a scored guide.
+        ValueError: `method` is not one of ``METHODS``, `weight` or `direction` is given with ``"fisher"``, `alpha` is not in ``(0, 1)``, `n_null` is below one, a finite `score` falls outside ``[0, 1]`` (so it is not a p-value), no control guide is present, no gene has a scored guide, or `gene` is a :func:`~mantispy.pp.pseudogenes` column that left `control` fewer guides than a pseudo-gene.
         KeyError: `score`, `guide`, `gene`, `weight` or `direction` is not an ``obs`` column.
 
     Notes:
@@ -107,6 +108,7 @@ def aggregate_guides(
         if optional is not None and optional not in obs:
             raise KeyError(f"{name}={optional!r} is not an obs column")
 
+    check_control_label(adata, gene, control)
     genes = obs[gene].astype(str).to_numpy()
     raw = pd.to_numeric(obs[score], errors="coerce").to_numpy(dtype=float)
     finite = np.isfinite(raw)

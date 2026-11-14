@@ -147,6 +147,7 @@ UNS_KEYS: tuple[str, ...] = (
     "image_table",
     "params",
     "perturbation",
+    "pseudogenes",
 )
 
 #: Result tables mantispy writes under ``uns["mantispy"]`` and reads back.
