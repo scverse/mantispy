@@ -18,6 +18,8 @@ A null mAP counts against the group when it is at least the group's mAP, within 
 
 from __future__ import annotations
 
+import hashlib
+import math
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
@@ -25,7 +27,7 @@ import numpy as np
 import pandas as pd
 from numba import njit
 
-from mantispy._core._average_precision import _pairwise_sum, summation_plan
+from mantispy._core._average_precision import APResult, _pairwise_sum, summation_plan
 from mantispy._core._numba import N_CHUNKS
 
 if TYPE_CHECKING:
@@ -52,13 +54,15 @@ def _conf_seed(seed: int, num_pos: int, total: int) -> int:
     return int(np.random.SeedSequence([seed, num_pos, total]).generate_state(1)[0])
 
 
-def group_scores(ap: pd.DataFrame, sameby: list[str]) -> tuple[pd.DataFrame, list[np.ndarray]]:
+def group_scores(ap: pd.DataFrame, sameby: list[str]) -> tuple[pd.DataFrame, list[np.ndarray], pd.DataFrame]:
     """Each group's mean AP and normalized AP, and its rows, over the rows with an AP and a positive pair.
 
-    Groups and their rows come out in copairs' order: sorted keys, rows in table order, as positions in the filtered
-    table.
+    Returns the group table, each group's rows as positions in the tested rows, and the tested rows, whose ``index``
+    keeps ``ap``'s (the AP row, when ``ap`` is a filtered :func:`~mantispy._core._average_precision.ap_frame`).
+    Groups and rows come out in copairs' order: sorted keys, rows in table order.
     """
-    valid = ap[ap["average_precision"].notna() & (ap["n_pos_pairs"] > 0)].reset_index(drop=True)
+    tested = ap[ap["average_precision"].notna() & (ap["n_pos_pairs"] > 0)]
+    valid = tested.reset_index(drop=True)
     grouped = valid.groupby(sameby, observed=True, sort=True)
     table = grouped[["average_precision", "normalized_average_precision"]].mean().reset_index()
     table = table.rename(
@@ -70,7 +74,7 @@ def group_scores(ap: pd.DataFrame, sameby: list[str]) -> tuple[pd.DataFrame, lis
     indices = grouped.indices
     keys = table[sameby].itertuples(index=False, name=None)
     groups = [np.asarray(indices[key if len(sameby) > 1 else key[0]], dtype=np.int64) for key in keys]
-    return table, groups
+    return table, groups, tested
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -220,3 +224,325 @@ def copied_pvalues(
         nulls, member_conf.ravel().astype(np.int64), group_ptr, thresholds, min(N_CHUNKS, len(scores))
     )
     return (hits + 1) / (null_size + 1)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# joint null: copairs' Philox4x32-10 sampler (copairs.nulls.joint), compiled
+
+
+_M32 = np.uint64(0xFFFFFFFF)
+_S32 = np.uint64(32)
+_INV_2_53 = 1.0 / 9007199254740992.0
+#: Below this mean, binomials are drawn by inversion; above it by BTRS.
+_INVERSION_MEAN = 10.0
+#: log(k!) for small k; larger k use Stirling's series.
+LOG_FACTORIAL = np.array([math.lgamma(k + 1.0) for k in range(256)])
+#: Coefficients ``1 / (2k + 1)`` of ``log(m) = 2 atanh(s)``.
+LOG_SERIES = np.array([1.0 / (2 * k + 1) for k in range(12)])
+_HALF_LOG_2PI = 0.5 * math.log(2 * math.pi)
+_SQRT_HALF = math.sqrt(0.5)
+_LN2 = math.log(2.0)
+#: A member sorts up to this many positives by insertion, more by quicksort.
+_INSERTION = 32
+#: Draws per pass of the joint null; bounds the samples held at once.
+_JOINT_CHUNK = 1024
+
+
+@njit(nogil=True, cache=True)
+def _philox(c0, c1, c2, c3, k0, k1):
+    m0 = np.uint64(0xD2511F53)
+    m1 = np.uint64(0xCD9E8D57)
+    w0 = np.uint64(0x9E3779B9)
+    w1 = np.uint64(0xBB67AE85)
+    mask = np.uint64(0xFFFFFFFF)
+    s32 = np.uint64(32)
+    for r in range(10):
+        if r > 0:
+            k0 = (k0 + w0) & mask
+            k1 = (k1 + w1) & mask
+        p0 = m0 * c0
+        p1 = m1 * c2
+        c0, c1, c2, c3 = (p1 >> s32) ^ c1 ^ k0, p1 & mask, (p0 >> s32) ^ c3 ^ k1, p0 & mask
+    return c0, c1, c2, c3
+
+
+@njit(nogil=True, cache=True, inline="always")
+def _uniform53(a, b):
+    return np.float64(((a >> np.uint64(5)) << np.uint64(26)) | (b >> np.uint64(6))) * (1.0 / 9007199254740992.0)
+
+
+@njit(nogil=True, cache=True)
+def _uniform_pair(c0, c1, block, stream, k0, k1):
+    w0, w1, w2, w3 = _philox(c0, c1, np.uint64(block), np.uint64(stream), k0, k1)
+    return _uniform53(w0, w1), _uniform53(w2, w3)
+
+
+@njit(nogil=True, cache=True)
+def _log(x, series):
+    """Natural log of ``x >= 0`` from a fixed series, as copairs computes it (not libm)."""
+    if x == 0.0:
+        return -np.inf
+    m, e = math.frexp(x)
+    if m < 0.7071067811865476:
+        m *= 2.0
+        e -= 1
+    s = (m - 1.0) / (m + 1.0)
+    z = s * s
+    p = series[11]
+    for k in range(10, -1, -1):
+        p = p * z + series[k]
+    return e * 0.6931471805599453 + 2.0 * s * p
+
+
+@njit(nogil=True, cache=True)
+def _powi(x, n):
+    r = 1.0
+    while n > 0:
+        if n & 1:
+            r *= x
+        x *= x
+        n >>= 1
+    return r
+
+
+@njit(nogil=True, cache=True)
+def _log_factorial(k, table, series):
+    if k < 256:
+        return table[int(k)]
+    x = k + 1.0
+    r = 1.0 / (x * x)
+    return (x - 0.5) * _log(x, series) - x + 0.9189385332046727 + (1.0 / 12.0 - r * (1.0 / 360.0 - r / 1260.0)) / x
+
+
+@njit(nogil=True, cache=True)
+def _binomial(n, p, c0, c1, block, stream, k0, k1, table, series):
+    """Binomial(``n``, ``p``) from the stream's blocks starting at ``block``: ``(draw, next_block)``."""
+    if n <= 0 or p <= 0.0:
+        return 0, block
+    if p >= 1.0:
+        return n, block
+    flip = p > 0.5
+    q = 1.0 - p if flip else p
+    if n * q < 10.0:
+        u, _ = _uniform_pair(c0, c1, block, stream, k0, k1)
+        block += 1
+        s = q / (1.0 - q)
+        a = (n + 1) * s
+        r = _powi(1.0 - q, n)
+        x = 0
+        while u > r and x < n:
+            u -= r
+            x += 1
+            r *= a / x - s
+    else:
+        spq = math.sqrt(n * q * (1.0 - q))
+        b = 1.15 + 2.53 * spq
+        a = -0.0873 + 0.0248 * b + 0.01 * q
+        c = n * q + 0.5
+        v_r = 0.92 - 4.2 / b
+        alpha = (2.83 + 5.1 / b) * spq
+        lpq = _log(q / (1.0 - q), series)
+        m = math.floor((n + 1) * q)
+        h = _log_factorial(m, table, series) + _log_factorial(n - m, table, series)
+        while True:
+            u, v = _uniform_pair(c0, c1, block, stream, k0, k1)
+            block += 1
+            u -= 0.5
+            us = 0.5 - abs(u)
+            if us <= 0.0:
+                continue
+            kf = math.floor((2.0 * a / us + b) * u + c)
+            if kf < 0.0 or kf > n:
+                continue
+            if us >= 0.07 and v <= v_r:
+                break
+            v = _log(v * alpha / (a / (us * us) + b), series)
+            if v <= h - _log_factorial(kf, table, series) - _log_factorial(n - kf, table, series) + (kf - m) * lpq:
+                break
+        x = int(kf)
+    return (n - x if flip else x), block
+
+
+@njit(nogil=True, cache=True)
+def _sort_head(vals, n):
+    if n > 32:
+        vals[:n].sort()
+        return
+    for i in range(1, n):
+        v = vals[i]
+        k = i - 1
+        while k >= 0 and vals[k] > v:
+            vals[k + 1] = vals[k]
+            k -= 1
+        vals[k + 1] = v
+
+
+@njit(nogil=True, cache=True)
+def _member_ap(vals, num_pos, num_neg, c0, c1, stream, k0, k1, table, series):
+    _sort_head(vals, num_pos)
+    remaining = num_neg
+    prev = 1.0
+    above = 0
+    acc = 0.0
+    block = 0
+    for t in range(num_pos):
+        v = vals[num_pos - 1 - t]
+        if remaining > 0 and prev > 0.0:
+            x, block = _binomial(remaining, (prev - v) / prev, c0, c1, block, stream, k0, k1, table, series)
+            above += x
+            remaining -= x
+        prev = v
+        acc += (t + 1) / (t + 1 + above)
+    return acc / num_pos
+
+
+@njit(nogil=True, cache=True)
+def _joint_sample(s, j, mem_ptr, num_pos, num_neg, edge_ptr, inc_ptr, inc_edge, k0, k1, ev, vals, table, series):
+    """The mAP of draw ``j`` of signature ``s``."""
+    c0 = np.uint64(j) & np.uint64(0xFFFFFFFF)
+    c1 = np.uint64(j) >> np.uint64(32)
+    key0, key1 = k0[s], k1[s]
+    n_edge = edge_ptr[s + 1] - edge_ptr[s]
+    for e in range(0, n_edge, 2):
+        u0, u1 = _uniform_pair(c0, c1, e // 2, 0, key0, key1)
+        ev[e] = u0
+        if e + 1 < n_edge:
+            ev[e + 1] = u1
+    m0, m1 = mem_ptr[s], mem_ptr[s + 1]
+    total = 0.0
+    for i in range(m0, m1):
+        p = num_pos[i]
+        shared = inc_ptr[i + 1] - inc_ptr[i]
+        for t in range(shared):
+            vals[t] = ev[inc_edge[inc_ptr[i] + t]]
+        stream = 1 + 2 * (i - m0)
+        for t in range(shared, p, 2):
+            u0, u1 = _uniform_pair(c0, c1, (t - shared) // 2, stream, key0, key1)
+            vals[t] = u0
+            if t + 1 < p:
+                vals[t + 1] = u1
+        total += _member_ap(vals, p, num_neg[i], c0, c1, stream + 1, key0, key1, table, series)
+    return total / (m1 - m0)
+
+
+@njit(parallel=True, nogil=True, cache=True)
+def _joint_counts(
+    plan_mem_ptr, num_pos, num_neg, edge_ptr, inc_ptr, inc_edge, k0, k1, group_sig, sig_group_ptr, sig_groups,
+    thresholds, null_size, max_edges, max_pos, table, series, n_chunks,
+):  # fmt: skip
+    """Null draws of each group's signature at or above the group's threshold, draws split over the threads."""
+    n_sig = k0.shape[0]
+    n_groups = group_sig.shape[0]
+    hits = np.zeros((n_chunks, n_groups), np.int64)
+    for chunk in prange(n_chunks):
+        ev = np.empty(max(max_edges, 1), np.float64)
+        vals = np.empty(max(max_pos, 1), np.float64)
+        lo = null_size * chunk // n_chunks
+        hi = null_size * (chunk + 1) // n_chunks
+        for s in range(n_sig):
+            g_lo = sig_group_ptr[s]
+            g_hi = sig_group_ptr[s + 1]
+            for j in range(lo, hi):
+                value = _joint_sample(
+                    s, j, plan_mem_ptr, num_pos, num_neg, edge_ptr, inc_ptr, inc_edge, k0, k1, ev, vals, table, series
+                )
+                for t in range(g_lo, g_hi):
+                    g = sig_groups[t]
+                    if value >= thresholds[g]:
+                        hits[chunk, g] += 1
+    return hits.sum(axis=0)
+
+
+def canonical_signature(members, edges):
+    """``(members, edges)`` with members sorted when every pair is an edge, as copairs keys a joint null."""
+    members = tuple((int(a), int(b)) for a, b in members)
+    edges = tuple(sorted({(min(int(i), int(j)), max(int(i), int(j))) for i, j in edges}))
+    n = len(members)
+    if len(edges) == n * (n - 1) // 2:
+        members = tuple(sorted(members))
+    return members, edges
+
+
+def _stream_key(seed: int, obj) -> tuple[np.uint64, np.uint64]:
+    """Philox key of ``(seed, obj)``, from a hash of its representation, as copairs derives it."""
+    digest = hashlib.blake2b(repr((int(seed), obj)).encode(), digest_size=8)
+    word = int.from_bytes(digest.digest(), "little")
+    return np.uint64(word & 0xFFFFFFFF), np.uint64(word >> 32)
+
+
+def joint_pvalues(
+    scores: np.ndarray,
+    groups: list[np.ndarray],
+    n_pos: np.ndarray,
+    n_neg: np.ndarray,
+    edges: list[np.ndarray],
+    null_size: int,
+    seed: int,
+) -> np.ndarray:
+    """P-values of the groups' mAPs under the joint null.
+
+    ``groups[g]`` lists the group's AP rows, ``edges[g]`` its positive pairs between them as local member indices.
+    Groups with equal signatures share draws, as in copairs.
+    """
+    signatures = [
+        canonical_signature(zip(n_pos[ix], n_neg[ix], strict=True), e) for ix, e in zip(groups, edges, strict=True)
+    ]
+    unique = sorted(set(signatures))
+    index = {sig: k for k, sig in enumerate(unique)}
+    group_sig = np.array([index[s] for s in signatures], dtype=np.int64)
+    mem_ptr, edge_ptr, inc_ptr = [0], [0], [0]
+    num_pos, num_neg, inc_edge = [], [], []
+    k0 = np.empty(len(unique), np.uint64)
+    k1 = np.empty(len(unique), np.uint64)
+    for s, (members, sig_edges) in enumerate(unique):
+        incident: list[list[int]] = [[] for _ in members]
+        for e, (i, j) in enumerate(sig_edges):
+            incident[i].append(e)
+            incident[j].append(e)
+        for i, (p, m) in enumerate(members):
+            num_pos.append(p)
+            num_neg.append(m)
+            inc_edge.extend(incident[i])
+            inc_ptr.append(len(inc_edge))
+        mem_ptr.append(len(num_pos))
+        edge_ptr.append(edge_ptr[-1] + len(sig_edges))
+        k0[s], k1[s] = _stream_key(seed, (members, sig_edges))
+    order = np.argsort(group_sig, kind="stable")
+    sig_group_ptr = np.searchsorted(group_sig[order], np.arange(len(unique) + 1)).astype(np.int64)
+    as64 = lambda a: np.asarray(a, dtype=np.int64)
+    n_chunks = max(1, min(N_CHUNKS, null_size))
+    hits = _joint_counts(
+        as64(mem_ptr), as64(num_pos), as64(num_neg), as64(edge_ptr), as64(inc_ptr), as64(inc_edge), k0, k1, group_sig,
+        sig_group_ptr, order.astype(np.int64), tie_thresholds(np.asarray(scores, dtype=np.float64)), null_size,
+        int(np.diff(edge_ptr).max(initial=1)), int(max(num_pos, default=1)), LOG_FACTORIAL, LOG_SERIES, n_chunks,
+    )  # fmt: skip
+    return (hits + 1) / (null_size + 1)
+
+
+def group_edges(groups: list[np.ndarray], rows: np.ndarray, result: APResult) -> list[np.ndarray]:
+    """Each group's positive pairs between its members, as local member indices.
+
+    ``rows[k]`` is the AP row of position ``k`` of the tested table; a positive pair joins two AP rows of one label.
+    """
+    n_rows = len(result.row_profile)
+    n_labels = int(result.row_label.max(initial=0)) + 1
+    keys = result.row_profile * n_labels + result.row_label
+    owner = np.repeat(np.arange(n_rows), np.diff(result.pos_ptr))
+    other = np.searchsorted(keys, result.partner * n_labels + result.row_label[owner])
+    group_of = np.full(n_rows, -1, np.int64)
+    local = np.zeros(n_rows, np.int64)
+    for g, ix in enumerate(groups):
+        group_of[rows[ix]] = g
+        local[rows[ix]] = np.arange(len(ix))
+    other = np.minimum(other, n_rows - 1)
+    inside = (
+        (group_of[owner] >= 0)
+        & (group_of[owner] == group_of[other])
+        & (keys[other] == result.partner * n_labels + result.row_label[owner])
+    )
+    inside &= local[owner] < local[other]
+    a, b = owner[inside], other[inside]
+    order = np.argsort(group_of[a], kind="stable")
+    ptr = np.searchsorted(group_of[a][order], np.arange(len(groups) + 1))
+    pairs = np.stack([local[a], local[b]], axis=1)[order]
+    return [pairs[ptr[g] : ptr[g + 1]] for g in range(len(groups))]

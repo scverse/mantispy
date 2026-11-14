@@ -146,9 +146,8 @@ def _our_groups(meta, x, spec, multilabel_col=None):
     ap = ap_kernel.ap_frame(meta, lay, result, multilabel_col)
     ap = ap[ap["ref"] < 0] if "ref" in spec[0] else ap
     sameby = [c for c in spec[0] if c != "ref"]
-    table, groups = map_null.group_scores(ap, sameby)
-    valid = ap[ap["average_precision"].notna() & (ap["n_pos_pairs"] > 0)].reset_index(drop=True)
-    return table, groups, valid, result
+    table, groups, tested = map_null.group_scores(ap, sameby)
+    return table, groups, tested, result
 
 
 @pytest.mark.parametrize("ties", [False, True])
@@ -182,3 +181,29 @@ def test_copied_null_draws_are_copairs_draws(num_pos, total):
     ours = map_null._null_exact(np.array([[num_pos, total]]), 64, 11, 1)[0]
     expected = random_ap(64, num_pos, total, map_null._conf_seed(11, num_pos, total))
     np.testing.assert_array_equal(ours.view(np.uint32), expected.view(np.uint32))
+
+
+@pytest.mark.parametrize("multilabel", [False, True])
+@pytest.mark.parametrize("ties", [False, True])
+@pytest.mark.parametrize("mode", list(MODES))
+def test_joint_null_matches_copairs(mode, ties, multilabel):
+    """copairs' Philox sampler, compiled: the same draws for the same seed, so every p-value is copairs'."""
+    meta, x = _screen(ties=ties)
+    spec, column = MODES[mode], None
+    if multilabel:
+        meta["moa"] = meta["Metadata_Perturbation"].map(lambda p: [] if p == "ctrl" else [f"m{int(p[1:]) % 4}"])
+        spec, column = (["moa"], ["Metadata_Perturbation"], [], ["moa"]), "moa"
+    expected, _ = _copairs_groups(meta, x, spec, "joint", multilabel_col=column)
+    table, groups, tested, result = _our_groups(meta, x, spec, multilabel_col=column)
+    n_pos = tested["n_pos_pairs"].to_numpy()
+    edges = map_null.group_edges(groups, tested.index.to_numpy(), result)
+    p = map_null.joint_pvalues(
+        table["mean_average_precision"].to_numpy(),
+        groups,
+        n_pos,
+        tested["n_total_pairs"].to_numpy() - n_pos,
+        edges,
+        2000,
+        7,
+    )
+    np.testing.assert_array_equal(p, expected["p_value"])
