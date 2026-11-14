@@ -300,7 +300,7 @@ def map(
             each turned into a similarity as copairs does.
         null: The null model of the group mAP, as copairs defines it: ``"copied"``, ``"permutation"`` or ``"joint"``.
             ``"copied"`` is the model of :cite:t:`Kalinin_2025` and copairs before 0.6.
-            ``"permutation"`` relabels profiles within the blocks they are ranked in and recomputes the mAP from their similarities. It needs every profile holding a label in the scored table, so it fails on a multilabel annotation where a profile has no negative pair.
+            ``"permutation"`` relabels profiles within the blocks they are ranked in and recomputes the mAP from their similarities. It needs every profile holding a label in the scored table, so it fails on a multilabel annotation where a profile has no negative pair. It ranks by the six named distances, not by a scipy metric.
             ``"joint"`` draws the members' APs together, sharing each positive pair between its two members.
         null_sampler: How the copied null is drawn. ``"exact"`` replays copairs' random stream, so p-values equal copairs' for the same seed; ``"floyd"`` draws only the positions of the positives, which is faster and has the same distribution but different draws.
         similarity_solver: How similarities are computed. ``"exact"`` reproduces copairs' float32 values, so rankings and scores equal copairs'; ``"blas"`` computes them as matrix products, which is faster for the cosine, correlation and euclidean distances but can order near-tied pairs differently.
