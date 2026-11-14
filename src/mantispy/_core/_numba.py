@@ -257,6 +257,39 @@ def grouped_stat(
 
 
 @njit(parallel=True, cache=True, nogil=True)
+def knn_distances(receivers: np.ndarray, donors: np.ndarray) -> np.ndarray:
+    """``nan_euclidean`` distances from each receiver row to every donor, parallel over receivers.
+
+    Reproduces sklearn's ``nan_euclidean``: the squared differences over the coordinates both rows
+    measure, scaled by ``n_features / n_shared`` and square-rooted, and ``NaN`` when the two rows
+    share no measured coordinate.
+    ``receivers`` and ``donors`` are ``(*, n_features)`` with ``NaN`` marking a missing value, read in
+    ``float64`` so the result is independent of the input dtype.
+    """
+    n_recv, n_features = receivers.shape
+    n_donors = donors.shape[0]
+    out = np.empty((n_recv, n_donors), dtype=np.float64)
+    for r in prange(n_recv):
+        row = receivers[r]
+        for s in range(n_donors):
+            donor = donors[s]
+            total = 0.0
+            shared = 0
+            for j in range(n_features):
+                a = row[j]
+                if np.isnan(a):
+                    continue
+                b = donor[j]
+                if np.isnan(b):
+                    continue
+                diff = a - b
+                total += diff * diff
+                shared += 1
+            out[r, s] = np.nan if shared == 0 else np.sqrt(total * n_features / shared)
+    return out
+
+
+@njit(parallel=True, cache=True, nogil=True)
 def _grouped_median_spread(
     X: np.ndarray, order: np.ndarray, offsets: np.ndarray, n_groups: int, spread: int
 ) -> tuple[np.ndarray, np.ndarray]:

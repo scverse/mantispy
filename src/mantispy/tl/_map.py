@@ -356,9 +356,9 @@ def map(
     features = representation(adata, use_rep).astype(np.float32)
     if np.isnan(features).any():
         raise ValueError(
-            "mAP cannot rank profiles with missing values. Drop the affected features "
-            "with mt.pp.feature_select(adata, na_cutoff=0.0, subset=True); the default na_cutoff=0.05 "
-            "keeps features with up to 5% missing values."
+            "mAP cannot rank profiles with missing values. Fill them with mt.pp.impute(adata), or drop the "
+            "affected features with mt.pp.feature_select(adata, na_cutoff=0.0, subset=True); the default "
+            "na_cutoff=0.05 keeps features with up to 5% missing values."
         )
     obs = as_frame(adata.obs)
     # copairs is handed the Metadata_ columns plus every obs column the pair spec or label names, so a column

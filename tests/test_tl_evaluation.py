@@ -405,7 +405,7 @@ def test_map_refuses_missing_values(profiles):
     values = profiles.X.copy()
     values[0, 0] = np.nan
     profiles.X = values
-    with pytest.raises(ValueError, match="missing values"):
+    with pytest.raises(ValueError, match=r"missing values\. Fill them with mt\.pp\.impute"):
         mt.tl.map(profiles, mode="activity", null_size=100)
 
 

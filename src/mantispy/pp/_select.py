@@ -411,7 +411,7 @@ def feature_select(
         get_logger().warning(
             "feature_select: %d selected feature(s) still hold NaN, which pp.sphere and PCA cannot take",
             with_nan.size,
-            deep=f"{lever} and subset, or impute the missing values",
+            deep=f"{lever} and subset, or fill them with mt.pp.impute",
         )
 
     if "drop_outliers" not in operations:

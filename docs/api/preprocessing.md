@@ -42,6 +42,7 @@ Annotate, quality-control, normalize, select and batch-correct profiles.
    :toctree: generated
 
    pp.normalize
+   pp.impute
    pp.rank_int
 ```
 

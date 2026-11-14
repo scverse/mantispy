@@ -11,7 +11,6 @@ from mantispy._core._numba import IQR, MEAN, STD, grouped_median_spread
 from mantispy._core._numba import MAD as MAD_STAT
 from mantispy._core._reduce import (
     get_matrix,
-    group_codes,
     group_offsets,
     matrix_dtype,
     reduce_grouped,
@@ -20,7 +19,7 @@ from mantispy._core._reduce import (
 from mantispy._core._stats import MAD_TO_SIGMA
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
-from mantispy._core.masks import reference_mask
+from mantispy._core.masks import reference_groups
 from mantispy._core.mutation import inplace_or_copy
 from mantispy._core.schema import resolve_perturbation_column
 
@@ -182,18 +181,7 @@ def normalize(
     if method not in METHODS:
         raise ValueError(f"method must be one of {METHODS}, got {method!r}")
 
-    mask = reference_mask(adata, reference)
-    if not mask.any():
-        raise ValueError(
-            f"no reference rows selected by reference={reference!r}. Check that obs['Metadata_Control_Type'] has "
-            "'negcon' rows (mt.pp.annotate_controls), or pass reference=None to use all rows."
-        )
-
-    codes, keys = group_codes(adata, by)
-    present = np.bincount(codes[mask], minlength=len(keys))
-    if (present == 0).any():
-        empty = [str(keys[int(index)]) for index in np.flatnonzero(present == 0)]
-        raise ValueError(f"no reference rows in group(s): {empty[:5]}")
+    mask, codes, keys = reference_groups(adata, reference, by)
 
     erased = _erased_treatments(adata, by, codes)
     if erased:

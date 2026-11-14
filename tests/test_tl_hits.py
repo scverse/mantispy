@@ -110,6 +110,7 @@ def test_edistance_refuses_profiles_with_missing_values(scored):
     assert str(scored.var_names[2]) in str(error.value)
     # the advice must name subset=True, since feature_select only flags without it (audit item 2)
     assert "subset=True" in str(error.value)
+    assert "mt.pp.impute" in str(error.value)
 
 
 def test_results_round_trip(scored, tmp_path):
