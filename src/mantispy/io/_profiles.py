@@ -582,11 +582,30 @@ def _lazy_chunk_rows(n_vars: int) -> int:
     return max(settings.stream_bytes // (workers * max(n_vars, 1) * 8), 1024)
 
 
+def _read_chunked(elem: Any, rows: int) -> Any:
+    """``elem`` as a dask array of about ``rows`` rows per chunk, reading each chunk of the file once.
+
+    A dask chunk that cuts through a stored chunk decompresses all of it, so a file stored in chunks larger than ``rows`` is read a stored chunk at a time and then split, and one stored in smaller chunks is read several stored chunks at a time.
+    """
+    from anndata.experimental import read_elem_lazy
+
+    stored = getattr(elem, "chunks", None)
+    if not stored:
+        return read_elem_lazy(elem, chunks=(rows, -1))
+    if stored[0] < rows:
+        return read_elem_lazy(elem, chunks=(stored[0] * (rows // stored[0]), -1))
+    matrix: Any = read_elem_lazy(elem, chunks=(stored[0], -1))
+    pieces: list[int] = []
+    for size in matrix.chunks[0]:
+        parts = -(-size // rows)
+        pieces += [size // parts + (part < size % parts) for part in range(parts)]
+    return matrix.rechunk((tuple(pieces), matrix.chunks[1]))
+
+
 def _read_lazy(path: Path) -> ad.AnnData:
     """The object at ``path``, with ``X`` and the layers as dask arrays chunked by rows and everything else in memory."""
     if importlib.util.find_spec("dask") is None:
         raise ImportError("mt.io.read(path, lazy=True) needs dask; install it with pip install 'mantispy[lazy]'")
-    from anndata.experimental import read_elem_lazy
     from anndata.io import read_elem
 
     store: Any
@@ -602,9 +621,9 @@ def _read_lazy(path: Path) -> ad.AnnData:
     elems: dict[str, Any] = {
         key: read_elem(store[key]) for key in ("obs", "var", "obsm", "varm", "obsp", "varp", "uns") if key in store
     }
-    chunks = (_lazy_chunk_rows(len(elems["var"])), -1)
-    X = read_elem_lazy(store["X"], chunks=chunks) if "X" in store else None
-    layers = {key: read_elem_lazy(store["layers"][key], chunks=chunks) for key in store.get("layers", {})}
+    rows = _lazy_chunk_rows(len(elems["var"]))
+    X = _read_chunked(store["X"], rows) if "X" in store else None
+    layers = {key: _read_chunked(store["layers"][key], rows) for key in store.get("layers", {})}
     return ad.AnnData(X=X, layers=layers, **elems)
 
 

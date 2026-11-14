@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 from anndata import AnnData
 
-from mantispy._core._numba import IQR, MEAN, STD, grouped_median_spread
+from mantispy._core._numba import IQR, MEAN, STD, grouped_median_spread, grouped_stat
 from mantispy._core._numba import MAD as MAD_STAT
 from mantispy._core._reduce import (
     get_matrix,
@@ -53,6 +53,24 @@ def _median_and_spread(
     return grouped_median_spread(matrix, codes, len(keys), spread)
 
 
+def _mean_and_std(
+    adata: AnnData, by: str | list[str] | None, codes: np.ndarray, keys: pd.Index, layer: str | None, mask: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-group mean and population standard deviation, from one pass over a matrix that is not in memory."""
+    if out_of_core(adata, layer):
+        centre = np.full((len(keys), adata.n_vars), np.nan)
+        scale = np.full((len(keys), adata.n_vars), np.nan)
+        for groups, _, wave_codes, block in iter_waves(adata, (codes, keys), layer, mask=mask):
+            centre[groups] = grouped_stat(block, wave_codes, groups.size, MEAN)
+            scale[groups] = grouped_stat(block, wave_codes, groups.size, STD, ddof=0)
+        return centre, scale
+    grouping = (codes, keys)
+    centre, _, _ = reduce_grouped(adata, by, MEAN, layer=layer, mask=mask, grouping=grouping)
+    # ddof=0 matches pycytominer, which uses sklearn's StandardScaler (population SD).
+    scale, _, _ = reduce_grouped(adata, by, STD, layer=layer, mask=mask, ddof=0, grouping=grouping)
+    return centre, scale
+
+
 def _center_and_scale(
     adata: AnnData,
     method: str,
@@ -70,10 +88,7 @@ def _center_and_scale(
     The two overlap: a feature can be constant in one group and unmeasured in another, and both facts have to reach the caller.
     """
     if method == "standardize":
-        grouping = (codes, keys)
-        centre, _, _ = reduce_grouped(adata, by, MEAN, layer=layer, mask=mask, grouping=grouping)
-        # ddof=0 matches pycytominer, which uses sklearn's StandardScaler (population SD).
-        scale, _, _ = reduce_grouped(adata, by, STD, layer=layer, mask=mask, ddof=0, grouping=grouping)
+        centre, scale = _mean_and_std(adata, by, codes, keys, layer, mask)
     elif method == "mad_robustize":
         centre, mad = _median_and_spread(adata, MAD_STAT, codes, keys, layer, mask)
         scale = MAD_TO_SIGMA * mad + epsilon

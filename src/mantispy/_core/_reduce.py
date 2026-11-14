@@ -38,7 +38,9 @@ __all__ = [
     "group_offsets",
     "group_rows",
     "iter_groups",
+    "is_lazy",
     "iter_waves",
+    "materialize",
     "matrix_dtype",
     "out_of_core",
     "reduce_grouped",
@@ -183,9 +185,21 @@ def _caller() -> str:
     return "an unknown caller" if frame is None else frame.f_code.co_name
 
 
-def _is_dask(matrix: Any) -> bool:
+def is_lazy(matrix: Any) -> bool:
     """Whether this matrix is a dask array, which is lazy rather than read from a file."""
     return type(matrix).__module__.split(".")[0] == "dask"
+
+
+def materialize(matrix: Any) -> np.ndarray:
+    """Compute a lazy matrix into one array, in the dtype :func:`float_dtype` gives it.
+
+    Each chunk is stored into the result as it is computed, where computing the whole would also hold the chunks to concatenate.
+    """
+    import dask.array as da
+
+    out = np.empty(matrix.shape, dtype=float_dtype(matrix.dtype))
+    da.store(matrix, out, lock=False)
+    return out
 
 
 def _warn_if_not_streamable(matrix: Any) -> None:
@@ -409,7 +423,7 @@ def reduce_grouped(
         raise ValueError(f"mask must be one boolean per row: got shape {selected.shape} for {adata.n_obs} rows")
 
     # A lazy representation is computed once: it is as narrow as an in-memory one, and each wave over it would run its whole graph again.
-    lazy_rep = use_rep is not None and _is_dask(source)
+    lazy_rep = use_rep is not None and is_lazy(source)
     if _reads_from_disk(source) and not lazy_rep:
         # A group with no contributing rows is NaN, as in the in-memory kernel.
         values = np.full((len(keys), n_cols), np.nan)
@@ -421,11 +435,7 @@ def reduce_grouped(
         return values, keys, counts
 
     if lazy_rep:
-        import dask.array as da
-
-        # Stored chunk by chunk into one array, where computing it would also hold the chunks to concatenate.
-        matrix = np.empty(source.shape, dtype=float_dtype(source.dtype))
-        da.store(source, matrix, lock=False)
+        matrix = materialize(source)
     else:
         matrix = get_matrix(adata, layer, use_rep=use_rep)
     if selected is not None:
@@ -450,6 +460,7 @@ def transform_grouped(
     ``func(key, block)`` receives a group's rows as :func:`get_matrix` reads them and returns the replacement block.
     The output is written into one preallocated array of that same dtype, so the peak cost is the input plus the output, with no full-size temporaries in a wider dtype.
     ``rowwise=True`` declares that ``func`` transforms every row on its own, as a fitted centre and scale do, so a lazy (dask) matrix can hand it a group's rows one chunk at a time; the result is then lazy too, in the same row chunks, and computed when it is read or written.
+    It also hands ``func`` a group in slices that fit :attr:`~mantispy.settings.stream_bytes`, which bounds the temporaries it makes.
     Otherwise every group reaches ``func`` whole, as a ranking needs.
     ``use_rep`` rewrites ``adata.obsm[use_rep]`` instead of ``X`` or a layer, and ``n_cols`` sets the width of the result when ``func`` changes it.
     ``grouping`` reuses a ``(codes, keys)`` pair already computed with :func:`group_codes` for ``by``.
@@ -458,13 +469,16 @@ def transform_grouped(
     source = _source(adata, layer, use_rep)
     dtype = float_dtype(source.dtype)
     width = source.shape[1] if n_cols is None else n_cols
-    if rowwise and _is_dask(source):
+    if rowwise and is_lazy(source):
         return _transform_lazy(source, codes, keys, func, dtype, width)
     # Shaped from the source, not read off it: get_matrix with no rows reads all of it.
     out = np.empty((source.shape[0], width), dtype=dtype)
+    # A row-wise func is fed slices of a group, so the float64 temporaries it makes stay inside the read budget.
+    step = max(settings.stream_bytes // (max(width, source.shape[1]) * 8), 1) if rowwise else None
     for key, rows, block in iter_groups(adata, by, layer=layer, use_rep=use_rep, grouping=(codes, keys)):
-        if rows.size:
-            out[rows] = func(key, block).astype(dtype, copy=False)
+        for start in range(0, rows.size, step or max(rows.size, 1)):
+            stop = start + (step or rows.size)
+            out[rows[start:stop]] = func(key, block[start:stop]).astype(dtype, copy=False)
     return out
 
 

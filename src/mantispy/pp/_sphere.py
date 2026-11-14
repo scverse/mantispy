@@ -11,7 +11,7 @@ from anndata import AnnData
 
 from mantispy._core._numba import group_offsets
 from mantispy._core._pca import pca_solver
-from mantispy._core._reduce import get_matrix, group_codes, matrix_dtype, transform_grouped
+from mantispy._core._reduce import get_matrix, group_codes, is_lazy, materialize, matrix_dtype, transform_grouped
 from mantispy._core.logging import get_logger
 from mantispy._core.masks import CONTROL_CLASSES, reference_mask
 from mantispy._core.mutation import inplace_or_copy
@@ -551,8 +551,8 @@ def tvn(
         Measured that way, it tends to trade replicate consistency for relationship recall, where :func:`~mantispy.pp.harmony` trades the other way.
         Neither buys the other's gain, so which of the two readouts the screen is for is the question to answer before running either.
 
-        Only the control rows are read to fit the transform, and the fit is then applied batch by batch, so a lazy representation, such as the PCA of an object read with :func:`mantispy.io.read` and ``lazy=True``, gives a lazy result with the same numbers as in memory.
-        Aligning single cells before aggregating them is practical for the same reason.
+        A lazy representation, such as the PCA of an object read with :func:`mantispy.io.read` and ``lazy=True``, is computed once and kept in ``obsm[use_rep]``, since it is as narrow as one in memory, and the result is written in memory with the same numbers.
+        With ``use_rep=None`` on a lazy ``X``, only the control rows are read to fit, and the result stays lazy.
 
         What it needs is controls, per batch and not in total, because the covariance it whitens each batch by is estimated from that batch's controls alone.
         A batch with fewer controls than the rotation has components cannot span the space, and the warning that says so is the sign to reduce to fewer components or to pool smaller batches together.
@@ -562,6 +562,9 @@ def tvn(
         raise KeyError(f"obs has no column {batch_key!r} naming the batches to align")
     if use_rep is not None and use_rep not in adata.obsm:
         raise KeyError(f"obsm has no representation {use_rep!r}; run sc.pp.pca first, or pass use_rep=None")
+    if use_rep is not None and is_lazy(adata.obsm[use_rep]):
+        # Computed once and kept: the fit and the apply would each run its whole graph, and so would every later step.
+        adata.obsm[use_rep] = materialize(adata.obsm[use_rep])
 
     controls = reference_mask(adata, reference)
     if not controls.any():
