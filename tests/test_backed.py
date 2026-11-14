@@ -46,9 +46,9 @@ def reads(monkeypatch):
     original = _reduce.get_matrix
     asked: list[np.ndarray | None] = []
 
-    def recording(adata, layer=None, rows=None):
+    def recording(adata, layer=None, rows=None, **kwargs):
         asked.append(None if rows is None else np.asarray(rows))
-        return original(adata, layer, rows)
+        return original(adata, layer, rows, **kwargs)
 
     monkeypatch.setattr(_reduce, "get_matrix", recording)
     return asked
@@ -65,11 +65,12 @@ grouped_paths = pytest.mark.parametrize(
 
 
 @grouped_paths
-def test_per_group_reads_never_ask_for_the_whole_matrix(backed, reads, call):
-    """Both grouped paths read one group at a time.
+def test_per_group_reads_never_ask_for_the_whole_matrix(backed, reads, call, monkeypatch):
+    """Both grouped paths read one group at a time when a group fills the read budget.
 
     transform_grouped used to size its output with ``np.empty_like(get_matrix(adata, layer))``, a full read on top of the per-group ones (#67).
     """
+    monkeypatch.setattr(mt.settings, "stream_bytes", 1)
     call(backed)
 
     assert reads, "nothing was read through the seam"
@@ -281,3 +282,289 @@ def test_filtering_a_backed_object_names_the_way_out(backed, name):
 
     with pytest.raises(ValueError, match="copy=True"):
         getattr(mt.pp, name)(backed)
+
+
+@pytest.fixture
+def lazy_pair(tmp_path, cells):
+    """Factory for the same cells read lazily and into memory, with the rows shuffled so that no group is contiguous."""
+    order = np.random.default_rng(0).permutation(cells.n_obs)
+
+    def build(dtype=np.float32):
+        shuffled = cells[order].copy()
+        shuffled.X = shuffled.X.astype(dtype)
+        path = tmp_path / f"shuffled-{np.dtype(dtype).name}.h5ad"
+        if not path.exists():
+            mt.io.write(shuffled, path)
+        return mt.io.read(path, lazy=True), mt.io.read(path)
+
+    return build
+
+
+def _is_dask(matrix):
+    return type(matrix).__module__.startswith("dask")
+
+
+@pytest.mark.parametrize("method", ["mad_robustize", "standardize", "robustize", "center"])
+@pytest.mark.parametrize(
+    ("by", "reference"),
+    [("Metadata_Plate", "negcon"), ("Metadata_Plate", None), (["Metadata_Plate", "Metadata_Well"], None)],
+    ids=["plate-negcon", "plate-all", "well-all"],
+)
+def test_a_lazy_object_normalizes_to_what_it_does_in_memory(lazy_pair, method, by, reference):
+    lazy, in_memory = lazy_pair()
+
+    mt.pp.normalize(lazy, method=method, by=by, reference=reference)
+    mt.pp.normalize(in_memory, method=method, by=by, reference=reference)
+
+    assert _is_dask(lazy.X), "the result must stay lazy until it is read"
+    np.testing.assert_array_equal(np.asarray(lazy.X), in_memory.X)
+    np.testing.assert_array_equal(lazy.var["degenerate_scale"], in_memory.var["degenerate_scale"])
+
+
+def test_a_small_read_budget_streams_several_groups_at_a_time(lazy_pair, reads, monkeypatch):
+    """Groups are packed into reads under mt.settings.stream_bytes, and the numbers do not depend on how they were packed."""
+    lazy, in_memory = lazy_pair()
+    mt.pp.normalize(in_memory, by=["Metadata_Plate", "Metadata_Well"], reference=None)
+    reads.clear()
+    # About forty rows of twenty float32 features: two or three wells of fifteen cells per read.
+    monkeypatch.setattr(mt.settings, "stream_bytes", 40 * 20 * 4)
+
+    mt.pp.normalize(lazy, by=["Metadata_Plate", "Metadata_Well"], reference=None)
+
+    np.testing.assert_array_equal(np.asarray(lazy.X), in_memory.X)
+    assert all(rows is not None for rows in reads), "a read asked for the whole matrix"
+    assert 1 < len(reads) < in_memory.obs[["Metadata_Plate", "Metadata_Well"]].drop_duplicates().shape[0]
+    assert max(rows.size for rows in reads) <= 40
+    for rows in reads:
+        assert (np.diff(rows) > 0).all(), "a read must ask for its rows in increasing order"
+
+
+def test_pca_of_a_lazily_normalized_object_matches_in_memory(lazy_pair):
+    import scanpy as sc
+
+    lazy, in_memory = lazy_pair(np.float64)
+    for adata in (lazy, in_memory):
+        mt.pp.normalize(adata, by="Metadata_Plate")
+        sc.pp.pca(adata, n_comps=10, svd_solver="covariance_eigh")
+
+    assert _is_dask(lazy.obsm["X_pca"])
+    streamed, single = np.asarray(lazy.obsm["X_pca"]), in_memory.obsm["X_pca"]
+    signs = np.sign((streamed * single).sum(axis=0))
+    np.testing.assert_allclose(streamed * signs, single, atol=1e-8)
+
+
+def test_tvn_computes_a_lazy_representation_once_and_matches_in_memory(lazy_pair):
+    """The fit and the apply each ran the representation's whole graph, and aggregating the result ran it again.
+
+    A representation is as narrow as one in memory, so TVN computes it once and keeps it.
+    """
+    import dask.array as da
+    import scanpy as sc
+
+    _, in_memory = lazy_pair(np.float64)
+    mt.pp.normalize(in_memory, by="Metadata_Plate")
+    sc.pp.pca(in_memory, n_comps=10)
+    computed = []
+
+    def counted(block):
+        computed.append(block.shape[0])
+        return block
+
+    lazy = in_memory.copy()
+    lazy.obsm["X_pca"] = da.from_array(in_memory.obsm["X_pca"], chunks=(100, -1)).map_blocks(
+        counted, meta=np.array((), dtype=in_memory.obsm["X_pca"].dtype)
+    )
+
+    mt.pp.tvn(lazy, batch_key="Metadata_Plate")
+    mt.pp.tvn(in_memory, batch_key="Metadata_Plate")
+    mt.tl.aggregate(lazy, by=["Metadata_Perturbation"], use_rep="X_tvn", min_cells=0)
+
+    assert sum(computed) == lazy.n_obs, f"{sum(computed)} rows computed for {lazy.n_obs}"
+    np.testing.assert_array_equal(lazy.obsm["X_pca"], in_memory.obsm["X_pca"])
+    np.testing.assert_allclose(lazy.obsm["X_tvn"], in_memory.obsm["X_tvn"], rtol=1e-10, atol=1e-10)
+
+
+def test_aggregating_a_lazy_representation_computes_it_once(lazy_pair, monkeypatch):
+    """The perturbations are spread over every chunk, so streaming them in waves ran the representation's whole graph once per wave.
+
+    A representation is as narrow as an in-memory one, so it is computed once instead, however small the read budget.
+    """
+    import dask.array as da
+
+    _, in_memory = lazy_pair(np.float64)
+    in_memory.obsm["X_tvn"] = np.random.default_rng(1).normal(size=(in_memory.n_obs, 5))
+    expected = mt.tl.aggregate(in_memory, by=["Metadata_Perturbation"], use_rep="X_tvn", min_cells=0)
+    computed = []
+
+    def counted(block):
+        computed.append(block.shape[0])
+        return block
+
+    lazy = in_memory.copy()
+    lazy.obsm["X_tvn"] = da.from_array(in_memory.obsm["X_tvn"], chunks=(100, -1)).map_blocks(
+        counted, meta=np.array((), dtype=np.float64)
+    )
+    monkeypatch.setattr(mt.settings, "stream_bytes", 5 * 8 * 100)
+
+    result = mt.tl.aggregate(lazy, by=["Metadata_Perturbation"], use_rep="X_tvn", min_cells=0)
+
+    np.testing.assert_array_equal(result.X, expected.X)
+    assert sum(computed) == lazy.n_obs, f"{sum(computed)} rows computed for {lazy.n_obs}"
+
+
+def test_lazy_chunks_fit_one_per_worker_in_the_read_budget(tmp_path, monkeypatch):
+    """Every dask worker holds a chunk and what a step computes from it, so chunks sized for the file alone multiplied the peak by the worker count."""
+    import dask
+
+    n_obs, n_vars, workers = 6000, 20, 2
+    obs = pd.DataFrame({"g": np.repeat(["a", "b"], n_obs // 2)}, index=[str(index) for index in range(n_obs)])
+    path = tmp_path / "wide.h5ad"
+    ad.AnnData(X=np.zeros((n_obs, n_vars), dtype=np.float32), obs=obs).write_h5ad(path)
+    monkeypatch.setattr(mt.settings, "stream_bytes", workers * n_vars * 8 * 1500)
+
+    from mantispy.io._profiles import _read_lazy
+
+    with dask.config.set(num_workers=workers):
+        lazy = _read_lazy(path)
+
+    assert max(lazy.X.chunks[0]) * workers * n_vars * 8 <= mt.settings.stream_bytes
+    assert len(lazy.X.chunks[0]) > 1
+
+
+def test_a_lazy_screen_aligns_end_to_end_without_loading_x(lazy_pair, tmp_path):
+    """normalize and PCA keep X lazy until the object is written, TVN computes only the narrow PCA, and the numbers are the in-memory ones.
+
+    TVN takes cells as they are: aligning before aggregating is the out-of-core route, so it must not warn about the resolution.
+    """
+    import warnings
+
+    import scanpy as sc
+
+    lazy, in_memory = lazy_pair(np.float64)
+    for adata in (lazy, in_memory):
+        mt.pp.normalize(adata, by="Metadata_Plate")
+        sc.pp.pca(adata, n_comps=10, svd_solver="covariance_eigh")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            mt.pp.tvn(adata, batch_key="Metadata_Plate")
+
+    assert _is_dask(lazy.X)
+    mt.io.write(lazy, tmp_path / "aligned.h5ad")
+    written = mt.io.read(tmp_path / "aligned.h5ad")
+
+    np.testing.assert_allclose(written.X, in_memory.X, atol=1e-12)
+    # The PCA signs are free, and TVN carries them through to its own columns.
+    signs = np.sign((written.obsm["X_tvn"] * in_memory.obsm["X_tvn"]).sum(axis=0))
+    np.testing.assert_allclose(written.obsm["X_tvn"] * signs, in_memory.obsm["X_tvn"], atol=1e-6)
+
+
+def test_reading_the_whole_of_a_large_lazy_matrix_names_the_caller(lazy_pair, monkeypatch, caplog):
+    import logging
+
+    lazy, _ = lazy_pair()
+    monkeypatch.setattr(mt.settings, "stream_bytes", 1000)
+
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
+        mt.pp.calculate_qc_metrics(lazy)
+
+    assert "calculate_qc_metrics reads the whole" in caplog.text
+
+
+def test_lazy_reads_without_dask_name_the_extra(paths, monkeypatch):
+    import importlib.util
+
+    find_spec = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util, "find_spec", lambda name, *args: None if name == "dask" else find_spec(name, *args)
+    )
+
+    with pytest.raises(ImportError, match=r"mantispy\[lazy\]"):
+        mt.io.read(paths, lazy=True)
+
+
+def test_a_ranking_on_a_lazy_object_sees_each_group_whole(lazy_pair):
+    """A rank depends on every row of its group, so a group spread over chunks must not be ranked one chunk at a time."""
+    lazy, in_memory = lazy_pair()
+    lazy.X = lazy.X.rechunk((100, -1))
+
+    mt.pp.rank_int(lazy, by="Metadata_Plate")
+    mt.pp.rank_int(in_memory, by="Metadata_Plate")
+
+    np.testing.assert_array_equal(np.asarray(lazy.X), in_memory.X)
+
+
+def test_standardize_reads_each_row_of_a_lazy_object_once(lazy_pair, reads):
+    """The mean and the spread used to be two grouped reductions, so the statistics read the whole file twice."""
+    lazy, in_memory = lazy_pair()
+    mt.pp.normalize(in_memory, method="standardize", by="Metadata_Plate", reference=None)
+    reads.clear()
+
+    mt.pp.normalize(lazy, method="standardize", by="Metadata_Plate", reference=None)
+
+    assert sum(rows.size for rows in reads) == lazy.n_obs
+    np.testing.assert_array_equal(np.asarray(lazy.X), in_memory.X)
+
+
+def test_lazy_chunks_never_cut_through_a_stored_chunk(tmp_path, monkeypatch):
+    """A dask chunk that cuts through a stored chunk decompresses all of it, so misaligned chunks read the file many times over."""
+    import dask
+
+    from mantispy.io._profiles import _read_lazy
+
+    n_obs, n_vars, stored = 10_000, 20, 4000
+    obs = pd.DataFrame(index=[str(index) for index in range(n_obs)])
+    ad.AnnData(X=np.arange(n_obs * n_vars, dtype=np.float32).reshape(n_obs, n_vars), obs=obs).write_zarr(
+        tmp_path / "stored.zarr", chunks=(stored, n_vars)
+    )
+    monkeypatch.setattr(mt.settings, "stream_bytes", n_vars * 8 * 1500)
+
+    with dask.config.set(num_workers=1):
+        lazy = _read_lazy(tmp_path / "stored.zarr")
+
+    bounds = set(np.cumsum(lazy.X.chunks[0]).tolist())
+    assert {4000, 8000, n_obs} <= bounds, f"chunks {lazy.X.chunks[0]} cut through a stored chunk"
+    assert max(lazy.X.chunks[0]) * n_vars * 8 <= mt.settings.stream_bytes
+    reads = [name for name in lazy.X.dask.layers if name.startswith("from-zarr")]
+    assert [len(lazy.X.dask.layers[name]) for name in reads] == [3], "each stored chunk is read by one task"
+    np.testing.assert_array_equal(np.asarray(lazy.X), np.arange(n_obs * n_vars).reshape(n_obs, n_vars))
+
+
+@pytest.mark.parametrize("method", ["mad_robustize", "standardize", "robustize"])
+def test_a_group_larger_than_the_budget_is_read_in_column_blocks(lazy_pair, monkeypatch, method):
+    """A plate of a wide screen does not fit the read budget on its own, so it was read whole.
+
+    The statistics are taken column by column, so a block of columns at a time gives the same numbers in bounded memory.
+    """
+    from mantispy._core import _reduce
+
+    lazy, in_memory = lazy_pair()
+    mt.pp.normalize(in_memory, method=method, by="Metadata_Plate", reference=None)
+    rows = int((in_memory.obs["Metadata_Plate"] == in_memory.obs["Metadata_Plate"].iloc[0]).sum())
+    budget = rows * 4 * 6  # six float32 columns of a whole plate
+    monkeypatch.setattr(mt.settings, "stream_bytes", budget)
+    original = _reduce.get_matrix
+    blocks = []
+
+    def recording(*args, **kwargs):
+        block = original(*args, **kwargs)
+        blocks.append(block.nbytes)
+        return block
+
+    monkeypatch.setattr(_reduce, "get_matrix", recording)
+
+    mt.pp.normalize(lazy, method=method, by="Metadata_Plate", reference=None)
+
+    np.testing.assert_array_equal(np.asarray(lazy.X), in_memory.X)
+    assert len(blocks) > 2, "each plate is read in several blocks of columns"
+    assert max(blocks) <= budget
+
+
+def test_a_reduction_of_a_group_larger_than_the_budget_matches_in_memory(lazy_pair, monkeypatch):
+    lazy, in_memory = lazy_pair()
+    expected, _, counts = reduce_grouped(in_memory, "Metadata_Plate", MEDIAN)
+    monkeypatch.setattr(mt.settings, "stream_bytes", int(counts.max()) * 4 * 6)
+
+    streamed, _, streamed_counts = reduce_grouped(lazy, "Metadata_Plate", MEDIAN)
+
+    np.testing.assert_array_equal(streamed, expected)
+    np.testing.assert_array_equal(streamed_counts, counts)

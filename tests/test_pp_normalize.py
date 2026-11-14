@@ -207,3 +207,27 @@ def test_per_plate_normalization_with_plate_level_labels_does_not_warn(adata, ca
     with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.pp.normalize(adata, by="Metadata_Plate", copy=True)
     assert "constant within every" not in caplog.text
+
+
+@pytest.mark.parametrize("method", ["standardize", "mad_robustize"])
+def test_normalizing_in_memory_allocates_little_beyond_the_result(method, monkeypatch):
+    """Masking the reference copied the whole matrix, and each group was copied and rescaled whole on top of the result.
+
+    On a wide screen of two plates that was several times the input; now only the result is full size.
+    """
+    import tracemalloc
+
+    adata = synthetic_plate(n_plates=2, n_wells=24, n_cells=40, n_features=50, seed=0)
+    adata.X = adata.X.astype(np.float32)
+    monkeypatch.setattr(mt.settings, "stream_bytes", adata.X.nbytes // 20)
+    expected = mt.pp.normalize(adata, method=method, reference=None, copy=True).X
+
+    tracemalloc.start()
+    try:
+        mt.pp.normalize(adata, method=method, reference=None)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    np.testing.assert_array_equal(adata.X, expected)
+    assert peak < 1.5 * adata.X.nbytes, f"peak {peak} for a {adata.X.nbytes}-byte result"

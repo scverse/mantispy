@@ -20,6 +20,8 @@ else:
     from numba import prange
 
 MEAN, MEDIAN, MAD, STD, QUANTILE = 0, 1, 2, 3, 4
+#: Work chunks of a parallel kernel that reuses one buffer per chunk; enough to keep a node's threads busy.
+N_CHUNKS = 64
 #: Spread selector for :func:`grouped_median_spread` only, alongside :data:`MAD`.
 IQR = 5
 
@@ -54,6 +56,16 @@ def group_offsets(codes: np.ndarray, n_groups: int) -> tuple[np.ndarray, np.ndar
     """
     codes = np.ascontiguousarray(codes, dtype=np.int32)
     return _counting_order(codes, n_groups)
+
+
+def _masked_offsets(codes: np.ndarray, n_groups: int, mask: np.ndarray | None) -> tuple[np.ndarray, np.ndarray]:
+    """:func:`group_offsets` over the rows ``mask`` keeps, each group's rows still in increasing order."""
+    order, offsets = group_offsets(codes, n_groups)
+    if mask is None:
+        return order, offsets
+    keep = np.asarray(mask, dtype=bool)
+    counts = np.bincount(np.asarray(codes)[keep], minlength=n_groups)
+    return order[keep[order]], np.concatenate([[0], np.cumsum(counts)]).astype(np.int64)
 
 
 def group_counts(codes: np.ndarray, n_groups: int) -> np.ndarray:
@@ -195,11 +207,14 @@ def _grouped(
     n_vars = X.shape[1]
     out = np.empty((n_groups, n_vars), dtype=np.float64)
     longest = _longest_group(offsets)
+    n_chunks = min(N_CHUNKS, max(n_groups * n_vars, 1))
 
-    for group in prange(n_groups):
-        start, stop = offsets[group], offsets[group + 1]
+    # Every (group, feature) slice is its own item, shared out over a fixed number of chunks, so a screen of two plates still uses every thread.
+    for chunk in prange(n_chunks):
         buffer = np.empty(longest, dtype=np.float64)
-        for j in range(n_vars):
+        for item in range(chunk, n_groups * n_vars, n_chunks):
+            group, j = item // n_vars, item % n_vars
+            start, stop = offsets[group], offsets[group + 1]
             n = 0
             total = 0.0
             for i in range(start, stop):
@@ -246,13 +261,15 @@ def grouped_stat(
     stat: int,
     q: float = 0.5,
     ddof: int = 1,
+    mask: np.ndarray | None = None,
 ) -> np.ndarray:
     """Per-group NaN-skipping statistic, shaped ``(n_groups, n_vars)``.
 
     Empty groups and all-NaN columns yield ``NaN`` rather than raising.
+    ``mask`` restricts the rows that contribute, without copying them out of ``X``.
     """
     X = _kernel_input(X)
-    order, offsets = group_offsets(codes, n_groups)
+    order, offsets = _masked_offsets(codes, n_groups, mask)
     return _grouped(X, order, offsets, n_groups, stat, float(q), int(ddof))
 
 
@@ -297,11 +314,14 @@ def _grouped_median_spread(
     centre = np.empty((n_groups, n_vars), dtype=np.float64)
     scale = np.empty((n_groups, n_vars), dtype=np.float64)
     longest = _longest_group(offsets)
+    n_chunks = min(N_CHUNKS, max(n_groups * n_vars, 1))
 
-    for group in prange(n_groups):
-        start, stop = offsets[group], offsets[group + 1]
+    # Shared out by (group, feature) slice, as in _grouped.
+    for chunk in prange(n_chunks):
         buffer = np.empty(longest, dtype=np.float64)
-        for j in range(n_vars):
+        for item in range(chunk, n_groups * n_vars, n_chunks):
+            group, j = item // n_vars, item % n_vars
+            start, stop = offsets[group], offsets[group + 1]
             n = 0
             for i in range(start, stop):
                 value = X[order[i], j]
@@ -326,7 +346,7 @@ def _grouped_median_spread(
 
 
 def grouped_median_spread(
-    X: np.ndarray, codes: np.ndarray, n_groups: int, spread: int
+    X: np.ndarray, codes: np.ndarray, n_groups: int, spread: int, mask: np.ndarray | None = None
 ) -> tuple[np.ndarray, np.ndarray]:
     """Per-group median and robust spread, both read off one sort per (group, feature) slice.
 
@@ -338,6 +358,7 @@ def grouped_median_spread(
         codes: Per-row group code in ``[0, n_groups)``.
         n_groups: Number of groups, so that a group with no rows still gets its row of ``NaN`` instead of being dropped.
         spread: :data:`MAD` for the unscaled median absolute deviation, or :data:`IQR` for the interquartile range.
+        mask: Boolean per row, restricting the rows that contribute without copying them out of ``X``.
 
     Returns:
         ``(median, spread)``, each ``(n_groups, n_vars)`` float64, holding ``NaN`` wherever a group has no usable value for a feature.
@@ -348,12 +369,8 @@ def grouped_median_spread(
     if spread not in (MAD, IQR):
         raise ValueError(f"spread must be MAD or IQR, got {spread!r}")
     X = _kernel_input(X)
-    order, offsets = group_offsets(codes, n_groups)
+    order, offsets = _masked_offsets(codes, n_groups, mask)
     return _grouped_median_spread(X, order, offsets, n_groups, int(spread))
-
-
-#: Work chunks of a parallel kernel that reuses one buffer per chunk; enough to keep a node's threads busy.
-N_CHUNKS = 64
 
 
 @njit(parallel=True, cache=True, nogil=True)

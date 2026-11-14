@@ -7,12 +7,13 @@ import numpy as np
 import pandas as pd
 from anndata import AnnData
 
-from mantispy._core._numba import IQR, MEAN, STD, grouped_median_spread
+from mantispy._core._numba import IQR, MEAN, STD, grouped_median_spread, grouped_stat
 from mantispy._core._numba import MAD as MAD_STAT
 from mantispy._core._reduce import (
     get_matrix,
-    group_offsets,
+    iter_waves,
     matrix_dtype,
+    out_of_core,
     reduce_grouped,
     transform_grouped,
 )
@@ -37,25 +38,40 @@ def _median_and_spread(
     adata: AnnData, spread: int, codes: np.ndarray, keys: pd.Index, layer: str | None, mask: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray]:
     """Per-group median and robust spread."""
-    if adata.isbacked:
-        # One group at a time, as the backed branch of reduce_grouped does, so a screen that does not fit in memory still normalizes.
+    if out_of_core(adata, layer):
+        # A few groups at a time, as reduce_grouped streams them, so a screen that does not fit in memory still normalizes.
         centre = np.full((len(keys), adata.n_vars), np.nan)
         scale = np.full((len(keys), adata.n_vars), np.nan)
-        selected = np.flatnonzero(mask)
-        order, offsets = group_offsets(codes[mask], len(keys))
-        for index in range(len(keys)):
-            rows = selected[order[offsets[index] : offsets[index + 1]]]
-            if rows.size:
-                block = get_matrix(adata, layer, rows=rows)
-                group_centre, group_scale = grouped_median_spread(block, np.zeros(rows.size, np.int32), 1, spread)
-                centre[index], scale[index] = group_centre[0], group_scale[0]
+        for groups, _, wave_codes, columns, block in iter_waves(
+            adata, (codes, keys), layer, mask=mask, by_columns=True
+        ):
+            centre[groups, columns], scale[groups, columns] = grouped_median_spread(
+                block, wave_codes, groups.size, spread
+            )
         return centre, scale
 
-    matrix = get_matrix(adata, layer)
-    # Masking copies the whole matrix, so it is skipped when the reference is every row.
-    if not mask.all():
-        codes, matrix = codes[mask], matrix[mask]
-    return grouped_median_spread(matrix, codes, len(keys), spread)
+    # The kernel skips the rows outside the reference, so they are never copied out of the matrix.
+    return grouped_median_spread(get_matrix(adata, layer), codes, len(keys), spread, mask=None if mask.all() else mask)
+
+
+def _mean_and_std(
+    adata: AnnData, by: str | list[str] | None, codes: np.ndarray, keys: pd.Index, layer: str | None, mask: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-group mean and population standard deviation, from one pass over a matrix that is not in memory."""
+    if out_of_core(adata, layer):
+        centre = np.full((len(keys), adata.n_vars), np.nan)
+        scale = np.full((len(keys), adata.n_vars), np.nan)
+        for groups, _, wave_codes, columns, block in iter_waves(
+            adata, (codes, keys), layer, mask=mask, by_columns=True
+        ):
+            centre[groups, columns] = grouped_stat(block, wave_codes, groups.size, MEAN)
+            scale[groups, columns] = grouped_stat(block, wave_codes, groups.size, STD, ddof=0)
+        return centre, scale
+    grouping = (codes, keys)
+    centre, _, _ = reduce_grouped(adata, by, MEAN, layer=layer, mask=mask, grouping=grouping)
+    # ddof=0 matches pycytominer, which uses sklearn's StandardScaler (population SD).
+    scale, _, _ = reduce_grouped(adata, by, STD, layer=layer, mask=mask, ddof=0, grouping=grouping)
+    return centre, scale
 
 
 def _center_and_scale(
@@ -75,10 +91,7 @@ def _center_and_scale(
     The two overlap: a feature can be constant in one group and unmeasured in another, and both facts have to reach the caller.
     """
     if method == "standardize":
-        grouping = (codes, keys)
-        centre, _, _ = reduce_grouped(adata, by, MEAN, layer=layer, mask=mask, grouping=grouping)
-        # ddof=0 matches pycytominer, which uses sklearn's StandardScaler (population SD).
-        scale, _, _ = reduce_grouped(adata, by, STD, layer=layer, mask=mask, ddof=0, grouping=grouping)
+        centre, scale = _mean_and_std(adata, by, codes, keys, layer, mask)
     elif method == "mad_robustize":
         centre, mad = _median_and_spread(adata, MAD_STAT, codes, keys, layer, mask)
         scale = MAD_TO_SIGMA * mad + epsilon
@@ -174,6 +187,7 @@ def normalize(
     Returns:
         ``None``, or the normalized copy when ``copy=True``.
         Writes ``X`` or ``layers[key_added]``, and ``var["degenerate_scale"]``, or ``var["degenerate_scale_<key_added>"]`` when writing to a layer, which flags features that have no spread in some group or no reference values to centre on there, and comes with a warning; a feature with no spread in a group is set to NaN in that group, since it has no scale there. Drop the flagged features before computing distances.
+        On a lazy ``X``, read with :func:`mantispy.io.read` and ``lazy=True``, the statistics are computed exactly by streaming the groups, and the result stays lazy until it is read or written.
 
     Raises:
         ValueError: If ``method`` is unknown, ``reference`` selects no rows at all or none in some group, or every feature has no spread in some group.
@@ -226,7 +240,9 @@ def normalize(
 
     def _rescale(key: Any, block: np.ndarray) -> np.ndarray:
         index = lookup[key]
-        scaled = (block - centre[index]) / scale[index]
+        scaled = block - centre[index]
+        # In place, so a slice makes one temporary rather than two.
+        scaled /= scale[index]
         # A feature with no spread among this group's reference rows has no scale, so its values are undefined here.
         scaled[:, spreadless[index]] = np.nan
         return scaled
@@ -234,7 +250,7 @@ def normalize(
     if keep_raw and "raw" not in adata.layers:
         adata.layers["raw"] = get_matrix(adata, layer).copy()
 
-    out = transform_grouped(adata, by, _rescale, layer=layer, grouping=(codes, keys))
+    out = transform_grouped(adata, by, _rescale, layer=layer, rowwise=True, grouping=(codes, keys))
     if key_added is None:
         adata.X = out
     else:
