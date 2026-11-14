@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import numpy as np
-from numba import get_num_threads, njit
+from numba import njit
 
 if TYPE_CHECKING:
     # numba's prange iterates like range, but its own type says nothing about that.
@@ -319,6 +319,10 @@ def grouped_median_spread(
     return _grouped_median_spread(X, order, offsets, n_groups, int(spread))
 
 
+#: Work chunks of a parallel kernel that reuses one buffer per chunk; enough to keep a node's threads busy.
+N_CHUNKS = 64
+
+
 @njit(parallel=True, cache=True, nogil=True)
 def _column_max_robust_z(X: np.ndarray, columns: np.ndarray, mad_to_sigma: float) -> np.ndarray:
     """Largest robust z-score of each selected column, columns shared out over the threads.
@@ -328,17 +332,18 @@ def _column_max_robust_z(X: np.ndarray, columns: np.ndarray, mad_to_sigma: float
     feature), scores ``0``, matching ``np.nan_to_num(..., nan=0.0)`` on the division.
 
     ``columns`` indexes into ``X``'s features, so the whole matrix is read without first copying the kept block.
-    Each thread gathers into one buffer reused across its columns, since allocating inside the ``prange`` body
+    Each chunk gathers into one buffer reused across its columns, since allocating inside the ``prange`` body
     serializes the loop on numba's allocator lock, and the median and MAD come from the same selection
     ``np.nanmedian`` uses, so the result matches it per column.
     """
     n_obs = X.shape[0]
     n_columns = columns.size
     out = np.zeros(n_columns, dtype=np.float64)
-    n_threads = get_num_threads()
-    for thread in prange(n_threads):
+    # A fixed chunk count rather than numba.get_num_threads(), which reads a ctypes pointer and stops the kernel from caching.
+    n_chunks = min(N_CHUNKS, n_columns)
+    for chunk in prange(n_chunks):
         buffer = np.empty(n_obs, dtype=np.float64)
-        for c in range(thread, n_columns, n_threads):
+        for c in range(chunk, n_columns, n_chunks):
             j = columns[c]
             n = 0
             for i in range(n_obs):
