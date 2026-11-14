@@ -50,14 +50,14 @@ def test_filter_cells_without_metrics_says_what_to_run(adata):
         mt.pp.filter_cells(adata)
 
 
-def test_feature_metrics_are_opt_in(adata):
-    """qc_variance and qc_n_unique are a per-feature pass filter_cells never reads, so they are written only on request; qc_n_nan comes free from the missingness pass and stays."""
+def test_qc_metrics_are_opt_in(adata):
+    """qc_variance and qc_n_unique are a per-feature pass filter_cells never reads, so the default qc_metrics leave them out."""
     mt.pp.calculate_qc_metrics(adata)
     assert "qc_n_nan" in adata.var
     assert "qc_variance" not in adata.var
     assert "qc_n_unique" not in adata.var
 
-    mt.pp.calculate_qc_metrics(adata, feature_metrics=True)
+    mt.pp.calculate_qc_metrics(adata, qc_metrics=("variance", "n_unique"))
     assert "qc_variance" in adata.var
     assert "qc_n_unique" in adata.var
 
@@ -68,9 +68,23 @@ def test_feature_metrics_match_a_direct_computation(adata):
     expected_variance = np.nanvar(X, axis=0)
     expected_unique = np.array([len(np.unique(column[~np.isnan(column)])) for column in X.T], dtype=np.int32)
 
-    mt.pp.calculate_qc_metrics(adata, feature_metrics=True)
+    mt.pp.calculate_qc_metrics(adata, qc_metrics=("variance", "n_unique"))
     np.testing.assert_allclose(adata.var["qc_variance"].to_numpy(), expected_variance, rtol=1e-5)
     np.testing.assert_array_equal(adata.var["qc_n_unique"].to_numpy(), expected_unique)
+
+
+def test_qc_metrics_choose_columns_and_qc_fail(adata):
+    """Only the requested metrics are written, and qc_fail ORs only their flags."""
+    mt.pp.calculate_qc_metrics(adata, qc_metrics=["border"], image_shape=(100, 100))
+    assert "qc_is_border" in adata.obs
+    assert "qc_nan_fraction" not in adata.obs
+    assert "qc_area_outlier" not in adata.obs
+    np.testing.assert_array_equal(adata.obs["qc_fail"], adata.obs["qc_is_border"])
+
+
+def test_qc_metrics_rejects_unknown_names(adata):
+    with pytest.raises(ValueError, match="unknown"):
+        mt.pp.calculate_qc_metrics(adata, qc_metrics=["varaince"])
 
 
 def test_filter_cells_works_without_feature_metrics(adata):
