@@ -131,6 +131,7 @@ def test_a_gene_with_a_phenotype_scores_high_and_its_responders_above_its_escape
     assert table.loc["HIT", "auc"] > 0.7
     assert abs(table.loc["QUIET", "auc"] - 0.5) < 0.1
     assert table.loc["HIT", "n_cells"] == table.loc["HIT", "n_reference"] == 200
+    assert not any("not a registered result key" in w for w in mt.io.validate(adata).warnings)
 
     score = adata.obs["perturbation_score"]
     assert score[adata.obs["Metadata_Gene"] == "nontargeting"].isna().all()

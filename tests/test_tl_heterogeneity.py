@@ -410,7 +410,9 @@ def _composition(adata, **kwargs):
 
 
 def test_composition_shift_finds_a_g1_gain_with_three_wells_and_the_guide_as_unit():
-    moved = _composition(_phase_object(3, ko_g1=0.7))
+    adata = _phase_object(3, ko_g1=0.7)
+    moved = _composition(adata)
+    assert not any("not a registered result key" in w for w in mt.io.validate(adata).warnings)
     assert moved.loc["KO", "G1"] == pytest.approx(0.3, abs=0.05)
     assert moved.loc["KO", "distance"] == pytest.approx(0.3, abs=0.05)
     assert moved.loc["KO", "pvalue"] < 0.05
