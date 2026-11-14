@@ -143,14 +143,14 @@ def aconcagua(cache_dir: str | Path | None = None) -> AnnData:
     The subset keeps all 250 non-targeting guides, four annotated positive controls (H2AX, ECT2, TUBB, CFL1), 50 strong and 50 weak known hits, and 396 random library genes, across eight plates and 46 wells.
 
     Mitotic cells are pooled at their natural share rather than capped, so a profile mixes interphase and mitotic cells as the screen saw them, and each row records its ``Metadata_MitoticFraction``.
-    The file is staged on ``scverse-exampledata``, so the loader fetches a single h5ad rather than rebuilding it from the raw per-cell table.
+    The file is staged on ``scverse-exampledata``, so the loader fetches a single h5ad; ``scripts/build_aconcagua.py`` rebuilds it from the public per-cell table.
 
     Args:
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Returns:
-        Guide-by-well profiles read with :func:`mantispy.io.read`, carrying ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_sgRNA``, ``Metadata_Gene``, ``Metadata_Perturbation`` (the gene, or ``"nontargeting"``), ``Metadata_Perturbation_Type`` (``"crispr"``), ``Metadata_Control`` and ``Metadata_Control_Type`` (``negcon``/``poscon``/``treatment``), ``Metadata_Tier`` (``control``/``strong``/``weak``/``random``), ``Metadata_CellCount`` and ``Metadata_MitoticFraction``.
+        Guide-by-well profiles read with :func:`mantispy.io.read`, carrying ``Metadata_Plate``, ``Metadata_Well`` (and its ``Metadata_Row`` and ``Metadata_Col``), ``Metadata_sgRNA``, ``Metadata_Gene``, ``Metadata_Perturbation`` (the gene, or ``"nontargeting"``), ``Metadata_Control`` and ``Metadata_Control_Type`` (``negcon``/``poscon``/``treatment``), ``Metadata_Tier`` (``control``/``strong``/``weak``/``random``), ``Metadata_CellCount``, ``Metadata_SiteCount`` and ``Metadata_MitoticFraction``. The perturbation is CRISPR, recorded in ``uns["mantispy"]["perturbation"]``.
 
     References:
         :cite:t:`Di_Bernardo_2026`, the Brieflow reanalysis; :cite:p:`Funk_2022`, the screen it reanalyses.
@@ -165,13 +165,14 @@ def aconcagua_cells(cache_dir: str | Path | None = None) -> AnnData:
     The genes are RRM1, DTL, SKA2, HAUS6, ITGAV, TLN1, PSMB7 and SF3B3. The cells were imaged in four channels: DAPI
     for DNA, gamma-H2AX, phalloidin for actin, and alpha-tubulin. Intensities are raw, as brieflow measured them, so
     :func:`mantispy.tl.dna_content` can read the DNA stain.
+    Every treatment cell of the eight genes is kept; the non-targeting controls are a seeded random subsample, for 38,674 cells in all.
 
     Args:
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Returns:
-        Cells by features at object resolution, read with :func:`mantispy.io.read`, carrying ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_sgRNA``, ``Metadata_Gene``, ``Metadata_Perturbation`` (the gene, or ``"nontargeting"``), ``Metadata_Perturbation_Type`` (``"crispr"``), ``Metadata_Control``, ``Metadata_Control_Type`` and the screen's interphase or mitotic call per cell, ``Metadata_Class``.
+        Cells by features at object resolution, read with :func:`mantispy.io.read`, carrying ``Metadata_Plate``, ``Metadata_Well`` (and its ``Metadata_Row`` and ``Metadata_Col``), ``Metadata_Site``, ``Metadata_ObjectNumber``, ``Metadata_sgRNA``, ``Metadata_Gene``, ``Metadata_Perturbation`` (the gene, or ``"nontargeting"``), ``Metadata_Control``, ``Metadata_Control_Type`` and the screen's interphase or mitotic call per cell, ``Metadata_Class``. The perturbation is CRISPR, recorded in ``uns["mantispy"]["perturbation"]``.
 
     References:
         :cite:t:`Di_Bernardo_2026`, the Brieflow reanalysis; :cite:p:`Funk_2022`, the screen it reanalyses.
