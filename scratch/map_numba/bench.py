@@ -95,8 +95,10 @@ def run_numba(meta, x, settings, drop, null_size, seed, null_kind, timer, n_jobs
 
 def run_copairs(meta, x, settings, drop, null_size, seed, timer, n_jobs):
     import copairs.compute as compute
-    import copairs.map.average_precision as cap
-    import copairs.map.map as cmm
+    import copairs.map  # noqa: F401 - registers the submodules, whose names the package's functions shadow
+
+    cap = sys.modules["copairs.map.average_precision"]
+    cmm = sys.modules["copairs.map.map"]
 
     from mantispy.tl._map import _score_map
 
