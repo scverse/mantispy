@@ -128,7 +128,8 @@ def _ap_kernel(xn, pos_same, pos_order, pos_off, pos_diff, neg_diff, q_order, it
     n_items = items.shape[0]
     n_chunks = min(n_items, get_num_threads())
     for chunk in prange(n_chunks):
-        pkeys = np.empty(max_pos, np.float32)
+        pkeys = np.empty((BLOCK, max_pos), np.float32)
+        pcnt = np.zeros(BLOCK, np.int64)
         nkeys = np.empty((BLOCK, max_neg), np.float32)
         cnt = np.zeros(BLOCK, np.int64)
         bins = np.empty(max_pos + 1, np.int64)
@@ -136,7 +137,18 @@ def _ap_kernel(xn, pos_same, pos_order, pos_off, pos_diff, neg_diff, q_order, it
         for k in range(chunk, n_items, n_chunks):
             q_lo, q_hi, c_lo, c_hi = items[k, 0], items[k, 1], items[k, 2], items[k, 3]
             nb = q_hi - q_lo
+            # positives first: a query without any is unscored, so its negatives are only counted, never ranked
             for b in range(nb):
+                i = q_order[q_lo + b]
+                p = 0
+                g = pos_same[i]
+                if g >= 0:
+                    for t in range(pos_off[g], pos_off[g + 1]):
+                        j = pos_order[t]
+                        if j != i and _differs(pos_diff, i, j):
+                            pkeys[b, p] = one - _dot_rec(xn[i], xn[j], 0, f)
+                            p += 1
+                pcnt[b] = p
                 cnt[b] = 0
             for t in range(c_lo, c_hi):
                 j = q_order[t]
@@ -144,25 +156,18 @@ def _ap_kernel(xn, pos_same, pos_order, pos_off, pos_diff, neg_diff, q_order, it
                 for b in range(nb):
                     i = q_order[q_lo + b]
                     if j != i and _differs(neg_diff, i, j):
-                        nkeys[b, cnt[b]] = one - _dot_rec(xn[i], xj, 0, f)
+                        if pcnt[b] > 0:
+                            nkeys[b, cnt[b]] = one - _dot_rec(xn[i], xj, 0, f)
                         cnt[b] += 1
             for b in range(nb):
                 i = q_order[q_lo + b]
-                xi = xn[i]
-                p = 0
-                g = pos_same[i]
-                if g >= 0:
-                    for t in range(pos_off[g], pos_off[g + 1]):
-                        j = pos_order[t]
-                        if j != i and _differs(pos_diff, i, j):
-                            pkeys[p] = one - _dot_rec(xi, xn[j], 0, f)
-                            p += 1
+                p = pcnt[b]
                 q = cnt[b]
                 npos[i] = p
                 ntot[i] = p + q
                 if p == 0:
                     continue
-                ps = pkeys[:p]
+                ps = pkeys[b, :p]
                 ps.sort()
                 for m in range(p + 1):
                     bins[m] = 0
