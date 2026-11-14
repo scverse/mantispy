@@ -152,36 +152,34 @@ def _count_below(keys, lo, hi, key):
 
 
 @njit(nogil=True, cache=True, inline="always")
-def _key(e1, e2, e0, table_at, size, table, rows, scale, profile, metric, leaf_lo, leaf_n, ops, stack):
+def _key(e1, e2, tidx, table_at, size, table, rows, scale, profile, metric, leaf_lo, leaf_n, ops, stack):
     """Rank key between pool entries ``e1`` and ``e2``: from the group's key table if it has one, else scored."""
     if table_at >= 0:
-        return table[table_at + (e1 - e0) * size + (e2 - e0)]
+        return table[table_at + tidx[e1] * size + tidx[e2]]
     return np.float32(1.0) - _similarity(rows, scale, profile[e1], profile[e2], metric, leaf_lo, leaf_n, ops, stack)
 
 
 @njit(parallel=True, nogil=True, cache=True)
 def _key_tables(
-    rows, scale, metric, leaf_lo, leaf_n, ops, profile, row_entry, row_lo, row_size, row_at, table, n_chunks
+    rows, scale, metric, leaf_lo, leaf_n, ops, row_profile, cols, row_lo, row_size, row_at, table, n_chunks
 ):
-    """Key tables of the groups that have one: row ``r`` holds entry ``row_entry[r]``'s keys to the group's entries."""
+    """Key table rows: row ``r`` holds the keys of ``row_profile[r]`` to ``cols[row_lo[r]:row_lo[r] + row_size[r]]``."""
     one = np.float32(1.0)
     for chunk in prange(n_chunks):
         stack = np.empty(64, np.float32)
-        for r in range(chunk, row_entry.shape[0], n_chunks):
-            e = row_entry[r]
+        for r in range(chunk, row_profile.shape[0], n_chunks):
+            x = row_profile[r]
             for c in range(row_size[r]):
-                z = row_lo[r] + c
+                z = cols[row_lo[r] + c]
                 table[row_at[r] + c] = (
-                    one
-                    if z == e
-                    else one - _similarity(rows, scale, profile[e], profile[z], metric, leaf_lo, leaf_n, ops, stack)
+                    one if z == x else one - _similarity(rows, scale, x, z, metric, leaf_lo, leaf_n, ops, stack)
                 )
 
 
 @njit(parallel=True, nogil=True, cache=True)
 def _permutation_hits(
-    rows, scale, metric, leaf_lo, leaf_n, ops, group_slot, group_block, group_key, thresholds, group_table, table,
-    slot_block, adj_ptr, adj, block_slot, block_pool, block_kind, profile, entry_row, entry_sub_row, entry_lone,
+    rows, scale, metric, leaf_lo, leaf_n, ops, group_slot, group_block, group_key, thresholds, group_table,
+    group_size, tidx, table, slot_block, adj_ptr, adj, block_slot, block_pool, block_kind, profile, entry_row, entry_sub_row, entry_lone,
     lone_ptr, lone, neg_bucket, neg_diff, lab_ptr, lab, store_ptr, store, items, max_slots, max_pool, max_scored,
     n_chunks,
 ):  # fmt: skip
@@ -191,7 +189,8 @@ def _permutation_hits(
     block ``b``'s slots are ``block_slot[b]:block_slot[b + 1]``, in order, and its pool entries
     ``block_pool[b]:block_pool[b + 1]``, its members first. Each entry ranks against the sorted keys of
     ``entry_row``, less those of ``entry_sub_row`` (``-1`` for none). ``group_table[g]`` locates the group's key
-    table between its entries in ``table``, ``-1`` when the keys are scored during the draws.
+    table in ``table`` (``-1`` when the keys are scored during the draws), ``group_size[g]`` its width and ``tidx``
+    each entry's row and column in it.
     """
     hits = np.zeros(items.shape[0], np.int64)
     for chunk in prange(n_chunks):
@@ -209,7 +208,7 @@ def _permutation_hits(
             b0, b1 = group_block[g], group_block[g + 1]
             e0 = block_pool[b0]
             at = group_table[g]
-            size = block_pool[b1] - e0
+            size = group_size[g]
             for j in range(d_lo, d_hi):
                 state = _mix(group_key[g] ^ _mix(np.uint64(j) + np.uint64(0x632BE59BD9B4E019)))
                 for b in range(b0, b1):  # Floyd's k-subset of the block's pool, then a uniform order
@@ -248,7 +247,7 @@ def _permutation_hits(
                                     added[n_add] = _key(
                                         e,
                                         ze,
-                                        e0,
+                                        tidx,
                                         at,
                                         size,
                                         table,
@@ -270,7 +269,7 @@ def _permutation_hits(
                                 removed[n_rem] = _key(
                                     e,
                                     ze,
-                                    e0,
+                                    tidx,
                                     at,
                                     size,
                                     table,
@@ -292,7 +291,7 @@ def _permutation_hits(
                                     added[n_add] = _key(
                                         e,
                                         ze,
-                                        e0,
+                                        tidx,
                                         at,
                                         size,
                                         table,
@@ -312,7 +311,7 @@ def _permutation_hits(
                                 removed[n_rem] = _key(
                                     e,
                                     ze,
-                                    e0,
+                                    tidx,
                                     at,
                                     size,
                                     table,
@@ -331,7 +330,7 @@ def _permutation_hits(
                     deg = 0
                     for t in range(adj_ptr[s], adj_ptr[s + 1]):
                         key = _key(
-                            e, slot_entry[adj[t] - s0], e0, at, size, table, rows, scale, profile, metric, leaf_lo,
+                            e, slot_entry[adj[t] - s0], tidx, at, size, table, rows, scale, profile, metric, leaf_lo,
                             leaf_n, ops, stack,
                         )  # fmt: skip
                         # ties rank the positive first, so only negatives strictly before it count
@@ -499,8 +498,9 @@ def permutation_pvalues(
     as64 = lambda a: np.asarray(a, dtype=np.int64)
     group_slot, group_block, block_pool = as64(plan.group_slot), as64(plan.group_block), as64(plan.block_pool)
     profile = as64(plan.entry_profile)
-    group_table, table = _tables(plan, group_slot, group_block, block_pool, profile, null_size, x, scale, metric,
-                                 leaf_lo, leaf_n, ops, n_chunks)  # fmt: skip
+    group_table, group_size, tidx, table = _tables(
+        plan, group_slot, group_block, block_pool, profile, null_size, x, scale, metric, leaf_lo, leaf_n, ops, n_chunks
+    )
     items = np.array(
         [(g, d, min(d + _DRAW_CHUNK, null_size)) for g in range(len(groups)) for d in range(0, null_size, _DRAW_CHUNK)],
         dtype=np.int64,
@@ -510,7 +510,7 @@ def permutation_pvalues(
     max_scored = 2 * max_slots + int(np.diff(plan.lone_ptr).max(initial=0)) + 1
     hits = _permutation_hits(
         x, scale, metric, leaf_lo, leaf_n, ops, group_slot, group_block, np.array(plan.group_key, dtype=np.uint64),
-        tie_thresholds(np.asarray(scores, dtype=np.float64)), group_table, table, as64(plan.slot_block),
+        tie_thresholds(np.asarray(scores, dtype=np.float64)), group_table, group_size, tidx, table, as64(plan.slot_block),
         as64(plan.adj_ptr), as64(plan.adj), as64(plan.block_slot), block_pool, as64(plan.block_kind), profile,
         entry_row, entry_sub_row, as64(plan.entry_lone), as64(plan.lone_ptr), as64(plan.lone), lay.neg_bucket,
         lay.neg_diff, lay.lab_ptr, lay.lab, store_ptr, store, items, max_slots, int(pool_size.max(initial=1)),
@@ -522,34 +522,49 @@ def permutation_pvalues(
 
 def _tables(plan, group_slot, group_block, block_pool, profile, null_size, x, scale, metric, leaf_lo, leaf_n, ops,
             n_chunks):  # fmt: skip
-    """Key tables between each group's pool entries, for the groups whose draws would score more pairs than it holds.
+    """Key tables, for the groups whose draws would score more pairs than a table holds.
 
-    Returns each group's offset into the table (``-1`` for none) and the tables.
+    One table over every profile of every pool when that is smaller than the groups' own tables together (groups
+    whose pools are whole plates share them), else a table per group between its pool entries. Returns each group's
+    offset into the tables (``-1`` for none) and width, each entry's row and column, and the tables.
     """
-    group_table = np.full(len(group_slot) - 1, -1, np.int64)
+    n_groups = len(group_slot) - 1
     adj_ptr = np.asarray(plan.adj_ptr, dtype=np.int64)
-    used = 0
-    row_entry, row_lo, row_size, row_at = [], [], [], []
-    for g in range(len(group_table)):
-        e0, e1 = int(block_pool[group_block[g]]), int(block_pool[group_block[g + 1]])
-        size = e1 - e0
-        n_slots = int(group_slot[g + 1] - group_slot[g])
-        scored = null_size * (int(adj_ptr[group_slot[g + 1]] - adj_ptr[group_slot[g]]) + 2 * n_slots * n_slots)
-        if size * size > scored or 4 * (used + size * size) > _TABLE_BUDGET:
-            continue
-        group_table[g] = used
-        row_entry.extend(range(e0, e1))
-        row_lo.extend([e0] * size)
-        row_size.extend([size] * size)
-        row_at.extend(used + r * size for r in range(size))
-        used += size * size
+    e0 = block_pool[group_block[:-1]]
+    size = block_pool[group_block[1:]] - e0
+    n_slots = np.diff(group_slot)
+    scored = null_size * (adj_ptr[group_slot[1:]] - adj_ptr[group_slot[:-1]] + 2 * n_slots * n_slots)
+    own = np.minimum(size * size, scored)
+    union, position = np.unique(profile, return_inverse=True)
+    rows_spec: tuple[np.ndarray, ...]
+    if 4 * len(union) ** 2 <= _TABLE_BUDGET and len(union) ** 2 < own.sum():
+        group_table = np.zeros(n_groups, np.int64)
+        group_size = np.full(n_groups, len(union), np.int64)
+        tidx = position.astype(np.int64)
+        n = len(union)
+        rows_spec = (union, union, np.zeros(n, np.int64), np.full(n, n, np.int64), np.arange(n, dtype=np.int64) * n)
+        used = n * n
+    else:
+        group_table = np.full(n_groups, -1, np.int64)
+        group_size = size.astype(np.int64)
+        tidx = np.arange(len(profile), dtype=np.int64) - np.repeat(e0, size)
+        used = 0
+        owners, lo, width, at = [], [], [], []
+        for g in np.flatnonzero(size * size <= scored):
+            if 4 * (used + int(size[g]) ** 2) > _TABLE_BUDGET:
+                break
+            group_table[g] = used
+            owners.append(np.arange(e0[g], e0[g] + size[g]))
+            lo.append(np.full(size[g], e0[g]))
+            width.append(np.full(size[g], size[g]))
+            at.append(used + np.arange(size[g]) * size[g])
+            used += int(size[g]) ** 2
+        cat = lambda parts: np.concatenate(parts).astype(np.int64) if parts else np.zeros(0, np.int64)
+        rows_spec = (profile[cat(owners)], profile, cat(lo), cat(width), cat(at))
     table = np.empty(used, np.float32)
-    if row_entry:
-        _key_tables(
-            x, scale, metric, leaf_lo, leaf_n, ops, profile, np.asarray(row_entry, np.int64), np.asarray(row_lo, np.int64),
-            np.asarray(row_size, np.int64), np.asarray(row_at, np.int64), table, max(1, min(n_chunks, len(row_entry))),
-        )  # fmt: skip
-    return group_table, table
+    if len(rows_spec[0]):
+        _key_tables(x, scale, metric, leaf_lo, leaf_n, ops, *rows_spec, table, max(1, min(n_chunks, len(rows_spec[0]))))
+    return group_table, group_size, tidx, table
 
 
 def _single_label_blocks(lay: Layout, plan: _Plan, members: np.ndarray, order: np.ndarray, off: np.ndarray):

@@ -328,3 +328,20 @@ def test_tl_map_reproduces_copairs(mode, null):
     np.testing.assert_allclose(joined["score"], joined["mean_average_precision"], rtol=0, atol=1e-12)
     np.testing.assert_array_equal(joined["pvalue"], joined["p_value"])
     np.testing.assert_allclose(joined["qvalue"], joined["corrected_p_value"], rtol=1e-12)
+
+
+@pytest.mark.parametrize("mode", [*MODES, "multilabel"])
+def test_permutation_null_does_not_depend_on_where_its_keys_come_from(mode, monkeypatch):
+    """A shared table, per-group tables or keys scored during the draws hold the same values, so the draws agree exactly."""
+    meta, x = _screen(seed=6, ties=True, n_features=20)
+    spec, column = MODES.get(mode), None
+    if mode == "multilabel":
+        meta["moa"] = meta["Metadata_Perturbation"].map(lambda p: [] if p == "ctrl" else [f"m{int(p[1:]) % 3}"])
+        spec, column = (["moa"], ["Metadata_Perturbation"], [], ["moa"]), "moa"
+    shared = _permutation(meta, x, spec, 500, 0, multilabel_col=column)["p_value"]
+    monkeypatch.setattr(map_permutation, "_TABLE_BUDGET", 4 * len(meta) ** 2 // 3)  # too small for the shared one
+    per_group = _permutation(meta, x, spec, 500, 0, multilabel_col=column)["p_value"]
+    monkeypatch.setattr(map_permutation, "_TABLE_BUDGET", 0)
+    scored = _permutation(meta, x, spec, 500, 0, multilabel_col=column)["p_value"]
+    np.testing.assert_array_equal(shared, per_group)
+    np.testing.assert_array_equal(shared, scored)
