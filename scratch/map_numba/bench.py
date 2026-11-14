@@ -129,11 +129,12 @@ def main():
     p.add_argument("impl")
     p.add_argument("outdir")
     p.add_argument("--null-size", type=int, default=10_000)
+    p.add_argument("--seed", type=int, default=0)
     p.add_argument("--threads", type=int, default=int(os.environ.get("SLURM_CPUS_PER_TASK", 8)))
     a = p.parse_args()
     out = Path(a.outdir)
     out.mkdir(parents=True, exist_ok=True)
-    tag = f"{a.dataset}_{a.mode}_{a.impl}"
+    tag = f"{a.dataset}_{a.mode}_{a.impl}" + (f"_seed{a.seed}" if a.seed else "")
 
     t0 = time.perf_counter()
     meta, x, settings, drop, label, is_control = prepare(a.dataset, a.mode)
@@ -153,9 +154,9 @@ def main():
         map_nb._group_pvalues(np.zeros((1, 2), np.float32), np.zeros(1, np.int64), np.array([0, 1]), np.zeros(1))
     t1 = time.perf_counter()
     if a.impl == "copairs":
-        table = run_copairs(meta, x, settings, drop, a.null_size, 0, timer, a.threads)
+        table = run_copairs(meta, x, settings, drop, a.null_size, a.seed, timer, a.threads)
     else:
-        table = run_numba(meta, x, settings, drop, a.null_size, 0, "numpy" if a.impl == "numba" else "floyd",
+        table = run_numba(meta, x, settings, drop, a.null_size, a.seed, "numpy" if a.impl == "numba" else "floyd",
                           timer, a.threads, sims="gemm" if a.impl == "gemm" else "exact")  # fmt: skip
     wall = time.perf_counter() - t1
     if a.mode == "activity":
