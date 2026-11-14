@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 
+from mantispy._core._pca import pca_solver
 from mantispy._core._reduce import get_matrix
 from mantispy._core.frames import as_frame
 from mantispy._core.masks import control_annotated, reference_mask
@@ -140,6 +141,7 @@ def _benchmark(
     batch_key: str,
     min_max_scale: bool,
     scib_names: list[str] | None = None,
+    svd_solver: str | None = None,
 ) -> pd.DataFrame:
     """scib-metrics' public ``get_results`` frame for the representations, kept as a seam a test can read directly.
 
@@ -155,7 +157,8 @@ def _benchmark(
     slim = ad.AnnData(get_matrix(adata), obs=as_frame(adata.obs)[list(dict.fromkeys((batch_key, label_key)))].copy())
     for rep in reps:
         slim.obsm[rep] = adata.obsm[rep]
-    sc.tl.pca(slim, svd_solver="arpack", mask=None, key_added=_UNINTEGRATED)
+    solver = pca_solver(slim.n_obs, slim.n_vars, svd_solver, fallback="arpack")
+    sc.tl.pca(slim, svd_solver=solver, mask=None, key_added=_UNINTEGRATED)
     # progress_bar=False keeps the tqdm bars out of executed notebooks and test logs.
     bm = Benchmarker(
         slim,
@@ -181,6 +184,7 @@ def evaluate_integration(
     metrics: Sequence[str] | None = None,
     map_mode: str = "replicability",
     map_kwargs: dict[str, Any] | None = None,
+    svd_solver: str | None = None,
     ax: Axes | None = None,
 ) -> pd.DataFrame:
     """Score one or more representations against a batch and draw the integration benchmark as a heatmap.
@@ -231,6 +235,7 @@ def evaluate_integration(
         map_mode: The copairs pairing for mAP, ``"replicability"`` (the Arevalo ``mAP-nonrep`` default) or
             ``"cross_plate"``. See ``_map_settings``.
         map_kwargs: Overrides for any of the four copairs pair arguments, on top of ``map_mode``.
+        svd_solver: How the unintegrated baseline PCA is decomposed. ``None`` eigendecomposes the feature covariance when the screen has many more wells than features and otherwise uses arpack; any scanpy solver name forces one. The baseline matches either way.
         ax: Axes to draw the heatmap on, or ``None`` for a new figure.
 
     Returns:
@@ -341,7 +346,13 @@ def evaluate_integration(
         )
 
     results = _benchmark(
-        adata, reps=reps, label_key=label_key, batch_key=batch_key, min_max_scale=min_max_scale, scib_names=scib_names
+        adata,
+        reps=reps,
+        label_key=label_key,
+        batch_key=batch_key,
+        min_max_scale=min_max_scale,
+        scib_names=scib_names,
+        svd_solver=svd_solver,
     )
     metric_type = results.loc["Metric Type"]
     data = results.drop(index="Metric Type").astype(float).loc[list(reps)]
