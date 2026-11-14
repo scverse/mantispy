@@ -203,6 +203,7 @@ def _convert(frame: pd.DataFrame, tiers: pd.Series) -> AnnData:
             "Metadata_sgRNA": frame["barcode"].astype(str).to_numpy(),
             "Metadata_Gene": np.where(control, "nontargeting", gene),
             "Metadata_Perturbation": np.where(control, "nontargeting", gene),
+            "Metadata_Perturbation_Type": pd.Categorical(["crispr"] * len(frame)),
             "Metadata_Control_Type": np.where(
                 control, "negcon", np.where(gene.isin(POSITIVE_CONTROLS), "poscon", "treatment")
             ),
