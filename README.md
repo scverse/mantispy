@@ -80,13 +80,12 @@ Choose from the options below to install mantispy:
 
    Cloning the repository and running `uv sync` is for contributors, see the [contributing guide](https://mantispy.readthedocs.io/en/latest/contributing.html).
 
-Optional extras add features: `spatial` (reading images as `SpatialData`), `map` (copairs
-retrieval metrics), `harmony` and `integration` (batch correction and its scoring), and
-`interactive` (plotly plots). Install the ones you need, for example:
+Optional extras add features: `spatial` (reading images as `SpatialData`), `harmony` and
+`integration` (batch correction and its scoring), and `interactive` (plotly plots). Install the ones you need, for example:
 
 ```bash
-uv add 'mantispy[spatial,map]'  # in a uv project
-pip install 'mantispy[spatial,map]'  # or with pip
+uv add 'mantispy[spatial]'  # in a uv project
+pip install 'mantispy[spatial]'  # or with pip
 ```
 
 The [installation guide](https://mantispy.readthedocs.io/en/latest/installation.html) says what

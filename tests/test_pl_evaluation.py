@@ -35,7 +35,6 @@ def _metrics_table():
 
 @pytest.fixture
 def evaluated():
-    pytest.importorskip("copairs")  # tl.map below; copairs declares requires-python <3.13
     cells = synthetic_plate(
         n_plates=2,
         n_wells=96,

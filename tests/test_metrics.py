@@ -200,13 +200,6 @@ def _block_imports(monkeypatch, *blocked):
     monkeypatch.setattr(builtins, "__import__", fake_import)
 
 
-def test_evaluate_integration_needs_at_least_one_engine(monkeypatch):
-    """With neither scib-metrics nor copairs there is nothing to run, so it raises and names the extra to install."""
-    _block_imports(monkeypatch, "scib_metrics", "copairs")
-    with pytest.raises(ImportError, match=r"mantispy\[integration,map\]"):
-        mt.metrics.evaluate_integration(_scib_ready())
-
-
 def test_evaluate_integration_refuses_one_row_per_perturbation():
     """A consensus object has no replicate pairs to score, so it fails with a message naming the cause, not a traceback."""
     pytest.importorskip("scib_metrics")  # the replicate guard is reached only past the engine-present check
@@ -224,9 +217,8 @@ def test_evaluate_integration_refuses_one_row_per_perturbation():
         mt.metrics.evaluate_integration(adata)
 
 
-def test_evaluate_integration_copairs_only_returns_a_per_rep_map_frame(monkeypatch):
+def test_evaluate_integration_without_scib_returns_a_per_rep_map_frame(monkeypatch):
     """Without scib-metrics it drops to a native mAP frame, one row per representation, and warns once."""
-    pytest.importorskip("copairs")  # copairs declares requires-python <3.13
     adata = _scib_ready()
     adata.obsm["X_other"] = np.asarray(adata.obsm["X_pca"])[:, :4]
     _block_imports(monkeypatch, "scib_metrics")
@@ -241,22 +233,6 @@ def test_evaluate_integration_copairs_only_returns_a_per_rep_map_frame(monkeypat
     assert np.isfinite(frame["mean_average_precision"]).all()
 
 
-def test_evaluate_integration_scib_only_returns_a_frame_without_a_map_block(monkeypatch):
-    """With scib-metrics but no copairs it returns the numeric frame with the aggregates and no mAP column."""
-    pytest.importorskip("scib_metrics")
-
-    adata = _scib_ready()
-    _block_imports(monkeypatch, "copairs")
-
-    frame = mt.metrics.evaluate_integration(adata, reps=("X_pca",))
-    assert isinstance(frame, pd.DataFrame)
-    assert list(frame.index) == ["X_pca"]
-    assert "mean_average_precision" not in frame.columns  # no retrieval block without copairs
-    assert "Total+mAP" not in frame.columns  # and no mantispy total either
-    assert {"Batch correction", "Bio conservation", "Total"} <= set(frame.columns)
-    assert np.isfinite(frame["Total"]).all()
-
-
 @pytest.mark.filterwarnings("error:The argument mask_var is deprecated:FutureWarning")
 def test_evaluate_integration_scores_the_callers_x_pca_and_leaves_it_untouched(monkeypatch):
     """scib-metrics computes its own PCA into obsm["X_pca"]; the caller's embedding must be the one scored and kept."""
@@ -264,7 +240,6 @@ def test_evaluate_integration_scores_the_callers_x_pca_and_leaves_it_untouched(m
     adata = _scib_ready()
     adata.obsm["X_pca"] = np.asarray(adata.obsm["X_pca"])[:, :4]
     before = adata.obsm["X_pca"].copy()
-    _block_imports(monkeypatch, "copairs")
 
     mt.metrics.evaluate_integration(adata, reps=("X_pca",))
     np.testing.assert_array_equal(adata.obsm["X_pca"], before)
@@ -274,7 +249,6 @@ def test_evaluate_integration_scores_the_callers_x_pca_and_leaves_it_untouched(m
 def test_evaluate_integration_both_returns_the_map_column_and_both_totals():
     """With both installed the frame carries the metric columns, the mAP column and scib's Total beside mantispy's Total+mAP."""
     pytest.importorskip("scib_metrics")
-    pytest.importorskip("copairs")
 
     adata = _scib_ready()
     adata.obsm["X_other"] = np.asarray(adata.obsm["X_pca"])[:, :4]
@@ -290,7 +264,6 @@ def test_evaluate_integration_both_returns_the_map_column_and_both_totals():
 def test_evaluate_integration_metrics_map_only_skips_scib():
     """metrics=['map'] returns the mAP frame alone even with scib-metrics installed, and does not warn."""
     pytest.importorskip("scib_metrics")
-    pytest.importorskip("copairs")
     adata = _scib_ready()
 
     import warnings as _warnings
@@ -331,7 +304,6 @@ def test_evaluate_integration_scib_needs_features_in_X():
 
 def test_evaluate_integration_names_label_batch_confounding():
     """One label per batch leaves the mAP with no cross-batch negative; the error names the confounding."""
-    pytest.importorskip("copairs")
     import anndata as ad
 
     rng = np.random.default_rng(0)
@@ -351,7 +323,6 @@ def test_evaluate_integration_names_label_batch_confounding():
 
 def test_map_is_one_for_separable_labels_and_drops_when_shuffled():
     """Ground truth: tight, well-separated label clusters retrieve perfectly, and shuffling the labels drops mAP to chance."""
-    pytest.importorskip("copairs")
     import anndata as ad
 
     from mantispy.metrics._evaluate import _map_settings, _rep_map
@@ -641,7 +612,6 @@ def test_evaluate_integration_baseline_solver_auto_matches_arpack(monkeypatch):
 
     adata = _scib_ready()
     assert pca_solver(adata.n_obs, adata.n_vars, fallback="arpack") == "covariance_eigh"
-    _block_imports(monkeypatch, "copairs")
 
     auto = mt.metrics.evaluate_integration(_scib_ready(), reps=("X_pca",), svd_solver=None)
     arpack = mt.metrics.evaluate_integration(_scib_ready(), reps=("X_pca",), svd_solver="arpack")

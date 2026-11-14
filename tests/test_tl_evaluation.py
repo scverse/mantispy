@@ -2,7 +2,6 @@
 
 import logging
 import warnings
-from importlib.util import find_spec
 
 import anndata as ad
 import numpy as np
@@ -11,9 +10,6 @@ import pytest
 
 import mantispy as mt
 from mantispy.ds import synthetic_plate
-
-# tl.map runs copairs, which declares requires-python <3.13 until that is lifted upstream.
-requires_copairs = pytest.mark.skipif(find_spec("copairs") is None, reason="copairs does not install on this Python")
 
 
 @pytest.fixture
@@ -25,7 +21,6 @@ def profiles():
     return mt.tl.aggregate(cells, min_cells=0)
 
 
-@requires_copairs
 def test_activity_scores_treatments_against_the_controls(profiles):
     """Phenotypic activity as the field defines it: replicates retrieved against control profiles only, with the controls themselves dropped from the result."""
     mt.tl.map(profiles, mode="activity", null_size=200)
@@ -36,7 +31,6 @@ def test_activity_scores_treatments_against_the_controls(profiles):
     assert {"map", "map_qvalue"} <= set(profiles.obs.columns)
 
 
-@requires_copairs
 def test_map_keeps_the_copied_null_unless_told_otherwise(profiles):
     """copairs 0.6 made the permutation null its default; mantispy keeps the copied null and lets the caller switch."""
     default = mt.tl.map(profiles, mode="activity", null_size=200, copy=True).uns["mantispy"]["map"]
@@ -46,9 +40,8 @@ def test_map_keeps_the_copied_null_unless_told_otherwise(profiles):
     np.testing.assert_allclose(permuted["score"], copied["score"])
 
 
-@requires_copairs
 def test_map_accepts_a_label_column_without_the_metadata_prefix(profiles):
-    """A user column without the Metadata_ prefix must reach copairs, not trip its matcher (audit A2)."""
+    """A user column without the Metadata_ prefix is matched like any other (audit A2)."""
     profiles.obs["perturbation"] = profiles.obs["Metadata_Perturbation"].astype(str).to_numpy()
     mt.tl.map(profiles, mode="activity", label="perturbation", null_size=200)
     table = profiles.uns["mantispy"]["map"]
@@ -70,7 +63,6 @@ def _inert_p_value(pure_noise_screen, controls_elsewhere: int) -> float:
     return float(wells.uns["mantispy"]["map"]["pvalue"].item())
 
 
-@requires_copairs
 def test_activity_does_not_depend_on_another_plates_controls(pure_noise_screen):
     """Phenotypic activity asks whether a perturbation stands apart from the controls it was plated with.
 
@@ -84,7 +76,6 @@ def test_activity_does_not_depend_on_another_plates_controls(pure_noise_screen):
     assert few > 0.05
 
 
-@requires_copairs
 def test_a_plate_without_controls_calls_nothing_active(pure_noise_screen, caplog):
     """A query with replicates and nothing to rank them against has a perfect rank list by construction.
     Scored, the inert compound on the plate without controls would come out active at the smallest p."""
@@ -101,7 +92,6 @@ def test_a_plate_without_controls_calls_nothing_active(pure_noise_screen, caplog
     assert set(wells.uns["mantispy"]["map"]["Metadata_Perturbation"]) == {"p00"}
 
 
-@requires_copairs
 def test_a_null_too_small_for_the_correction_says_so(pure_noise_screen, caplog):
     """No p-value falls below 1 / (null_size + 1), so over enough groups the correction calls nothing however strong a lone effect is, and a screen scored that way would report no hits without saying why."""
     screen = pure_noise_screen()
@@ -114,10 +104,8 @@ def test_a_null_too_small_for_the_correction_says_so(pure_noise_screen, caplog):
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 
-@requires_copairs
 def test_a_p_value_does_not_depend_on_earlier_calls(pure_noise_screen, tmp_path, monkeypatch):
-    """copairs draws each null with a seed that depends on the other nulls in the same call.
-    A cache shared across calls hands the second object a null drawn for the first, so its p-values depend on what ran before it."""
+    """A configuration's null is seeded by its own counts, so a p-value depends neither on the other groups nor on earlier calls."""
     alone = pure_noise_screen(n_control=0, n_groups=6, per_group=4, seed=0)
     other_plate = pure_noise_screen(n_control=0, n_groups=3, per_group=2, seed=1)
     other_plate.obs["Metadata_Plate"] = "P2"
@@ -136,10 +124,8 @@ def test_a_p_value_does_not_depend_on_earlier_calls(pure_noise_screen, tmp_path,
     after = p_values(both, alone.copy())
 
     np.testing.assert_array_equal(fresh, after)
-    assert not (tmp_path / "after" / ".copairs").exists()
 
 
-@requires_copairs
 def test_activity_and_replicability_are_different_questions(profiles):
     mt.tl.map(profiles, mode="activity", null_size=200, key_added="activity")
     mt.tl.map(profiles, mode="replicability", null_size=200, key_added="replicability")
@@ -152,7 +138,6 @@ def test_activity_and_replicability_are_different_questions(profiles):
     assert set(activity.index) == set(replicability.index)
 
 
-@requires_copairs
 def test_replicability_is_the_map_nonrep_of_arevalo(profiles):
     """Regression test for #70: as in the paper's code, negatives come from the query's plate and the controls are left out."""
     mt.tl.map(profiles, mode="replicability", null_size=200)
@@ -172,14 +157,12 @@ def test_replicability_is_the_map_nonrep_of_arevalo(profiles):
     assert "DMSO" in set(profiles.uns["mantispy"]["with_controls"]["Metadata_Perturbation"])
 
 
-@requires_copairs
 def test_activity_needs_controls_and_says_so(profiles):
     treated = profiles[~profiles.obs["Metadata_Control"].to_numpy()].copy()
     with pytest.raises(ValueError, match="mode='replicability'"):
         mt.tl.map(treated, mode="activity", null_size=100)
 
 
-@requires_copairs
 def test_consistency_groups_by_an_annotation(profiles, caplog):
     """Phenotypic consistency :cite:p:`Kalinin_2025`: do perturbations sharing a mechanism look alike, against those that do not?"""
     with pytest.raises(ValueError, match="annotation_key"):
@@ -194,7 +177,6 @@ def test_consistency_groups_by_an_annotation(profiles, caplog):
     assert set(profiles.uns["mantispy"]["map"]["Metadata_MOA"]) == {"A", "B"}
 
 
-@requires_copairs
 def test_consistency_does_not_count_a_perturbation_agreeing_with_itself(profiles, caplog):
     """Two wells of one treatment share its annotation trivially.
 
@@ -254,7 +236,6 @@ def _consensus_with_moa(profiles, assignment):
     return signatures
 
 
-@requires_copairs
 def test_multilabel_scores_a_perturbation_toward_each_of_its_labels(profiles):
     """A list of labels per row is multilabel: a pair is positive if the lists intersect, and a perturbation with
     two labels is scored toward both classes."""
@@ -272,7 +253,6 @@ def test_multilabel_scores_a_perturbation_toward_each_of_its_labels(profiles):
     assert "map" not in signatures.obs.columns
 
 
-@requires_copairs
 def test_single_element_lists_match_the_single_label_column(profiles):
     """Wrapping each scalar label in a one-element list must score exactly as the scalar column does."""
     scalar = {"pert00": "A", "pert01": "A", "pert02": "A", "pert03": "B", "pert04": "B"}
@@ -289,7 +269,6 @@ def test_single_element_lists_match_the_single_label_column(profiles):
     np.testing.assert_allclose(single_scores.to_numpy(), listed_scores.to_numpy())
 
 
-@requires_copairs
 def test_a_label_column_mixing_lists_and_scalars_is_rejected(profiles):
     mixed = {"pert00": ["A"], "pert01": "A", "pert02": ["A", "B"], "pert03": "B", "pert04": "B"}
     signatures = _consensus_with_moa(profiles, mixed)
@@ -297,7 +276,6 @@ def test_a_label_column_mixing_lists_and_scalars_is_rejected(profiles):
         mt.tl.map(signatures, mode="consistency", annotation_key="Metadata_MOA", null_size=200)
 
 
-@requires_copairs
 def test_label_sep_splits_a_delimited_string_into_the_same_scores(profiles):
     """A stored 'A|B' string split by label_sep must score exactly as the equivalent list column, since a list
     column cannot be written to h5ad and a delimited string can."""
@@ -315,7 +293,6 @@ def test_label_sep_splits_a_delimited_string_into_the_same_scores(profiles):
     np.testing.assert_allclose(split_scores.to_numpy(), list_scores.to_numpy())
 
 
-@requires_copairs
 def test_a_missing_multilabel_entry_is_left_unscored(profiles):
     """A row with no annotation becomes an empty label set and joins no class, rather than erroring."""
     assignment = {"pert00": ["A"], "pert01": ["A"], "pert02": ["A", "B"], "pert03": ["B"], "pert04": None}
@@ -324,7 +301,6 @@ def test_a_missing_multilabel_entry_is_left_unscored(profiles):
     assert set(signatures.uns["mantispy"]["map"]["Metadata_MOA"]) == {"A", "B"}
 
 
-@requires_copairs
 def test_multilabel_clears_a_stale_single_label_obs_column(profiles):
     """The single-label path writes obs[key]; a later multilabel run must not leave those per-row columns behind to
     disagree with the per-class table."""
@@ -343,16 +319,14 @@ def test_multilabel_clears_a_stale_single_label_obs_column(profiles):
     assert "map_qvalue" not in signatures.obs.columns
 
 
-@requires_copairs
 def test_map_result_survives_a_round_trip(profiles, tmp_path):
-    """copairs returns a ragged 'indices' column that h5ad cannot store."""
+    """The table holds no ragged per-group column, which h5ad cannot store."""
     mt.tl.map(profiles, mode="activity", null_size=200)
     assert "indices" not in profiles.uns["mantispy"]["map"].columns
     mt.io.write(profiles, tmp_path / "with_map.h5ad")
     assert "map" in mt.io.read(tmp_path / "with_map.h5ad").uns["mantispy"]
 
 
-@requires_copairs
 def test_map_is_reproducible_and_supports_a_representation(profiles):
     mt.tl.map(profiles, mode="activity", null_size=200, seed=1)
     first = profiles.uns["mantispy"]["map"]["qvalue"].to_numpy()
@@ -366,31 +340,35 @@ def test_map_is_reproducible_and_supports_a_representation(profiles):
     assert len(profiles.uns["mantispy"]["map_pca"]) > 0
 
 
-@requires_copairs
-def test_map_n_jobs_and_batch_size_do_not_change_the_result(profiles):
-    """n_jobs/batch_size are plumbing for copairs' pool and memory; the scores must not depend on them."""
-    mt.tl.map(profiles, mode="activity", null_size=200, seed=1)
-    default = profiles.uns["mantispy"]["map"]["score"].to_numpy()
-    mt.tl.map(profiles, mode="activity", null_size=200, seed=1, n_jobs=2, batch_size=128)
-    np.testing.assert_allclose(default, profiles.uns["mantispy"]["map"]["score"].to_numpy())
+def test_map_fast_paths_agree_with_the_exact_ones(profiles):
+    """The Floyd sampler and BLAS similarities trade bit-identity for speed: the scores and calls stay the same here."""
+    exact = mt.tl.map(profiles, mode="activity", null_size=500, seed=1, copy=True).uns["mantispy"]["map"]
+    floyd = mt.tl.map(profiles, mode="activity", null_size=500, seed=1, null_sampler="floyd", copy=True)
+    blas = mt.tl.map(profiles, mode="activity", null_size=500, seed=1, similarity_solver="blas", copy=True)
+    pd.testing.assert_series_equal(exact["score"], floyd.uns["mantispy"]["map"]["score"])
+    np.testing.assert_allclose(exact["score"], blas.uns["mantispy"]["map"]["score"], atol=1e-6)
+    np.testing.assert_array_equal(exact["is_significant"], floyd.uns["mantispy"]["map"]["is_significant"])
+    pd.testing.assert_series_equal(exact["pvalue"], blas.uns["mantispy"]["map"]["pvalue"])
 
 
-@requires_copairs
-def test_map_warns_before_a_pair_query_that_fans_out(profiles):
-    """Every profile against every other, on 15,000 profiles, is over a hundred million pairs; say so before copairs builds them."""
-    n = 15_000
+def test_map_refuses_unsupported_null_options(profiles):
+    with pytest.raises(ValueError, match="draws the copied null"):
+        mt.tl.map(profiles, mode="activity", null="joint", null_sampler="floyd")
+    with pytest.raises(ValueError, match="null must be one of"):
+        mt.tl.map(profiles, mode="activity", null="bootstrap")
+    with pytest.raises(ValueError, match="'blas' supports"):
+        mt.tl.map(profiles, mode="activity", distance="manhattan", similarity_solver="blas")
+
+
+def test_map_without_any_positive_pair_says_so():
+    """Every perturbation a singleton: nothing has a replicate to retrieve."""
+    n = 50
     obs = pd.DataFrame({"Metadata_Perturbation": [f"p{i}" for i in range(n)]}, index=[str(i) for i in range(n)])
-    wide = ad.AnnData(np.random.default_rng(0).normal(size=(n, 2)).astype(np.float32), obs=obs)
-    # Every perturbation is a singleton, so copairs gives up on the positive pairs before it builds the negative ones.
-    with pytest.warns(UserWarning, match="pairs over 15000 profiles"), pytest.raises(Exception, match="positive pairs"):
+    wide = ad.AnnData(np.random.default_rng(0).normal(size=(n, 3)).astype(np.float32), obs=obs)
+    with pytest.raises(ValueError, match="no profile has a positive pair"):
         mt.tl.map(wide, pos_sameby=["Metadata_Perturbation"], neg_diffby=["Metadata_Perturbation"])
 
-    with warnings.catch_warnings():
-        warnings.filterwarnings("error", message=".*pairs over")
-        mt.tl.map(profiles, mode="activity", null_size=200)
 
-
-@requires_copairs
 def test_map_argument_errors(profiles):
     with pytest.raises(ValueError, match="not both"):
         mt.tl.map(profiles, mode="activity", pos_sameby=["Metadata_Perturbation"])
@@ -400,7 +378,6 @@ def test_map_argument_errors(profiles):
         mt.tl.map(profiles, pos_sameby=["Metadata_Nope"])
 
 
-@requires_copairs
 def test_map_refuses_missing_values(profiles):
     values = profiles.X.copy()
     values[0, 0] = np.nan
@@ -409,7 +386,6 @@ def test_map_refuses_missing_values(profiles):
         mt.tl.map(profiles, mode="activity", null_size=100)
 
 
-@requires_copairs
 @pytest.mark.parametrize("value", [3e20, 0.0, np.inf])
 def test_map_refuses_profiles_it_cannot_rank(profiles, value):
     """A profile whose float32 norm overflows, is zero, or holds an infinity would tie every similarity and score AP = 1."""
@@ -479,7 +455,6 @@ def test_grit_accepts_reference_none_to_use_every_row(profiles):
     assert profiles.obs["grit_all"].notna().any()
 
 
-@requires_copairs
 def test_map_activity_groups_by_label_when_perturbation_column_is_absent(profiles):
     """The perturbation column is a defaulted argument, not a hard-coded name."""
     profiles.obs["Metadata_Gene"] = profiles.obs.pop("Metadata_Perturbation")
