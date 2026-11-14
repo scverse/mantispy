@@ -11,10 +11,11 @@ aggregates to guide-by-well profiles. It writes the two files the registry rehos
 * ``aconcagua_guide_well.h5ad`` -- 84,125 guide x well profiles over 1,483 features (``mt.ds.aconcagua``);
 * ``aconcagua_cells.h5ad`` -- the raw single cells of eight genes and the non-targeting controls (``mt.ds.aconcagua_cells``).
 
-The cells file keeps every treatment cell of the eight interpretation genes (RRM1, DTL, SKA2, HAUS6, ITGAV,
-TLN1, PSMB7, SF3B3) and a seeded random sample of the non-targeting controls, taken from the converted cells
-before normalization, down to 38,674 rows in total. The subsample step is not in the source bundle, so its
-seed (0) is fixed here; the original hosted file's exact non-targeting rows cannot be recovered.
+The cells file keeps every extracted cell of the eight interpretation genes (RRM1, DTL, SKA2, HAUS6, ITGAV,
+TLN1, PSMB7, SF3B3) and, drawn independently in each part with the generator reseeded per part, a tenth of the
+non-targeting controls. The mitotic cells are left uncapped (not thinned to their natural share as the pooled
+profiles are), because the cell-cycle analysis the file feeds needs the mitotic cells; the per-part draw keeps
+the natural mitotic fraction. This reproduces how the file was first built, so its rows match the hosted file.
 
 Prints each file's size and sha256 (to pin in the registry) and a content fingerprint; a rebuild is checked
 against the fingerprint, not the sha256, because anndata or h5py releases can write the same object as
@@ -57,9 +58,9 @@ POSITIVE_CONTROLS = ("H2AX", "ECT2", "TUBB", "CFL1")
 PLATES = range(1, 9)
 # The eight genes the single-cell file keeps, beside a sample of the non-targeting controls.
 CELLS_GENES = ("RRM1", "DTL", "SKA2", "HAUS6", "ITGAV", "TLN1", "PSMB7", "SF3B3")
-# The single-cell file keeps every treatment cell of the eight genes and subsamples the non-targeting
-# controls down to this total, matching the size of the originally hosted file.
-CELLS_TOTAL = 38674
+# The single-cell file keeps every cell of the eight genes and, independently in each part (the generator
+# reseeded per part), this fraction of the non-targeting controls, matching how the file was first built.
+CELLS_CONTROL_FRACTION = 0.10
 CELLS_SEED = 0
 
 # Coordinates and bounding boxes are positions, not phenotypes (94 columns); they stay out of the subset.
@@ -293,8 +294,8 @@ def _parts_of_plate(parts: Path, plate: int) -> list[Path]:
     return keep
 
 
-def process_plate(parts: Path, keep_prob: pd.DataFrame, tiers: pd.Series, plate: int) -> tuple[AnnData, AnnData]:
-    """One plate: thin mitotic cells, convert, normalize, aggregate to guide x well; return (profiles, cells subset)."""
+def process_plate(parts: Path, keep_prob: pd.DataFrame, tiers: pd.Series, plate: int) -> AnnData:
+    """One plate: thin mitotic cells, convert, normalize, aggregate to guide x well profiles."""
     frame = pd.concat(
         [pq.read_table(p, filters=[("plate", "=", plate)]).to_pandas() for p in _parts_of_plate(parts, plate)],
         ignore_index=True,
@@ -319,11 +320,6 @@ def process_plate(parts: Path, keep_prob: pd.DataFrame, tiers: pd.Series, plate:
         cells = _convert(frame, tiers)
     del frame
     cells.obs["Metadata_Mitotic"] = (cells.obs["Metadata_Class"] == "Mitotic").astype(np.float32)
-    # The raw, unnormalized cells of the eight example genes and the non-targeting controls (not the positive
-    # controls), taken before normalization overwrites X.
-    gene = cells.obs["Metadata_Gene"].astype(str)
-    negcon = (cells.obs["Metadata_Control_Type"] == "negcon").to_numpy()
-    subset = cells[gene.isin(CELLS_GENES).to_numpy() | negcon].copy()
 
     mt.pp.normalize(cells, by=["Metadata_Plate", "Metadata_Well"], reference="negcon")
     keys = ["Metadata_Plate", "Metadata_Well", "Metadata_sgRNA"]
@@ -336,7 +332,7 @@ def process_plate(parts: Path, keep_prob: pd.DataFrame, tiers: pd.Series, plate:
         f"mitotic {cells.obs.Metadata_Mitotic.mean():.3f}; degenerate features {int(cells.var.degenerate_scale.sum())}",
         flush=True,
     )
-    return profiles, subset
+    return profiles
 
 
 def fingerprint(adata: AnnData) -> str:
@@ -361,19 +357,25 @@ def _report(path: Path, adata: AnnData) -> None:
     print(f"fingerprint  {fingerprint(adata)}")
 
 
-def _subsample_controls(cells: AnnData) -> AnnData:
-    """Keep every treatment cell and a seeded random sample of non-targeting cells, to ``CELLS_TOTAL`` rows."""
-    negcon = (cells.obs["Metadata_Control_Type"] == "negcon").to_numpy()
-    keep_negcon = CELLS_TOTAL - int((~negcon).sum())
-    if keep_negcon < 0 or keep_negcon > int(negcon.sum()):
-        raise ValueError(
-            f"cannot reach {CELLS_TOTAL} cells: {int((~negcon).sum())} treatment, {int(negcon.sum())} non-targeting"
-        )
-    negcon_rows = np.flatnonzero(negcon)
-    chosen = np.random.default_rng(CELLS_SEED).choice(negcon_rows, size=keep_negcon, replace=False)
-    keep = ~negcon
-    keep[chosen] = True
-    return cells[keep].copy()
+def build_cells(parts: Path, tiers: pd.Series) -> AnnData:
+    """Raw single cells of the eight genes and a per-part 10% sample of the non-targeting controls.
+
+    Reproduces the originally hand-built cells file: every extracted cell of the eight genes and, independently in
+    each part (the generator reseeded per part), a tenth of the non-targeting controls. The mitotic cells are left
+    uncapped -- no mitotic thinning and no normalization is applied here, unlike the pooled profiles -- because the
+    cell-cycle analysis the file feeds needs the mitotic cells.
+    """
+    kept = []
+    for path in sorted(parts.glob("rg*.parquet")):
+        table = pq.read_table(path).to_pandas()
+        draw = np.random.default_rng(CELLS_SEED).random(len(table))
+        keep_ctrl = table["is_control"].to_numpy() & (draw < CELLS_CONTROL_FRACTION)
+        keep = table["perturbation_id"].astype(str).isin(CELLS_GENES).to_numpy() | keep_ctrl
+        kept.append(table[keep])
+    frame = pd.concat(kept, ignore_index=True)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FutureWarning)
+        return _convert(frame, tiers)
 
 
 def main() -> None:
@@ -396,11 +398,7 @@ def main() -> None:
 
     extract(work / "parts", keep_prob, args.workers)
 
-    profiles, cells_parts = [], []
-    for plate in PLATES:
-        plate_profiles, plate_cells = process_plate(work / "parts", keep_prob, tiers, plate)
-        profiles.append(plate_profiles)
-        cells_parts.append(plate_cells)
+    profiles = [process_plate(work / "parts", keep_prob, tiers, plate) for plate in PLATES]
 
     # Guide x well: carry degenerate_scale as the OR over plates (a feature degenerate on any plate is flagged).
     degenerate = np.any([a.var["degenerate_scale"].to_numpy() for a in profiles], axis=0)
@@ -410,8 +408,7 @@ def main() -> None:
     guide_well.var["degenerate_scale"] = degenerate
     guide_well.obs_names = [str(i) for i in range(guide_well.n_obs)]
 
-    cells = ad.concat(cells_parts, merge="same", uns_merge="first")
-    cells = _subsample_controls(cells)
+    cells = build_cells(work / "parts", tiers)
     cells.obs_names = [str(i) for i in range(cells.n_obs)]
 
     guide_well_path = args.out / "aconcagua_guide_well.h5ad"

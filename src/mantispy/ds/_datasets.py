@@ -165,7 +165,7 @@ def aconcagua_cells(cache_dir: str | Path | None = None) -> AnnData:
     The genes are RRM1, DTL, SKA2, HAUS6, ITGAV, TLN1, PSMB7 and SF3B3. The cells were imaged in four channels: DAPI
     for DNA, gamma-H2AX, phalloidin for actin, and alpha-tubulin. Intensities are raw, as brieflow measured them, so
     :func:`mantispy.tl.dna_content` can read the DNA stain.
-    Every treatment cell of the eight genes is kept; the non-targeting controls are a seeded random subsample, for 38,674 cells in all.
+    Every extracted cell of the eight genes is kept, with its mitotic cells uncapped; the non-targeting controls are a tenth, sampled at random, for 38,674 cells in all.
 
     Args:
         cache_dir: Where to keep the download.

@@ -15,7 +15,7 @@ datasets:
             # The single cells of eight of its genes and the non-targeting controls, raw intensities, staged alongside: 38,674 cells x 1,483 features.
             - name: aconcagua_cells.h5ad
               url: https://exampledata.scverse.org/mantispy/aconcagua/aconcagua_cells.h5ad
-              sha256: 766e1a7957b21facc1b73899fb7b1332356fcd54a7e6116252a3dbc1327a0ac1
+              sha256: fdb5a51e75a9e301089acda70761add79de4cbf53460188d7cce48a530346944
     bbbc021:
         type: mantispy
         doc_header: BBBC021, 632 wells of 38 compounds and DMSO annotated with a mechanism of action.
