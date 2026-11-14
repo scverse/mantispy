@@ -196,6 +196,7 @@ UNS_RESULTS: tuple[str, ...] = (
     "cell_cycle_G1_order",
     "cell_cycle_S_order",
     "cell_cycle_G2M_order",
+    "pseudogenes",
 )
 
 #: Suffixes of a companion table written beside a result (e.g. ``effect_groups`` beside ``effect``). A key

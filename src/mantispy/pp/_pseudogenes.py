@@ -8,7 +8,6 @@ from anndata import AnnData
 from mantispy._core.frames import as_frame
 from mantispy._core.masks import reference_mask
 from mantispy._core.mutation import inplace_or_copy
-from mantispy.tl._bootstrap import PSEUDOGENE_PREFIX
 
 
 @inplace_or_copy()
@@ -45,6 +44,7 @@ def pseudogenes(
     Returns:
         ``None``, or the modified copy.
         Writes ``obs[key_added]``, a copy of ``obs[groupby]`` as strings in which the guides of each pseudo-gene read ``"pseudogene_01"``, ``"pseudogene_02"`` and so on.
+        Also writes ``uns["mantispy"]["pseudogenes"][key_added]``, the list of those labels, which is how :func:`~mantispy.tl.bootstrap_features` tells a pseudo-gene from a control label.
 
     Raises:
         ValueError: ``size`` is below one, or there are fewer control guides than ``size``.
@@ -74,11 +74,12 @@ def pseudogenes(
 
     shuffled = np.random.default_rng(seed).permutation(control_guides)[: n_groups * size]
     width = max(2, len(str(n_groups)))
-    names = np.array([f"{PSEUDOGENE_PREFIX}{index + 1:0{width}d}" for index in range(n_groups)])
+    names = np.array([f"pseudogene_{index + 1:0{width}d}" for index in range(n_groups)])
     label_of_guide = dict(zip(shuffled, np.repeat(names, size), strict=True))
 
     labels = obs[groupby].astype(str).to_numpy(dtype=object)
     in_pseudo = is_control & np.isin(guides, shuffled)
     labels[in_pseudo] = [label_of_guide[guide] for guide in guides[in_pseudo]]
     adata.obs[key_added] = labels
+    adata.uns.setdefault("mantispy", {}).setdefault("pseudogenes", {})[key_added] = [str(name) for name in names]
     return None

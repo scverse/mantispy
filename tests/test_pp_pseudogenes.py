@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 import mantispy as mt
-from mantispy._core.schema import stamp
+from mantispy._core.schema import set_control_columns, stamp
 
 
 def _screen(n_control_guides=10, n_cells=8, n_features=3, seed=0):
@@ -125,3 +125,32 @@ def test_bootstrap_calls_pseudogenes_of_a_null_screen_at_about_alpha():
     table = adata.uns["mantispy"]["bootstrap"]
     assert table["group"].nunique() == 20
     assert 0.02 < (table["pvalue"] < 0.05).mean() < 0.085
+
+
+def test_a_pseudogene_label_without_the_record_is_an_ordinary_control_label():
+    adata = _screen()
+    mt.tl.bootstrap_features(adata)
+    expected = _pvalues(adata)
+    adata.obs["Metadata_Gene"] = np.where(
+        adata.obs["Metadata_Gene"] == "nontargeting", "pseudogene_01", adata.obs["Metadata_Gene"]
+    )
+    mt.tl.bootstrap_features(adata)
+    assert "pseudogene_01" not in _pvalues(adata).index.get_level_values("group")
+    pd.testing.assert_series_equal(_pvalues(adata), expected)
+
+
+def test_the_leave_own_out_test_survives_a_round_trip(tmp_path):
+    adata = mt.ds.synthetic_plate(n_plates=1, n_wells=24, n_cells=10, n_features=3, seed=0)
+    guide = np.arange(adata.n_obs) % 14
+    adata.obs["Metadata_sgRNA"] = [f"g{i}" for i in guide]
+    adata.obs["Metadata_Gene"] = np.where(guide < 10, "nontargeting", np.where(guide < 12, "GENE_A", "GENE_B"))
+    set_control_columns(adata.obs, guide < 10)
+    mt.pp.pseudogenes(adata, size=4)
+    path = tmp_path / "screen.h5ad"
+    mt.io.write(adata, path)
+    read = mt.io.read(path)
+    assert mt.io.validate(read).ok
+    mt.tl.bootstrap_features(adata, groupby="Metadata_Gene_pseudo")
+    mt.tl.bootstrap_features(read, groupby="Metadata_Gene_pseudo")
+    pd.testing.assert_series_equal(_pvalues(read), _pvalues(adata))
+    assert "pseudogene_01" in _pvalues(read).index.get_level_values("group")

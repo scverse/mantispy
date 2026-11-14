@@ -30,10 +30,6 @@ else:
 #: Where each guide's null is drawn from; see :func:`bootstrap_features`.
 CONTROL_SCOPES = ("pooled", "within_group", "reference_group", "within_perturbation")
 
-#: The label :func:`~mantispy.pp.pseudogenes` gives a group of control guides; such a group is tested, and its
-#: guides leave only its own null.
-PSEUDOGENE_PREFIX = "pseudogene_"
-
 #: Atoms of a guide null whose probability is below this are dropped when the gene null needs
 #: them. The dropped mass is a far order-statistic tail of comparable size, well under the
 #: Monte-Carlo error of any feasible simulation; small problems keep every atom, so the result
@@ -1015,7 +1011,7 @@ def bootstrap_features(
         groupby: ``obs`` column, or columns, naming the gene each cell's guide targets; each group is tested.
         replicate: ``obs`` column naming the guide, the unit the null resamples.
         reference: The control cells: ``"negcon"``, or the name of a boolean ``obs`` column.
-            Their guides form the null and are not tested, except those relabelled as pseudo-genes (see Notes).
+            Their guides form the null and are not tested, except those :func:`~mantispy.pp.pseudogenes` relabelled (see Notes).
             Unused under ``control_scope="within_perturbation"``.
         control_scope: Which control cells a guide's null is drawn from.
             ``"pooled"`` uses every control cell.
@@ -1047,7 +1043,7 @@ def bootstrap_features(
         The null resamples a control guide's own cells, so it carries that sample's error on top of the spread between control guides, while a tested guide carries only its own.
         The test therefore runs conservative when guides barely differ from one another, and near the nominal rate when they differ by more than the error of a guide's median.
         To check the rate on your own screen, group the control guides into pseudo-genes with :func:`~mantispy.pp.pseudogenes` and pass its column as ``groupby``.
-        A group whose label starts with ``"pseudogene_"`` is tested even though its cells are controls, against every control guide but its own; its guides stay in the null of every other group, so the real genes get the p-values they get without pseudo-genes.
+        A pseudo-gene that function records for a ``groupby`` column is tested even though its cells are controls, against every control guide but its own; its guides stay in the null of every other group, so the real genes get the p-values they get without pseudo-genes.
     """
     if control_scope not in CONTROL_SCOPES:
         raise ValueError(f"control_scope must be one of {CONTROL_SCOPES}, got {control_scope!r}")
@@ -1082,10 +1078,12 @@ def bootstrap_features(
         pool_of_row = np.where(in_reference, perturbation_codes, -1)
     else:
         is_control = reference_mask(adata, reference)
-        # Control cells relabelled as pseudo-genes (mt.pp.pseudogenes) are tested as well as pooled.
+        # Control cells that mt.pp.pseudogenes relabelled, as it records, are tested as well as pooled.
+        recorded = adata.uns.get("mantispy", {}).get("pseudogenes", {})
         pseudo = np.zeros(adata.n_obs, dtype=bool)
         for column in by:
-            pseudo |= obs[column].astype(str).str.startswith(PSEUDOGENE_PREFIX).to_numpy()
+            if column in recorded:
+                pseudo |= obs[column].astype(str).isin([str(label) for label in recorded[column]]).to_numpy()
         tested = ~is_control | (is_control & pseudo)
         if control_scope == "pooled":
             pool_of_row = np.where(is_control, 0, -1)
