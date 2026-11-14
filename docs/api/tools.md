@@ -46,6 +46,7 @@ Aggregate profiles and ask what the perturbations did.
    tl.effect_size
    tl.wasserstein_features
    tl.differential_features
+   tl.bootstrap_features
    tl.feature_signature
    tl.cytotoxicity
 ```
