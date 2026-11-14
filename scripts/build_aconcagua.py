@@ -45,6 +45,7 @@ import pyarrow as pa
 import pyarrow.fs as pfs
 import pyarrow.parquet as pq
 from anndata import AnnData
+from build_dataset import fingerprint
 
 import mantispy as mt
 from mantispy._core.features import parse_feature_names
@@ -339,19 +340,6 @@ def process_plate(parts: Path, keep_prob: pd.DataFrame, tiers: pd.Series, plate:
         flush=True,
     )
     return profiles
-
-
-def fingerprint(adata: AnnData) -> str:
-    """sha256 over ``X``, ``obs``, ``var`` and what ``uns`` says the object is, however a file encodes them."""
-    store = adata.uns["mantispy"]
-    # h5ad reads a list back as an array, so both are hashed as lists.
-    identity = [np.asarray(store.get(key)).tolist() for key in ("resolution", "channels", "dataset")]
-    digest = hashlib.sha256(repr(identity).encode())
-    digest.update(np.ascontiguousarray(adata.X, dtype=np.float32))
-    for frame in (adata.obs, adata.var):
-        digest.update("\t".join(frame.columns).encode())
-        digest.update(pd.util.hash_pandas_object(frame, index=True).to_numpy())
-    return digest.hexdigest()
 
 
 def _report(path: Path, adata: AnnData) -> None:
