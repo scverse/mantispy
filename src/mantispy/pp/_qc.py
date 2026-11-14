@@ -66,7 +66,7 @@ def calculate_qc_metrics(
             Partial NaN is routine in CellProfiler output (Zernike and RadialDistribution features are undefined for small objects), so requiring no missing values would flag almost every cell.
         area_feature: The ``var`` name of the area measurement to score for outliers.
             By default the columns whose parsed ``feature`` is ``Area`` are used; pass this for a table whose names do not parse (``mt.io.stamp`` could not fill ``var["feature"]``).
-        qc_metrics: Metrics to compute, from :data:`QC_METRICS`.
+        qc_metrics: Metrics to compute.
             ``"nan"`` writes ``obs["qc_n_nan_features"]``, ``obs["qc_nan_fraction"]`` and ``var["qc_n_nan"]``; ``"border"`` writes ``obs["qc_is_border"]``; ``"area_outlier"`` writes ``obs["qc_area_outlier"]``; ``"variance"`` and ``"n_unique"`` write ``var["qc_variance"]`` and ``var["qc_n_unique"]``.
             The per-feature ``"variance"`` and ``"n_unique"`` are left out by default: :func:`filter_cells` reads neither, and ``"n_unique"`` sorts every feature, which dominates the runtime on large single-cell objects.
         copy: Return a modified copy instead of mutating in place.
@@ -79,7 +79,7 @@ def calculate_qc_metrics(
 
     Raises:
         KeyError: `area_feature` is given but is not a ``var`` name.
-        ValueError: `qc_metrics` names a metric not in :data:`QC_METRICS`.
+        ValueError: `qc_metrics` names an unknown metric.
     """
     unknown = set(qc_metrics) - set(QC_METRICS)
     if unknown:
