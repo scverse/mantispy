@@ -76,6 +76,17 @@ def test_cell_counts_draws_the_count_profiles_carry(plotted):
     plt.close("all")
 
 
+def test_qc_draws_the_variance_panel_without_the_column(plotted):
+    """calculate_qc_metrics no longer writes qc_variance by default; qc computes it from the matrix so the panel still fills, and leaves var untouched."""
+    assert "qc_variance" not in plotted.var
+    before = list(plotted.var.columns)
+    assert mt.pl.qc(plotted) is None
+    variance_panel = plt.gcf().axes[3]
+    assert variance_panel.patches, "the variance histogram drew no bars"
+    assert list(plotted.var.columns) == before
+    plt.close("all")
+
+
 def test_plate_one_panel_per_plate_and_rejects_unknown_color(plotted):
     # plate owns the figure over both plates, so it draws and returns None; count the panels it drew.
     assert mt.pl.plate(plotted, color=plotted.var_names[0]) is None

@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
+from mantispy._core._pca import pca_solver
 from mantispy._core._reduce import get_matrix
 from mantispy._core.frames import as_frame
 from mantispy._core.masks import reference_mask
@@ -117,6 +118,7 @@ def control_drift(
     adata: AnnData,
     groupby: str = "Metadata_Plate",
     n_components: int = 2,
+    svd_solver: str | None = None,
     ax: Axes | None = None,
 ) -> Axes | None:
     """Control wells projected onto principal components fitted on the controls alone.
@@ -128,6 +130,7 @@ def control_drift(
         groupby: ``obs`` column that colors the control wells, normally the plate or the batch.
         n_components: Components fitted on the controls.
             The first two are the ones drawn.
+        svd_solver: How the controls are decomposed. ``None`` eigendecomposes the feature covariance when there are many more controls than features and otherwise uses scikit-learn's default; any scikit-learn solver name forces one. The embedding matches either way.
         ax: Axes to draw on, or ``None`` for a new figure.
 
     Returns:
@@ -148,7 +151,8 @@ def control_drift(
         raise ValueError(f"need more than {n_components} control rows, found {int(is_control.sum())}")
 
     controls = np.nan_to_num(get_matrix(adata)[is_control], nan=0.0, posinf=0.0, neginf=0.0)
-    embedding = PCA(n_components=n_components).fit_transform(controls)
+    solver = pca_solver(controls.shape[0], controls.shape[1], svd_solver, fallback="auto")
+    embedding = PCA(n_components=n_components, svd_solver=solver).fit_transform(controls)
     labels = adata.obs[groupby].astype(str).to_numpy()[is_control]
 
     ax = _axes(ax, (5, 4))

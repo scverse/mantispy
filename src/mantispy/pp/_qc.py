@@ -18,6 +18,7 @@ from mantispy._core.logging import get_logger, report_drop
 from mantispy._core.mutation import inplace_or_copy
 
 AREA_Z_CUTOFF = 5.0
+QC_METRICS = ("nan", "border", "area_outlier", "variance", "n_unique")
 
 
 def _n_unique(X: np.ndarray, missing: np.ndarray) -> np.ndarray:
@@ -28,12 +29,18 @@ def _n_unique(X: np.ndarray, missing: np.ndarray) -> np.ndarray:
     n_obs, n_vars = X.shape
     out = np.empty(n_vars, dtype=np.int32)
     width = max(int(CHUNK_BYTES / max(n_obs, 1) / X.itemsize), 1)
-    position = np.arange(1, n_obs)[:, None]
+    position = None
     for start in range(0, n_vars, width):
         columns = slice(start, start + width)
         block = np.sort(X[:, columns], axis=0)
         finite = n_obs - missing[:, columns].sum(axis=0)
-        changed = (block[1:] != block[:-1]) & (position < finite)
+        changed = block[1:] != block[:-1]
+        if (finite != n_obs).any():
+            # A column with missing values keeps its finite prefix only; the rest sorted to the end and is not
+            # counted. Columns with no gaps need no mask, which is the common case and avoids the position array.
+            if position is None:
+                position = np.arange(1, n_obs)[:, None]
+            changed &= position < finite
         out[columns] = changed.sum(axis=0) + (finite > 0)
     return out
 
@@ -45,6 +52,7 @@ def calculate_qc_metrics(
     border_margin: int = 10,
     max_nan_fraction: float = 0.5,
     area_feature: str | None = None,
+    qc_metrics: Sequence[str] = ("nan", "border", "area_outlier"),
     copy: bool = False,
 ) -> AnnData | None:
     """Compute per-cell and per-feature QC metrics.
@@ -58,41 +66,55 @@ def calculate_qc_metrics(
             Partial NaN is routine in CellProfiler output (Zernike and RadialDistribution features are undefined for small objects), so requiring no missing values would flag almost every cell.
         area_feature: The ``var`` name of the area measurement to score for outliers.
             By default the columns whose parsed ``feature`` is ``Area`` are used; pass this for a table whose names do not parse (``mt.io.stamp`` could not fill ``var["feature"]``).
+        qc_metrics: Metrics to compute.
+            ``"nan"`` writes ``obs["qc_n_nan_features"]``, ``obs["qc_nan_fraction"]`` and ``var["qc_n_nan"]``; ``"border"`` writes ``obs["qc_is_border"]``; ``"area_outlier"`` writes ``obs["qc_area_outlier"]``; ``"variance"`` and ``"n_unique"`` write ``var["qc_variance"]`` and ``var["qc_n_unique"]``.
+            The per-feature ``"variance"`` and ``"n_unique"`` are left out by default: :func:`filter_cells` reads neither, and ``"n_unique"`` sorts every feature, which dominates the runtime on large single-cell objects.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
         ``None``, or the modified copy.
-        Writes the ``obs`` columns ``qc_n_nan_features``, ``qc_nan_fraction``, ``qc_is_border``, ``qc_area_outlier`` and ``qc_fail``, and the ``var`` columns ``qc_n_nan``, ``qc_variance`` and ``qc_n_unique``.
-        Every ``qc_*`` boolean is ``True`` for a problem, matching the ecosystem convention; ``qc_fail`` is their union and the flag :func:`filter_cells` reads.
+        Writes the columns of each metric in `qc_metrics`, and ``obs["qc_fail"]``.
+        Every ``qc_*`` boolean is ``True`` for a problem, matching the ecosystem convention; ``qc_fail`` is the union of the computed flags and of a missing fraction above `max_nan_fraction`, and is the flag :func:`filter_cells` reads.
         When no area column is found and `area_feature` is not given, ``qc_area_outlier`` is skipped (left all ``False``) with a warning and the other metrics are still computed.
 
     Raises:
         KeyError: `area_feature` is given but is not a ``var`` name.
+        ValueError: `qc_metrics` names an unknown metric.
     """
-    area = _area_features(adata, area_feature)
+    unknown = set(qc_metrics) - set(QC_METRICS)
+    if unknown:
+        raise ValueError(f"qc_metrics: unknown {sorted(unknown)}, choose from {list(QC_METRICS)}")
 
     X = get_matrix(adata)
-    missing = np.isnan(X)
-    nan_fraction = missing.mean(axis=1)
-    border = _border_flag(adata, image_shape, border_margin)
-    if len(area):
-        area_outlier = _area_outlier_flag(adata, X, area)
-    else:
-        get_logger().info(
-            "calculate_qc_metrics: no area feature in var, so qc_area_outlier is all False",
-            deep="pass area_feature= to name the area column",
-        )
-        area_outlier = np.zeros(adata.n_obs, dtype=bool)
+    fail = np.zeros(adata.n_obs, dtype=bool)
+    if "nan" in qc_metrics:
+        missing = np.isnan(X)
+        nan_fraction = missing.mean(axis=1)
+        adata.obs["qc_n_nan_features"] = missing.sum(axis=1).astype(np.int32)
+        adata.obs["qc_nan_fraction"] = nan_fraction
+        adata.var["qc_n_nan"] = missing.sum(axis=0).astype(np.int32)
+        fail |= nan_fraction > max_nan_fraction
+    if "border" in qc_metrics:
+        adata.obs["qc_is_border"] = border = _border_flag(adata, image_shape, border_margin)
+        fail |= border
+    if "area_outlier" in qc_metrics:
+        area = _area_features(adata, area_feature)
+        if len(area):
+            area_outlier = _area_outlier_flag(adata, X, area)
+        else:
+            get_logger().info(
+                "calculate_qc_metrics: no area feature in var, so qc_area_outlier is all False",
+                deep="pass area_feature= to name the area column",
+            )
+            area_outlier = np.zeros(adata.n_obs, dtype=bool)
+        adata.obs["qc_area_outlier"] = area_outlier
+        fail |= area_outlier
+    if "variance" in qc_metrics:
+        adata.var["qc_variance"] = nanvar(X)
+    if "n_unique" in qc_metrics:
+        adata.var["qc_n_unique"] = _n_unique(X, missing if "nan" in qc_metrics else np.isnan(X))
 
-    adata.obs["qc_n_nan_features"] = missing.sum(axis=1).astype(np.int32)
-    adata.obs["qc_nan_fraction"] = nan_fraction
-    adata.var["qc_n_nan"] = missing.sum(axis=0).astype(np.int32)
-    adata.var["qc_variance"] = nanvar(X)
-    adata.var["qc_n_unique"] = _n_unique(X, missing)
-
-    adata.obs["qc_is_border"] = border
-    adata.obs["qc_area_outlier"] = area_outlier
-    adata.obs["qc_fail"] = border | area_outlier | (nan_fraction > max_nan_fraction)
+    adata.obs["qc_fail"] = fail
     return None
 
 
@@ -179,10 +201,10 @@ def filter_cells(
         keep &= np.bincount(codes[keep], minlength=len(keys))[codes] >= min_cells_per_well
 
     dropped = int((~keep).sum())
-    if dropped:
-        get_logger().info(
-            "filter_cells dropped %d of %d cells (%.1f%%)", dropped, adata.n_obs, 100 * dropped / adata.n_obs
-        )
+    if not dropped:
+        # Nothing fails the checks, so the subset would copy the whole matrix only to return the same rows.
+        return None
+    get_logger().info("filter_cells dropped %d of %d cells (%.1f%%)", dropped, adata.n_obs, 100 * dropped / adata.n_obs)
     if not keep.any():
         get_logger().warning("filter_cells: removed every cell", deep="check qc_fail and min_cells_per_well")
     adata._inplace_subset_obs(keep)

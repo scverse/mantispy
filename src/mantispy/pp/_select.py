@@ -14,8 +14,9 @@ import pandas as pd
 from anndata import AnnData
 
 from mantispy._core._corr import _blockwise, correlated_pairs, rank_revealing_subset
+from mantispy._core._numba import column_max_robust_z
 from mantispy._core._reduce import get_matrix, group_codes, group_offsets
-from mantispy._core._stats import nanvar, robust_zscore
+from mantispy._core._stats import MAD_TO_SIGMA, nanvar
 from mantispy._core.features import feature_kind_of, load_blocklist, var_blocklist_hits
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
@@ -400,7 +401,9 @@ def feature_select(
     # pp.sphere and sc.pp.pca cannot take. Warn with the lever to remove them here, rather than let the matrix
     # fail several steps later with an error that does not point back to feature selection.
     kept = np.flatnonzero(keep)
-    with_nan = kept[np.isnan(full[:, kept]).any(axis=0)] if kept.size else kept
+    # any(axis=0) over the full matrix, then index the kept columns: avoids copying the kept
+    # sub-matrix (fancy column indexing on a wide screen is a full-size float copy).
+    with_nan = kept[np.isnan(full).any(axis=0)[kept]] if kept.size else kept
     if with_nan.size:
         lever = (
             "lower na_cutoff to 0.0" if "drop_na_columns" in operations else "add drop_na_columns with na_cutoff=0.0"
@@ -432,13 +435,13 @@ def _warn_extreme(adata: AnnData, full: np.ndarray, kept: np.ndarray, cutoff: fl
 
     Each feature is scaled by its own median and MAD, so the check means the same on raw and on normalized values, and ``outlier_cutoff`` is the bound ``drop_outliers`` would apply to a robustly scaled feature.
     """
-    extreme: list[int] = []
-    # A few columns at a time, since robust_zscore holds several float64 copies of what it is given.
-    for start in range(0, kept.size, 32):
-        columns = kept[start : start + 32]
-        largest = np.nanmax(np.abs(robust_zscore(full[:, columns], axis=0)), axis=0, initial=0.0)
-        extreme.extend(columns[largest > cutoff])
-    if extreme:
+    if not kept.size:
+        return
+    # One parallel pass over the kept columns, each read straight from the matrix: no float64 copy of the
+    # kept block and no per-column Python dispatch, which is otherwise the whole cost of feature_select.
+    largest = column_max_robust_z(full, kept, MAD_TO_SIGMA)
+    extreme = kept[largest > cutoff]
+    if extreme.size:
         names = [str(adata.var_names[index]) for index in extreme]
         shown = ", ".join(names[:5]) + (f" and {len(names) - 5} more" if len(names) > 5 else "")
         get_logger().warning(

@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from mantispy._core._reduce import get_matrix, group_codes
+from mantispy._core._stats import nanvar
 from mantispy._core.frames import as_frame
 from mantispy._core.schema import get_resolution
 from mantispy.pl._common import axes as _axes
@@ -240,12 +241,15 @@ def qc(
             axes[1, 0].set_xlabel(group_label)
         axes[1, 0].legend(fontsize=6)
 
+    # pp.calculate_qc_metrics writes qc_variance only on request, so fall back to computing it here.
     if "qc_variance" in adata.var:
         variance = as_frame(adata.var)["qc_variance"].to_numpy(dtype=float)
-        variance = variance[np.isfinite(variance) & (variance > 0)]
-        if variance.size:
-            axes[1, 1].hist(np.log10(variance), bins=40)
-        axes[1, 1].set_xlabel("log10 feature variance")
+    else:
+        variance = nanvar(get_matrix(adata))
+    variance = variance[np.isfinite(variance) & (variance > 0)]
+    if variance.size:
+        axes[1, 1].hist(np.log10(variance), bins=40)
+    axes[1, 1].set_xlabel("log10 feature variance")
 
     figure.tight_layout()
     return _returned(axes, owned=True)

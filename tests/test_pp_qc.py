@@ -35,9 +35,63 @@ def test_filter_cells_drops_failures_and_small_wells(adata):
     assert mt.pp.filter_cells(adata, min_cells_per_well=21, require_qc=False, copy=True).n_obs == 0
 
 
+def test_filter_cells_does_not_copy_when_nothing_is_dropped(adata):
+    """With no failing cell and no well floor the subset would copy the whole matrix only to return the same rows, so filter_cells leaves the object, and its matrix, untouched."""
+    mt.pp.calculate_qc_metrics(adata)
+    adata.obs["qc_fail"] = False
+    x_before, n_before = adata.X, adata.n_obs
+    assert mt.pp.filter_cells(adata, min_cells_per_well=0, require_qc=True) is None
+    assert adata.n_obs == n_before
+    assert adata.X is x_before
+
+
 def test_filter_cells_without_metrics_says_what_to_run(adata):
     with pytest.raises(KeyError, match="calculate_qc_metrics"):
         mt.pp.filter_cells(adata)
+
+
+def test_qc_metrics_are_opt_in(adata):
+    """qc_variance and qc_n_unique are a per-feature pass filter_cells never reads, so the default qc_metrics leave them out."""
+    mt.pp.calculate_qc_metrics(adata)
+    assert "qc_n_nan" in adata.var
+    assert "qc_variance" not in adata.var
+    assert "qc_n_unique" not in adata.var
+
+    mt.pp.calculate_qc_metrics(adata, qc_metrics=("variance", "n_unique"))
+    assert "qc_variance" in adata.var
+    assert "qc_n_unique" in adata.var
+
+
+def test_feature_metrics_match_a_direct_computation(adata):
+    """Opt-in values equal computing them straight from the matrix."""
+    X = adata.X.astype(np.float64)
+    expected_variance = np.nanvar(X, axis=0)
+    expected_unique = np.array([len(np.unique(column[~np.isnan(column)])) for column in X.T], dtype=np.int32)
+
+    mt.pp.calculate_qc_metrics(adata, qc_metrics=("variance", "n_unique"))
+    np.testing.assert_allclose(adata.var["qc_variance"].to_numpy(), expected_variance, rtol=1e-5)
+    np.testing.assert_array_equal(adata.var["qc_n_unique"].to_numpy(), expected_unique)
+
+
+def test_qc_metrics_choose_columns_and_qc_fail(adata):
+    """Only the requested metrics are written, and qc_fail ORs only their flags."""
+    mt.pp.calculate_qc_metrics(adata, qc_metrics=["border"], image_shape=(100, 100))
+    assert "qc_is_border" in adata.obs
+    assert "qc_nan_fraction" not in adata.obs
+    assert "qc_area_outlier" not in adata.obs
+    np.testing.assert_array_equal(adata.obs["qc_fail"], adata.obs["qc_is_border"])
+
+
+def test_qc_metrics_rejects_unknown_names(adata):
+    with pytest.raises(ValueError, match="unknown"):
+        mt.pp.calculate_qc_metrics(adata, qc_metrics=["varaince"])
+
+
+def test_filter_cells_works_without_feature_metrics(adata):
+    """A default (feature-metric-free) qc run still drives filter_cells: qc_fail is unchanged."""
+    mt.pp.calculate_qc_metrics(adata)
+    passing = int((~adata.obs["qc_fail"]).sum())
+    assert mt.pp.filter_cells(adata, min_cells_per_well=0, copy=True).n_obs == passing
 
 
 def test_filter_features_drops_all_nan_constant_and_blocklisted(adata):

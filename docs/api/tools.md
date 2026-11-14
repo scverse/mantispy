@@ -40,6 +40,7 @@ Aggregate profiles and ask what the perturbations did.
    tl.hit_calling
    tl.empirical_fdr
    tl.guide_activity
+   tl.perturbation_score
    tl.aggregate_guides
    tl.edistance
    tl.effect_size

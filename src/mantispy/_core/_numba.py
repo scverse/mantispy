@@ -2,6 +2,7 @@
 
 The row permutation is passed as an index array and applied inside the kernel, never materialized as ``X[order]``.
 Scratch buffers are allocated once per group, because allocating inside a ``prange`` body serializes the loop on numba's allocator lock.
+Medians and quantiles are read with an in-place quickselect rather than a full sort; it lands the same order statistics, so the result is bit-identical.
 Input stays ``float32`` or ``float64`` as given, and any other dtype is read as ``float64``; accumulation is in ``float64`` scalars.
 """
 
@@ -23,13 +24,36 @@ MEAN, MEDIAN, MAD, STD, QUANTILE = 0, 1, 2, 3, 4
 IQR = 5
 
 
-def group_offsets(codes: np.ndarray, n_groups: int) -> tuple[np.ndarray, np.ndarray]:
-    """Stable row ordering by group, plus the start/stop offsets of each group."""
-    codes = np.ascontiguousarray(codes, dtype=np.int32)
-    order = np.argsort(codes, kind="stable").astype(np.int64)
+@njit(cache=True, nogil=True)
+def _counting_order(codes: np.ndarray, n_groups: int) -> tuple[np.ndarray, np.ndarray]:
+    """Rows bucketed by group code in one counting pass, visiting rows in order so each group stays stable."""
+    n = codes.size
     offsets = np.zeros(n_groups + 1, dtype=np.int64)
-    np.cumsum(np.bincount(codes, minlength=n_groups), out=offsets[1:])
+    for i in range(n):
+        code = codes[i]
+        if code < 0 or code >= n_groups:
+            # A negative code once raised in np.bincount; without that guard it would index out of bounds below.
+            raise ValueError("group codes must be in [0, n_groups)")
+        offsets[code + 1] += 1
+    for group in range(n_groups):
+        offsets[group + 1] += offsets[group]
+    order = np.empty(n, dtype=np.int64)
+    cursor = offsets[:n_groups].copy()
+    for i in range(n):
+        code = codes[i]
+        order[cursor[code]] = i
+        cursor[code] += 1
     return order, offsets
+
+
+def group_offsets(codes: np.ndarray, n_groups: int) -> tuple[np.ndarray, np.ndarray]:
+    """Stable row ordering by group, plus the start/stop offsets of each group.
+
+    The codes already index the groups, so a counting sort buckets the rows in linear time and gives
+    the same ordering a stable ``argsort`` would, without its ``n log n``.
+    """
+    codes = np.ascontiguousarray(codes, dtype=np.int32)
+    return _counting_order(codes, n_groups)
 
 
 def group_counts(codes: np.ndarray, n_groups: int) -> np.ndarray:
@@ -81,9 +105,87 @@ def _median_of(buffer: np.ndarray, n: int) -> float:
 
 
 @njit(cache=True, nogil=True)
-def _quantile_of(buffer: np.ndarray, n: int, q: float) -> float:
-    """Quantile of the ``n`` gathered values in ``buffer``, which this sorts."""
-    return _quantile_sorted(np.sort(buffer[:n]), q)
+def _select_kth(a: np.ndarray, n: int, k: int) -> float:
+    """The ``k``-th smallest of ``a[:n]``, partitioning ``a`` in place so ``a[k]`` holds it.
+
+    Quickselect (the Numerical Recipes in-place scheme, iterative with a median-of-three pivot):
+    it reads an order statistic without the ``n log n`` of a full sort, and on return every entry
+    left of ``k`` is no greater than ``a[k]`` and every entry right of it no smaller. The value is
+    the exact same float a sort would land at ``k``, so a median or quantile read off it is bit-identical.
+    """
+    lo, hi = 0, n - 1
+    while True:
+        if hi <= lo + 1:
+            if hi == lo + 1 and a[lo] > a[hi]:
+                a[lo], a[hi] = a[hi], a[lo]
+            return a[k]
+        mid = (lo + hi) >> 1
+        a[mid], a[lo + 1] = a[lo + 1], a[mid]
+        if a[lo] > a[hi]:
+            a[lo], a[hi] = a[hi], a[lo]
+        if a[lo + 1] > a[hi]:
+            a[lo + 1], a[hi] = a[hi], a[lo + 1]
+        if a[lo] > a[lo + 1]:
+            a[lo], a[lo + 1] = a[lo + 1], a[lo]
+        pivot = a[lo + 1]
+        i, j = lo + 1, hi
+        while True:
+            i += 1
+            while a[i] < pivot:
+                i += 1
+            j -= 1
+            while a[j] > pivot:
+                j -= 1
+            if i > j:
+                break
+            a[i], a[j] = a[j], a[i]
+        a[lo + 1], a[j] = a[j], a[lo + 1]
+        if j >= k:
+            hi = j - 1
+        if j <= k:
+            lo = i
+
+
+@njit(cache=True, nogil=True)
+def _median_select(buffer: np.ndarray, n: int) -> float:
+    """Median of the ``n`` gathered values in ``buffer`` by selection, which this partitions.
+
+    For an even count the upper middle is selected, then the lower middle is the largest value left
+    of it; ``0.5 * (lower + upper)`` is taken in ``float64``, matching :func:`_median_sorted`.
+    """
+    if n == 0:
+        return np.nan
+    middle = n // 2
+    upper = _select_kth(buffer, n, middle)
+    if n % 2 == 1:
+        return upper
+    lower = buffer[0]
+    for k in range(1, middle):
+        if buffer[k] > lower:
+            lower = buffer[k]
+    return 0.5 * (np.float64(lower) + np.float64(upper))
+
+
+@njit(cache=True, nogil=True)
+def _quantile_select(buffer: np.ndarray, n: int, q: float) -> float:
+    """Linearly interpolated quantile of the ``n`` gathered values by selection, which this partitions.
+
+    The two order statistics the interpolation needs are selected rather than taken from a full sort,
+    matching :func:`_quantile_sorted`.
+    """
+    if n == 0:
+        return np.nan
+    position = q * (n - 1)
+    low = int(np.floor(position))
+    high = int(np.ceil(position))
+    high_value = _select_kth(buffer, n, high)
+    if low == high:
+        return high_value
+    low_value = buffer[0]  # the largest value left of ``high`` is the ``low``-th order statistic
+    for k in range(1, high):
+        if buffer[k] > low_value:
+            low_value = buffer[k]
+    return low_value + (position - low) * (high_value - low_value)
 
 
 @njit(parallel=True, cache=True, nogil=True)
@@ -111,12 +213,12 @@ def _grouped(
             elif stat == 0:  # mean
                 out[group, j] = total / n
             elif stat == 1:  # median
-                out[group, j] = _median_of(buffer, n)
+                out[group, j] = _median_select(buffer, n)
             elif stat == 2:  # median absolute deviation, unscaled
-                centre = _median_of(buffer, n)
+                centre = _median_select(buffer, n)
                 for k in range(n):
                     buffer[k] = abs(buffer[k] - centre)
-                out[group, j] = _median_of(buffer, n)
+                out[group, j] = _median_select(buffer, n)
             elif stat == 3:  # standard deviation
                 if n - ddof <= 0:
                     out[group, j] = np.nan
@@ -127,7 +229,7 @@ def _grouped(
                         squares += (buffer[k] - mean) ** 2
                     out[group, j] = np.sqrt(squares / (n - ddof))
             else:  # quantile
-                out[group, j] = _quantile_of(buffer, n, q)
+                out[group, j] = _quantile_select(buffer, n, q)
     return out
 
 
@@ -248,6 +350,70 @@ def grouped_median_spread(
     X = _kernel_input(X)
     order, offsets = group_offsets(codes, n_groups)
     return _grouped_median_spread(X, order, offsets, n_groups, int(spread))
+
+
+#: Work chunks of a parallel kernel that reuses one buffer per chunk; enough to keep a node's threads busy.
+N_CHUNKS = 64
+
+
+@njit(parallel=True, cache=True, nogil=True)
+def _column_max_robust_z(X: np.ndarray, columns: np.ndarray, mad_to_sigma: float) -> np.ndarray:
+    """Largest robust z-score of each selected column, columns shared out over the threads.
+
+    For column ``j`` this is ``max|value - median| / (mad_to_sigma * MAD)`` over its finite values, where ``MAD`` is
+    the median of ``|value - median|``. A column with no finite value, or a zero or non-finite scale (a constant
+    feature), scores ``0``, matching ``np.nan_to_num(..., nan=0.0)`` on the division.
+
+    ``columns`` indexes into ``X``'s features, so the whole matrix is read without first copying the kept block.
+    Each chunk gathers into one buffer reused across its columns, since allocating inside the ``prange`` body
+    serializes the loop on numba's allocator lock, and the median and MAD come from the same selection
+    ``np.nanmedian`` uses, so the result matches it per column.
+    """
+    n_obs = X.shape[0]
+    n_columns = columns.size
+    out = np.zeros(n_columns, dtype=np.float64)
+    # A fixed chunk count rather than numba.get_num_threads(), which reads a ctypes pointer and stops the kernel from caching.
+    n_chunks = min(N_CHUNKS, n_columns)
+    for chunk in prange(n_chunks):
+        buffer = np.empty(n_obs, dtype=np.float64)
+        for c in range(chunk, n_columns, n_chunks):
+            j = columns[c]
+            n = 0
+            for i in range(n_obs):
+                value = X[i, j]
+                if not np.isnan(value):
+                    buffer[n] = value
+                    n += 1
+            if n == 0:
+                continue
+            median = _median_select(buffer, n)
+            largest = 0.0
+            for k in range(n):
+                deviation = abs(buffer[k] - median)
+                buffer[k] = deviation
+                if deviation > largest:
+                    largest = deviation
+            scale = mad_to_sigma * _median_select(buffer, n)
+            if scale != 0.0 and np.isfinite(scale):
+                out[c] = largest / scale
+    return out
+
+
+def column_max_robust_z(X: np.ndarray, columns: np.ndarray, mad_to_sigma: float) -> np.ndarray:
+    """Per-column largest robust z-score over the given feature indices, read column-major in parallel.
+
+    Args:
+        X: ``(n_obs, n_vars)`` matrix, read in its own dtype if that is ``float32`` or ``float64`` and as ``float64`` otherwise.
+        columns: Feature indices to score, each read straight from ``X`` without copying the kept block out.
+        mad_to_sigma: The scale factor turning a median absolute deviation into a standard-deviation estimate.
+
+    Returns:
+        ``(columns.size,)`` float64, the largest ``|value - median| / (mad_to_sigma * MAD)`` of each column, and ``0``
+        for a column with no finite value or a zero/non-finite scale.
+    """
+    X = np.asarray(X)
+    X = X if X.dtype in (np.float32, np.float64) else X.astype(np.float64)
+    return _column_max_robust_z(X, np.ascontiguousarray(columns, dtype=np.int64), float(mad_to_sigma))
 
 
 @njit(cache=True, nogil=True)

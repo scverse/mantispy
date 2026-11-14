@@ -194,21 +194,64 @@ def group_codes(adata: AnnData, by: str | Sequence[str] | None) -> tuple[np.ndar
 
     frame = as_frame(adata.obs)[columns]
     if frame.isna().to_numpy().any():
-        empty = [column for column in columns if frame[column].isna().any()]
+        empty = [column for position, column in enumerate(columns) if frame.iloc[:, position].isna().any()]
         raise ValueError(f"grouping column(s) contain missing values: {empty}. Filter or fill them first.")
 
-    values: pd.Index = pd.Index(frame[columns[0]]) if len(columns) == 1 else pd.MultiIndex.from_frame(frame)
-    codes, uniques = values.factorize(sort=True)
-    # MultiIndex is already an Index; wrapping it again would flatten it to tuples.
-    keys = uniques if isinstance(uniques, pd.Index) else pd.Index(uniques)
+    if len(columns) == 1:
+        codes, uniques = pd.Index(frame[columns[0]]).factorize(sort=True)
+        keys = uniques if isinstance(uniques, pd.Index) else pd.Index(uniques)
+        return codes.astype(np.int32), keys
+    return _multi_group_codes(frame, columns)
+
+
+def _multi_group_codes(frame: pd.DataFrame, columns: list[str]) -> tuple[np.ndarray, pd.Index]:
+    """``group_codes`` for several columns, without the object-tuple array ``MultiIndex.factorize`` builds.
+
+    Each column is factorized on its own (a hash over the values, dtype kept), and the per-column codes are
+    folded into one mixed-radix integer. Because every column's codes are sorted, that integer is monotone in
+    lexicographic order, so factorizing it reproduces ``MultiIndex.factorize(sort=True)``'s codes and key order.
+    Materializing the tuples instead costs an object array per row, which dominates grouping at screen scale.
+    """
+    # By position, so a column named twice in ``columns`` is read as a Series rather than a two-column frame.
+    per_column = [pd.factorize(frame.iloc[:, position], sort=True) for position in range(len(columns))]
+    sizes = [len(uniques) for _, uniques in per_column]
+    product = 1
+    for size in sizes:
+        product *= max(size, 1)
+        if product > (1 << 62):
+            # The mixed-radix fold would overflow int64; the object-tuple path is correct whatever the sizes.
+            codes, uniques = pd.MultiIndex.from_frame(frame).factorize(sort=True)
+            return codes.astype(np.int32), uniques if isinstance(uniques, pd.Index) else pd.Index(uniques)
+    composite = per_column[0][0].astype(np.int64)
+    for (column_codes, _), size in zip(per_column[1:], sizes[1:], strict=True):
+        composite = composite * size + column_codes
+    codes, present = pd.factorize(composite, sort=True)
+    # Decode each present combination back to its per-column position, then name the groups with the
+    # original values, so keys is the same MultiIndex as the object-tuple path would have produced.
+    remainder = np.asarray(present, dtype=np.int64)
+    decoded = []
+    for size in reversed(sizes[1:]):
+        decoded.append(remainder % size)
+        remainder = remainder // size
+    decoded.append(remainder)
+    decoded.reverse()
+    levels = [uniques.take(position) for (_, uniques), position in zip(per_column, decoded, strict=True)]
+    keys = pd.MultiIndex.from_arrays(levels, names=columns)
     return codes.astype(np.int32), keys
 
 
 def iter_groups(
-    adata: AnnData, by: str | Sequence[str] | None, layer: str | None = None
+    adata: AnnData,
+    by: str | Sequence[str] | None,
+    layer: str | None = None,
+    *,
+    grouping: tuple[np.ndarray, pd.Index] | None = None,
 ) -> Iterator[tuple[Any, np.ndarray, np.ndarray]]:
-    """Yield ``(key, row_index, block)`` per group, in group-key order."""
-    codes, keys = group_codes(adata, by)
+    """Yield ``(key, row_index, block)`` per group, in group-key order.
+
+    ``grouping`` reuses a ``(codes, keys)`` pair a caller already computed with :func:`group_codes` for ``by``, so a function that groups the same object more than once factorizes it only once.
+    """
+    codes, keys = group_codes(adata, by) if grouping is None else grouping
     _warn_if_not_streamable(adata.X if layer is None else adata.layers[layer])
     order = np.argsort(codes, kind="stable")
     bounds = np.searchsorted(codes[order], np.arange(len(keys) + 1))
@@ -227,6 +270,7 @@ def reduce_grouped(
     ddof: int = 1,
     *,
     use_rep: str | None = None,
+    grouping: tuple[np.ndarray, pd.Index] | None = None,
 ) -> tuple[np.ndarray, pd.Index, np.ndarray]:
     """Per-group statistic over the feature matrix.
 
@@ -241,6 +285,7 @@ def reduce_grouped(
         ddof: Delta degrees of freedom for :data:`STD`.
         use_rep: Reduce ``adata.obsm[use_rep]`` instead of ``X``; ``values`` then has one column per axis of that representation.
             Mutually exclusive with ``layer``.
+        grouping: Reuse a ``(codes, keys)`` pair already computed with :func:`group_codes` for ``by``, so a caller that reduces the same object twice factorizes it once.
 
     Returns:
         ``(values, keys, counts)`` where ``values`` is ``(n_groups, n_cols)`` float64 (``n_cols`` is ``n_vars`` for ``X``/``layer`` and the representation's width for ``use_rep``), ``keys`` indexes the groups and ``counts`` holds the contributing row count.
@@ -248,7 +293,7 @@ def reduce_grouped(
     Raises:
         ValueError: ``mask`` does not hold one entry per row of ``adata``, or ``use_rep`` and ``layer`` are both given, or ``use_rep`` is not a 2-D ``obsm``.
     """
-    codes, keys = group_codes(adata, by)
+    codes, keys = group_codes(adata, by) if grouping is None else grouping
     source: Any
     if use_rep is not None:
         source = _obsm_source(adata, use_rep, layer)
@@ -286,16 +331,19 @@ def transform_grouped(
     by: str | Sequence[str] | None,
     func: Callable[[Any, np.ndarray], np.ndarray],
     layer: str | None = None,
+    *,
+    grouping: tuple[np.ndarray, pd.Index] | None = None,
 ) -> np.ndarray:
     """Rewrite the matrix one group at a time.
 
     ``func(key, block)`` receives a group's rows as :func:`get_matrix` reads them and returns the replacement block.
     The output is written into one preallocated array of that same dtype, so the peak cost is the input plus the output, with no full-size temporaries in a wider dtype.
+    ``grouping`` reuses a ``(codes, keys)`` pair already computed with :func:`group_codes` for ``by``.
     """
     # Shaped from the object, not read off the matrix: get_matrix with no rows reads all of it.
     dtype = matrix_dtype(adata, layer)
     out = np.empty(adata.shape, dtype=dtype)
-    for key, rows, block in iter_groups(adata, by, layer=layer):
+    for key, rows, block in iter_groups(adata, by, layer=layer, grouping=grouping):
         if rows.size:
             out[rows] = func(key, block).astype(dtype, copy=False)
     return out
