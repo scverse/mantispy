@@ -84,21 +84,74 @@ def test_lof_flags_what_sklearn_and_brieflow_flag():
     np.testing.assert_array_equal(adata.obs["qc_outlier"].to_numpy(), brieflow)
 
 
+def _brute_knn(X: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
+    """Each row's k nearest other rows by squared distance summed in feature order, ties broken by row."""
+    X = np.asarray(X, dtype=np.float64)
+    n = X.shape[0]
+    rdist = np.zeros((n, n))
+    for f in range(X.shape[1]):
+        diff = X[:, None, f] - X[None, :, f]
+        rdist += diff * diff
+    rdist[np.arange(n), np.arange(n)] = np.inf
+    order = np.lexsort((np.broadcast_to(np.arange(n), (n, n)), rdist), axis=1)
+    return order[:, :k], np.take_along_axis(rdist, order[:, : k + 1], axis=1)
+
+
+def _gridded(rng, shape):
+    return rng.integers(0, 5, size=shape).astype(np.float64)
+
+
+def _duplicated(rng, shape):
+    base = rng.normal(size=shape)
+    return np.vstack([base, base[: shape[0] // 4]])
+
+
+def _normal(rng, shape):
+    return rng.normal(size=shape)
+
+
 @pytest.mark.parametrize("dtype", [np.float64, np.float32])
-@pytest.mark.parametrize("shape", [(1000, 4), (500, 8), (40, 6), (3, 5)])
+@pytest.mark.parametrize("make", [_normal, _duplicated, _gridded])
+@pytest.mark.parametrize("shape", [(3000, 8), (700, 3), (90, 2), (6, 4)])
+def test_lof_kdtree_neighbours_match_a_brute_force_search(dtype, make, shape):
+    """The numba KD-tree finds exactly the brute-force neighbours, in distance-then-row order, and flags k-th ties."""
+    from mantispy._core._lof import _knn, n_chunks, tree_levels
+
+    X = np.ascontiguousarray(make(np.random.default_rng(0), shape), dtype=dtype)
+    coords = np.ascontiguousarray(X, dtype=np.float64)
+    n = coords.shape[0]
+    k = min(20, n - 1)
+    m = min(k + 1, n - 1)
+    levels = tree_levels(n)
+    perm, _, neighbors, k_rdist, tied = _knn(coords, levels, k, m, n_chunks(levels))
+    found = np.empty((n, k), dtype=np.int64)
+    found[perm] = perm[neighbors]
+    kth = np.empty(n)
+    kth[perm] = k_rdist
+    truth, rdist = _brute_knn(coords, k)
+    np.testing.assert_array_equal(kth, rdist[:, k - 1])
+    if m > k:
+        assert tied == bool(np.any(np.sqrt(rdist[:, k - 1]) == np.sqrt(rdist[:, k])))
+    np.testing.assert_array_equal(found, truth)
+
+
+@pytest.mark.parametrize("dtype", [np.float64, np.float32])
+@pytest.mark.parametrize("shape", [(1000, 4), (500, 8), (40, 6), (22, 2), (21, 2), (3, 5)])
 def test_lof_fast_path_matches_sklearn_exactly(dtype, shape):
-    """The cKDTree fast path reproduces sklearn's negative_outlier_factor_ on ordinary data."""
+    """The KD-tree fast path reproduces sklearn's negative_outlier_factor_ on ordinary data."""
     from sklearn.neighbors import LocalOutlierFactor
 
-    from mantispy.pp._outliers import _LOF_NEIGHBORS, _lof_negative_outlier_factor
+    from mantispy._core._lof import lof_negative_outlier_factor
+    from mantispy.pp._outliers import _LOF_NEIGHBORS
 
     n = shape[0]
     X = np.ascontiguousarray(np.random.default_rng(0).normal(size=shape), dtype=dtype)
-    fast = _lof_negative_outlier_factor(X, _LOF_NEIGHBORS, n_jobs=None)
+    fast = lof_negative_outlier_factor(X, _LOF_NEIGHBORS)
     assert fast is not None  # continuous data has no ties, so the fast path is taken
+    assert fast.dtype == dtype
     truth = LocalOutlierFactor(n_neighbors=min(_LOF_NEIGHBORS, n - 1)).fit(X).negative_outlier_factor_
-    # float64 is bit-exact; float32 distances differ from sklearn's by a rounding step cKDTree (float64)
-    # cannot avoid, far below anything that moves a flag.
+    # Distances agree with sklearn's to the last bit only where both compile the sum of squares the same way,
+    # which depends on the platform; elsewhere they differ by a rounding step, far below anything that moves a flag.
     rtol, atol = (1e-12, 1e-12) if dtype is np.float64 else (1e-5, 1e-6)
     np.testing.assert_allclose(fast, truth, rtol=rtol, atol=atol)
 
