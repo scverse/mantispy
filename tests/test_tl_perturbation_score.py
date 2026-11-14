@@ -269,6 +269,17 @@ def test_a_backed_object_scores_as_in_memory_in_batches(tmp_path, monkeypatch):
     np.testing.assert_array_equal(backed.obs["backed"], adata.obs["perturbation_score"])
 
 
+def test_string_and_categorical_replicates_give_the_same_folds():
+    as_string = _cells()
+    as_category = as_string.copy()
+    # Categories in order of appearance (nt0, nt1, nt2, ...), not in the sorted order of the labels (nt0, nt1, nt10, ...).
+    guides = as_string.obs["Metadata_sgRNA"].astype(str)
+    as_category.obs["Metadata_sgRNA"] = pd.Categorical(guides, categories=guides.unique())
+    mt.tl.perturbation_score(as_string)
+    mt.tl.perturbation_score(as_category)
+    np.testing.assert_array_equal(as_string.obs["perturbation_score"], as_category.obs["perturbation_score"])
+
+
 def test_n_jobs_is_gone():
     with pytest.raises(TypeError, match="n_jobs"):
         mt.tl.perturbation_score(_cells(), n_jobs=2)

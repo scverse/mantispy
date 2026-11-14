@@ -16,6 +16,7 @@ from mantispy._core._liblinear import fit_l2_logistic
 from mantispy._core._numba import _kernel_input
 from mantispy._core._reduce import _reads_from_disk, _source, get_matrix, group_codes
 from mantispy._core._stats import _is_object_resolution
+from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy._core.masks import reference_mask
 from mantispy._core.mutation import inplace_or_copy
@@ -187,6 +188,25 @@ def _finite_rows(x: np.ndarray) -> np.ndarray:
     return out
 
 
+def _replicate_codes(obs: pd.DataFrame, replicate: str | Sequence[str]) -> np.ndarray:
+    """Each row's replicate code, numbered by the sorted string labels whatever the column's dtype.
+
+    The group splitter orders the replicates by their codes before it shuffles them, so a string column and a
+    categorical one, whose categories may come in any order, would otherwise draw different folds from the same guides.
+    """
+    columns = [replicate] if isinstance(replicate, str) else list(replicate)
+    ranks = []
+    for column in columns:
+        values = pd.Categorical(obs[column])
+        if (values.codes < 0).any():
+            raise ValueError(f"replicate column {column!r} contains missing values. Filter or fill them first.")
+        rank = np.unique(np.asarray(values.categories.astype(str), dtype=str), return_inverse=True)[1]
+        ranks.append(rank[values.codes])
+    if len(ranks) == 1:
+        return ranks[0]
+    return np.unique(np.column_stack(ranks), axis=0, return_inverse=True)[1].ravel()
+
+
 def _folds(y: np.ndarray, replicates: np.ndarray | None, n_folds: int, seed: int) -> tuple[np.ndarray, int]:
     """Each row's cross-validation fold, from the splitter :func:`~sklearn.model_selection.cross_val_predict` would use."""
     from sklearn.model_selection import StratifiedGroupKFold, StratifiedKFold
@@ -242,6 +262,7 @@ def perturbation_score(
         replicate: ``obs`` column, or columns, whose groups are kept whole within a cross-validation fold, the guide by default (``"Metadata_sgRNA"``, as :func:`~mantispy.tl.composition_shift` also defaults to).
             The model is then always tested on guides it was not trained on, so a phenotype one guide carries alone, such as an off-target effect, does not raise the group's score.
             A named column that ``obs`` lacks raises, naming the argument.
+            Replicates are ordered by their labels as strings, so a string column and a categorical one draw the same folds.
             ``None`` draws folds over cells, as Brieflow does, and warns on an object stamped object resolution, since non-targeting guides grouped into pseudo-genes can then score above one half.
         by: ``obs`` column whose levels are scored apart, for example ``"Metadata_Class"`` to score interphase and mitotic cells separately, as Brieflow does.
             Each group is scored within each level against a reference sample drawn from that level, so a cell's score and its group's AUC come from its own level; a group too small within a level is left unscored there.
@@ -294,7 +315,7 @@ def perturbation_score(
             stacklevel=3,
         )
     codes, keys = group_codes(adata, groupby)
-    replicate_codes = group_codes(adata, replicate)[0] if replicate is not None else None
+    replicate_codes = _replicate_codes(as_frame(adata.obs), replicate) if replicate is not None else None
     # One level per distinct value of `by`, scored on its own cells and its own reference sample; without
     # `by` the whole object is one level, with the seed and reference set it had before `by` existed.
     level_codes, level_keys = group_codes(adata, by) if by is not None else (None, None)
