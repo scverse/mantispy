@@ -527,3 +527,44 @@ def test_lazy_chunks_never_cut_through_a_stored_chunk(tmp_path, monkeypatch):
     reads = [name for name in lazy.X.dask.layers if name.startswith("from-zarr")]
     assert [len(lazy.X.dask.layers[name]) for name in reads] == [3], "each stored chunk is read by one task"
     np.testing.assert_array_equal(np.asarray(lazy.X), np.arange(n_obs * n_vars).reshape(n_obs, n_vars))
+
+
+@pytest.mark.parametrize("method", ["mad_robustize", "standardize", "robustize"])
+def test_a_group_larger_than_the_budget_is_read_in_column_blocks(lazy_pair, monkeypatch, method):
+    """A plate of a wide screen does not fit the read budget on its own, so it was read whole.
+
+    The statistics are taken column by column, so a block of columns at a time gives the same numbers in bounded memory.
+    """
+    from mantispy._core import _reduce
+
+    lazy, in_memory = lazy_pair()
+    mt.pp.normalize(in_memory, method=method, by="Metadata_Plate", reference=None)
+    rows = int((in_memory.obs["Metadata_Plate"] == in_memory.obs["Metadata_Plate"].iloc[0]).sum())
+    budget = rows * 4 * 6  # six float32 columns of a whole plate
+    monkeypatch.setattr(mt.settings, "stream_bytes", budget)
+    original = _reduce.get_matrix
+    blocks = []
+
+    def recording(*args, **kwargs):
+        block = original(*args, **kwargs)
+        blocks.append(block.nbytes)
+        return block
+
+    monkeypatch.setattr(_reduce, "get_matrix", recording)
+
+    mt.pp.normalize(lazy, method=method, by="Metadata_Plate", reference=None)
+
+    np.testing.assert_array_equal(np.asarray(lazy.X), in_memory.X)
+    assert len(blocks) > 2, "each plate is read in several blocks of columns"
+    assert max(blocks) <= budget
+
+
+def test_a_reduction_of_a_group_larger_than_the_budget_matches_in_memory(lazy_pair, monkeypatch):
+    lazy, in_memory = lazy_pair()
+    expected, _, counts = reduce_grouped(in_memory, "Metadata_Plate", MEDIAN)
+    monkeypatch.setattr(mt.settings, "stream_bytes", int(counts.max()) * 4 * 6)
+
+    streamed, _, streamed_counts = reduce_grouped(lazy, "Metadata_Plate", MEDIAN)
+
+    np.testing.assert_array_equal(streamed, expected)
+    np.testing.assert_array_equal(streamed_counts, counts)

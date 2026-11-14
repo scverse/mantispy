@@ -113,7 +113,12 @@ def matrix_dtype(adata: AnnData, layer: str | None = None, *, use_rep: str | Non
 
 
 def get_matrix(
-    adata: AnnData, layer: str | None = None, rows: np.ndarray | None = None, *, use_rep: str | None = None
+    adata: AnnData,
+    layer: str | None = None,
+    rows: np.ndarray | None = None,
+    *,
+    use_rep: str | None = None,
+    columns: slice | None = None,
 ) -> np.ndarray:
     """Return the requested matrix as a dense floating array, in the dtype :func:`float_dtype` gives it.
 
@@ -124,12 +129,18 @@ def get_matrix(
     Rows that cover the whole matrix in order are read as one slice rather than selected point by point, and an in-order read hands back the block the backend produced rather than a copy of it, so treat the result as read-only.
 
     ``use_rep`` reads ``adata.obsm[use_rep]`` instead of ``X`` or a layer; it must be a 2-D representation and cannot be combined with ``layer``.
+    ``columns`` reads only that block of columns of the rows asked for, in the same read.
 
     Reading the whole of an on-disk or lazy matrix larger than :attr:`~mantispy.settings.stream_bytes` warns, naming the function that asked for it, since that function does not stream.
     """
     matrix = _source(adata, layer, use_rep)
     if rows is None:
         _warn_if_whole_read(matrix)
+    source = matrix
+
+    def take(index: Any) -> Any:
+        """``source[index]``, narrowed to ``columns`` in the same read."""
+        return source[index] if columns is None else source[index, columns]
 
     if rows is not None:
         wanted = np.asarray(rows)
@@ -138,7 +149,7 @@ def get_matrix(
             increasing = wanted.dtype.kind in "iu" and bool(np.all(wanted[1:] > wanted[:-1]))
             if not increasing:
                 order = np.argsort(wanted, kind="stable")
-                block = matrix[wanted[order]]
+                block = take(wanted[order])
                 inverse = np.empty_like(order)
                 inverse[order] = np.arange(order.size)
                 matrix = block[inverse]
@@ -149,11 +160,13 @@ def get_matrix(
                 and wanted[-1] - wanted[0] + 1 == wanted.size
             ):
                 # The ends are bounds-checked because a slice silently clamps where a fancy index is refused.
-                matrix = matrix[int(wanted[0]) : int(wanted[-1]) + 1]
+                matrix = take(slice(int(wanted[0]), int(wanted[-1]) + 1))
             else:
-                matrix = matrix[wanted]
+                matrix = take(wanted)
         else:
-            matrix = matrix[wanted]
+            matrix = take(wanted)
+    elif columns is not None:
+        matrix = take(slice(None))
     elif _reads_from_disk(matrix) and not hasattr(matrix, "__array__"):
         # anndata's CSRDataset and CSCDataset have no ``__array__``, so np.asarray below would raise on them.
         matrix = matrix[:]
@@ -307,11 +320,13 @@ def iter_waves(
     *,
     use_rep: str | None = None,
     mask: np.ndarray | None = None,
-) -> Iterator[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
-    """Yield ``(groups, rows, codes, block)``, reading several groups' rows of an on-disk or lazy matrix at once.
+    by_columns: bool = False,
+) -> Iterator[tuple[np.ndarray, np.ndarray, np.ndarray, slice, np.ndarray]]:
+    """Yield ``(groups, rows, codes, columns, block)``, reading several groups' rows of an on-disk or lazy matrix at once.
 
     Groups are taken in key order and packed together until their rows would exceed :attr:`~mantispy.settings.stream_bytes`; a group larger than that is read on its own.
-    ``groups`` holds the positions of a wave's groups in the keys, ``rows`` the increasing row indices read into ``block``, and ``codes`` the position of each row's group within ``groups``.
+    ``by_columns=True`` reads such a group in blocks of columns that each fit the budget, for a caller whose statistic is computed column by column.
+    ``groups`` holds the positions of a wave's groups in the keys, ``rows`` the increasing row indices read into ``block``, ``codes`` the position of each row's group within ``groups``, and ``columns`` the columns ``block`` holds.
     A lazy matrix is read through those rows alone, so each wave touches only the chunks that hold them, and each of those once.
     ``mask`` restricts which rows are read, and a group it leaves empty is skipped.
     """
@@ -327,25 +342,32 @@ def iter_waves(
     row_bytes = max(source.shape[1], 1) * float_dtype(source.dtype).itemsize
     limit = max(settings.stream_bytes // row_bytes, 1)
 
-    def read(groups: list[int]) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def read(groups: list[int]) -> Iterator[tuple[np.ndarray, np.ndarray, np.ndarray, slice, np.ndarray]]:
         # The groups of a wave are consecutive in the ordering, so their rows are one slice of it.
         members = order[offsets[groups[0]] : offsets[groups[-1] + 1]]
         local = np.repeat(np.arange(len(groups)), sizes[groups])
         increasing = np.argsort(members, kind="stable")
         rows = members[increasing]
-        block = get_matrix(adata, layer, rows=rows, use_rep=use_rep)
-        return np.asarray(groups), rows, local[increasing], block
+        n_cols = source.shape[1]
+        # Sized as column_block in _corr sizes a slice of the data, against the read budget.
+        width = max(settings.stream_bytes // (rows.size * float_dtype(source.dtype).itemsize), 1)
+        if not by_columns or rows.size <= limit or width >= n_cols:
+            width = max(n_cols, 1)
+        for start in range(0, max(n_cols, 1), width):
+            columns = slice(start, min(start + width, n_cols))
+            block = get_matrix(adata, layer, rows=rows, use_rep=use_rep, columns=None if width >= n_cols else columns)
+            yield np.asarray(groups), rows, local[increasing], columns, block
 
     wave: list[int] = []
     total = 0
     for group in np.flatnonzero(sizes):
         if wave and total + sizes[group] > limit:
-            yield read(wave)
+            yield from read(wave)
             wave, total = [], 0
         wave.append(int(group))
         total += int(sizes[group])
     if wave:
-        yield read(wave)
+        yield from read(wave)
 
 
 def iter_groups(
@@ -363,7 +385,7 @@ def iter_groups(
     """
     codes, keys = group_codes(adata, by) if grouping is None else grouping
     if out_of_core(adata, layer, use_rep=use_rep):
-        for groups, rows, wave_codes, block in iter_waves(adata, (codes, keys), layer, use_rep=use_rep):
+        for groups, rows, wave_codes, _, block in iter_waves(adata, (codes, keys), layer, use_rep=use_rep):
             wave_order, wave_offsets = group_offsets(wave_codes, groups.size)
             for local, group in enumerate(groups):
                 picked = wave_order[wave_offsets[local] : wave_offsets[local + 1]]
@@ -428,9 +450,9 @@ def reduce_grouped(
         # A group with no contributing rows is NaN, as in the in-memory kernel.
         values = np.full((len(keys), n_cols), np.nan)
         counts = np.zeros(len(keys), dtype=np.int64)
-        waves = iter_waves(adata, (codes, keys), layer, use_rep=use_rep, mask=selected)
-        for groups, _, wave_codes, block in waves:
-            values[groups] = grouped_stat(block, wave_codes, groups.size, stat, q=q, ddof=ddof)
+        waves = iter_waves(adata, (codes, keys), layer, use_rep=use_rep, mask=selected, by_columns=True)
+        for groups, _, wave_codes, columns, block in waves:
+            values[groups, columns] = grouped_stat(block, wave_codes, groups.size, stat, q=q, ddof=ddof)
             counts[groups] = np.bincount(wave_codes, minlength=groups.size)
         return values, keys, counts
 

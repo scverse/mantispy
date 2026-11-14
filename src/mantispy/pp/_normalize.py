@@ -42,8 +42,12 @@ def _median_and_spread(
         # A few groups at a time, as reduce_grouped streams them, so a screen that does not fit in memory still normalizes.
         centre = np.full((len(keys), adata.n_vars), np.nan)
         scale = np.full((len(keys), adata.n_vars), np.nan)
-        for groups, _, wave_codes, block in iter_waves(adata, (codes, keys), layer, mask=mask):
-            centre[groups], scale[groups] = grouped_median_spread(block, wave_codes, groups.size, spread)
+        for groups, _, wave_codes, columns, block in iter_waves(
+            adata, (codes, keys), layer, mask=mask, by_columns=True
+        ):
+            centre[groups, columns], scale[groups, columns] = grouped_median_spread(
+                block, wave_codes, groups.size, spread
+            )
         return centre, scale
 
     matrix = get_matrix(adata, layer)
@@ -60,9 +64,11 @@ def _mean_and_std(
     if out_of_core(adata, layer):
         centre = np.full((len(keys), adata.n_vars), np.nan)
         scale = np.full((len(keys), adata.n_vars), np.nan)
-        for groups, _, wave_codes, block in iter_waves(adata, (codes, keys), layer, mask=mask):
-            centre[groups] = grouped_stat(block, wave_codes, groups.size, MEAN)
-            scale[groups] = grouped_stat(block, wave_codes, groups.size, STD, ddof=0)
+        for groups, _, wave_codes, columns, block in iter_waves(
+            adata, (codes, keys), layer, mask=mask, by_columns=True
+        ):
+            centre[groups, columns] = grouped_stat(block, wave_codes, groups.size, MEAN)
+            scale[groups, columns] = grouped_stat(block, wave_codes, groups.size, STD, ddof=0)
         return centre, scale
     grouping = (codes, keys)
     centre, _, _ = reduce_grouped(adata, by, MEAN, layer=layer, mask=mask, grouping=grouping)
