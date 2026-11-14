@@ -140,6 +140,6 @@
         "cell_cycle_G2M_order",
         "perturbation_score",
         "bootstrap",
-        "bootstrap_guides"
+        "composition_shift"
     ]
 }

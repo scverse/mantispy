@@ -198,14 +198,14 @@ UNS_RESULTS: tuple[str, ...] = (
     "cell_cycle_G2M_order",
     "perturbation_score",
     "bootstrap",
-    "bootstrap_guides",
+    "composition_shift",
 )
 
 #: Suffixes of a companion table written beside a result (e.g. ``effect_groups`` beside ``effect``). A key
 #: ending in one of these is registered when its base (the part before the suffix) is a registered result.
 #: Companions that are registered in their own right (``edistance_pairwise``, ``moa_confusion``) are not
 #: listed here, so each companion has a single registration.
-_RESULT_COMPANION_SUFFIXES: tuple[str, ...] = ("_groups", "_summary", "_units", "_prior_df", "_linkage")
+_RESULT_COMPANION_SUFFIXES: tuple[str, ...] = ("_groups", "_summary", "_units", "_prior_df", "_linkage", "_guides")
 
 
 @dataclass
