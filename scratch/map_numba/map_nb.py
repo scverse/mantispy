@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from numba import get_num_threads, njit, prange
+from numba import get_num_threads, njit, prange, uint64
 
 PW_BLOCKSIZE = 128
 
@@ -29,39 +29,38 @@ PW_BLOCKSIZE = 128
 
 @njit(nogil=True, inline="always")
 def _pw_dot(x, y, lo, n):
-    if n < 8:
+    # Unsigned indices drop numba's negative-index wraparound selects, which otherwise block vectorization (2.2x).
+    lo = uint64(lo)
+    n = uint64(n)
+    u1, u2, u3, u4, u5, u6, u7, u8 = uint64(1), uint64(2), uint64(3), uint64(4), uint64(5), uint64(6), uint64(7), uint64(8)
+    if n < u8:
         res = np.float32(0.0)
-        for i in range(lo, lo + n):
-            res += x[i] * y[i]
-        return res
-    if n <= PW_BLOCKSIZE:
-        r0 = x[lo] * y[lo]
-        r1 = x[lo + 1] * y[lo + 1]
-        r2 = x[lo + 2] * y[lo + 2]
-        r3 = x[lo + 3] * y[lo + 3]
-        r4 = x[lo + 4] * y[lo + 4]
-        r5 = x[lo + 5] * y[lo + 5]
-        r6 = x[lo + 6] * y[lo + 6]
-        r7 = x[lo + 7] * y[lo + 7]
-        i = 8
-        stop = n - (n % 8)
-        while i < stop:
-            b = lo + i
-            r0 += x[b] * y[b]
-            r1 += x[b + 1] * y[b + 1]
-            r2 += x[b + 2] * y[b + 2]
-            r3 += x[b + 3] * y[b + 3]
-            r4 += x[b + 4] * y[b + 4]
-            r5 += x[b + 5] * y[b + 5]
-            r6 += x[b + 6] * y[b + 6]
-            r7 += x[b + 7] * y[b + 7]
-            i += 8
-        res = ((r0 + r1) + (r2 + r3)) + ((r4 + r5) + (r6 + r7))
-        while i < n:
+        for i in range(n):
             res += x[lo + i] * y[lo + i]
-            i += 1
         return res
-    return np.float32(0.0)  # unreachable, the caller splits
+    r0 = x[lo] * y[lo]
+    r1 = x[lo + u1] * y[lo + u1]
+    r2 = x[lo + u2] * y[lo + u2]
+    r3 = x[lo + u3] * y[lo + u3]
+    r4 = x[lo + u4] * y[lo + u4]
+    r5 = x[lo + u5] * y[lo + u5]
+    r6 = x[lo + u6] * y[lo + u6]
+    r7 = x[lo + u7] * y[lo + u7]
+    stop = n - (n % u8)
+    for i in range(u8, stop, u8):
+        b = lo + i
+        r0 += x[b] * y[b]
+        r1 += x[b + u1] * y[b + u1]
+        r2 += x[b + u2] * y[b + u2]
+        r3 += x[b + u3] * y[b + u3]
+        r4 += x[b + u4] * y[b + u4]
+        r5 += x[b + u5] * y[b + u5]
+        r6 += x[b + u6] * y[b + u6]
+        r7 += x[b + u7] * y[b + u7]
+    res = ((r0 + r1) + (r2 + r3)) + ((r4 + r5) + (r6 + r7))
+    for i in range(stop, n):
+        res += x[lo + i] * y[lo + i]
+    return res
 
 
 @njit(nogil=True)
@@ -193,6 +192,70 @@ def _work_items(neg_codes: np.ndarray, n_groups: int) -> tuple[np.ndarray, np.nd
     return q_order, np.array(items, dtype=np.int64).reshape(-1, 4)
 
 
+@njit(parallel=True, nogil=True)
+def _gemm_chunk(xn, sims, qrows, brows, pos_same, pos_order, pos_off, pos_diff, neg_diff, max_pos, ap, npos, ntot):
+    """Rank queries ``qrows`` against their bucket ``brows``, reading negatives' similarities from the BLAS block
+    ``sims[q, b] = xn[qrows[q]] . xn[brows[b]]``. Positives (few) keep the exact float32 pairwise dot."""
+    nq = qrows.shape[0]
+    f = xn.shape[1]
+    n_chunks = min(nq, 4 * get_num_threads())
+    for chunk in prange(n_chunks):
+      pkeys = np.empty(max_pos, np.float32)
+      bins = np.zeros(max_pos + 1, np.int64)
+      one = np.float32(1.0)
+      for b in range(chunk, nq, n_chunks):
+        i = qrows[b]
+        for m in range(max_pos + 1):
+            bins[m] = 0
+        p = 0
+        g = pos_same[i]
+        if g >= 0:
+            for t in range(pos_off[g], pos_off[g + 1]):
+                j = pos_order[t]
+                if j != i and _differs(pos_diff, i, j):
+                    pkeys[p] = one - _dot_rec(xn[i], xn[j], 0, f)
+                    p += 1
+        ps = pkeys[:p]
+        ps.sort()
+        q = 0
+        for t in range(brows.shape[0]):
+            j = brows[t]
+            if j != i and _differs(neg_diff, i, j):
+                q += 1
+                if p > 0:
+                    bins[np.searchsorted(ps, one - sims[b, t], side="right")] += 1
+        npos[i] = p
+        ntot[i] = p + q
+        if p == 0:
+            continue
+        above = 0
+        s = 0.0
+        for r in range(p):
+            above += bins[r]
+            s += (r + 1) / (r + 1 + above)
+        ap[i] = s / p
+
+
+def _average_precision_gemm(meta, xn, ps, po, poff, pdiff, ns, n_ns, ndiff, max_pos, chunk=4096):
+    n = len(meta)
+    ap = np.full(n, np.nan)
+    npos = np.zeros(n, np.int64)
+    ntot = np.zeros(n, np.int64)
+    order, off = _bucket(ns, n_ns)
+    for g in range(n_ns):
+        brows = order[off[g] : off[g + 1]]
+        xb = xn[brows]
+        for lo in range(0, len(brows), chunk):
+            qrows = brows[lo : lo + chunk]
+            sims = xb[lo : lo + chunk] @ xb.T
+            _gemm_chunk(xn, sims, qrows, brows, ps, po, poff, pdiff, ndiff, max_pos, ap, npos, ntot)
+    lone = np.flatnonzero(ns < 0)
+    if len(lone):
+        _gemm_chunk(xn, np.empty((len(lone), 0), np.float32), lone, np.empty(0, np.int64), ps, po, poff, pdiff, ndiff,
+                    max_pos, ap, npos, ntot)  # fmt: skip
+    return ap, npos, ntot
+
+
 def _codes(meta: pd.DataFrame, columns: list[str]) -> tuple[np.ndarray, int]:
     """One code per row for the combination of ``columns``; -1 where any is missing; all zero for no columns."""
     if not columns:
@@ -209,13 +272,24 @@ def _diff_codes(meta: pd.DataFrame, columns: list[str]) -> np.ndarray:
     return out
 
 
-def average_precision(meta, feats, pos_sameby, pos_diffby, neg_sameby, neg_diffby, xn=None) -> pd.DataFrame:
-    """Per-row AP, n_pos_pairs, n_total_pairs, as copairs.map.average_precision (cosine only)."""
+def average_precision(meta, feats, pos_sameby, pos_diffby, neg_sameby, neg_diffby, xn=None, sims="exact"):
+    """Per-row AP, n_pos_pairs, n_total_pairs, as copairs.map.average_precision (cosine only).
+
+    ``sims="exact"`` reproduces copairs' float32 similarities bit for bit; ``"gemm"`` takes the negatives'
+    similarities from BLAS blocks per ``neg_sameby`` bucket, faster but rounded differently (~1e-7).
+    """
     meta = meta.reset_index(drop=True)
     xn = normalize_rows(feats) if xn is None else xn
     ps, n_ps = _codes(meta, list(pos_sameby))
     ns, n_ns = _codes(meta, list(neg_sameby))
     po, poff = _bucket(ps, n_ps)
+    if sims == "gemm":
+        max_pos = int(np.diff(poff).max()) if n_ps else 1
+        ap, npos, ntot = _average_precision_gemm(meta, xn, ps, po, poff, _diff_codes(meta, list(pos_diffby)), ns, n_ns,
+                                                 _diff_codes(meta, list(neg_diffby)), max(max_pos, 1))  # fmt: skip
+        out = meta.copy()
+        out["n_pos_pairs"], out["n_total_pairs"], out["average_precision"] = npos, ntot, ap
+        return out
     q_order, items = _work_items(ns, n_ns)
     max_pos = int(np.diff(poff).max()) if n_ps else 1
     max_neg = int((items[:, 3] - items[:, 2]).max()) if len(items) else 1

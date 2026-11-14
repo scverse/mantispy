@@ -17,7 +17,7 @@ for r in rows:
 for p in sorted(res.glob("*_copairs.parquet")):
     ref = pd.read_parquet(p)
     key = ref.columns[0]
-    for impl in ("numba", "floyd"):
+    for impl in ("numba", "floyd", "gemm"):
         q = p.with_name(p.name.replace("_copairs", f"_{impl}"))
         if not q.exists():
             continue

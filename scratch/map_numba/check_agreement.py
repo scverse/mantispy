@@ -56,6 +56,9 @@ def main():
         for mode, (ps, pd_, ns, nd) in MODES.items():
             ref = cm.average_precision(meta, x, ps, pd_, ns, nd, progress_bar=False)
             mine = map_nb.average_precision(meta, x, ps, pd_, ns, nd)
+            gemm = map_nb.average_precision(meta, x, ps, pd_, ns, nd, sims="gemm")
+            dg = np.nanmax(np.abs(ref["average_precision"].to_numpy() - gemm["average_precision"].to_numpy()))
+            print(f"  gemm: counts equal {np.array_equal(ref['n_total_pairs'], gemm['n_total_pairs'])}, max|dAP| {dg:.2e}")
             same_counts = np.array_equal(ref["n_pos_pairs"], mine["n_pos_pairs"]) and np.array_equal(
                 ref["n_total_pairs"], mine["n_total_pairs"]
             )

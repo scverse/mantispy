@@ -2,7 +2,7 @@
 
     python bench.py DATASET MODE IMPL OUTDIR [--null-size N] [--threads T]
 
-IMPL: copairs | numba (copairs' exact numpy null stream) | floyd (numba null sampler).
+IMPL: copairs | numba (copairs' exact numpy null stream) | floyd (numba null sampler) | gemm (BLAS sims + floyd).
 Writes OUTDIR/{dataset}_{mode}_{impl}.parquet (group table) and .json (timings, peak RSS).
 """
 
@@ -75,14 +75,14 @@ def prepare(dataset, mode):
     return meta, x, settings, drop, label, is_control
 
 
-def run_numba(meta, x, settings, drop, null_size, seed, null_kind, timer, n_jobs):
+def run_numba(meta, x, settings, drop, null_size, seed, null_kind, timer, n_jobs, sims="exact"):
     import map_nb
     from mantispy.tl._map import REFERENCE_COLUMN
 
     t0 = time.perf_counter()
     xn = map_nb.normalize_rows(x)
     timer.t["normalize"] = time.perf_counter() - t0
-    ap = timer.wrap("ap_kernel", map_nb.average_precision)(meta, x, **settings, xn=xn)
+    ap = timer.wrap("ap_kernel", map_nb.average_precision)(meta, x, **settings, xn=xn, sims=sims)
     if drop is not None:
         ap = ap[~ap.index.isin(drop)]
     stranded = (ap["n_pos_pairs"] > 0) & (ap["n_total_pairs"] == ap["n_pos_pairs"])
@@ -146,6 +146,7 @@ def main():
         sub = meta.iloc[:200].reset_index(drop=True)
         try:
             map_nb.average_precision(sub, x[:200], **settings)
+            map_nb.average_precision(sub, x[:200], **settings, sims="gemm")
         except Exception:
             pass
         map_nb.null_floyd(np.array([[1, 3]]), 10, 0)
@@ -155,7 +156,7 @@ def main():
         table = run_copairs(meta, x, settings, drop, a.null_size, 0, timer, a.threads)
     else:
         table = run_numba(meta, x, settings, drop, a.null_size, 0, "numpy" if a.impl == "numba" else "floyd",
-                          timer, a.threads)  # fmt: skip
+                          timer, a.threads, sims="gemm" if a.impl == "gemm" else "exact")  # fmt: skip
     wall = time.perf_counter() - t1
     if a.mode == "activity":
         ctrl = set(meta.loc[is_control, label])
