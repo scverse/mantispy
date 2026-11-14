@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import warnings
 from collections.abc import Sequence
 from typing import Literal
 
@@ -56,6 +57,27 @@ _LIST_LIKE = (list, tuple, set, np.ndarray)
 #: The nulls of a group's mAP, and the samplers of the copied one.
 NULLS = ("copied", "permutation", "joint")
 NULL_SAMPLERS = ("exact", "floyd")
+
+#: Above this many positive plus negative pairs, :func:`map` warns that the run takes minutes to hours, as each pair's
+#: similarity is computed once.
+MAX_PAIRS = 10_000_000_000
+
+
+def _count_pairs(meta: pd.DataFrame, sameby: list[str], diffby: list[str]) -> int:
+    """An upper bound on the pairs of one ``sameby``/``diffby`` definition, from group sizes alone.
+
+    The pairs sharing ``sameby`` are counted exactly. A pair must also differ in every ``diffby`` column, so the
+    pairs sharing ``sameby`` and any single ``diffby`` column are subtracted, the largest such set, which is exact
+    for one ``diffby`` column.
+    """
+
+    def sharing(columns: list[str]) -> int:
+        if not columns:
+            return len(meta) * (len(meta) - 1) // 2
+        sizes = meta.groupby(columns, observed=True, sort=False).size().to_numpy(dtype=np.int64)
+        return int((sizes * (sizes - 1) // 2).sum())
+
+    return sharing(sameby) - max((sharing([*sameby, column]) for column in diffby), default=0)
 
 
 def _resolve_mode(mode: str, *, label: str, batch: str, annotation: str | None = None) -> dict[str, list[str]]:
@@ -130,7 +152,6 @@ def _score_map(
     distance: str = "cosine",
     null: str = "copied",
     null_sampler: str = "exact",
-    similarity_solver: str = "exact",
     drop_positions: np.ndarray | None = None,
     multilabel_col: str | None = None,
     warn: bool = True,
@@ -160,7 +181,7 @@ def _score_map(
         meta, settings["pos_sameby"], settings["pos_diffby"], settings["neg_sameby"], settings["neg_diffby"],
         multilabel_col,
     )  # fmt: skip
-    result = ap_kernel.average_precision(lay, features, distance, similarity_solver)
+    result = ap_kernel.average_precision(lay, features, distance)
     precision = ap_kernel.ap_frame(meta, lay, result, multilabel_col)
     if drop_positions is not None:
         precision = precision[~precision[ap_kernel.PROFILE].isin(drop_positions)]
@@ -168,7 +189,11 @@ def _score_map(
 
     queries = precision["n_pos_pairs"] > 0
     if not queries.any():
-        raise ValueError("no profile has a positive pair, so there is nothing to score")
+        raise ValueError(
+            "no profile has a positive pair, so there is nothing to score. Each label group needs at least two rows "
+            "(replicates) that meet the mode's plate rule, such as sitting on different plates for "
+            "mode='cross_plate'. Check label= and batch=."
+        )
     # A query with replicates but no negatives cannot be ranked, so it is left out rather than scored AP = 1.
     stranded = queries & (precision["n_total_pairs"] == precision["n_pos_pairs"])
     if stranded.any():
@@ -232,7 +257,7 @@ def _score_map(
     return groups_table, group_columns
 
 
-@inplace_or_copy(expects=("well", "aggregate"))
+@inplace_or_copy(expects=("well", "aggregate"), record_by_key=True)
 def map(
     adata: AnnData,
     pos_sameby: Sequence[str] | None = None,
@@ -252,7 +277,6 @@ def map(
     distance: str = "cosine",
     null: Literal["copied", "permutation", "joint"] = "copied",
     null_sampler: Literal["exact", "floyd"] = "exact",
-    similarity_solver: Literal["exact", "blas"] = "exact",
     key_added: str = "map",
     copy: bool = False,
 ) -> AnnData | None:
@@ -298,27 +322,39 @@ def map(
         distance: Distance to rank by: ``"cosine"`` (the default), ``"abs_cosine"``, ``"correlation"``,
             ``"euclidean"``, ``"manhattan"``, ``"chebyshev"``, or a :func:`scipy.spatial.distance.cdist` metric name,
             each turned into a similarity as copairs does.
-        null: The null model of the group mAP, as copairs defines it: ``"copied"``, ``"permutation"`` or ``"joint"``.
-            ``"copied"`` is the model of :cite:t:`Kalinin_2025` and copairs before 0.6.
-            ``"permutation"`` relabels profiles within the blocks they are ranked in and recomputes the mAP from their similarities. It needs every profile holding a label in the scored table, so it fails on a multilabel annotation where a profile has no negative pair. It ranks by the six named distances, not by a scipy metric.
-            ``"joint"`` draws the members' APs together, sharing each positive pair between its two members.
-        null_sampler: How the copied null is drawn. ``"exact"`` replays copairs' random stream, so p-values equal copairs' for the same seed; ``"floyd"`` draws only the positions of the positives, which is faster and has the same distribution but different draws.
-        similarity_solver: How similarities are computed. ``"exact"`` reproduces copairs' float32 values, so rankings and scores equal copairs'; ``"blas"`` computes them as matrix products, which is faster for the cosine, correlation and euclidean distances but can order near-tied pairs differently.
+        null: The null model the group mAP is tested against, one of the three copairs defines.
+            The default is ``"copied"``, the model of :cite:t:`Kalinin_2025` and of copairs before 0.6, which copairs 0.6 replaced with ``"permutation"`` as its default.
+            mantispy keeps ``"copied"`` because its p-values are conservative for groups with several replicates, while ``"joint"`` can give p-values that are too small for groups with many replicates, which copairs warns about too.
+
+            ``"copied"``
+                Compares each member's average precision with random rankings that have the member's numbers of positives and pairs, and averages over the members. Members with the same numbers share one random draw, which widens the null, so the test is conservative for groups with several replicates.
+            ``"joint"``
+                Draws the members' average precisions together, so a positive pair between two members is one random rank in both of their lists.
+            ``"permutation"``
+                Moves the group's label at random among the profiles its members are ranked with, and recomputes the mAP from the observed similarities. It is the slowest of the three. It needs every profile holding a label in the scored table, so it fails on a multilabel annotation where a profile has no negative pair, and it ranks by the six named distances, not by a scipy metric. It holds at most 8 GiB of sorted similarities and 4 GiB of similarity tables, about 12 GiB in all, and refuses a screen that would need more.
+        null_sampler: How the ``"copied"`` null is drawn.
+            ``"exact"`` gives the same p-values as copairs for the same seed, so published copairs numbers reproduce.
+            ``"floyd"`` is faster on large screens and draws from the same null distribution, but its p-values differ from copairs' by the random error of the draws. Keep ``"exact"`` for numbers you report.
         key_added: Where to store results.
         copy: Return a modified copy instead of mutating in place.
 
     Returns:
         ``None``, or the modified copy.
         Writes the per-group table to ``uns["mantispy"][key_added]`` and joins ``obs[key_added]`` and ``obs[key_added + "_qvalue"]`` back onto the rows.
+        The call's parameters, the null and seed among them, go to ``uns["mantispy"]["params"]["map:" + key_added]``.
         A group with one member has no within-group pair to score, so it is absent from the table.
         A multilabel annotation has no single score per row, so it writes the per-class table to ``uns`` only and clears ``obs[key_added]`` and ``obs[key_added + "_qvalue"]``.
 
     Raises:
-        ValueError: ``mode`` was passed together with explicit pair arguments or neither was passed, ``mode`` is not one of ``MODES``, ``mode="consistency"`` came without ``annotation_key``, ``mode="activity"`` found no controls, no profile has a positive pair or a negative pair to be ranked against, the profiles hold missing or infinite values or a cosine norm of zero or overflow, which cannot be ranked, a label column mixes list-valued and scalar entries, more than one positive-pair column is list-valued, or the null, sampler, solver or distance is not supported.
+        ValueError: ``mode`` was passed together with explicit pair arguments or neither was passed, ``mode`` is not one of ``MODES``, ``mode="consistency"`` came without ``annotation_key``, ``mode="activity"`` found no controls, no profile has a positive pair or a negative pair to be ranked against, the profiles hold missing or infinite values or a cosine norm of zero or overflow, which cannot be ranked, a label column mixes list-valued and scalar entries, more than one positive-pair column is list-valued, or the null, sampler or distance is not supported.
         KeyError: ``obs`` is missing a column the pair definitions or ``reference`` name.
 
     Notes:
-        The pairs are never materialized: a query's positives and negatives follow from the group codes of the pair columns, so memory does not grow with the number of pairs, while time does. An explicit pair query that pairs across a high-cardinality column (every compound against every other) is best run on consensus profiles (:func:`~mantispy.tl.consensus`).
+        The pairs are never stored: a query's positives and negatives follow from the group codes of the pair columns, so memory does not grow with the number of pairs, while time does. An explicit pair query that pairs across a high-cardinality column (every compound against every other) is best run on consensus profiles (:func:`~mantispy.tl.consensus`), and a warning says when a query ranks so many pairs that it would run for a long time.
+
+        The scoring runs on numba's threads, one per core by default. Cap them with ``numba.set_num_threads``.
+
+        :doc:`/tutorials/profiles/map_and_copairs` lists how the arguments and nulls of copairs map onto this function.
     """
     label = resolve_perturbation_column(adata, label)
     explicit = any([pos_sameby, pos_diffby, neg_sameby, neg_diffby])
@@ -406,6 +442,19 @@ def map(
             lambda value: list(value) if isinstance(value, _LIST_LIKE) else []
         )
 
+    # A list-valued column cannot be grouped; leaving it out of the count only loosens the bound.
+    scalar = {key: [c for c in value if c != multilabel_col] for key, value in settings.items()}
+    pairs = _count_pairs(meta, scalar["pos_sameby"], scalar["pos_diffby"]) + _count_pairs(
+        meta, scalar["neg_sameby"], scalar["neg_diffby"]
+    )
+    if pairs > MAX_PAIRS:
+        warnings.warn(
+            f"these pair definitions rank up to {pairs:,} pairs of {len(meta)} profiles, which takes minutes to "
+            "hours. Run on mt.tl.consensus() profiles, or narrow the negatives with neg_sameby=.",
+            UserWarning,
+            stacklevel=3,
+        )
+
     table, group_columns = _score_map(
         meta,
         features,
@@ -416,7 +465,6 @@ def map(
         distance=distance,
         null=null,
         null_sampler=null_sampler,
-        similarity_solver=similarity_solver,
         drop_positions=drop_positions,
         multilabel_col=multilabel_col,
     )

@@ -88,6 +88,16 @@ def test_map_plot_draws_the_threshold_actually_used(evaluated):
     assert any(abs(y - -np.log10(0.05)) < 1e-9 for y in lines)
 
 
+def test_map_plot_draws_the_threshold_of_its_own_key(evaluated):
+    """A later call under another key must not move the line drawn for an earlier table."""
+    mt.tl.map(evaluated, mode="activity", null_size=200, threshold=0.1, key_added="loose")
+    mt.tl.map(evaluated, mode="activity", null_size=200, threshold=0.01, key_added="strict")
+    _, ax = plt.subplots()
+    mt.pl.map(evaluated, key="loose", ax=ax)
+    lines = [line.get_ydata()[0] for line in ax.get_lines()]
+    assert any(abs(y - -np.log10(0.1)) < 1e-9 for y in lines)
+
+
 def test_metrics_plot_marks_which_direction_is_better():
     _, ax = plt.subplots()
     mt.pl.metrics(_metrics_table(), ax=ax)

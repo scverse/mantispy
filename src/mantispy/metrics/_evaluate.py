@@ -236,6 +236,9 @@ def evaluate_integration(
             ``label_key`` has no replicates or is confounded with ``batch_key``; or ``metrics`` names an unknown
             metric or selects nothing runnable.
         KeyError: ``obs`` is missing ``label_key`` or ``batch_key``.
+
+    Notes:
+        The mAP runs on numba's threads, one per core by default. Cap them with ``numba.set_num_threads``.
     """
     from mantispy.pl._evaluation import _integration_heatmap
 

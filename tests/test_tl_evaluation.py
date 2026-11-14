@@ -104,7 +104,7 @@ def test_a_null_too_small_for_the_correction_says_so(pure_noise_screen, caplog):
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 
-def test_a_p_value_does_not_depend_on_earlier_calls(pure_noise_screen, tmp_path, monkeypatch):
+def test_a_p_value_does_not_depend_on_earlier_calls(pure_noise_screen):
     """A configuration's null is seeded by its own counts, so a p-value depends neither on the other groups nor on earlier calls."""
     alone = pure_noise_screen(n_control=0, n_groups=6, per_group=4, seed=0)
     other_plate = pure_noise_screen(n_control=0, n_groups=3, per_group=2, seed=1)
@@ -118,9 +118,7 @@ def test_a_p_value_does_not_depend_on_earlier_calls(pure_noise_screen, tmp_path,
             mt.tl.map(adata, mode="replicability", reference=None, null_size=200)
         return objects[-1].uns["mantispy"]["map"]["pvalue"].to_numpy()
 
-    monkeypatch.setenv("HOME", str(tmp_path / "fresh"))
     fresh = p_values(alone.copy())
-    monkeypatch.setenv("HOME", str(tmp_path / "after"))
     after = p_values(both, alone.copy())
 
     np.testing.assert_array_equal(fresh, after)
@@ -340,15 +338,14 @@ def test_map_is_reproducible_and_supports_a_representation(profiles):
     assert len(profiles.uns["mantispy"]["map_pca"]) > 0
 
 
-def test_map_fast_paths_agree_with_the_exact_ones(profiles):
-    """The Floyd sampler and BLAS similarities trade bit-identity for speed: the scores and calls stay the same here."""
-    exact = mt.tl.map(profiles, mode="activity", null_size=500, seed=1, copy=True).uns["mantispy"]["map"]
-    floyd = mt.tl.map(profiles, mode="activity", null_size=500, seed=1, null_sampler="floyd", copy=True)
-    blas = mt.tl.map(profiles, mode="activity", null_size=500, seed=1, similarity_solver="blas", copy=True)
-    pd.testing.assert_series_equal(exact["score"], floyd.uns["mantispy"]["map"]["score"])
-    np.testing.assert_allclose(exact["score"], blas.uns["mantispy"]["map"]["score"], atol=1e-6)
-    np.testing.assert_array_equal(exact["is_significant"], floyd.uns["mantispy"]["map"]["is_significant"])
-    pd.testing.assert_series_equal(exact["pvalue"], blas.uns["mantispy"]["map"]["pvalue"])
+def test_map_floyd_sampler_agrees_with_the_exact_one(profiles):
+    """The Floyd sampler draws the same null with other draws: equal scores, p-values within the draws' random error."""
+    exact = mt.tl.map(profiles, mode="activity", null_size=2000, seed=1, copy=True).uns["mantispy"]["map"]
+    floyd = mt.tl.map(profiles, mode="activity", null_size=2000, seed=1, null_sampler="floyd", copy=True)
+    floyd = floyd.uns["mantispy"]["map"]
+    pd.testing.assert_series_equal(exact["score"], floyd["score"])
+    p = exact["pvalue"].to_numpy()
+    assert np.all(np.abs(floyd["pvalue"].to_numpy() - p) <= 5 * np.sqrt(2 * p * (1 - p) / 2000) + 3 / 2001)
 
 
 def test_map_refuses_unsupported_null_options(profiles):
@@ -356,17 +353,44 @@ def test_map_refuses_unsupported_null_options(profiles):
         mt.tl.map(profiles, mode="activity", null="joint", null_sampler="floyd")
     with pytest.raises(ValueError, match="null must be one of"):
         mt.tl.map(profiles, mode="activity", null="bootstrap")
-    with pytest.raises(ValueError, match="'blas' supports"):
-        mt.tl.map(profiles, mode="activity", distance="manhattan", similarity_solver="blas")
 
 
 def test_map_without_any_positive_pair_says_so():
-    """Every perturbation a singleton: nothing has a replicate to retrieve."""
+    """Every perturbation a singleton: nothing has a replicate to retrieve, and the error says what to check."""
     n = 50
     obs = pd.DataFrame({"Metadata_Perturbation": [f"p{i}" for i in range(n)]}, index=[str(i) for i in range(n)])
     wide = ad.AnnData(np.random.default_rng(0).normal(size=(n, 3)).astype(np.float32), obs=obs)
-    with pytest.raises(ValueError, match="no profile has a positive pair"):
+    with pytest.raises(ValueError, match="no profile has a positive pair.*at least two rows.*label= and batch="):
         mt.tl.map(wide, pos_sameby=["Metadata_Perturbation"], neg_diffby=["Metadata_Perturbation"])
+
+
+def test_map_warns_before_a_pair_query_that_runs_for_long(profiles, monkeypatch):
+    """Every pair's similarity is computed, so a query ranking billions of pairs runs for minutes to hours; say so first."""
+    from mantispy.tl import _map
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", message=".*pairs of")
+        mt.tl.map(profiles, mode="activity", null_size=200)
+    monkeypatch.setattr(_map, "MAX_PAIRS", 100)
+    with pytest.warns(UserWarning, match="takes minutes to hours"):
+        mt.tl.map(profiles, mode="activity", null_size=200)
+
+
+def test_map_keeps_the_parameters_of_each_key(profiles):
+    """Two calls under different keys keep their own null and seed, so each table can be traced to its call."""
+    mt.tl.map(profiles, mode="activity", null_size=200, seed=1, key_added="first")
+    mt.tl.map(profiles, mode="activity", null_size=300, seed=2, null="joint", key_added="second")
+    params = profiles.uns["mantispy"]["params"]
+    assert (params["map:first"]["null"], params["map:first"]["seed"], params["map:first"]["null_size"]) == (
+        "copied",
+        1,
+        200,
+    )
+    assert (params["map:second"]["null"], params["map:second"]["seed"], params["map:second"]["null_size"]) == (
+        "joint",
+        2,
+        300,
+    )
 
 
 def test_map_argument_errors(profiles):

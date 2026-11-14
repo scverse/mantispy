@@ -45,8 +45,8 @@ def map(adata: AnnData, key: str = "map", label_top: int = 10, ax: Axes | None =
     significance = -np.log10(np.clip(table["qvalue"].to_numpy(dtype=float), 1e-12, None))
     ax.scatter(table["score"], significance, s=14)
 
-    # Params are stored under the function name, not the table's `key`.
-    threshold = adata.uns.get("mantispy", {}).get("params", {}).get("map", {}).get("threshold", 0.05)
+    # tl.map records its parameters under "map:<key_added>", next to the table it wrote under that key.
+    threshold = adata.uns.get("mantispy", {}).get("params", {}).get(f"map:{key}", {}).get("threshold", 0.05)
     ax.axhline(-np.log10(threshold), color="grey", ls="--", lw=1, label=f"q = {threshold}")
 
     group_column = table.columns[0]

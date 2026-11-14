@@ -107,10 +107,7 @@ def test_profile_level_tools(shape):
     _measure("tl.edistance", wells.shape, lambda: mt.tl.edistance(wells, use_rep="X_pca", n_permutations=1000))
     _measure("tl.effect_size", wells.shape, lambda: mt.tl.effect_size(wells))
 
-    map_available = pytest.importorskip("copairs", reason="mAP needs mantispy[map]") is not None
-    if map_available:
-        treated = wells[~wells.obs["Metadata_Control"].to_numpy()].copy()
-        _measure("tl.map", treated.shape, lambda: mt.tl.map(treated, mode="activity", null_size=1000))
+    _measure("tl.map", wells.shape, lambda: mt.tl.map(wells, mode="activity", null_size=1000))
 
 
 def test_backed_uses_less_memory_than_it_saves_time(tmp_path):

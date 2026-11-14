@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 from numba import njit
 
-from mantispy._core._average_precision import APResult, _pairwise_sum, summation_plan
+from mantispy._core._average_precision import APResult
 from mantispy._core._numba import N_CHUNKS
 
 if TYPE_CHECKING:
@@ -81,35 +81,26 @@ def group_scores(ap: pd.DataFrame, sameby: list[str]) -> tuple[pd.DataFrame, lis
 # copied null
 
 
-@njit(nogil=True, cache=True)
-def _random_ap_exact(rng, null_size, num_pos, total, out, leaf_lo, leaf_n, ops, ones32, ones64):
+#: Null draws shuffled per chunk in the exact sampler, so a configuration of ``total`` pairs holds ``chunk * total``
+#: indices at a time rather than ``null_size * total``.
+_EXACT_CHUNK = 256
+
+
+def _random_ap_exact(rng: np.random.Generator, null_size: int, num_pos: int, total: int, out: np.ndarray) -> None:
     """Copairs' ``random_ap``: each draw shuffles ``range(total)`` with ``rng`` and scores its first ``num_pos``.
 
-    numba's ``Generator.shuffle`` consumes numpy's stream exactly as ``Generator.permuted`` does row by row, and the
-    float32 precisions are summed with numpy's pairwise tree, so every draw is copairs' value.
+    ``Generator.permuted`` shuffles row after row from one stream, so shuffling the draws a chunk at a time takes the
+    same numbers as copairs' single call, and the precisions are summed with copairs' own numpy expression and
+    dtypes, so every draw is copairs' value.
     """
-    buf = np.empty(total, np.int64)
-    terms32 = np.empty(num_pos, np.float32)
-    terms64 = np.empty(num_pos, np.float64)
-    stack32 = np.empty(64, np.float32)
-    stack64 = np.empty(64, np.float64)
-    small = total < 2**16  # copairs indexes with uint16 then, whose ``+ 1`` stays an integer float32 divides
-    for d in range(null_size):
-        for t in range(total):
-            buf[t] = t
-        rng.shuffle(buf)
-        head = buf[:num_pos]
-        head.sort()
-        if small:
-            for r in range(num_pos):
-                terms32[r] = np.float32(r + 1) / np.float32(head[r] + 1)
-            s = _pairwise_sum(terms32, ones32, 0, leaf_lo, leaf_n, ops, stack32)
-            out[d] = s / np.float32(num_pos)
-        else:
-            for r in range(num_pos):
-                terms64[r] = np.float64(np.float32(r + 1)) / np.float64(head[r] + 1)
-            s64 = _pairwise_sum(terms64, ones64, 0, leaf_lo, leaf_n, ops, stack64)
-            out[d] = np.float32(s64 / num_pos)
+    dtype = np.uint16 if total < 2**16 else np.uint32
+    ranks = np.arange(1, num_pos + 1, dtype=np.float32)
+    for lo in range(0, null_size, _EXACT_CHUNK):
+        n = min(_EXACT_CHUNK, null_size - lo)
+        indices = np.tile(np.arange(total, dtype=dtype), (n, 1))
+        rng.permuted(indices, axis=1, out=indices)
+        head: np.ndarray = np.sort(indices[:, :num_pos], axis=1)
+        out[lo : lo + n] = ((ranks / (head + 1)).sum(axis=1) / num_pos).astype(np.float32)
 
 
 def _null_exact(confs: np.ndarray, null_size: int, seed: int, n_threads: int) -> np.ndarray:
@@ -117,29 +108,27 @@ def _null_exact(confs: np.ndarray, null_size: int, seed: int, n_threads: int) ->
 
     def one(c: int) -> None:
         k, total = int(confs[c, 0]), int(confs[c, 1])
-        leaf_lo, leaf_n, ops = summation_plan(k)
-        rng = np.random.default_rng(_conf_seed(seed, k, total))
-        _random_ap_exact(rng, null_size, k, total, out[c], leaf_lo, leaf_n, ops, np.ones(k, np.float32), np.ones(k))
+        _random_ap_exact(np.random.default_rng(_conf_seed(seed, k, total)), null_size, k, total, out[c])
 
+    # The longest shuffles first, so no thread starts a large configuration after the others have finished.
     with ThreadPoolExecutor(max(1, n_threads)) as pool:
-        list(pool.map(one, range(len(confs))))
+        list(pool.map(one, np.argsort(-confs[:, 1], kind="stable")))
     return out
 
 
 @njit(nogil=True, cache=True, inline="always")
-def _splitmix(state):
-    state = state + np.uint64(0x9E3779B97F4A7C15)
-    z = state
+def mix(z):
+    """splitmix64's output function, which also hashes a seed into a state."""
     z = (z ^ (z >> np.uint64(30))) * np.uint64(0xBF58476D1CE4E5B9)
     z = (z ^ (z >> np.uint64(27))) * np.uint64(0x94D049BB133111EB)
-    return state, z ^ (z >> np.uint64(31))
+    return z ^ (z >> np.uint64(31))
 
 
 @njit(nogil=True, cache=True, inline="always")
-def _uniform(state):
-    """A double in ``[0, 1)`` with 53 random bits, and the advanced state."""
-    state, z = _splitmix(state)
-    return state, np.float64(z >> np.uint64(11)) * (1.0 / 9007199254740992.0)
+def uniform(state):
+    """splitmix64: the advanced state and a double in ``[0, 1)`` with 53 random bits."""
+    state = state + np.uint64(0x9E3779B97F4A7C15)
+    return state, np.float64(mix(state) >> np.uint64(11)) * (1.0 / 9007199254740992.0)
 
 
 @njit(parallel=True, nogil=True, cache=True)
@@ -157,7 +146,7 @@ def _null_floyd_kernel(ks, totals, seeds, null_size, max_total, max_k, n_chunks)
             for d in range(null_size):
                 m = 0
                 for j in range(total - k, total):
-                    state, u = _uniform(state)
+                    state, u = uniform(state)
                     t = min(np.int64(u * (j + 1)), j)
                     if mark[t]:
                         t = j

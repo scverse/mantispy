@@ -1,4 +1,7 @@
-"""mAP equivalence against copairs, the reference implementation mantispy's kernels replace."""
+"""mAP equivalence against copairs 0.6.0, the reference implementation mantispy's kernels replace.
+
+The test dependency group pins that version, because the exact null samplers replay its random streams.
+"""
 
 import numpy as np
 import pandas as pd
@@ -43,9 +46,9 @@ def _screen(seed: int = 0, ties: bool = False, n_features: int = 150) -> tuple[p
     return meta, x
 
 
-def _ours(meta, x, spec, distance="cosine", solver="exact", multilabel_col=None):
+def _ours(meta, x, spec, distance="cosine", multilabel_col=None):
     lay = ap_kernel.layout(meta, *spec, multilabel_col=multilabel_col)
-    return lay, ap_kernel.average_precision(lay, x, distance, solver)
+    return lay, ap_kernel.average_precision(lay, x, distance)
 
 
 @pytest.mark.parametrize("ties", [False, True])
@@ -64,16 +67,6 @@ def test_average_precision_matches_copairs(mode, distance, ties):
         result.average_precision, result.n_pos_pairs, result.n_total_pairs
     )
     np.testing.assert_allclose(normalized, expected["normalized_average_precision"], rtol=0, atol=1e-12)
-
-
-@pytest.mark.parametrize("distance", ap_kernel.BLAS_DISTANCES)
-def test_blas_similarities_match_copairs_without_near_ties(distance):
-    """BLAS rounds differently, which moves a rank only where two similarities lie within float32 rounding."""
-    meta, x = _screen(seed=1)
-    expected = copairs_map.average_precision(meta, x, *MODES["replicability"], distance=distance, progress_bar=False)
-    _, result = _ours(meta, x, MODES["replicability"], distance, solver="blas")
-    np.testing.assert_array_equal(result.n_total_pairs, expected["n_total_pairs"])
-    np.testing.assert_allclose(result.average_precision, expected["average_precision"], atol=1e-12)
 
 
 @pytest.mark.parametrize("ties", [False, True])
@@ -119,13 +112,39 @@ def test_exact_similarity_is_copairs_float32_value(n_features):
     np.testing.assert_array_equal(ours.view(np.uint32), expected.view(np.uint32))
 
 
+@pytest.mark.parametrize("n_features", [5, 8, 128, 129, 300, 1483])
+@pytest.mark.parametrize("distance", list(ap_kernel.BUILTIN))
+def test_panel_similarities_are_the_pairwise_values(distance, n_features):
+    """A panel of candidates scored against a block of queries gives every pair's float32 value, bit for bit."""
+    rng = np.random.default_rng(n_features)
+    rows, scale = ap_kernel.prepare_rows(rng.standard_normal((40, n_features)).astype(np.float32), distance)
+    metric = ap_kernel.BUILTIN[distance]
+    leaf_lo, leaf_n, ops = ap_kernel.summation_plan(n_features)
+    stack = np.empty(64, np.float32)
+    queries, cand = np.arange(5, dtype=np.int64), np.arange(3, 40, dtype=np.int64)
+    panel = np.zeros((n_features, ap_kernel.PANEL), np.float32)
+    acc = np.zeros((ap_kernel.QUERIES, 8, ap_kernel.PANEL), np.float32)
+    sums = np.zeros((ap_kernel.stack_depth(ops), ap_kernel.QUERIES, ap_kernel.PANEL), np.float32)
+    out = np.zeros((ap_kernel.QUERIES, ap_kernel.PANEL), np.float32)
+    ap_kernel.fill_panel(rows, cand, len(cand), panel)
+    ap_kernel.panel_similarity(
+        rows, scale, metric, leaf_lo, leaf_n, ops, queries, len(queries), cand, len(cand), panel, acc, sums, out
+    )
+    expected = np.array(
+        [
+            [ap_kernel._similarity(rows, scale, i, j, metric, leaf_lo, leaf_n, ops, stack) for j in cand]
+            for i in queries
+        ],
+        dtype=np.float32,
+    )
+    np.testing.assert_array_equal(out[: len(queries), : len(cand)].view(np.uint32), expected.view(np.uint32))
+
+
 def test_unsupported_distances_are_refused():
     meta, x = _screen()
     lay = ap_kernel.layout(meta, *MODES["replicability"])
     with pytest.raises(ValueError, match="estimates its scale"):
         ap_kernel.average_precision(lay, x, "mahalanobis")
-    with pytest.raises(ValueError, match="'blas' supports"):
-        ap_kernel.average_precision(lay, x, "manhattan", solver="blas")
     with pytest.raises(ValueError, match="distance must be one of"):
         ap_kernel.average_precision(lay, x, "nonsense")
 
@@ -182,6 +201,17 @@ def test_copied_null_draws_are_copairs_draws(num_pos, total):
     ours = map_null._null_exact(np.array([[num_pos, total]]), 64, 11, 1)[0]
     expected = random_ap(64, num_pos, total, map_null._conf_seed(11, num_pos, total))
     np.testing.assert_array_equal(ours.view(np.uint32), expected.view(np.uint32))
+
+
+def test_copied_null_draws_in_chunks_are_copairs_draws(monkeypatch):
+    """Shuffling the draws a few at a time takes copairs' random stream in the same order as one call."""
+    from copairs.compute import random_ap
+
+    monkeypatch.setattr(map_null, "_EXACT_CHUNK", 7)
+    ours = map_null._null_exact(np.array([[3, 50], [4, 70000]]), 30, 2, 2)
+    for row, (num_pos, total) in zip(ours, [(3, 50), (4, 70000)], strict=True):
+        expected = random_ap(30, num_pos, total, map_null._conf_seed(2, num_pos, total))
+        np.testing.assert_array_equal(row.view(np.uint32), expected.view(np.uint32))
 
 
 @pytest.mark.parametrize("multilabel", [False, True])
@@ -343,15 +373,9 @@ def test_permutation_null_does_not_depend_on_where_its_keys_come_from(mode, monk
     for budget in (4 * len(meta) ** 2 // 3, 2000, 0):
         monkeypatch.setattr(map_permutation, "_TABLE_BUDGET", budget)
         np.testing.assert_array_equal(_permutation(meta, x, spec, 500, 0, multilabel_col=column)["p_value"], default)
-
-
-def test_blas_positives_are_scored_in_chunks(monkeypatch):
-    """Gathering every positive pair's rows at once needs memory in the pair count; chunks give the same scores."""
-    meta, x = _screen(seed=2)
-    _, whole = _ours(meta, x, MODES["cross_plate"], "euclidean", solver="blas")
-    monkeypatch.setattr(ap_kernel, "_BLOCK_BYTES", 8 * x.shape[1] * 7)  # seven pairs per chunk
-    _, chunked = _ours(meta, x, MODES["cross_plate"], "euclidean", solver="blas")
-    np.testing.assert_allclose(whole.average_precision, chunked.average_precision, atol=1e-6)
+    # without tables, the keys between the drawn profiles come from panels rather than one pair at a time
+    monkeypatch.setattr(map_permutation, "_PANEL_SLOTS", 1)
+    np.testing.assert_array_equal(_permutation(meta, x, spec, 500, 0, multilabel_col=column)["p_value"], default)
 
 
 @pytest.mark.parametrize("mode", list(MODES))

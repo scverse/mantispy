@@ -94,7 +94,7 @@ dev = [
 ]
 test = [
   # Reference implementations, used only to assert equivalence. Never imported from src/.
-  "copairs>=0.6",
+  "copairs==0.6",
   "coverage>=7.10",
   # sc.tl.leiden needs both.
   "igraph",
@@ -227,6 +227,7 @@ overrides = [
     "geopandas.*",
     "h5py.*",
     "imageio.*",
+    "llvmlite.*",
     "numba.*",
     "plotly.*",
     "plottable.*",
