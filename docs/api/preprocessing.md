@@ -16,6 +16,7 @@ Annotate, quality-control, normalize, select and batch-correct profiles.
    pp.annotate_controls
    pp.annotate_jump
    pp.find_perturbation_key
+   pp.pseudogenes
    pp.standardize_feature_names
 ```
 
