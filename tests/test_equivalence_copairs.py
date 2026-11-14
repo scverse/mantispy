@@ -354,3 +354,13 @@ def test_blas_positives_are_scored_in_chunks(monkeypatch):
     monkeypatch.setattr(ap_kernel, "_BLOCK_BYTES", 8 * x.shape[1] * 7)  # seven pairs per chunk
     _, chunked = _ours(meta, x, MODES["cross_plate"], "euclidean", solver="blas")
     np.testing.assert_allclose(whole.average_precision, chunked.average_precision, atol=1e-6)
+
+
+@pytest.mark.parametrize("mode", list(MODES))
+def test_permutation_null_does_not_depend_on_the_fixed_set_it_ranks_against(mode, monkeypatch):
+    """Ranking against the references plus the undrawn members, or the whole bucket less its outsiders, counts the same."""
+    meta, x = _screen(seed=7, ties=True, n_features=20)
+    bucket = _permutation(meta, x, MODES[mode], 500, 0)["p_value"]
+    monkeypatch.setattr(map_permutation, "_MAX_EXPLICIT", -1)  # every block ranks against its references
+    references = _permutation(meta, x, MODES[mode], 500, 0)["p_value"]
+    np.testing.assert_array_equal(bucket, references)
