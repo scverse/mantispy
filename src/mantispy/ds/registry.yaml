@@ -9,13 +9,13 @@ datasets:
         # (s3://ops-explorer-public/aconcagua), not from a Cell Painting Gallery accession, so it is staged
         # straight to scverse-exampledata with no raw source here.
         files:
-            - name: aconcagua_guide_well.h5ad
-              url: https://exampledata.scverse.org/mantispy/aconcagua/aconcagua_guide_well.h5ad
-              sha256: 783898d220cfa0dfcd6bd7f821d11ec8de88b9306603b316bd04cf28bb4bbdaf
+            - name: aconcagua_guide_well_v2.h5ad
+              url: https://exampledata.scverse.org/mantispy/aconcagua/aconcagua_guide_well_v2.h5ad
+              sha256: fd81d3bc30ba31382aab5ae2896088835746b83ff9dffa6846d1326c1425768a
             # The single cells of nine of its genes, raw intensities, staged alongside: 38,674 cells x 1,483 features.
-            - name: aconcagua_cells.h5ad
-              url: https://exampledata.scverse.org/mantispy/aconcagua/aconcagua_cells.h5ad
-              sha256: fcc65da402b2954d55c1b99bd0b944ed64d8550555ecdfaeb6e42dd7d68eb0ac
+            - name: aconcagua_cells_v2.h5ad
+              url: https://exampledata.scverse.org/mantispy/aconcagua/aconcagua_cells_v2.h5ad
+              sha256: 6e4d136c422dc926d5107782d16ee924d2a5d490069b9747d868cfe568537e06
     bbbc021:
         type: mantispy
         doc_header: BBBC021, 632 wells of 38 compounds and DMSO annotated with a mechanism of action.

@@ -150,13 +150,13 @@ def aconcagua(cache_dir: str | Path | None = None) -> AnnData:
             Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Returns:
-        Guide-by-well profiles read with :func:`mantispy.io.read`, carrying ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Guide``, ``Metadata_Gene``, ``Metadata_Perturbation`` (the gene, or ``"nontargeting"``), ``Metadata_Perturbation_Type`` (``"crispr"``), ``Metadata_Control`` and ``Metadata_Control_Type`` (``negcon``/``poscon``/``treatment``), ``Metadata_Tier`` (``control``/``strong``/``weak``/``random``), ``Metadata_CellCount`` and ``Metadata_MitoticFraction``.
+        Guide-by-well profiles read with :func:`mantispy.io.read`, carrying ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_sgRNA``, ``Metadata_Gene``, ``Metadata_Perturbation`` (the gene, or ``"nontargeting"``), ``Metadata_Perturbation_Type`` (``"crispr"``), ``Metadata_Control`` and ``Metadata_Control_Type`` (``negcon``/``poscon``/``treatment``), ``Metadata_Tier`` (``control``/``strong``/``weak``/``random``), ``Metadata_CellCount`` and ``Metadata_MitoticFraction``.
 
     References:
         :cite:t:`Di_Bernardo_2026`, the Brieflow reanalysis; :cite:p:`Funk_2022`, the screen it reanalyses.
         The per-cell measurements are from brieflow; the subset is available through the CZ Biohub OPS Explorer.
     """
-    return _fetch_variant("aconcagua", "aconcagua_guide_well.h5ad", cache_dir)
+    return _fetch_variant("aconcagua", "aconcagua_guide_well_v2.h5ad", cache_dir)
 
 
 def aconcagua_cells(cache_dir: str | Path | None = None) -> AnnData:
@@ -171,12 +171,12 @@ def aconcagua_cells(cache_dir: str | Path | None = None) -> AnnData:
             Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Returns:
-        Cells by features at object resolution, read with :func:`mantispy.io.read`, carrying ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_Guide``, ``Metadata_Gene``, ``Metadata_Perturbation`` (the gene, or ``"nontargeting"``), ``Metadata_Perturbation_Type`` (``"crispr"``), ``Metadata_Control``, ``Metadata_Control_Type`` and the screen's interphase or mitotic call per cell, ``Metadata_Class``.
+        Cells by features at object resolution, read with :func:`mantispy.io.read`, carrying ``Metadata_Plate``, ``Metadata_Well``, ``Metadata_sgRNA``, ``Metadata_Gene``, ``Metadata_Perturbation`` (the gene, or ``"nontargeting"``), ``Metadata_Perturbation_Type`` (``"crispr"``), ``Metadata_Control``, ``Metadata_Control_Type`` and the screen's interphase or mitotic call per cell, ``Metadata_Class``.
 
     References:
         :cite:t:`Di_Bernardo_2026`, the Brieflow reanalysis; :cite:p:`Funk_2022`, the screen it reanalyses.
     """
-    return _fetch_variant("aconcagua", "aconcagua_cells.h5ad", cache_dir)
+    return _fetch_variant("aconcagua", "aconcagua_cells_v2.h5ad", cache_dir)
 
 
 #: The (aggregated, feature_selected) combination each rehosted bbbc021 variant answers to.
