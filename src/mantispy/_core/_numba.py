@@ -319,53 +319,6 @@ def grouped_median_spread(
     return _grouped_median_spread(X, order, offsets, n_groups, int(spread))
 
 
-@njit(cache=True, nogil=True)
-def _select_kth(buffer: np.ndarray, n: int, k: int) -> float:
-    """Place the ``k``-th smallest of ``buffer[:n]`` at ``buffer[k]`` by quickselect, reordering ``buffer[:n]``.
-
-    Hoare partition, median-of-the-ends-and-middle pivot. On return ``buffer[:k]`` are all at or below ``buffer[k]`` and ``buffer[k + 1 : n]`` all at or above it, the selection ``np.partition`` gives.
-    """
-    lo, hi = 0, n - 1
-    while lo < hi:
-        pivot = buffer[(lo + hi) >> 1]
-        i, j = lo, hi
-        while i <= j:
-            while buffer[i] < pivot:
-                i += 1
-            while buffer[j] > pivot:
-                j -= 1
-            if i <= j:
-                buffer[i], buffer[j] = buffer[j], buffer[i]
-                i += 1
-                j -= 1
-        if k <= j:
-            hi = j
-        elif k >= i:
-            lo = i
-        else:
-            break
-    return buffer[k]
-
-
-@njit(cache=True, nogil=True)
-def _median_inplace(buffer: np.ndarray, n: int) -> float:
-    """Median of ``buffer[:n]`` by selection, reordering it in place, matching ``np.median``.
-
-    For an even count the lower neighbour is the maximum of the selected lower half, so the result is the same linearly interpolated median ``np.nanmedian`` returns, with no allocation.
-    """
-    if n == 0:
-        return np.nan
-    middle = n // 2
-    upper = _select_kth(buffer, n, middle)
-    if n % 2 == 1:
-        return upper
-    lower = buffer[0]
-    for k in range(1, middle):
-        if buffer[k] > lower:
-            lower = buffer[k]
-    return 0.5 * (lower + upper)
-
-
 @njit(parallel=True, cache=True, nogil=True)
 def _column_max_robust_z(X: np.ndarray, columns: np.ndarray, mad_to_sigma: float) -> np.ndarray:
     """Largest robust z-score of each selected column, columns shared out over the threads.
@@ -395,14 +348,14 @@ def _column_max_robust_z(X: np.ndarray, columns: np.ndarray, mad_to_sigma: float
                     n += 1
             if n == 0:
                 continue
-            median = _median_inplace(buffer, n)
+            median = _median_select(buffer, n)
             largest = 0.0
             for k in range(n):
                 deviation = abs(buffer[k] - median)
                 buffer[k] = deviation
                 if deviation > largest:
                     largest = deviation
-            scale = mad_to_sigma * _median_inplace(buffer, n)
+            scale = mad_to_sigma * _median_select(buffer, n)
             if scale != 0.0 and np.isfinite(scale):
                 out[c] = largest / scale
     return out
