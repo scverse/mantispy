@@ -4,13 +4,14 @@ import importlib.util
 import math
 import warnings
 from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 from anndata import AnnData
 
 from mantispy._core._numba import group_offsets
 from mantispy._core._pca import pca_solver
-from mantispy._core._reduce import get_matrix, group_codes, matrix_dtype, representation
+from mantispy._core._reduce import get_matrix, group_codes, matrix_dtype, transform_grouped
 from mantispy._core.logging import get_logger
 from mantispy._core.masks import CONTROL_CLASSES, reference_mask
 from mantispy._core.mutation import inplace_or_copy
@@ -379,8 +380,8 @@ def sphere(
     return None
 
 
-def _centre_scale(values: np.ndarray, reference: np.ndarray, where: str = "") -> np.ndarray:
-    """Centre and scale every row by the mean and spread of the reference rows.
+def _centre_scale(block: np.ndarray, where: str = "") -> tuple[np.ndarray, np.ndarray]:
+    """The mean and spread of the reference rows, which every row is centred and scaled by.
 
     The spread is the population standard deviation, as sklearn's ``StandardScaler`` computes it.
     A dimension with no spread among the reference rows is left on its own scale rather than divided by zero, and warns.
@@ -388,14 +389,12 @@ def _centre_scale(values: np.ndarray, reference: np.ndarray, where: str = "") ->
     "No spread" is read against the resolution of the values rather than as an exact zero, since a dimension an embedding is constant in still carries the rounding of the rotation that built it.
 
     Args:
-        values: Rows to transform.
-        reference: Boolean mask over ``values``, selecting the rows the mean and spread are taken from.
+        block: The reference rows.
         where: Names the batch in the warning, when the reference rows are one batch's.
 
     Returns:
-        The transformed rows.
+        ``(centre, scale)``, with a scale of one for a dimension that has no spread.
     """
-    block = values[reference]
     centre = block.mean(axis=0)
     scale = block.std(axis=0, ddof=0)
     # The tolerance scales with the row count because the rounding error in a standard deviation grows with its rows.
@@ -405,11 +404,11 @@ def _centre_scale(values: np.ndarray, reference: np.ndarray, where: str = "") ->
             "tvn: %d of %d dimension(s) have no spread among the %d reference row(s)%s and stay unscaled",
             no_spread,
             scale.size,
-            int(reference.sum()),
+            block.shape[0],
             where,
             deep="reduce to fewer components, or use more controls",
         )
-    return (values - centre) / np.where(degenerate, 1.0, scale)
+    return centre, np.where(degenerate, 1.0, scale)
 
 
 def _regularized_covariance(values: np.ndarray, epsilon: float) -> np.ndarray:
@@ -439,7 +438,70 @@ def _symmetric_power(matrix: np.ndarray, power: float) -> np.ndarray:
     return (vectors * eigenvalues**power) @ vectors.T
 
 
-@inplace_or_copy(expects=("well", "aggregate"))
+def _fit_tvn(
+    controls: np.ndarray, batches: np.ndarray, keys: Any, reference: str | None, epsilon: float, svd_solver: str | None
+) -> tuple[Callable[[int, np.ndarray], np.ndarray], int]:
+    """Fit :func:`tvn` on the control rows alone, which are all its statistics are taken from.
+
+    Args:
+        controls: The control rows, as ``float64``.
+        batches: The batch of each control row, as a code into ``keys``.
+        keys: The batches.
+        reference: How the controls were selected, for the error message.
+        epsilon: Added to the diagonal of every covariance.
+        svd_solver: How the control rotation is decomposed.
+
+    Returns:
+        ``(align, width)``: ``align(batch, block)`` applies the fitted transform to rows of the batch at that position in ``keys``, and ``width`` is the number of components it returns.
+    """
+    from sklearn.decomposition import PCA
+
+    centre, scale = _centre_scale(controls)
+    values = (controls - centre) / scale
+    solver = pca_solver(values.shape[0], values.shape[1], svd_solver, fallback="auto")
+    rotation = PCA(svd_solver=solver).fit(values)
+    values = rotation.transform(values)
+
+    # The two passes cannot be merged: the target below is taken from every control row after the first pass rewrote them.
+    order, offsets = group_offsets(batches, len(keys))
+    members = [order[offsets[group] : offsets[group + 1]] for group in range(len(keys))]
+    rescale = []
+    thin = []
+    for key, rows in zip(keys, members, strict=True):
+        if rows.size < 2:
+            raise ValueError(
+                f"batch {key!r} has {rows.size} row(s) selected by reference={reference!r}, "
+                "and aligning a batch needs at least 2 to estimate its covariance. Drop that batch, or "
+                "check that the platemap labels its controls."
+            )
+        if rows.size <= values.shape[1]:
+            thin.append(f"{key!r} ({rows.size})")
+        batch_centre, batch_scale = _centre_scale(values[rows], where=f" of batch {key!r}")
+        values[rows] = (values[rows] - batch_centre) / batch_scale
+        rescale.append((batch_centre, batch_scale))
+
+    if thin:
+        get_logger().warning(
+            "tvn: %d batch(es) have no more reference rows than the %d components (%s)",
+            len(thin),
+            values.shape[1],
+            ", ".join(thin[:3]) + (", ..." if len(thin) > 3 else ""),
+            deep="their empty directions are amplified, so reduce to fewer components or pool the smaller batches",
+        )
+
+    target = _symmetric_power(_regularized_covariance(values, epsilon), 0.5)
+    whiten = [_symmetric_power(_regularized_covariance(values[rows], epsilon), -0.5) for rows in members]
+
+    def align(batch: int, block: np.ndarray) -> np.ndarray:
+        aligned = rotation.transform((block.astype(np.float64) - centre) / scale)
+        batch_centre, batch_scale = rescale[batch]
+        aligned = (aligned - batch_centre) / batch_scale
+        return aligned @ whiten[batch] @ target
+
+    return align, int(rotation.n_components_)
+
+
+@inplace_or_copy(expects=("object", "well", "aggregate"))
 def tvn(
     adata: AnnData,
     batch_key: str = "Metadata_Batch",
@@ -489,16 +551,18 @@ def tvn(
         Measured that way, it tends to trade replicate consistency for relationship recall, where :func:`~mantispy.pp.harmony` trades the other way.
         Neither buys the other's gain, so which of the two readouts the screen is for is the question to answer before running either.
 
+        Only the control rows are read to fit the transform, and the fit is then applied batch by batch, so a lazy representation, such as the PCA of an object read with :func:`mantispy.io.read` and ``lazy=True``, gives a lazy result with the same numbers as in memory.
+        Aligning single cells before aggregating them is practical for the same reason.
+
         What it needs is controls, per batch and not in total, because the covariance it whitens each batch by is estimated from that batch's controls alone.
         A batch with fewer controls than the rotation has components cannot span the space, and the warning that says so is the sign to reduce to fewer components or to pool smaller batches together.
     """
-    from sklearn.decomposition import PCA
-
     # Checked before the rotation, which is the expensive part, so a mistyped column costs nothing.
     if batch_key not in adata.obs:
         raise KeyError(f"obs has no column {batch_key!r} naming the batches to align")
+    if use_rep is not None and use_rep not in adata.obsm:
+        raise KeyError(f"obsm has no representation {use_rep!r}; run sc.pp.pca first, or pass use_rep=None")
 
-    values = representation(adata, use_rep)
     controls = reference_mask(adata, reference)
     if not controls.any():
         raise ValueError(
@@ -506,41 +570,18 @@ def tvn(
             "'negcon' rows (mt.pp.annotate_controls), or pass reference=None to use all rows."
         )
 
-    values = _centre_scale(values, controls)
-    solver = pca_solver(int(controls.sum()), values.shape[1], svd_solver, fallback="auto")
-    values = PCA(svd_solver=solver).fit(values[controls]).transform(values)
-
     codes, keys = group_codes(adata, batch_key)
-    # The two passes cannot be merged: the target below is taken from every control row after the first pass rewrote them.
-    order, offsets = group_offsets(codes, len(keys))
-    batches = [order[offsets[group] : offsets[group + 1]] for group in range(len(keys))]
-
-    thin = []
-    for key, rows in zip(keys, batches, strict=True):
-        reference_rows = rows[controls[rows]]
-        if reference_rows.size < 2:
-            raise ValueError(
-                f"batch {key!r} has {reference_rows.size} row(s) selected by reference={reference!r}, "
-                "and aligning a batch needs at least 2 to estimate its covariance. Drop that batch, or "
-                "check that the platemap labels its controls."
-            )
-        if reference_rows.size <= values.shape[1]:
-            thin.append(f"{key!r} ({reference_rows.size})")
-        values[rows] = _centre_scale(values[rows], controls[rows], where=f" of batch {key!r}")
-
-    if thin:
-        get_logger().warning(
-            "tvn: %d batch(es) have no more reference rows than the %d components (%s)",
-            len(thin),
-            values.shape[1],
-            ", ".join(thin[:3]) + (", ..." if len(thin) > 3 else ""),
-            deep="their empty directions are amplified, so reduce to fewer components or pool the smaller batches",
-        )
-
-    target = _symmetric_power(_regularized_covariance(values[controls], epsilon), 0.5)
-    for rows in batches:
-        source = _regularized_covariance(values[rows[controls[rows]]], epsilon)
-        values[rows] = values[rows] @ _symmetric_power(source, -0.5) @ target
-
-    adata.obsm[key_added] = values.astype(matrix_dtype(adata, use_rep=use_rep))
+    # Only the control rows are read to fit, so a lazy representation is never loaded whole.
+    fitted = get_matrix(adata, rows=np.flatnonzero(controls), use_rep=use_rep).astype(np.float64)
+    align, width = _fit_tvn(fitted, codes[controls], keys, reference, epsilon, svd_solver)
+    position = {key: index for index, key in enumerate(keys)}
+    adata.obsm[key_added] = transform_grouped(
+        adata,
+        batch_key,
+        lambda key, block: align(position[key], block),
+        use_rep=use_rep,
+        n_cols=width,
+        rowwise=True,
+        grouping=(codes, keys),
+    )
     return None

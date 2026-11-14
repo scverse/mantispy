@@ -353,6 +353,24 @@ def test_pca_of_a_lazily_normalized_object_matches_in_memory(lazy_pair):
     np.testing.assert_allclose(streamed * signs, single, atol=1e-8)
 
 
+def test_tvn_of_a_lazy_representation_matches_in_memory(lazy_pair):
+    """TVN reads only the control rows to fit, and applies the fit batch by batch to each chunk."""
+    import dask.array as da
+    import scanpy as sc
+
+    _, in_memory = lazy_pair(np.float64)
+    mt.pp.normalize(in_memory, by="Metadata_Plate")
+    sc.pp.pca(in_memory, n_comps=10)
+    lazy = in_memory.copy()
+    lazy.obsm["X_pca"] = da.from_array(in_memory.obsm["X_pca"], chunks=(100, -1))
+
+    mt.pp.tvn(lazy, batch_key="Metadata_Plate")
+    mt.pp.tvn(in_memory, batch_key="Metadata_Plate")
+
+    assert _is_dask(lazy.obsm["X_tvn"])
+    np.testing.assert_allclose(np.asarray(lazy.obsm["X_tvn"]), in_memory.obsm["X_tvn"], rtol=1e-10, atol=1e-10)
+
+
 def test_aggregating_a_lazy_representation_by_a_scattered_column(lazy_pair, reads, monkeypatch):
     """The perturbations are spread over every plate and chunk, so each read gathers rows from all of them."""
     import dask.array as da
@@ -370,6 +388,33 @@ def test_aggregating_a_lazy_representation_by_a_scattered_column(lazy_pair, read
     np.testing.assert_array_equal(result.X, expected.X)
     assert len(reads) > 1
     assert all(rows is not None and rows.size < lazy.n_obs for rows in reads)
+
+
+def test_a_lazy_screen_aligns_end_to_end_without_loading_x(lazy_pair, tmp_path):
+    """normalize, PCA and TVN keep X and obsm lazy until the object is written, and give the in-memory numbers.
+
+    TVN takes cells as they are: aligning before aggregating is the out-of-core route, so it must not warn about the resolution.
+    """
+    import warnings
+
+    import scanpy as sc
+
+    lazy, in_memory = lazy_pair(np.float64)
+    for adata in (lazy, in_memory):
+        mt.pp.normalize(adata, by="Metadata_Plate")
+        sc.pp.pca(adata, n_comps=10, svd_solver="covariance_eigh")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            mt.pp.tvn(adata, batch_key="Metadata_Plate")
+
+    assert _is_dask(lazy.X) and _is_dask(lazy.obsm["X_pca"]) and _is_dask(lazy.obsm["X_tvn"])
+    mt.io.write(lazy, tmp_path / "aligned.h5ad")
+    written = mt.io.read(tmp_path / "aligned.h5ad")
+
+    np.testing.assert_allclose(written.X, in_memory.X, atol=1e-12)
+    # The PCA signs are free, and TVN carries them through to its own columns.
+    signs = np.sign((written.obsm["X_tvn"] * in_memory.obsm["X_tvn"]).sum(axis=0))
+    np.testing.assert_allclose(written.obsm["X_tvn"] * signs, in_memory.obsm["X_tvn"], atol=1e-6)
 
 
 def test_reading_the_whole_of_a_large_lazy_matrix_names_the_caller(lazy_pair, monkeypatch, caplog):
