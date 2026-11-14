@@ -284,3 +284,47 @@ def test_permutation_null_refuses_positives_outside_the_group():
         map_permutation.permutation_pvalues(
             lay, result, x, "cosine", table["mean_average_precision"].to_numpy(), groups, tested.index.to_numpy(), 10, 0
         )
+
+
+def _copairs_map(adata, mode, null, null_size=1000, seed=0):
+    """tl.map's table as copairs computes it, on the same metadata and features."""
+    from mantispy._core.masks import reference_mask
+    from mantispy.tl._map import REFERENCE_COLUMN, _resolve_mode
+
+    settings = _resolve_mode(mode, label="Metadata_Perturbation", batch="Metadata_Plate")
+    meta = adata.obs[["Metadata_Perturbation", "Metadata_Plate"]].reset_index(drop=True).astype(str)
+    x = np.asarray(adata.X, dtype=np.float32)
+    control = reference_mask(adata, "negcon")
+    if mode == "activity":
+        meta[REFERENCE_COLUMN] = np.where(control, np.arange(adata.n_obs), -1)
+    else:
+        meta, x = meta[~control].reset_index(drop=True), x[~control]
+    ap = copairs_map.average_precision(meta, x, **settings, progress_bar=False)
+    if mode == "activity":
+        ap = ap[~control]
+    return copairs_map.mean_average_precision(
+        ap, ["Metadata_Perturbation"], null_size=null_size, threshold=0.05, seed=seed, progress_bar=False, null=null
+    )
+
+
+@pytest.mark.parametrize("null", ["copied", "joint"])
+@pytest.mark.parametrize("mode", ["activity", "replicability"])
+def test_tl_map_reproduces_copairs(mode, null):
+    """Out of the box, tl.map's scores, p-values and q-values are copairs'."""
+    import mantispy as mt
+    from mantispy.ds import synthetic_plate
+
+    cells = synthetic_plate(
+        n_plates=2, n_wells=96, n_cells=10, n_features=20, n_perturbations=8, effect_size=0.5, seed=0
+    )
+    mt.pp.normalize(cells, by="Metadata_Plate", reference="negcon")
+    wells = mt.tl.aggregate(cells, min_cells=0)
+    ours = mt.tl.map(wells, mode=mode, null=null, null_size=1000, copy=True).uns["mantispy"]["map"]
+    expected = _copairs_map(wells, mode, null)
+    joined = ours.assign(Metadata_Perturbation=ours["Metadata_Perturbation"].astype(str)).merge(
+        expected, on="Metadata_Perturbation"
+    )
+    assert len(joined) == len(ours) > 0
+    np.testing.assert_allclose(joined["score"], joined["mean_average_precision"], rtol=0, atol=1e-12)
+    np.testing.assert_array_equal(joined["pvalue"], joined["p_value"])
+    np.testing.assert_allclose(joined["qvalue"], joined["corrected_p_value"], rtol=1e-12)

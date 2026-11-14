@@ -1,4 +1,4 @@
-"""The integration benchmark: scib-metrics' standard panel drawn as a mantispy heatmap, with a copairs mAP block when copairs is present."""
+"""The integration benchmark: scib-metrics' standard panel drawn as a mantispy heatmap, with a mAP block."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from anndata import AnnData
     from matplotlib.axes import Axes
 
-#: The copairs pair-argument keys a caller must fully specify to bypass a preset.
+#: The pair-argument keys a caller must fully specify to bypass a preset.
 _PAIR_KEYS = ("pos_sameby", "pos_diffby", "neg_sameby", "neg_diffby")
 
 #: Tokens in ``metrics=`` that select the mAP rather than a scib metric.
@@ -38,19 +38,10 @@ def _has_scib() -> bool:
     return True
 
 
-def _has_copairs() -> bool:
-    """Whether copairs, which adds the mean-average-precision block, can be imported."""
-    try:
-        from copairs import map as _  # noqa: F401
-    except ImportError:
-        return False
-    return True
-
-
 def _map_settings(
     map_mode: str, label_key: str, batch_key: str, map_kwargs: dict[str, Any] | None
 ) -> dict[str, list[str]]:
-    """The four copairs pair arguments for the mAP, from the ``replicability``/``cross_plate`` preset plus overrides.
+    """The four pair arguments for the mAP, from the ``replicability``/``cross_plate`` preset plus overrides.
 
     Raises:
         ValueError: ``map_mode`` is neither preset and ``map_kwargs`` did not fully specify the four pair arguments.
@@ -71,7 +62,7 @@ def _map_settings(
 
 
 def _map_meta(adata: AnnData, settings: dict[str, list[str]]) -> tuple[pd.DataFrame, np.ndarray | None]:
-    """The copairs metadata frame and the treated-row mask, built once so every representation reuses them."""
+    """The pair metadata frame and the treated-row mask, built once so every representation reuses them."""
     from mantispy._core.frames import as_frame
 
     obs = as_frame(adata.obs)
@@ -92,7 +83,7 @@ def _rep_map(
     settings: dict[str, list[str]],
     prepared: tuple[pd.DataFrame, np.ndarray | None] | None = None,
 ) -> float:
-    """Mean of the per-group mean average precision over ``obsm[use_rep]``, scored with copairs, controls left out."""
+    """Mean of the per-group mean average precision over ``obsm[use_rep]``, controls left out."""
     from mantispy.tl._map import _score_map
 
     meta, treated = prepared if prepared is not None else _map_meta(adata, settings)
@@ -191,7 +182,7 @@ def evaluate_integration(
 
     The numbers come from scib-metrics, the field's implementation of the integration panel, which mantispy
     reads through its public ``get_results`` rather than reimplements. mantispy renders its own heatmap from
-    them and, when copairs is installed, adds the cross-replicate mean average precision (mAP) as its own block.
+    them and adds the cross-replicate mean average precision (mAP) as its own block.
     The columns are grouped left to right into bio conservation, batch correction, retrieval (mAP) and the
     aggregate scores, each block under its own header.
 
@@ -207,12 +198,10 @@ def evaluate_integration(
 
     The return type is uniform across install states, so the numbers are always reachable:
 
-    - With ``mantispy[integration]`` (scib-metrics) and copairs, the frame holds every metric, the mAP column
-      and both totals; the heatmap has all four blocks.
-    - With only scib-metrics, the frame and heatmap drop the retrieval block and ``Total+mAP``.
-    - With only copairs, the frame and heatmap hold the per-representation mAP alone, and a warning notes that
+    - With ``mantispy[integration]`` (scib-metrics), the frame holds every metric, the mAP column and both
+      totals; the heatmap has all four blocks.
+    - Without it, the frame and heatmap hold the per-representation mAP alone, and a warning notes that
       scib-metrics adds the full panel.
-    - With neither, this raises :class:`ImportError`.
 
     This function computes no native PC-regression of its own. To audit what a representation spends its
     variance on besides the label, such as the cell count or the plate position, whose better direction is
@@ -232,9 +221,9 @@ def evaluate_integration(
             ``"isolated_labels"``, ``"silhouette_label"``, ...). ``metrics=["map"]`` skips scib entirely, the
             cheapest option. The full panel is expensive: expect several minutes and many GB on tens of
             thousands of cells, since kBET and the clustering metrics dominate.
-        map_mode: The copairs pairing for mAP, ``"replicability"`` (the Arevalo ``mAP-nonrep`` default) or
+        map_mode: The pairing for mAP, ``"replicability"`` (the Arevalo ``mAP-nonrep`` default) or
             ``"cross_plate"``. See ``_map_settings``.
-        map_kwargs: Overrides for any of the four copairs pair arguments, on top of ``map_mode``.
+        map_kwargs: Overrides for any of the four pair arguments, on top of ``map_mode``.
         svd_solver: How the unintegrated baseline PCA is decomposed. ``None`` eigendecomposes the feature covariance when the screen has many more wells than features and otherwise uses arpack; any scanpy solver name forces one. The baseline matches either way.
         ax: Axes to draw the heatmap on, or ``None`` for a new figure.
 
@@ -242,8 +231,7 @@ def evaluate_integration(
         The numeric results, one row per representation and one column per metric, the mAP and both totals.
 
     Raises:
-        ImportError: A requested family is missing its extra (neither installed, or ``metrics`` asks for one
-            that is not installed).
+        ImportError: ``metrics`` asks for a scib metric and scib-metrics is not installed.
         ValueError: The scib panel is requested with no features in ``adata.X``; the mAP is requested but
             ``label_key`` has no replicates or is confounded with ``batch_key``; or ``metrics`` names an unknown
             metric or selects nothing runnable.
@@ -252,14 +240,6 @@ def evaluate_integration(
     from mantispy.pl._evaluation import _integration_heatmap
 
     have_scib = _has_scib()
-    have_copairs = _has_copairs()
-
-    if not have_scib and not have_copairs:
-        raise ImportError(
-            'evaluate_integration needs scib-metrics and copairs; install pip install "mantispy[integration,map]". '
-            "For a native batch-variance check without them, use mt.metrics.batch_variance_explained (stack "
-            "several covariates) or mt.metrics.pc_regression (a single covariate)."
-        )
 
     reps = tuple(dict.fromkeys(reps))  # a duplicate rep would draw two identically-labelled rows
 
@@ -270,13 +250,11 @@ def evaluate_integration(
     # metrics=None runs the full default panel plus the mAP; a list fully specifies it, where "map" selects the
     # mAP and every other name a scib metric (validated against scib's flags inside _benchmark).
     if metrics is None:
-        scib_names, use_map, use_scib = None, have_copairs, have_scib
+        scib_names, use_map, use_scib = None, True, have_scib
     else:
         names = [str(metric) for metric in metrics]
         scib_names = [name for name in names if name not in _MAP_TOKENS]
         use_map, use_scib = len(scib_names) < len(names), bool(scib_names)
-        if use_map and not have_copairs:
-            raise ImportError('the mAP ("map") needs copairs; install pip install "mantispy[map]".')
         if use_scib and not have_scib:
             raise ImportError(f'metric(s) {scib_names} need scib-metrics; install pip install "mantispy[integration]".')
     if not use_map and not use_scib:
@@ -307,7 +285,7 @@ def evaluate_integration(
         prepared = _map_meta(adata, settings)
         try:
             map_values = [_rep_map(adata, rep, settings, prepared) for rep in reps]
-        except Exception as error:  # copairs' UnpairedException is not a public type we can name
+        except ValueError as error:
             if "negative pair" not in str(error).lower():
                 raise
             raise ValueError(
@@ -320,7 +298,7 @@ def evaluate_integration(
     if not use_scib:
         if metrics is None:  # scib genuinely not installed (an explicit map-only request chose this silently)
             warnings.warn(
-                'scib-metrics is not installed, so only mAP is computed. Install with pip install "mantispy[integration,map]" for the full panel.',
+                'scib-metrics is not installed, so only mAP is computed. Install with pip install "mantispy[integration]" for the full panel.',
                 UserWarning,
                 stacklevel=2,
             )

@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import math
-import tempfile
-import warnings
 from collections.abc import Sequence
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -17,11 +16,11 @@ from mantispy._core.mutation import inplace_or_copy
 from mantispy._core.schema import resolve_perturbation_column
 
 #: Row index for each control and -1 elsewhere, so under ``mode="activity"`` replicates retrieve against controls only.
-# A transient per-row index of the reference set, added for copairs and dropped before return. It is
+# A transient per-row index of the reference set, added for the pairing and dropped before return. It is
 # not metadata, so it does not wear the Metadata_ prefix (cf. the "__label__" helper column).
 REFERENCE_COLUMN = "__reference_index__"
 
-#: The copairs pairings, generic over the key names so :func:`map` and ``evaluate_integration`` share one source.
+#: The pair definitions, generic over the key names so :func:`map` and ``evaluate_integration`` share one source.
 #: ``__label__``/``__batch__``/``__annotation__`` are filled in by :func:`_resolve_mode`.
 MODES = {
     # Other plates' controls are beaten trivially yet count in the null, so pooling them inflates activity.
@@ -51,32 +50,12 @@ MODES = {
     },
 }
 
-#: The ragged per-group row indices cannot be written to h5ad.
-_UNWRITABLE = ("indices",)
-
 #: Types that mark an annotation cell as a list of labels rather than one scalar label.
 _LIST_LIKE = (list, tuple, set, np.ndarray)
 
-#: Above this many positive plus negative pairs, :func:`map` warns before handing the query to copairs, which holds
-#: every pair in memory at once.
-MAX_PAIRS = 100_000_000
-
-
-def _count_pairs(meta: pd.DataFrame, sameby: list[str], diffby: list[str]) -> int:
-    """An upper bound on the pairs copairs builds for one ``sameby``/``diffby`` definition, from group sizes alone.
-
-    The pairs sharing ``sameby`` are counted exactly. A pair must also differ in every ``diffby`` column, so the
-    pairs sharing ``sameby`` and any single ``diffby`` column are subtracted, the largest such set, which is exact
-    for one ``diffby`` column.
-    """
-
-    def sharing(columns: list[str]) -> int:
-        if not columns:
-            return len(meta) * (len(meta) - 1) // 2
-        sizes = meta.groupby(columns, observed=True, sort=False).size().to_numpy(dtype=np.int64)
-        return int((sizes * (sizes - 1) // 2).sum())
-
-    return sharing(sameby) - max((sharing([*sameby, column]) for column in diffby), default=0)
+#: The nulls of a group's mAP, and the samplers of the copied one.
+NULLS = ("copied", "permutation", "joint")
+NULL_SAMPLERS = ("exact", "floyd")
 
 
 def _resolve_mode(mode: str, *, label: str, batch: str, annotation: str | None = None) -> dict[str, list[str]]:
@@ -113,7 +92,7 @@ def _list_valued(series: pd.Series) -> bool:
 def _refuse_unrankable(features: np.ndarray, names: pd.Index, distance: str) -> None:
     """Raise when a profile holds an infinite value or, for a cosine distance, has a zero or overflowing norm.
 
-    copairs zeroes such a profile, so every similarity it has ties and its replicates rank first, scoring an
+    Such a profile is zeroed by the cosine, so every similarity it has ties and its replicates rank first, scoring an
     average precision of one that inflates the mAP without a sign that anything went wrong.
     """
     bad = ~np.isfinite(features).all(axis=1)
@@ -129,6 +108,17 @@ def _refuse_unrankable(features: np.ndarray, names: pd.Index, distance: str) -> 
         )
 
 
+def _check_null(null: str, null_sampler: str, seed: int) -> None:
+    if null not in NULLS:
+        raise ValueError(f"null must be one of {NULLS}, got {null!r}")
+    if null_sampler not in NULL_SAMPLERS:
+        raise ValueError(f"null_sampler must be one of {NULL_SAMPLERS}, got {null_sampler!r}")
+    if null_sampler == "floyd" and null != "copied":
+        raise ValueError(f"null_sampler='floyd' draws the copied null; it does not apply to null={null!r}")
+    if int(seed) != seed or not 0 <= seed < 2**64:
+        raise ValueError(f"seed must be an integer in [0, 2**64), got {seed!r}")
+
+
 def _score_map(
     meta: pd.DataFrame,
     features: np.ndarray,
@@ -139,46 +129,47 @@ def _score_map(
     seed: int,
     distance: str = "cosine",
     null: str = "copied",
+    null_sampler: str = "exact",
+    similarity_solver: str = "exact",
     drop_positions: np.ndarray | None = None,
     multilabel_col: str | None = None,
     warn: bool = True,
     compute_null: bool = True,
-    n_jobs: int | None = None,
-    batch_size: int | None = None,
 ) -> tuple[pd.DataFrame, list[str]]:
-    """The copairs scoring shared by :func:`map` and :func:`~mantispy.metrics.evaluate_integration`.
+    """The mAP scoring shared by :func:`map` and :func:`~mantispy.metrics.evaluate_integration`.
 
-    Returns the per-group table (its ``score`` column is the mean average precision; without the ragged
-    ``indices`` column) and the group columns, writing nothing into any object. With ``compute_null=False``
-    it skips the permutation null and returns just the per-group mean of ``average_precision``, the point
-    estimate the null does not affect,
-    which ``evaluate_integration`` uses so scoring a representation does not pay for discarded permutations.
+    Returns the per-group table (its ``score`` column is the mean average precision) and the group columns, writing
+    nothing into any object. With ``compute_null=False`` it skips the null and returns just the per-group mean of
+    ``average_precision``, the point estimate the null does not affect, which ``evaluate_integration`` uses so
+    scoring a representation does not pay for discarded draws.
 
-    With ``multilabel_col`` set, a positive pair shares at least one of that column's labels, and copairs splits a
-    profile with several labels into one scored row per label, so it counts toward each of its classes.
+    With ``multilabel_col`` set, a positive pair shares at least one of that column's labels, and a profile with
+    several labels is scored once per label, so it counts toward each of its classes.
 
     Raises:
-        ValueError: No profile has a negative pair, so there is nothing to score.
+        ValueError: No profile has a positive pair, or none has a negative pair, so there is nothing to score.
     """
-    from copairs import map as copairs_map
+    from numba import get_num_threads
 
-    # copairs sizes its own thread pool from os.cpu_count() (cytomining/copairs#163), which over-subscribes a
-    # SLURM allocation of a few CPUs; batch_size caps peak memory. Pass batch_size only when the caller set it.
-    ap_kwargs = {"distance": distance, "progress_bar": False, **({"batch_size": batch_size} if batch_size else {})}
-    if multilabel_col is not None:
-        from copairs.map import multilabel as copairs_multilabel
+    from mantispy._core import _average_precision as ap_kernel
+    from mantispy._core import _map_null, _map_permutation
+    from mantispy._core._stats import benjamini_hochberg
 
-        precision = copairs_multilabel.average_precision(
-            meta, features, **settings, multilabel_col=multilabel_col, **ap_kwargs
-        )
-    else:
-        precision = copairs_map.average_precision(meta, features, **settings, **ap_kwargs)
+    _check_null(null, null_sampler, seed)
+    lay = ap_kernel.layout(
+        meta, settings["pos_sameby"], settings["pos_diffby"], settings["neg_sameby"], settings["neg_diffby"],
+        multilabel_col,
+    )  # fmt: skip
+    result = ap_kernel.average_precision(lay, features, distance, similarity_solver)
+    precision = ap_kernel.ap_frame(meta, lay, result, multilabel_col)
     if drop_positions is not None:
-        precision = precision[~precision.index.isin(drop_positions)]
+        precision = precision[~precision[ap_kernel.PROFILE].isin(drop_positions)]
     group_columns = [column for column in settings["pos_sameby"] if column != REFERENCE_COLUMN]
 
-    # copairs scores a query with replicates but no negatives AP = 1 at the smallest p-value.
     queries = precision["n_pos_pairs"] > 0
+    if not queries.any():
+        raise ValueError("no profile has a positive pair, so there is nothing to score")
+    # A query with replicates but no negatives cannot be ranked, so it is left out rather than scored AP = 1.
     stranded = queries & (precision["n_total_pairs"] == precision["n_pos_pairs"])
     if stranded.any():
         if stranded.sum() == queries.sum():
@@ -196,9 +187,8 @@ def _score_map(
 
     if not compute_null:
         scored = precision[precision["n_pos_pairs"] > 0]
-        table = scored.groupby(group_columns, as_index=False)["average_precision"].mean()
         # Canonical schema names (§15.1): the per-group mean average precision is the method score.
-        return table.rename(columns={"average_precision": "score"}), group_columns
+        return scored.groupby(group_columns, as_index=False).agg(score=("average_precision", "mean")), group_columns
 
     if warn:
         groups = len(precision.loc[precision["n_pos_pairs"] > 0, group_columns].drop_duplicates())
@@ -211,30 +201,35 @@ def _score_map(
                 deep=f"raise null_size above {groups / threshold:.0f} for one group to be callable on its own",
             )
 
-    # copairs keys its on-disk null cache without the seed, so a shared cache leaks nulls between calls.
-    with tempfile.TemporaryDirectory() as cache:
-        table = copairs_map.mean_average_precision(
-            precision,
-            sameby=group_columns,
-            null_size=null_size,
-            threshold=threshold,
-            seed=seed,
-            progress_bar=False,
-            cache_dir=cache,
-            max_workers=n_jobs,
-            null=null,
-        ).drop(columns=list(_UNWRITABLE), errors="ignore")
-    # Canonical schema names (§15.1): copairs' score/p-value/decision columns → score/pvalue/qvalue/is_significant.
-    # below_p (the raw-p decision) stays as a tool-specific column beside the canonical is_significant.
-    table = table.rename(
-        columns={
-            "mean_average_precision": "score",
-            "p_value": "pvalue",
-            "corrected_p_value": "qvalue",
-            "below_corrected_p": "is_significant",
-        }
-    )
-    return table, group_columns
+    groups_table, members, tested = _map_null.group_scores(precision, group_columns)
+    scores = groups_table["mean_average_precision"].to_numpy()
+    n_pos = tested["n_pos_pairs"].to_numpy()
+    n_total = tested["n_total_pairs"].to_numpy()
+    if null_size == 0:
+        pvalues = np.full(len(groups_table), np.nan)
+    elif null == "copied":
+        order = np.concatenate(members)
+        ptr = np.concatenate([[0], np.cumsum([len(ix) for ix in members])]).astype(np.int64)
+        pvalues = _map_null.copied_pvalues(
+            scores, ptr, n_pos[order], n_total[order], null_size, seed, null_sampler, get_num_threads()
+        )
+    elif null == "joint":
+        edges = _map_null.group_edges(members, tested.index.to_numpy(), result)
+        pvalues = _map_null.joint_pvalues(scores, members, n_pos, n_total - n_pos, edges, null_size, seed)
+    else:
+        pvalues = _map_permutation.permutation_pvalues(
+            lay, result, features, distance, scores, members, tested.index.to_numpy(), null_size, seed
+        )
+    qvalues = benjamini_hochberg(pvalues)
+    # Canonical schema names (§15.1): score/pvalue/qvalue/is_significant. below_p (the raw-p decision) stays as a
+    # tool-specific column beside the canonical is_significant.
+    groups_table = groups_table.rename(columns={"mean_average_precision": "score"})
+    groups_table["pvalue"] = pvalues
+    groups_table["qvalue"] = qvalues
+    for column, values in (("below_p", pvalues), ("is_significant", qvalues)):
+        flags = pd.Series(values < threshold)
+        groups_table[column] = flags.astype("boolean").mask(np.isnan(values)) if np.isnan(values).any() else flags
+    return groups_table, group_columns
 
 
 @inplace_or_copy(expects=("well", "aggregate"))
@@ -255,13 +250,13 @@ def map(
     threshold: float = 0.05,
     seed: int = 0,
     distance: str = "cosine",
-    null: str = "copied",
-    n_jobs: int | None = None,
-    batch_size: int | None = None,
+    null: Literal["copied", "permutation", "joint"] = "copied",
+    null_sampler: Literal["exact", "floyd"] = "exact",
+    similarity_solver: Literal["exact", "blas"] = "exact",
     key_added: str = "map",
     copy: bool = False,
 ) -> AnnData | None:
-    """Mean average precision per group, with a permutation null.
+    """Mean average precision per group, with a null to test it against.
 
     Args:
         adata: Profiles to score, normally well-level.
@@ -296,18 +291,19 @@ def map(
         label_sep: Split a string ``annotation_key`` on this separator into a list of labels per row, so a stored ``"MEK|ERK"`` is scored as multilabel. ``None`` leaves the column as it is. An entry that is already a list, or is missing, is left untouched.
         reference: Which rows are the negative controls, which ``mode="activity"`` retrieves against and ``mode="replicability"`` leaves out: ``"negcon"``, the name of a boolean ``obs`` column, or ``None`` for none.
         use_rep: Score ``obsm[use_rep]`` instead of ``X``.
-        null_size: Size of the permutation null.
+        null_size: Number of draws of the null.
             No p-value falls below ``1 / (null_size + 1)``, so the correction over many groups needs a large one, and a warning says when it is too small to call a group on its own.
-        threshold: Significance threshold passed to copairs.
-        seed: Seed for the permutation null.
-        distance: Distance copairs ranks by.
-        null: The null model of the group mAP, passed to copairs: ``"copied"``, ``"permutation"`` or ``"joint"``.
+        threshold: Significance threshold of the p- and q-values.
+        seed: Seed of the null.
+        distance: Distance to rank by: ``"cosine"`` (the default), ``"abs_cosine"``, ``"correlation"``,
+            ``"euclidean"``, ``"manhattan"``, ``"chebyshev"``, or a :func:`scipy.spatial.distance.cdist` metric name,
+            each turned into a similarity as copairs does.
+        null: The null model of the group mAP, as copairs defines it: ``"copied"``, ``"permutation"`` or ``"joint"``.
             ``"copied"`` is the model of :cite:t:`Kalinin_2025` and copairs before 0.6.
-            ``"permutation"`` relabels profiles and recomputes the mAP from their similarities. It needs every profile holding a label in the scored table, so it fails on a multilabel annotation where a profile has no negative pair.
-        n_jobs: Threads for the null permutations (copairs' ``max_workers``).
-            ``None`` lets copairs size its own pool from ``os.cpu_count()``, which over-subscribes a job allocated only a few CPUs; set it to the cores you were given.
-        batch_size: Pair-distance batch size copairs scores at, which caps peak memory.
-            ``None`` uses copairs' default (20000).
+            ``"permutation"`` relabels profiles within the blocks they are ranked in and recomputes the mAP from their similarities. It needs every profile holding a label in the scored table, so it fails on a multilabel annotation where a profile has no negative pair.
+            ``"joint"`` draws the members' APs together, sharing each positive pair between its two members.
+        null_sampler: How the copied null is drawn. ``"exact"`` replays copairs' random stream, so p-values equal copairs' for the same seed; ``"floyd"`` draws only the positions of the positives, which is faster and has the same distribution but different draws.
+        similarity_solver: How similarities are computed. ``"exact"`` reproduces copairs' float32 values, so rankings and scores equal copairs'; ``"blas"`` computes them as matrix products, which is faster for the cosine, correlation and euclidean distances but can order near-tied pairs differently.
         key_added: Where to store results.
         copy: Return a modified copy instead of mutating in place.
 
@@ -318,21 +314,12 @@ def map(
         A multilabel annotation has no single score per row, so it writes the per-class table to ``uns`` only and clears ``obs[key_added]`` and ``obs[key_added + "_qvalue"]``.
 
     Raises:
-        ImportError: copairs is not installed; it is an optional extra.
-        ValueError: ``mode`` was passed together with explicit pair arguments or neither was passed, ``mode`` is not one of ``MODES``, ``mode="consistency"`` came without ``annotation_key``, ``mode="activity"`` found no controls, no profile has a negative pair to be ranked against, the profiles hold missing values, which cannot be ranked, a label column mixes list-valued and scalar entries, or more than one positive-pair column is list-valued.
+        ValueError: ``mode`` was passed together with explicit pair arguments or neither was passed, ``mode`` is not one of ``MODES``, ``mode="consistency"`` came without ``annotation_key``, ``mode="activity"`` found no controls, no profile has a positive pair or a negative pair to be ranked against, the profiles hold missing or infinite values or a cosine norm of zero or overflow, which cannot be ranked, a label column mixes list-valued and scalar entries, more than one positive-pair column is list-valued, or the null, sampler, solver or distance is not supported.
         KeyError: ``obs`` is missing a column the pair definitions or ``reference`` name.
 
     Notes:
-        An explicit pair query that pairs across a high-cardinality column (a large ``pos_diffby`` or ``neg_diffby`` fan-out, such as every compound against every other) materializes a pair set that grows with the product of the group sizes and can reach tens of gigabytes on a few thousand wells, separately from ``batch_size``, which only caps the distance step. Run such a query on consensus profiles (one row per perturbation, via :func:`~mantispy.tl.consensus`) rather than on every well, and set ``batch_size`` to cap the distance memory.
-        Before copairs runs, the pair count is bounded from the group sizes, and a query with too many pairs warns.
+        The pairs are never materialized: a query's positives and negatives follow from the group codes of the pair columns, so memory does not grow with the number of pairs, while time does. An explicit pair query that pairs across a high-cardinality column (every compound against every other) is best run on consensus profiles (:func:`~mantispy.tl.consensus`).
     """
-    try:
-        from copairs import map as _  # noqa: F401 - the scoring imports it again; this is the friendly early guard
-    except ImportError as error:  # pragma: no cover - exercised only without the extra
-        raise ImportError(
-            "mt.tl.map needs copairs, an optional extra. Install it with pip install 'mantispy[map]'."
-        ) from error
-
     label = resolve_perturbation_column(adata, label)
     explicit = any([pos_sameby, pos_diffby, neg_sameby, neg_diffby])
     if mode is not None and explicit:
@@ -381,8 +368,8 @@ def map(
         )
     _refuse_unrankable(features, adata.obs_names, distance)
     obs = as_frame(adata.obs)
-    # copairs is handed the Metadata_ columns plus every obs column the pair spec or label names, so a column
-    # without the prefix (batch="source", a user-added label) reaches copairs instead of tripping its matcher.
+    # The scoring reads the Metadata_ columns plus every obs column the pair spec or label names, so a column
+    # without the prefix (batch="source", a user-added label) is matched like any other.
     passthrough = needed | {label}
     meta = obs[[c for c in obs.columns if c.startswith("Metadata_") or c in passthrough]].reset_index(drop=True)
     drop_positions = None
@@ -414,22 +401,9 @@ def map(
         )
     multilabel_col = multilabel[0] if multilabel else None
     if multilabel_col is not None:
-        # A missing annotation becomes an empty label set: the row joins no class and copairs leaves it unscored.
+        # A missing annotation becomes an empty label set: the row joins no class and is left unscored.
         meta[multilabel_col] = meta[multilabel_col].map(
             lambda value: list(value) if isinstance(value, _LIST_LIKE) else []
-        )
-
-    # A list-valued column cannot be grouped; leaving it out of the count only loosens the bound.
-    scalar = {key: [c for c in value if c != multilabel_col] for key, value in settings.items()}
-    pairs = _count_pairs(meta, scalar["pos_sameby"], scalar["pos_diffby"]) + _count_pairs(
-        meta, scalar["neg_sameby"], scalar["neg_diffby"]
-    )
-    if pairs > MAX_PAIRS:
-        warnings.warn(
-            f"these pair definitions build up to {pairs:,} pairs over {len(meta)} profiles, which copairs holds in "
-            "memory at once. Run on mt.tl.consensus() profiles and set batch_size=.",
-            UserWarning,
-            stacklevel=3,
         )
 
     table, group_columns = _score_map(
@@ -441,10 +415,10 @@ def map(
         seed=seed,
         distance=distance,
         null=null,
+        null_sampler=null_sampler,
+        similarity_solver=similarity_solver,
         drop_positions=drop_positions,
         multilabel_col=multilabel_col,
-        n_jobs=n_jobs,
-        batch_size=batch_size,
     )
 
     if mode == "activity":
