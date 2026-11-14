@@ -5,16 +5,18 @@ The design of :func:`read_profiles` follows ``scverse/cell-painting-io`` (MIT).
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import shutil
 from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import anndata as ad
 import numpy as np
 import pandas as pd
 
+from mantispy._core._corr import chunk_rows
 from mantispy._core.features import (
     _BARE_NON_FEATURES,
     _KNOWN_GROUPS,
@@ -514,7 +516,9 @@ def read_profiles(
     return adata
 
 
-def read(path: str | Path, backed: Literal["r", "r+"] | None = None, migrate_schema: bool = True) -> ad.AnnData:
+def read(
+    path: str | Path, backed: Literal["r", "r+"] | None = None, migrate_schema: bool = True, lazy: bool = False
+) -> ad.AnnData:
     """Read a mantispy h5ad or zarr store, checking its schema version.
 
     Args:
@@ -525,18 +529,28 @@ def read(path: str | Path, backed: Literal["r", "r+"] | None = None, migrate_sch
             h5ad only; zarr stores are read whole.
         migrate_schema: Bring an older but known schema up to the current one on read.
             Set it to ``False`` to see the version the file carries.
+        lazy: Hold ``X`` and every layer as a dask array read in row chunks, for a screen that does not fit in memory.
+            ``obs``, ``var``, ``obsm`` and ``uns`` are read into memory.
+            :func:`~mantispy.pp.normalize`, :func:`~mantispy.pp.tvn` and :func:`~mantispy.tl.aggregate` stream it and give the same numbers as in memory, as does :func:`scanpy.pp.pca` with ``svd_solver="covariance_eigh"``; a function that needs the whole matrix warns before it reads it.
+            Needs dask, from ``mantispy[lazy]``, and cannot be combined with `backed`.
 
     Returns:
-        The object, backed or in memory.
+        The object, backed, lazy or in memory.
         ``adata.to_memory()`` loads a backed one into memory.
 
     Raises:
-        ValueError: `backed` was given for a zarr store, or the file carries a schema version this build cannot migrate from or was told not to migrate.
+        ImportError: `lazy` was given and dask is not installed.
+        ValueError: `backed` was given for a zarr store or together with `lazy`, or the file carries a schema version this build cannot migrate from or was told not to migrate.
     """
     path = Path(path)
     if backed is not None and path.suffix == ".zarr":
         raise ValueError("backed reads are h5ad only; a zarr store is read whole")
-    adata = ad.read_zarr(path) if path.suffix == ".zarr" else ad.read_h5ad(path, backed=backed)
+    if lazy and backed is not None:
+        raise ValueError("lazy=True and backed= both leave X on disk; pass only one")
+    if lazy:
+        adata = _read_lazy(path)
+    else:
+        adata = ad.read_zarr(path) if path.suffix == ".zarr" else ad.read_h5ad(path, backed=backed)
     stored = adata.uns.get("mantispy", {}).get("schema_version")
     if stored == SCHEMA_VERSION:
         validate(adata, raise_on_error=True)  # §16.1: full validation at the read boundary.
@@ -554,6 +568,32 @@ def read(path: str | Path, backed: Literal["r", "r+"] | None = None, migrate_sch
             else ""
         )
     )
+
+
+def _read_lazy(path: Path) -> ad.AnnData:
+    """The object at ``path``, with ``X`` and the layers as dask arrays chunked by rows and everything else in memory."""
+    if importlib.util.find_spec("dask") is None:
+        raise ImportError("mt.io.read(path, lazy=True) needs dask; install it with pip install 'mantispy[lazy]'")
+    from anndata.experimental import read_elem_lazy
+    from anndata.io import read_elem
+
+    store: Any
+    if path.suffix == ".zarr":
+        import zarr
+
+        store = zarr.open_group(path, mode="r")
+    else:
+        import h5py
+
+        # Left open: the dask arrays read their chunks through it.
+        store = h5py.File(path, "r")
+    elems: dict[str, Any] = {
+        key: read_elem(store[key]) for key in ("obs", "var", "obsm", "varm", "obsp", "varp", "uns") if key in store
+    }
+    chunks = (chunk_rows(len(elems["var"])), -1)
+    X = read_elem_lazy(store["X"], chunks=chunks) if "X" in store else None
+    layers = {key: read_elem_lazy(store["layers"][key], chunks=chunks) for key in store.get("layers", {})}
+    return ad.AnnData(X=X, layers=layers, **elems)
 
 
 def write(

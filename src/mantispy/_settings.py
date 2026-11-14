@@ -15,5 +15,12 @@ class MantispySettings(Settings):
     cache_dir: Path = Path(user_cache_dir("mantispy"))
     """Where :mod:`mantispy.ds` keeps the datasets it downloads."""
 
+    stream_bytes: int = 256_000_000
+    """How many bytes of a matrix that is not in memory a grouped operation reads at once.
+
+    Groups are packed into reads of about this size, so a smaller value lowers the peak memory and a larger one reads the file in fewer passes.
+    A single group larger than this is still read whole.
+    """
+
 
 settings = MantispySettings()

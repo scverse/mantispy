@@ -46,9 +46,9 @@ def reads(monkeypatch):
     original = _reduce.get_matrix
     asked: list[np.ndarray | None] = []
 
-    def recording(adata, layer=None, rows=None):
+    def recording(adata, layer=None, rows=None, **kwargs):
         asked.append(None if rows is None else np.asarray(rows))
-        return original(adata, layer, rows)
+        return original(adata, layer, rows, **kwargs)
 
     monkeypatch.setattr(_reduce, "get_matrix", recording)
     return asked
@@ -65,11 +65,12 @@ grouped_paths = pytest.mark.parametrize(
 
 
 @grouped_paths
-def test_per_group_reads_never_ask_for_the_whole_matrix(backed, reads, call):
-    """Both grouped paths read one group at a time.
+def test_per_group_reads_never_ask_for_the_whole_matrix(backed, reads, call, monkeypatch):
+    """Both grouped paths read one group at a time when a group fills the read budget.
 
     transform_grouped used to size its output with ``np.empty_like(get_matrix(adata, layer))``, a full read on top of the per-group ones (#67).
     """
+    monkeypatch.setattr(mt.settings, "stream_bytes", 1)
     call(backed)
 
     assert reads, "nothing was read through the seam"
@@ -281,3 +282,126 @@ def test_filtering_a_backed_object_names_the_way_out(backed, name):
 
     with pytest.raises(ValueError, match="copy=True"):
         getattr(mt.pp, name)(backed)
+
+
+@pytest.fixture
+def lazy_pair(tmp_path, cells):
+    """Factory for the same cells read lazily and into memory, with the rows shuffled so that no group is contiguous."""
+    order = np.random.default_rng(0).permutation(cells.n_obs)
+
+    def build(dtype=np.float32):
+        shuffled = cells[order].copy()
+        shuffled.X = shuffled.X.astype(dtype)
+        path = tmp_path / f"shuffled-{np.dtype(dtype).name}.h5ad"
+        if not path.exists():
+            mt.io.write(shuffled, path)
+        return mt.io.read(path, lazy=True), mt.io.read(path)
+
+    return build
+
+
+def _is_dask(matrix):
+    return type(matrix).__module__.startswith("dask")
+
+
+@pytest.mark.parametrize("method", ["mad_robustize", "standardize", "robustize", "center"])
+@pytest.mark.parametrize(
+    ("by", "reference"),
+    [("Metadata_Plate", "negcon"), ("Metadata_Plate", None), (["Metadata_Plate", "Metadata_Well"], None)],
+    ids=["plate-negcon", "plate-all", "well-all"],
+)
+def test_a_lazy_object_normalizes_to_what_it_does_in_memory(lazy_pair, method, by, reference):
+    lazy, in_memory = lazy_pair()
+
+    mt.pp.normalize(lazy, method=method, by=by, reference=reference)
+    mt.pp.normalize(in_memory, method=method, by=by, reference=reference)
+
+    assert _is_dask(lazy.X), "the result must stay lazy until it is read"
+    np.testing.assert_array_equal(np.asarray(lazy.X), in_memory.X)
+    np.testing.assert_array_equal(lazy.var["degenerate_scale"], in_memory.var["degenerate_scale"])
+
+
+def test_a_small_read_budget_streams_several_groups_at_a_time(lazy_pair, reads, monkeypatch):
+    """Groups are packed into reads under mt.settings.stream_bytes, and the numbers do not depend on how they were packed."""
+    lazy, in_memory = lazy_pair()
+    mt.pp.normalize(in_memory, by=["Metadata_Plate", "Metadata_Well"], reference=None)
+    reads.clear()
+    # About forty rows of twenty float32 features: two or three wells of fifteen cells per read.
+    monkeypatch.setattr(mt.settings, "stream_bytes", 40 * 20 * 4)
+
+    mt.pp.normalize(lazy, by=["Metadata_Plate", "Metadata_Well"], reference=None)
+
+    np.testing.assert_array_equal(np.asarray(lazy.X), in_memory.X)
+    assert all(rows is not None for rows in reads), "a read asked for the whole matrix"
+    assert 1 < len(reads) < in_memory.obs[["Metadata_Plate", "Metadata_Well"]].drop_duplicates().shape[0]
+    assert max(rows.size for rows in reads) <= 40
+    for rows in reads:
+        assert (np.diff(rows) > 0).all(), "a read must ask for its rows in increasing order"
+
+
+def test_pca_of_a_lazily_normalized_object_matches_in_memory(lazy_pair):
+    import scanpy as sc
+
+    lazy, in_memory = lazy_pair(np.float64)
+    for adata in (lazy, in_memory):
+        mt.pp.normalize(adata, by="Metadata_Plate")
+        sc.pp.pca(adata, n_comps=10, svd_solver="covariance_eigh")
+
+    assert _is_dask(lazy.obsm["X_pca"])
+    streamed, single = np.asarray(lazy.obsm["X_pca"]), in_memory.obsm["X_pca"]
+    signs = np.sign((streamed * single).sum(axis=0))
+    np.testing.assert_allclose(streamed * signs, single, atol=1e-8)
+
+
+def test_aggregating_a_lazy_representation_by_a_scattered_column(lazy_pair, reads, monkeypatch):
+    """The perturbations are spread over every plate and chunk, so each read gathers rows from all of them."""
+    import dask.array as da
+
+    _, in_memory = lazy_pair(np.float64)
+    in_memory.obsm["X_tvn"] = np.random.default_rng(1).normal(size=(in_memory.n_obs, 5))
+    lazy = in_memory.copy()
+    lazy.obsm["X_tvn"] = da.from_array(in_memory.obsm["X_tvn"], chunks=(100, -1))
+    expected = mt.tl.aggregate(in_memory, by=["Metadata_Perturbation"], use_rep="X_tvn", min_cells=0)
+    reads.clear()
+    monkeypatch.setattr(mt.settings, "stream_bytes", 5 * 8 * 100)
+
+    result = mt.tl.aggregate(lazy, by=["Metadata_Perturbation"], use_rep="X_tvn", min_cells=0)
+
+    np.testing.assert_array_equal(result.X, expected.X)
+    assert len(reads) > 1
+    assert all(rows is not None and rows.size < lazy.n_obs for rows in reads)
+
+
+def test_reading_the_whole_of_a_large_lazy_matrix_names_the_caller(lazy_pair, monkeypatch, caplog):
+    import logging
+
+    lazy, _ = lazy_pair()
+    monkeypatch.setattr(mt.settings, "stream_bytes", 1000)
+
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
+        mt.pp.calculate_qc_metrics(lazy)
+
+    assert "calculate_qc_metrics reads the whole" in caplog.text
+
+
+def test_lazy_reads_without_dask_name_the_extra(paths, monkeypatch):
+    import importlib.util
+
+    find_spec = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util, "find_spec", lambda name, *args: None if name == "dask" else find_spec(name, *args)
+    )
+
+    with pytest.raises(ImportError, match=r"mantispy\[lazy\]"):
+        mt.io.read(paths, lazy=True)
+
+
+def test_a_ranking_on_a_lazy_object_sees_each_group_whole(lazy_pair):
+    """A rank depends on every row of its group, so a group spread over chunks must not be ranked one chunk at a time."""
+    lazy, in_memory = lazy_pair()
+    lazy.X = lazy.X.rechunk((100, -1))
+
+    mt.pp.rank_int(lazy, by="Metadata_Plate")
+    mt.pp.rank_int(in_memory, by="Metadata_Plate")
+
+    np.testing.assert_array_equal(np.asarray(lazy.X), in_memory.X)

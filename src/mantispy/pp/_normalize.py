@@ -11,8 +11,9 @@ from mantispy._core._numba import IQR, MEAN, STD, grouped_median_spread
 from mantispy._core._numba import MAD as MAD_STAT
 from mantispy._core._reduce import (
     get_matrix,
-    group_offsets,
+    iter_waves,
     matrix_dtype,
+    out_of_core,
     reduce_grouped,
     transform_grouped,
 )
@@ -37,18 +38,12 @@ def _median_and_spread(
     adata: AnnData, spread: int, codes: np.ndarray, keys: pd.Index, layer: str | None, mask: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray]:
     """Per-group median and robust spread."""
-    if adata.isbacked:
-        # One group at a time, as the backed branch of reduce_grouped does, so a screen that does not fit in memory still normalizes.
+    if out_of_core(adata, layer):
+        # A few groups at a time, as reduce_grouped streams them, so a screen that does not fit in memory still normalizes.
         centre = np.full((len(keys), adata.n_vars), np.nan)
         scale = np.full((len(keys), adata.n_vars), np.nan)
-        selected = np.flatnonzero(mask)
-        order, offsets = group_offsets(codes[mask], len(keys))
-        for index in range(len(keys)):
-            rows = selected[order[offsets[index] : offsets[index + 1]]]
-            if rows.size:
-                block = get_matrix(adata, layer, rows=rows)
-                group_centre, group_scale = grouped_median_spread(block, np.zeros(rows.size, np.int32), 1, spread)
-                centre[index], scale[index] = group_centre[0], group_scale[0]
+        for groups, _, wave_codes, block in iter_waves(adata, (codes, keys), layer, mask=mask):
+            centre[groups], scale[groups] = grouped_median_spread(block, wave_codes, groups.size, spread)
         return centre, scale
 
     matrix = get_matrix(adata, layer)
@@ -174,6 +169,7 @@ def normalize(
     Returns:
         ``None``, or the normalized copy when ``copy=True``.
         Writes ``X`` or ``layers[key_added]``, and ``var["degenerate_scale"]``, or ``var["degenerate_scale_<key_added>"]`` when writing to a layer, which flags features that have no spread in some group or no reference values to centre on there, and comes with a warning; a feature with no spread in a group is set to NaN in that group, since it has no scale there. Drop the flagged features before computing distances.
+        On a lazy ``X``, read with :func:`mantispy.io.read` and ``lazy=True``, the statistics are computed exactly by streaming the groups, and the result stays lazy until it is read or written.
 
     Raises:
         ValueError: If ``method`` is unknown, ``reference`` selects no rows at all or none in some group, or every feature has no spread in some group.
@@ -234,7 +230,7 @@ def normalize(
     if keep_raw and "raw" not in adata.layers:
         adata.layers["raw"] = get_matrix(adata, layer).copy()
 
-    out = transform_grouped(adata, by, _rescale, layer=layer, grouping=(codes, keys))
+    out = transform_grouped(adata, by, _rescale, layer=layer, rowwise=True, grouping=(codes, keys))
     if key_added is None:
         adata.X = out
     else:
