@@ -51,6 +51,8 @@ _BOUNDED = ("jaccard", "hamming")
 #: Distances whose similarity is a matrix product of transformed rows, which ``solver="blas"`` can compute in blocks.
 BLAS_DISTANCES = ("cosine", "abs_cosine", "correlation", "euclidean")
 
+#: Column of :func:`ap_frame` naming the profile an AP row scores; not metadata, so not ``Metadata_``-prefixed.
+PROFILE = "__profile__"
 #: numpy sums at most this many float32 terms with eight running accumulators before it splits the range in two.
 _PW_BLOCK = 128
 #: Rows numpy sums with eight accumulators; shorter sums run one accumulator.
@@ -661,3 +663,22 @@ def normalized_average_precision(ap: np.ndarray, n_pos: np.ndarray, n_total: np.
     mu0 = np.where((m == total) & (total > 1), 1.0, mu0)
     out = np.clip((ap - mu0) / np.maximum(1 - mu0, 1e-10), -1.0, 1.0)
     return out
+
+
+def ap_frame(meta: pd.DataFrame, lay: Layout, result: APResult, multilabel_col: str | None = None) -> pd.DataFrame:
+    """The AP rows as copairs' ``average_precision`` frame, one row per AP row.
+
+    It holds the metadata, ``average_precision``, ``normalized_average_precision``, ``n_pos_pairs`` and
+    ``n_total_pairs``. A multilabel column holds the one label each row scores toward. ``PROFILE`` names the row of ``meta`` it scores.
+    """
+    frame = meta.iloc[result.row_profile].reset_index(drop=True)
+    if multilabel_col is not None:
+        frame[multilabel_col] = lay.label_values[result.row_label]
+    frame[PROFILE] = result.row_profile
+    frame["average_precision"] = result.average_precision
+    frame["normalized_average_precision"] = normalized_average_precision(
+        result.average_precision, result.n_pos_pairs, result.n_total_pairs
+    )
+    frame["n_pos_pairs"] = result.n_pos_pairs
+    frame["n_total_pairs"] = result.n_total_pairs
+    return frame

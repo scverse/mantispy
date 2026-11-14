@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 
 from mantispy._core import _average_precision as ap_kernel
+from mantispy._core import _map_null as map_null
 
 copairs_map = pytest.importorskip("copairs.map")
 copairs_multilabel = pytest.importorskip("copairs.map.multilabel")
@@ -126,3 +127,58 @@ def test_unsupported_distances_are_refused():
         ap_kernel.average_precision(lay, x, "manhattan", solver="blas")
     with pytest.raises(ValueError, match="distance must be one of"):
         ap_kernel.average_precision(lay, x, "nonsense")
+
+
+def _copairs_groups(meta, x, spec, null, seed=7, null_size=2000, multilabel_col=None):
+    if multilabel_col is None:
+        ap = copairs_map.average_precision(meta, x, *spec, progress_bar=False)
+    else:
+        ap = copairs_multilabel.average_precision(meta, x, *spec, multilabel_col=multilabel_col, progress_bar=False)
+    ap = ap[ap["ref"] < 0] if "ref" in spec[0] else ap
+    sameby = [c for c in spec[0] if c != "ref"]
+    return copairs_map.mean_average_precision(
+        ap, sameby, null_size=null_size, threshold=0.05, seed=seed, progress_bar=False, null=null
+    ), sameby
+
+
+def _our_groups(meta, x, spec, multilabel_col=None):
+    lay, result = _ours(meta, x, spec, multilabel_col=multilabel_col)
+    ap = ap_kernel.ap_frame(meta, lay, result, multilabel_col)
+    ap = ap[ap["ref"] < 0] if "ref" in spec[0] else ap
+    sameby = [c for c in spec[0] if c != "ref"]
+    table, groups = map_null.group_scores(ap, sameby)
+    valid = ap[ap["average_precision"].notna() & (ap["n_pos_pairs"] > 0)].reset_index(drop=True)
+    return table, groups, valid, result
+
+
+@pytest.mark.parametrize("ties", [False, True])
+@pytest.mark.parametrize("mode", list(MODES))
+def test_copied_null_matches_copairs(mode, ties):
+    """The exact sampler draws copairs' numpy stream, so every p-value is copairs'; Floyd's sampler agrees within Monte Carlo error."""
+    meta, x = _screen(ties=ties)
+    expected, sameby = _copairs_groups(meta, x, MODES[mode], "copied")
+    table, groups, valid, _ = _our_groups(meta, x, MODES[mode])
+    order = np.concatenate(groups)
+    ptr = np.concatenate([[0], np.cumsum([len(g) for g in groups])])
+    n_pos, n_total = valid["n_pos_pairs"].to_numpy()[order], valid["n_total_pairs"].to_numpy()[order]
+    scores = table["mean_average_precision"].to_numpy()
+    np.testing.assert_allclose(scores, expected["mean_average_precision"], rtol=0, atol=1e-12)
+    np.testing.assert_allclose(
+        table["mean_normalized_average_precision"], expected["mean_normalized_average_precision"], atol=1e-12
+    )
+
+    exact = map_null.copied_pvalues(scores, ptr, n_pos, n_total, 2000, 7, "exact", n_threads=2)
+    np.testing.assert_array_equal(exact, expected["p_value"])
+    floyd = map_null.copied_pvalues(scores, ptr, n_pos, n_total, 2000, 7, "floyd")
+    p = expected["p_value"].to_numpy()
+    assert np.all(np.abs(floyd - p) <= 5 * np.sqrt(p * (1 - p) / 2000) + 3 / 2001)
+
+
+@pytest.mark.parametrize(("num_pos", "total"), [(1, 5), (3, 300), (200, 300), (5, 65535), (3, 70000)])
+def test_copied_null_draws_are_copairs_draws(num_pos, total):
+    """Both index widths copairs uses (uint16 below 2**16 profiles, uint32 above) and sums longer than one block."""
+    from copairs.compute import random_ap
+
+    ours = map_null._null_exact(np.array([[num_pos, total]]), 64, 11, 1)[0]
+    expected = random_ap(64, num_pos, total, map_null._conf_seed(11, num_pos, total))
+    np.testing.assert_array_equal(ours.view(np.uint32), expected.view(np.uint32))
