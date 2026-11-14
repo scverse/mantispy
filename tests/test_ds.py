@@ -91,6 +91,9 @@ def test_the_downloads_read_back_at_the_shape_the_registry_claims(name: str) -> 
     else:
         assert adata.obs["Metadata_Perturbation"].nunique() >= 2
         assert set(adata.obs["Metadata_Perturbation_Type"].astype(str)) <= {"compound", "orf", "crispr", "untreated"}
+    if name == "aconcagua":
+        # The guide column is the schema's Metadata_sgRNA, not the non-schema Metadata_Guide.
+        assert "Metadata_sgRNA" in adata.obs and "Metadata_Guide" not in adata.obs
     if name == "bbbc021":
         assert adata.obs["Metadata_MOA"].notna().all()
         assert adata.obs["Metadata_Control"].sum() == 330
@@ -131,6 +134,8 @@ def test_aconcagua_cells_holds_eight_genes_and_the_controls_at_cell_resolution()
     genes = {"nontargeting", "RRM1", "DTL", "SKA2", "HAUS6", "ITGAV", "TLN1", "PSMB7", "SF3B3"}
     assert set(adata.obs["Metadata_Gene"].astype(str)) == genes
     assert adata.obs_names.is_unique
+    # The guide column is the schema's Metadata_sgRNA, not the non-schema Metadata_Guide.
+    assert "Metadata_sgRNA" in adata.obs and "Metadata_Guide" not in adata.obs
 
 
 @pytest.mark.network
