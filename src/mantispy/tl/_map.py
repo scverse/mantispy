@@ -110,6 +110,25 @@ def _list_valued(series: pd.Series) -> bool:
     return False
 
 
+def _refuse_unrankable(features: np.ndarray, names: pd.Index, distance: str) -> None:
+    """Raise when a profile holds an infinite value or, for a cosine distance, has a zero or overflowing norm.
+
+    copairs zeroes such a profile, so every similarity it has ties and its replicates rank first, scoring an
+    average precision of one that inflates the mAP without a sign that anything went wrong.
+    """
+    bad = ~np.isfinite(features).all(axis=1)
+    if "cosine" in distance:
+        with np.errstate(over="ignore"):
+            norm = np.linalg.norm(features, axis=1)
+        bad |= ~np.isfinite(norm) | (norm == 0)
+    if bad.any():
+        raise ValueError(
+            f"mAP cannot rank {int(bad.sum())} profile(s) with an infinite value, or a zero or overflowing norm "
+            f"under distance={distance!r} (e.g. {', '.join(str(name) for name in names[bad][:5])}). Drop the features with no "
+            "spread that normalize flags in var['degenerate_scale'], or features with extreme values, first."
+        )
+
+
 def _score_map(
     meta: pd.DataFrame,
     features: np.ndarray,
@@ -360,6 +379,7 @@ def map(
             "affected features with mt.pp.feature_select(adata, na_cutoff=0.0, subset=True); the default "
             "na_cutoff=0.05 keeps features with up to 5% missing values."
         )
+    _refuse_unrankable(features, adata.obs_names, distance)
     obs = as_frame(adata.obs)
     # copairs is handed the Metadata_ columns plus every obs column the pair spec or label names, so a column
     # without the prefix (batch="source", a user-added label) reaches copairs instead of tripping its matcher.

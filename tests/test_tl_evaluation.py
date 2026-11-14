@@ -409,6 +409,17 @@ def test_map_refuses_missing_values(profiles):
         mt.tl.map(profiles, mode="activity", null_size=100)
 
 
+@requires_copairs
+@pytest.mark.parametrize("value", [3e20, 0.0, np.inf])
+def test_map_refuses_profiles_it_cannot_rank(profiles, value):
+    """A profile whose float32 norm overflows, is zero, or holds an infinity would tie every similarity and score AP = 1."""
+    values = profiles.X.copy()
+    values[0] = value
+    profiles.X = values
+    with pytest.raises(ValueError, match=r"cannot rank 1 profile"):
+        mt.tl.map(profiles, mode="activity", null_size=100)
+
+
 @pytest.mark.parametrize("infinity", [np.inf, -np.inf])
 def test_an_infinite_value_is_compared_as_missing(infinity):
     """Regression test for #65: filled as the largest float, one infinity made its profile orthogonal to every other."""
