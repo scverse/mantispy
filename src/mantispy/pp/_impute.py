@@ -153,17 +153,17 @@ def impute(
             # the result back.
             finite = np.where(np.isinf(out), np.nan, out) if np.isinf(out).any() else out
             rng = np.random.default_rng(seed)
+            # Only rows with a missing value are gathered, so no group-sized copy of the matrix is made.
+            incomplete = missing.any(axis=1)
             for rows in group_rows(codes, len(keys)):
-                if not missing[rows].any():
+                targets = rows[incomplete[rows]]
+                if not targets.size:
                     continue
                 donors = rows[mask[rows]]
                 if n_donors is not None and donors.size > n_donors:
                     donors = np.sort(rng.choice(donors, size=n_donors, replace=False))
-                target = missing[rows]
-                block = _knn(finite[rows], finite[donors], n_neighbors)
-                updated = out[rows]
-                updated[target] = block[target]
-                out[rows] = updated
+                block = _knn(finite[targets], finite[donors], n_neighbors)
+                out[targets] = np.where(missing[targets], block, out[targets])
         filled = missing & ~np.isnan(out)
     else:
         # Nothing is missing: no value is filled, so skip the matrix copy, the grouping and the neighbour
