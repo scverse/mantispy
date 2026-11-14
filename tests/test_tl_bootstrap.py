@@ -152,6 +152,7 @@ def test_a_shifted_gene_is_called_with_the_sign_of_its_shift():
     assert np.sign(table["effect"].iloc[:2]).tolist() == [1.0, -1.0]
     guides = adata.uns["mantispy"]["bootstrap_guides"]
     assert set(guides["replicate"]) == {"hit0", "hit1", "hit2"} and set(guides["n_cells"]) == {40}
+    assert not any("not a registered result key" in w for w in mt.io.validate(adata).warnings)
     mt.pl.feature_volcano(adata, "HIT", key="bootstrap")
     mt.pl.effect_sizes(adata, "HIT", key="bootstrap")
 
