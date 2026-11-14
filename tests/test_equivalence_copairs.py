@@ -345,3 +345,12 @@ def test_permutation_null_does_not_depend_on_where_its_keys_come_from(mode, monk
     scored = _permutation(meta, x, spec, 500, 0, multilabel_col=column)["p_value"]
     np.testing.assert_array_equal(shared, per_group)
     np.testing.assert_array_equal(shared, scored)
+
+
+def test_blas_positives_are_scored_in_chunks(monkeypatch):
+    """Gathering every positive pair's rows at once needs memory in the pair count; chunks give the same scores."""
+    meta, x = _screen(seed=2)
+    _, whole = _ours(meta, x, MODES["cross_plate"], "euclidean", solver="blas")
+    monkeypatch.setattr(ap_kernel, "_BLOCK_BYTES", 8 * x.shape[1] * 7)  # seven pairs per chunk
+    _, chunked = _ours(meta, x, MODES["cross_plate"], "euclidean", solver="blas")
+    np.testing.assert_allclose(whole.average_precision, chunked.average_precision, atol=1e-6)

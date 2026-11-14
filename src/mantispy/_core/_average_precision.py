@@ -588,9 +588,13 @@ def average_precision(
     )  # fmt: skip
     if not exact:
         owner = np.repeat(row_profile, row_npos)
-        if distance in BUILTIN:  # BLAS-family similarities of the positives, row by row as the blocks compute them
-            sims = np.einsum("ij,ij->i", rows[owner], rows[partner]) if len(owner) else np.zeros(0, np.float32)
-            sims = _finish_blas(sims.astype(np.float32), rows, scale, owner, partner, distance)
+        if distance in BUILTIN:  # BLAS-family similarities of the positives, in chunks that bound the gathered rows
+            sims = np.empty(len(owner), np.float32)
+            step = max(1, _BLOCK_BYTES // (8 * rows.shape[1]))
+            for lo in range(0, len(owner), step):
+                a, b = owner[lo : lo + step], partner[lo : lo + step]
+                dot = np.einsum("ij,ij->i", rows[a], rows[b]).astype(np.float32)
+                sims[lo : lo + step] = _finish_blas(dot, rows, scale, a, b, distance)
         else:
             sims = _pair_similarity(rows, owner, partner, distance)
         keys[:] = np.float32(1) - sims
