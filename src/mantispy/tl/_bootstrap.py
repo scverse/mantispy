@@ -33,7 +33,7 @@ CONTROL_SCOPES = ("pooled", "within_group", "reference_group", "within_perturbat
 #: Atoms of a guide null whose probability is below this are dropped when the gene null needs
 #: them. The dropped mass is a far order-statistic tail of comparable size, well under the
 #: Monte-Carlo error of any feasible simulation; small problems keep every atom, so the result
-#: still matches a brute-force enumeration. :func:`_gene_caps` sizes its buffer to the same band.
+#: still matches a brute-force enumeration. :func:`_null_caps` sizes its buffer to the same band.
 _ATOM_EPS = 1e-8
 
 
@@ -494,13 +494,13 @@ def _build_construct(
 
 
 @njit(cache=True, nogil=True)
-def _poisbin_cdf(j, probs, k):
-    """``P(sum of k independent Bernoulli(probs[:k]) <= j)`` by DP."""
+def _poisbin_cdf(j, probs, k, dp):
+    """``P(sum of k independent Bernoulli(probs[:k]) <= j)`` by DP, in the scratch ``dp`` (size > k)."""
     if j < 0:
         return 0.0
     if j >= k:
         return 1.0
-    dp = np.zeros(k + 1)
+    dp[: k + 1] = 0.0
     dp[0] = 1.0
     size = 1
     for i in range(k):
@@ -516,19 +516,37 @@ def _poisbin_cdf(j, probs, k):
 
 
 @njit(cache=True, nogil=True)
-def _even_side(memb, nmem, off, vals, cum, obs, s, tv, ple):
+def _even_side(memb, nmem, lo_c, hi_c, vals, cum, obs, s, ple, fs, ints, pats, patw, bg, dp):
     """``P(median of the nmem listed guides > obs)`` for an even count ``2s``.
 
-    ``ple[a]`` is the exact ``P(guide <= obs | not nan)`` (the count part is kept exact so a coarsened
-    atom list cannot move probability across ``obs``); the atoms give only the boundary shape where
-    exactly ``s`` guides are at most ``obs``, classified by the actual float midpoint.
+    Guide ``c``'s atoms are ``vals[lo_c[c]:hi_c[c]]``, sorted and distinct, with ``cum`` their running
+    mass from that list's start. ``ple[a]`` is the exact ``P(guide <= obs | not nan)`` (the count part
+    is kept exact so a coarsened atom list cannot move probability across ``obs``); the atoms give only
+    the boundary shape where exactly ``s`` guides are at most ``obs`` (the low ones), classified by the
+    actual float midpoint of the largest low and the smallest high guide. One ascending sweep over all
+    the guides' atoms at most ``obs`` serves every split into low and high guides at once, so each
+    atom list is read once. ``fs``/``ints`` are float/int scratch rows, ``pats``/``patw``/``bg`` hold
+    one entry per split.
     """
-    f_obs_m = np.empty(nmem)  # cum_le(obs) per low member; s_obs per high member
-    le_end = np.empty(nmem, dtype=np.int64)  # low: one past the last atom <= obs
-    gt_start = np.empty(nmem, dtype=np.int64)  # high: first atom > obs
-    ptr = np.empty(nmem, dtype=np.int64)  # sweeping pointer (low: next >= aval; high: current cut)
-    mp = np.empty(nmem, dtype=np.int64)  # merge pointer for gathering sorted low atoms
-    g = _poisbin_cdf(s - 1, ple, nmem)
+    f_low, f_high, rle, rlt, rh = fs[0], fs[1], fs[2], fs[3], fs[4]
+    le_end, gt_start, lptr, cut = ints[0], ints[1], ints[2], ints[3]
+    g = _poisbin_cdf(s - 1, ple, nmem, dp)
+    for a in range(nmem):
+        c = memb[a]
+        lo = lo_c[c]
+        hi = hi_c[c]
+        cnt_le = np.searchsorted(vals[lo:hi], obs, side="right")
+        at_obs = cum[lo + cnt_le - 1] if cnt_le > 0 else 0.0
+        f_low[a] = at_obs  # mass at most obs, for the guide as a low one
+        f_high[a] = (cum[hi - 1] if hi > lo else 0.0) - at_obs  # mass above obs, as a high one
+        le_end[a] = lo + cnt_le  # one past the last atom <= obs
+        gt_start[a] = lo + cnt_le  # first atom > obs
+        lptr[a] = lo  # next atom <= obs not yet swept
+        cut[a] = hi  # atoms [cut, hi) have midpoint (aval + .)/2 > obs
+    # the splits with s low guides; a guide with no atom on its side of obs gives the boundary no
+    # shape, and its exact probability of being there is below the pruned atoms', so such a split,
+    # at most that probable, is left out
+    npat = 0
     for lowmask in range(1 << nmem):
         pc = 0
         mm = lowmask
@@ -538,101 +556,91 @@ def _even_side(memb, nmem, off, vals, cum, obs, s, tv, ple):
         if pc != s:
             continue
         pat = 1.0
+        shapeless = False
         for a in range(nmem):
             if (lowmask >> a) & 1:
                 pat *= ple[a]
+                shapeless |= f_low[a] <= 0.0
             else:
                 pat *= 1.0 - ple[a]
-        if pat <= 0.0:
+                shapeless |= f_high[a] <= 0.0
+        if pat <= 0.0 or shapeless:
             continue
-        nt = 0
-        shapeless = False
+        pats[npat] = lowmask
+        patw[npat] = pat
+        bg[npat] = 0.0
+        npat += 1
+    while npat > 0:
+        aval = np.inf
+        for a in range(nmem):
+            if lptr[a] < le_end[a] and vals[lptr[a]] < aval:
+                aval = vals[lptr[a]]
+        if aval == np.inf:
+            break
+        hit = 0  # the guides with an atom at aval
         for a in range(nmem):
             c = memb[a]
-            lo = off[c]
-            hi = off[c + 1]
-            base = cum[lo - 1] if lo > 0 else 0.0
-            cnt_le = np.searchsorted(vals[lo:hi], obs, side="right")
-            at_obs = cum[lo + cnt_le - 1] if cnt_le > 0 else base
-            if (lowmask >> a) & 1:
-                le_end[a] = lo + cnt_le
-                f_obs_m[a] = at_obs - base
-                ptr[a] = lo  # next atom with value >= current aval (used in the CDF sweep below)
-                mp[a] = lo  # merge pointer for gathering the sorted low atoms
-                nt += cnt_le
-            else:
-                gt_start[a] = lo + cnt_le
-                f_obs_m[a] = (cum[hi - 1] if hi > 0 else 0.0) - at_obs
-                ptr[a] = hi  # current cut: atoms [cut, hi) have midpoint (aval+.)/2 > obs
-            shapeless |= f_obs_m[a] <= 0.0
-        # A guide with no atom on its side of obs gives the boundary no shape: its exact probability
-        # of being there is below the pruned atoms', so the pattern, at most that, is left out.
-        if shapeless:
-            continue
-        # k-way merge of the already-sorted low-guide atom slices into tv (O(nt * s), no sort)
-        for pos in range(nt):
-            best = -1
-            bv = 0.0
-            for a in range(nmem):
-                if (lowmask >> a) & 1 and mp[a] < le_end[a] and (best == -1 or vals[mp[a]] < bv):
-                    bv = vals[mp[a]]
-                    best = a
-            tv[pos] = bv
-            mp[best] += 1
-        bg = 0.0
-        i = 0
-        while i < nt:
-            aval = tv[i]
-            jj = i
-            while jj < nt and tv[jj] == aval:
-                jj += 1
+            lo = lo_c[c]
+            hi = hi_c[c]
+            p = lptr[a]
+            f_lt = cum[p - 1] if p > lo else 0.0
+            if p < le_end[a] and vals[p] == aval:
+                p += 1
+                hit |= 1 << a
+            f_le = cum[p - 1] if p > lo else 0.0
+            lptr[a] = p
+            k = cut[a]
+            while k > gt_start[a] and (aval + vals[k - 1]) / 2.0 > obs:
+                k -= 1
+            cut[a] = k
+            gt_mass = cum[hi - 1] - (cum[k - 1] if k > lo else 0.0) if k < hi else 0.0
+            if f_low[a] > 0.0:
+                rlt[a] = f_lt / f_low[a]
+                rle[a] = f_le / f_low[a]
+            if f_high[a] > 0.0:
+                rh[a] = gt_mass / f_high[a]
+        for q in range(npat):
+            lowmask = pats[q]
+            if not lowmask & hit:  # no low guide's maximum can be at aval
+                continue
             prod_le = 1.0
             prod_lt = 1.0
             prod_s = 1.0
             for a in range(nmem):
-                c = memb[a]
-                base = cum[off[c] - 1] if off[c] > 0 else 0.0
-                if (lowmask >> a) & 1:  # low: sweep pointer to first atom >= aval, then past == aval
-                    p = ptr[a]
-                    while p < le_end[a] and vals[p] < aval:
-                        p += 1
-                    f_lt = (cum[p - 1] - base) if p > off[c] else 0.0
-                    while p < le_end[a] and vals[p] == aval:
-                        p += 1
-                    f_le = (cum[p - 1] - base) if p > off[c] else 0.0
-                    ptr[a] = p
-                    prod_lt *= f_lt / f_obs_m[a]
-                    prod_le *= f_le / f_obs_m[a]
-                else:  # high: move cut left while the midpoint with the atom below it exceeds obs
-                    cut = ptr[a]
-                    while cut > gt_start[a] and (aval + vals[cut - 1]) / 2.0 > obs:
-                        cut -= 1
-                    ptr[a] = cut
-                    hi = off[c + 1]
-                    gt_mass = cum[hi - 1] - (cum[cut - 1] if cut > 0 else 0.0) if cut < hi else 0.0
-                    prod_s *= gt_mass / f_obs_m[a]
+                if (lowmask >> a) & 1:
+                    prod_lt *= rlt[a]
+                    prod_le *= rle[a]
+                else:
+                    prod_s *= rh[a]
             pmax = prod_le - prod_lt
             if pmax > 0.0:
-                bg += pmax * prod_s
-            i = jj
-        g += pat * bg
+                bg[q] += pmax * prod_s
+    for q in range(npat):
+        g += patw[q] * bg[q]
     return g
 
 
 @njit(cache=True, nogil=True)
-def _gene_core(k_all, off, vals, cum, totmass, nanp, le_arr, lt_arr, rvals, rcum, obs, tv, memb):
+def _gene_core(
+    k_all, lo_c, hi_c, vals, cum, totmass, nanp, le_arr, lt_arr, rvals, rcum, obs, scratch, iscratch, pats, patw, bg
+):
     """``(P(gene median > obs), P(gene median == obs))`` over the gene's guides.
 
     Sums over which guides come out nan, with the odd case a Poisson-binomial count and the even
     case handled via :func:`_even_side` and reflection. ``le_arr``/``lt_arr`` are the exact
     ``P(guide <= obs)`` / ``P(guide < obs)`` (from the sub-tail mixture), so the count that decides
-    significance is exact; the atoms serve only the boundary shape.
+    significance is exact; the atoms serve only the boundary shape. ``scratch`` (8 rows) and
+    ``iscratch`` (5 rows) have at least ``k_all + 1`` columns, ``pats``/``patw``/``bg`` ``2 ** k_all``.
     """
     p_gt = 0.0
     p_eq = 0.0
-    ple = np.empty(k_all)
-    pge = np.empty(k_all)
-    for mask in range(1, 1 << k_all):
+    ple, pge, dp, fs = scratch[0], scratch[1], scratch[2], scratch[3:]
+    memb, ints = iscratch[0], iscratch[1:]
+    if nanp[:k_all].max() <= 0.0:  # no guide can come out nan: only the all-guides mask has weight
+        first = (1 << k_all) - 1
+    else:
+        first = 1
+    for mask in range(first, 1 << k_all):
         weight = 1.0
         k = 0
         for c in range(k_all):
@@ -651,16 +659,39 @@ def _gene_core(k_all, off, vals, cum, totmass, nanp, le_arr, lt_arr, rvals, rcum
             continue
         if k % 2 == 1:
             s = k // 2
-            g = _poisbin_cdf(s, ple, k)
-            lt = _poisbin_cdf(s, pge, k)
+            g = _poisbin_cdf(s, ple, k, dp)
+            lt = _poisbin_cdf(s, pge, k, dp)
         else:
             s = k // 2
-            g = _even_side(memb, k, off, vals, cum, obs, s, tv, ple)
-            lt = _even_side(memb, k, off, rvals, rcum, -obs, s, tv, pge)
+            g = _even_side(memb, k, lo_c, hi_c, vals, cum, obs, s, ple, fs, ints, pats, patw, bg, dp)
+            lt = _even_side(memb, k, lo_c, hi_c, rvals, rcum, -obs, s, pge, fs, ints, pats, patw, bg, dp)
         e = 1.0 - g - lt
         p_gt += weight * g
         p_eq += weight * e
     return p_gt, p_eq
+
+
+@njit(cache=True, nogil=True)
+def _deal(cost, n_slots):
+    """Deal items to ``n_slots`` slots, costliest first onto the least-loaded slot.
+
+    Returns ``(order, start)``: slot ``s`` runs ``order[start[s]:start[s + 1]]``. The parallel loops
+    run one slot per thread, so the threads finish together however unequal the items are.
+    """
+    n = cost.size
+    load = np.zeros(n_slots)
+    slot = np.empty(n, dtype=np.int64)
+    for i in np.argsort(-cost):
+        s = np.argmin(load)
+        slot[i] = s
+        load[s] += cost[i]
+    order = np.argsort(slot, kind="mergesort")
+    start = np.zeros(n_slots + 1, dtype=np.int64)
+    for i in range(n):
+        start[slot[i] + 1] += 1
+    for s in range(n_slots):
+        start[s + 1] += start[s]
+    return order, start
 
 
 @njit(parallel=True, cache=True, nogil=True)
@@ -672,141 +703,190 @@ def _gene_pvalues(
     pool_sub_start,
     pool_sub_stop,
     pool_width,
-    construct_pool,
     construct_size,
+    construct_null,
+    null_pool,
+    null_size,
+    null_caps,
     gene_offsets,
     gene_observed,
-    gene_caps,
     eps,
-    n_chunks,
+    n_slots,
 ):
-    """Two-sided p-value of every gene against its guides' control pools, exactly."""
+    """Two-sided p-value of every gene against its guides' control pools, exactly.
+
+    A guide's null depends only on its pool and cell count, so per feature each distinct
+    ``(null_pool, null_size)`` null is built once into a shared atom store, and the genes then only
+    read it. Work is dealt to ``n_slots`` slots (see :func:`_deal`), each with its own scratch.
+    """
     n_genes = gene_offsets.size - 1
     n_features = gene_observed.shape[1]
+    n_nulls = null_pool.size
     out = np.empty((n_genes, n_features), dtype=np.float64)
-    max_cap = 1
-    max_k = 1
-    for g in range(n_genes):
-        if gene_caps[g] > max_cap:
-            max_cap = gene_caps[g]
-        if gene_offsets[g + 1] - gene_offsets[g] > max_k:
-            max_k = gene_offsets[g + 1] - gene_offsets[g]
-    max_width = 1
-    for sub in range(sub_start.size):
-        if sub_stop[sub] - sub_start[sub] > max_width:
-            max_width = sub_stop[sub] - sub_start[sub]
-    # one set of scratch buffers per gene chunk, reused across its genes, so a large screen does not
-    # churn the allocator with a fresh buffer per gene
-    chunk = (n_genes + n_chunks - 1) // n_chunks
-    for ch in prange(n_chunks):
-        val_buf = np.empty(max_cap, dtype=np.float64)
-        prob_buf = np.empty(max_cap, dtype=np.float64)
-        rval = np.empty(max_cap, dtype=np.float64)
-        cum = np.empty(max_cap, dtype=np.float64)
-        rcum = np.empty(max_cap, dtype=np.float64)
-        tv = np.empty(max_cap, dtype=np.float64)
-        off = np.empty(max_k + 1, dtype=np.int64)
-        totmass = np.empty(max_k, dtype=np.float64)
-        nanp = np.empty(max_k, dtype=np.float64)
-        le_arr = np.empty(max_k, dtype=np.float64)  # exact P(guide <= obs)
-        lt_arr = np.empty(max_k, dtype=np.float64)  # exact P(guide < obs)
-        memb = np.empty(max_k, dtype=np.int64)
-        stack = np.empty(128, dtype=np.int64)
-        sval = np.empty(max_width, dtype=np.float64)
-        sfl = np.empty(max_width, dtype=np.float64)
-        sgt = np.empty(max_width, dtype=np.float64)
-        glo = ch * chunk
-        ghi = min(glo + chunk, n_genes)
-        for g in range(glo, ghi):
-            c0 = gene_offsets[g]
-            c1 = gene_offsets[g + 1]
-            k_all = c1 - c0
-            for j in range(n_features):
+    max_cap = max(1, null_caps.max())
+    max_k = max(1, np.diff(gene_offsets).max())
+    max_width = max(1, (sub_stop - sub_start).max())
+    val_t = np.empty((n_slots, max_cap), dtype=np.float64)
+    prob_t = np.empty((n_slots, max_cap), dtype=np.float64)
+    stack_t = np.empty((n_slots, 128), dtype=np.int64)
+    sval_t = np.empty((n_slots, max_width), dtype=np.float64)
+    sfl_t = np.empty((n_slots, max_width), dtype=np.float64)
+    sgt_t = np.empty((n_slots, max_width), dtype=np.float64)
+    # per gene: lo_c, hi_c, its guides' masses and tails, and the _gene_core scratch; rows written at
+    # every atom, padded by a cache line so that slots on different cores share none
+    row_k = max_k + 1 + 8
+    lohi_t = np.empty((n_slots, 2, row_k), dtype=np.int64)
+    small_t = np.empty((n_slots, 4, row_k), dtype=np.float64)
+    scratch_t = np.empty((n_slots, 8, row_k), dtype=np.float64)
+    iscratch_t = np.empty((n_slots, 5, row_k), dtype=np.int64)
+    pats_t = np.empty((n_slots, (1 << max_k) + 8), dtype=np.int64)
+    patw_t = np.empty((n_slots, (1 << max_k) + 8), dtype=np.float64)
+    bg_t = np.empty((n_slots, (1 << max_k) + 8), dtype=np.float64)
+    counts = np.empty(n_nulls, dtype=np.int64)
+    offs = np.zeros(n_nulls + 1, dtype=np.int64)
+    totmass_u = np.empty(n_nulls, dtype=np.float64)
+    nanp_u = np.empty(n_nulls, dtype=np.float64)
+    null_order, null_start = _deal(null_caps.astype(np.float64), n_slots)
+    gene_cost = np.empty(n_genes, dtype=np.float64)
+    for j in range(n_features):
+        row = pool_sorted[j]
+        # size each shared null's merged atom list, then build it again into its slot of the store
+        for t in prange(n_slots):
+            for ui in range(null_start[t], null_start[t + 1]):
+                u = null_order[ui]
+                p = null_pool[u]
+                end, _ = _build_construct(
+                    row,
+                    sub_nn[j],
+                    sub_start,
+                    sub_stop,
+                    pool_sub_start[p],
+                    pool_sub_stop[p],
+                    pool_width[p],
+                    null_size[u],
+                    eps,
+                    val_t[t],
+                    prob_t[t],
+                    0,
+                    stack_t[t],
+                    sval_t[t],
+                    sfl_t[t],
+                    sgt_t[t],
+                )
+                counts[u] = end
+        for u in range(n_nulls):
+            offs[u + 1] = offs[u] + counts[u]
+        vals = np.empty(offs[n_nulls], dtype=np.float64)
+        cum = np.empty(offs[n_nulls], dtype=np.float64)  # running mass from the list's start
+        rvals = np.empty(offs[n_nulls], dtype=np.float64)  # the list negated and reversed, for the < side
+        rcum = np.empty(offs[n_nulls], dtype=np.float64)
+        for t in prange(n_slots):
+            for ui in range(null_start[t], null_start[t + 1]):
+                u = null_order[ui]
+                p = null_pool[u]
+                end, nprob = _build_construct(
+                    row,
+                    sub_nn[j],
+                    sub_start,
+                    sub_stop,
+                    pool_sub_start[p],
+                    pool_sub_stop[p],
+                    pool_width[p],
+                    null_size[u],
+                    eps,
+                    val_t[t],
+                    prob_t[t],
+                    0,
+                    stack_t[t],
+                    sval_t[t],
+                    sfl_t[t],
+                    sgt_t[t],
+                )
+                nanp_u[u] = nprob
+                lo = offs[u]
+                running = 0.0
+                for z in range(end):
+                    vals[lo + z] = val_t[t, z]
+                    running += prob_t[t, z]
+                    cum[lo + z] = running
+                totmass_u[u] = running
+                running = 0.0
+                for z in range(end):
+                    rvals[lo + z] = -val_t[t, end - 1 - z]
+                    running += prob_t[t, end - 1 - z]
+                    rcum[lo + z] = running
+        # a gene costs about its guides' atom count, times the patterns of an even guide count
+        for g in range(n_genes):
+            tot = 0
+            for c in range(gene_offsets[g], gene_offsets[g + 1]):
+                tot += counts[construct_null[c]]
+            k = gene_offsets[g + 1] - gene_offsets[g]
+            gene_cost[g] = tot * (1.0 + (k % 2 == 0) * k) + 1.0
+        gene_order, gene_start = _deal(gene_cost, n_slots)
+        for t in prange(n_slots):
+            for gi in range(gene_start[t], gene_start[t + 1]):
+                g = gene_order[gi]
                 obs = gene_observed[g, j]
                 if np.isnan(obs):
                     out[g, j] = np.nan
                     continue
-                row = pool_sorted[j]
-                off[0] = 0
-                end = 0
+                lo_c, hi_c = lohi_t[t, 0], lohi_t[t, 1]
+                totmass, nanp, le_arr, lt_arr = small_t[t, 0], small_t[t, 1], small_t[t, 2], small_t[t, 3]
+                c0 = gene_offsets[g]
+                k_all = gene_offsets[g + 1] - c0
                 for ci in range(k_all):
                     c = c0 + ci
-                    p = construct_pool[c]
-                    m = construct_size[c]
-                    new_end, nprob = _build_construct(
-                        row,
-                        sub_nn[j],
-                        sub_start,
-                        sub_stop,
-                        pool_sub_start[p],
-                        pool_sub_stop[p],
-                        pool_width[p],
-                        m,
-                        eps,
-                        val_buf,
-                        prob_buf,
-                        end,
-                        stack,
-                        sval,
-                        sfl,
-                        sgt,
-                    )
-                    off[ci + 1] = new_end
-                    totmass[ci] = 0.0
-                    for z in range(end, new_end):
-                        totmass[ci] += prob_buf[z]
-                    nanp[ci] = nprob
-                    end = new_end
+                    u = construct_null[c]
+                    lo_c[ci] = offs[u]
+                    hi_c[ci] = offs[u + 1]
+                    totmass[ci] = totmass_u[u]
+                    nanp[ci] = nanp_u[u]
                     # exact P(guide <= obs) / P(guide < obs) from the sub-tail mixture, so the gene
                     # count that decides significance never depends on the atom coarsening
+                    p = null_pool[u]
+                    m = construct_size[c]
                     le = 0.0
                     lt = 0.0
-                    s0 = pool_sub_start[p]
-                    s1 = pool_sub_stop[p]
-                    wtot = pool_width[p]
-                    for sub in range(s0, s1):
+                    for sub in range(pool_sub_start[p], pool_sub_stop[p]):
                         aa = sub_start[sub]
                         width = sub_stop[sub] - aa
-                        w = width / wtot
+                        w = width / pool_width[p]
                         gsub, lsub, nasub = _sub_tail(row, aa, sub_nn[j, sub], width, m, obs)
                         le += w * (1.0 - gsub - nasub)
                         lt += w * lsub
                     le_arr[ci] = le
                     lt_arr[ci] = lt
-                # global prefix sums and reflected (negated, reversed) atoms for the < obs side
-                running = 0.0
-                for z in range(end):
-                    running += prob_buf[z]
-                    cum[z] = running
-                for ci in range(k_all):
-                    lo = off[ci]
-                    hi = off[ci + 1]
-                    nreff = hi - lo
-                    for z in range(nreff):
-                        rval[lo + z] = -val_buf[hi - 1 - z]
-                running = 0.0
-                for ci in range(k_all):
-                    lo = off[ci]
-                    hi = off[ci + 1]
-                    nreff = hi - lo
-                    for z in range(nreff):
-                        running += prob_buf[hi - 1 - z]
-                        rcum[lo + z] = running
-                gt, eq = _gene_core(k_all, off, val_buf, cum, totmass, nanp, le_arr, lt_arr, rval, rcum, obs, tv, memb)
+                gt, eq = _gene_core(
+                    k_all,
+                    lo_c,
+                    hi_c,
+                    vals,
+                    cum,
+                    totmass,
+                    nanp,
+                    le_arr,
+                    lt_arr,
+                    rvals,
+                    rcum,
+                    obs,
+                    scratch_t[t],
+                    iscratch_t[t],
+                    pats_t[t],
+                    patw_t[t],
+                    bg_t[t],
+                )
                 one = gt + 0.5 * eq
                 out[g, j] = min(1.0, max(0.0, 2.0 * min(one, 1.0 - one)))
     return out
 
 
-#: Hard limit on a gene's per-thread atom buffer, so a huge screen cannot ask for unbounded memory;
+#: Hard limit on a guide null's per-thread atom buffer, so a huge screen cannot ask for unbounded memory;
 #: the probability pruning keeps the real count far below this, and small problems never approach it.
 _ATOM_CAP_MAX = 40_000_000
 
 
-def _gene_caps(
-    sub_nn, sub_start, sub_stop, pool_sub_start, pool_sub_stop, construct_pool, construct_size, gene_offsets
-):
-    """Per-gene atom-buffer size: an upper bound on the atoms its guides generate before merging.
+def _null_caps(sub_start, sub_stop, pool_sub_start, pool_sub_stop, null_pool, null_size):
+    """Per-null atom-buffer size: an upper bound on the atoms a guide null generates before merging.
 
     A control guide of ``w`` cells resampled ``m`` at a time produces median atoms only where the
     central order statistic's empirical CDF lies within the band ``|F - 1/2| < ~3/sqrt(m)`` in which
@@ -815,18 +895,12 @@ def _gene_caps(
     """
     widths = (sub_stop - sub_start).astype(np.int64)
     full = widths * (widths + 1) // 2 + widths
-    n_genes = gene_offsets.size - 1
-    caps = np.empty(n_genes, dtype=np.int64)
-    for g in range(n_genes):
-        total = 0
-        for c in range(gene_offsets[g], gene_offsets[g + 1]):
-            p = construct_pool[c]
-            m = max(int(construct_size[c]), 1)
-            w = widths[pool_sub_start[p] : pool_sub_stop[p]]
-            nw = np.minimum(w, (7 * w) // int(np.sqrt(m)) + 4)
-            bound = np.minimum(full[pool_sub_start[p] : pool_sub_stop[p]], nw * nw + nw)
-            total += int(bound.sum())
-        caps[g] = min(total + 16, _ATOM_CAP_MAX)
+    caps = np.empty(null_pool.size, dtype=np.int64)
+    for u, (p, m) in enumerate(zip(null_pool, null_size, strict=True)):
+        w = widths[pool_sub_start[p] : pool_sub_stop[p]]
+        nw = np.minimum(w, (7 * w) // int(np.sqrt(max(int(m), 1))) + 4)
+        bound = np.minimum(full[pool_sub_start[p] : pool_sub_stop[p]], nw * nw + nw)
+        caps[u] = min(int(bound.sum()) + 16, _ATOM_CAP_MAX)
     return caps
 
 
@@ -1024,9 +1098,11 @@ def bootstrap_features(
         construct_size,
         construct_observed,
     )
-    gene_caps = _gene_caps(
-        sub_nn, sub_start, sub_stop, pool_sub_start, pool_sub_stop, construct_pool, construct_size, gene_offsets
+    # a guide's null depends only on its pool and cell count, so guides sharing both share it
+    null_keys, construct_null = np.unique(
+        construct_pool * (construct_size.max() + 1) + construct_size, return_inverse=True
     )
+    null_pool, null_size = np.divmod(null_keys, construct_size.max() + 1)
     gene_p = _gene_pvalues(
         pool_sorted,
         sub_nn,
@@ -1035,11 +1111,13 @@ def bootstrap_features(
         pool_sub_start,
         pool_sub_stop,
         pool_width,
-        construct_pool,
         construct_size,
+        construct_null.astype(np.int64),
+        null_pool.astype(np.int64),
+        null_size.astype(np.int64),
+        _null_caps(sub_start, sub_stop, pool_sub_start, pool_sub_stop, null_pool, null_size),
         gene_offsets,
         gene_observed,
-        gene_caps,
         _ATOM_EPS,
         numba.get_num_threads(),
     )
