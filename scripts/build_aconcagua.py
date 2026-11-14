@@ -22,9 +22,21 @@ against the fingerprint, not the sha256, because anndata or h5py releases can wr
 different bytes. Extraction streams every row group of the per-cell table and takes about 1.5 h on four cores;
 it is resumable (one part per row group) and the per-cell draw is deterministic, so a rerun keeps the same cells.
 
-The 500-gene subset and its keep probabilities were planned once from the screen-wide metadata (brieflow's
-published gene tables plus a screen-wide mitotic index) and are pinned here as small inputs rather than
-recomputed, so the exploratory planning code is not part of this script.
+The two inputs in ``scripts/data/aconcagua/`` were planned once from the screen-wide metadata (brieflow's
+published gene tables plus a screen-wide mitotic index) and are pinned as small files rather than recomputed, so
+the exploratory planning code is not part of this script:
+
+* ``genes.csv`` names the 500 genes of the subset and the tier of each: the four positive controls, the strong and
+  the weak known hits from brieflow's gene tables, and random library genes. All 250 non-targeting guides are kept
+  besides, and their cells take the tier ``control``.
+* ``keep_prob.parquet`` gives the probability that a cell is kept, per unit (the guide for a non-targeting control,
+  the gene otherwise), plate, well and class. It caps the interphase cells at about 20 per control guide and about 40
+  per gene (about 10 per guide) in each well, and keeps the mitotic cells uncapped.
+
+The build, not the inputs, makes the remaining choices: the pooled profiles thin the mitotic cells to their unit's
+interphase keep probability and halve the control cells, so a profile carries its natural mitotic share and a
+control guide about as many cells as a targeting guide, and the cells file draws its tenth of the controls as
+described above.
 """
 
 from __future__ import annotations
