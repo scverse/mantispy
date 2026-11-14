@@ -5,7 +5,7 @@ This is the bootstrap test of Brieflow (``workflow/lib/aggregate/bootstrap.py``)
 
 from __future__ import annotations
 
-from math import exp, lgamma, log
+from math import exp, expm1, lgamma, log, log1p
 from typing import TYPE_CHECKING
 
 import numba
@@ -38,8 +38,14 @@ _ATOM_EPS = 1e-8
 
 
 @njit(cache=True, nogil=True)
+def _binom_pmf(k: int, n: int, p: float) -> float:
+    """``P(Binomial(n, p) == k)`` for ``0 < p < 1``, in log space so it does not underflow for large ``n``."""
+    return exp(lgamma(n + 1.0) - lgamma(k + 1.0) - lgamma(n - k + 1.0) + k * log(p) + (n - k) * log1p(-p))
+
+
+@njit(cache=True, nogil=True)
 def _binom_cdf(k: int, n: int, p: float) -> float:
-    """``P(Binomial(n, p) <= k)`` by the pmf recurrence."""
+    """``P(Binomial(n, p) <= k)`` by the pmf recurrence from ``pmf(0) = (1 - p) ** n``."""
     if k < 0:
         return 0.0
     if k >= n:
@@ -49,12 +55,38 @@ def _binom_cdf(k: int, n: int, p: float) -> float:
     if p >= 1.0:
         return 0.0
     term = (1.0 - p) ** n
+    if term < 1e-280:  # pmf(0) underflows, or is a subnormal with too few digits, past ~1000 draws
+        return _binom_cdf_from_k(k, n, p)
     acc = term
     r = p / (1.0 - p)
     for i in range(1, k + 1):
         term = term * r * (n - i + 1) / i
         acc += term
     return acc
+
+
+@njit(cache=True, nogil=True)
+def _binom_cdf_from_k(k: int, n: int, p: float) -> float:
+    """:func:`_binom_cdf` by the recurrence from ``pmf(k)`` (or ``pmf(k + 1)``, for the upper tail) outward."""
+    if k < (n + 1) * p:  # lower tail: pmf decreases from k down to 0
+        term = _binom_pmf(k, n, p)
+        acc = term
+        q = (1.0 - p) / p
+        for i in range(k, 0, -1):
+            term *= i * q / (n - i + 1)  # pmf(i - 1) from pmf(i)
+            acc += term
+            if term <= acc * 1e-17:
+                break
+        return min(acc, 1.0)
+    term = _binom_pmf(k + 1, n, p)  # upper tail: pmf decreases from k + 1 up to n
+    acc = term
+    r = p / (1.0 - p)
+    for i in range(k + 1, n):
+        term *= (n - i) * r / (i + 1)  # pmf(i + 1) from pmf(i)
+        acc += term
+        if term <= acc * 1e-17:
+            break
+    return max(1.0 - acc, 0.0)
 
 
 @njit(cache=True, nogil=True)
@@ -164,10 +196,8 @@ def _sub_tail(v: np.ndarray, lo: int, nn: int, width: int, m: int, x: float):
     # number of non-nan draws r ~ Binomial(m, p_nn); median is over the r non-nan draws
     gt = 0.0
     lt = 0.0
-    term = (1.0 - p_nn) ** m
-    ratio = p_nn / (1.0 - p_nn)
     for r in range(1, m + 1):
-        term = term * ratio * (m - r + 1) / r  # P(r non-nan draws)
+        term = _binom_pmf(r, m, p_nn)  # P(r non-nan draws)
         if term > 0.0:
             gt += term * _median_gt(v, lo, nn, r, x)
             lt += term * _median_lt(v, lo, nn, r, x)
@@ -254,7 +284,10 @@ def _add_sub_atoms(v, lo, n, r, scale, eps, out_val, out_prob, cnt, sval, sfl, s
                 break
             i = j
         return cnt
-    # even r = 2t: pass 1 records each distinct value, its CDF, and (1-F)^(r-t)
+    # even r = 2t: pass 1 records each distinct value, its CDF, and (1-F)^(r-t). Over the band of
+    # values that carry atoms these powers and F^t stay normal floats up to a thousand draws; past
+    # that they underflow while C(r, t) overflows, so the atoms are formed in log space instead.
+    direct = r <= 1000
     log_c = lgamma(r + 1.0) - lgamma(t + 1.0) - lgamma(r - t + 1.0)
     nd = 0
     i = lo
@@ -267,47 +300,63 @@ def _add_sub_atoms(v, lo, n, r, scale, eps, out_val, out_prob, cnt, sval, sfl, s
         f = (j - lo) / n
         sval[nd] = a
         sfl[nd] = f
-        sgt[nd] = (1.0 - f) ** (r - t)
+        if direct:
+            sgt[nd] = (1.0 - f) ** (r - t)
+        else:
+            sgt[nd] = (r - t) * log1p(-f) if f < 1.0 else -np.inf
         nd += 1
         i = j
+    if not direct:
+        # sgt[lb] becomes log rb[lb], rb[lb] = (1-F_{lb-1})^(r-t) - (1-F_lb)^(r-t), then rb[lb] / rb[lb-1]
+        for lb in range(nd - 1, 0, -1):
+            sgt[lb] = sgt[lb - 1] + log(-expm1(sgt[lb] - sgt[lb - 1]))
+        for lb in range(nd - 1, 1, -1):
+            sgt[lb] = exp(sgt[lb] - sgt[lb - 1])
     # pass 2: diagonal and off-diagonal atoms from the precomputed tables
-    fp_prev = 0.0
     outer_seen = False
     for ka in range(nd):
-        fp = sfl[ka] ** t
-        la = fp - fp_prev
-        fp_prev = fp
         f_prev = sfl[ka - 1] if ka > 0 else 0.0
         marg = _binom_cdf(t - 1, r, f_prev) - _binom_cdf(t - 1, r, sfl[ka])  # P(t-th order stat == a)
         if marg > eps:
             outer_seen = True
-            diag = marg
-            if la > 0.0:
-                diag -= exp(log_c + log(la)) * sgt[ka]  # C(r,t)*la*(1-F)^(r-t)
+            # coef = C(r,t) * (F^t - F_prev^t); the diagonal takes off coef * (1-F)^(r-t), and the row's
+            # off-diagonal atoms are coef * rb[lb]
+            pr = 0.0
+            coef = 0.0
+            if direct:
+                la = sfl[ka] ** t - f_prev**t
+                coef = exp(log_c + log(la)) if la > 0.0 else 0.0
+                diag = marg - coef * sgt[ka]
+                if ka + 1 < nd:
+                    pr = coef * (sgt[ka] - sgt[ka + 1])
+            else:
+                log_coef = log_c + t * log(sfl[ka])
+                if f_prev > 0.0:
+                    log_coef += log(-expm1(t * log(f_prev / sfl[ka])))
+                log_g = (r - t) * log1p(-sfl[ka]) if sfl[ka] < 1.0 else -np.inf
+                diag = marg - exp(log_coef + log_g)
+                if ka + 1 < nd:
+                    log_g_next = (r - t) * log1p(-sfl[ka + 1]) if sfl[ka + 1] < 1.0 else -np.inf
+                    pr = exp(log_coef + log_g + log(-expm1(log_g_next - log_g)))
             if diag > eps:
                 if cnt >= out_val.shape[0]:
                     return cnt
                 out_val[cnt] = sval[ka]
                 out_prob[cnt] = scale * diag
                 cnt += 1
-            if la > 0.0:
-                coef = exp(log_c + log(la))  # C(r,t)*la
-                inner_seen = False
-                g_prev = sgt[ka]
-                for lb in range(ka + 1, nd):
-                    rb = g_prev - sgt[lb]  # (1-F_{lb-1})^(r-t) - (1-F_lb)^(r-t)
-                    g_prev = sgt[lb]
-                    if rb > 0.0:
-                        pr = coef * rb
-                        if pr > eps:
-                            if cnt >= out_val.shape[0]:
-                                return cnt
-                            out_val[cnt] = (sval[ka] + sval[lb]) / 2.0
-                            out_prob[cnt] = scale * pr
-                            cnt += 1
-                            inner_seen = True
-                        elif inner_seen:
-                            break
+            inner_seen = False
+            for lb in range(ka + 1, nd):
+                if lb > ka + 1:
+                    pr = coef * (sgt[lb - 1] - sgt[lb]) if direct else pr * sgt[lb]
+                if pr > eps:
+                    if cnt >= out_val.shape[0]:
+                        return cnt
+                    out_val[cnt] = (sval[ka] + sval[lb]) / 2.0
+                    out_prob[cnt] = scale * pr
+                    cnt += 1
+                    inner_seen = True
+                elif inner_seen:
+                    break
         elif outer_seen:
             break
     return cnt
@@ -433,10 +482,8 @@ def _build_construct(
             cnt = _add_sub_atoms(pool_sorted_row, a, nn, m, w, eps, val_buf, prob_buf, cnt, sval, sfl, sgt)
         else:
             nan_prob += w * (1.0 - p_nn) ** m
-            term = (1.0 - p_nn) ** m
-            ratio = p_nn / (1.0 - p_nn)
             for r in range(1, m + 1):
-                term = term * ratio * (m - r + 1) / r
+                term = _binom_pmf(r, m, p_nn)
                 if term > 0.0:
                     cnt = _add_sub_atoms(
                         pool_sorted_row, a, nn, r, w * term, eps, val_buf, prob_buf, cnt, sval, sfl, sgt
@@ -469,7 +516,7 @@ def _poisbin_cdf(j, probs, k):
 
 
 @njit(cache=True, nogil=True)
-def _even_side(memb, nmem, off, vals, cum, totmass, obs, s, tv, ple):
+def _even_side(memb, nmem, off, vals, cum, obs, s, tv, ple):
     """``P(median of the nmem listed guides > obs)`` for an even count ``2s``.
 
     ``ple[a]`` is the exact ``P(guide <= obs | not nan)`` (the count part is kept exact so a coarsened
@@ -499,24 +546,28 @@ def _even_side(memb, nmem, off, vals, cum, totmass, obs, s, tv, ple):
         if pat <= 0.0:
             continue
         nt = 0
+        shapeless = False
         for a in range(nmem):
             c = memb[a]
             lo = off[c]
             hi = off[c + 1]
+            base = cum[lo - 1] if lo > 0 else 0.0
             cnt_le = np.searchsorted(vals[lo:hi], obs, side="right")
+            at_obs = cum[lo + cnt_le - 1] if cnt_le > 0 else base
             if (lowmask >> a) & 1:
                 le_end[a] = lo + cnt_le
-                f_obs_m[a] = cum[lo + cnt_le - 1] - (cum[lo - 1] if lo > 0 else 0.0) if cnt_le > 0 else 0.0
+                f_obs_m[a] = at_obs - base
                 ptr[a] = lo  # next atom with value >= current aval (used in the CDF sweep below)
                 mp[a] = lo  # merge pointer for gathering the sorted low atoms
                 nt += cnt_le
             else:
                 gt_start[a] = lo + cnt_le
-                f_obs_m[a] = totmass[c] - (
-                    cum[lo + cnt_le - 1] - (cum[lo - 1] if lo > 0 else 0.0) if cnt_le > 0 else 0.0
-                )
+                f_obs_m[a] = (cum[hi - 1] if hi > 0 else 0.0) - at_obs
                 ptr[a] = hi  # current cut: atoms [cut, hi) have midpoint (aval+.)/2 > obs
-        if nt == 0:
+            shapeless |= f_obs_m[a] <= 0.0
+        # A guide with no atom on its side of obs gives the boundary no shape: its exact probability
+        # of being there is below the pruned atoms', so the pattern, at most that, is left out.
+        if shapeless:
             continue
         # k-way merge of the already-sorted low-guide atom slices into tv (O(nt * s), no sort)
         for pos in range(nt):
@@ -586,6 +637,9 @@ def _gene_core(k_all, off, vals, cum, totmass, nanp, le_arr, lt_arr, rvals, rcum
         k = 0
         for c in range(k_all):
             if (mask >> c) & 1:
+                if totmass[c] <= 0.0:  # no atoms, so never non-nan in this mask
+                    weight = 0.0
+                    break
                 weight *= totmass[c]
                 ple[k] = le_arr[c] / totmass[c]  # P(guide <= obs | not nan)
                 pge[k] = (totmass[c] - lt_arr[c]) / totmass[c]  # P(guide >= obs | not nan)
@@ -601,8 +655,8 @@ def _gene_core(k_all, off, vals, cum, totmass, nanp, le_arr, lt_arr, rvals, rcum
             lt = _poisbin_cdf(s, pge, k)
         else:
             s = k // 2
-            g = _even_side(memb, k, off, vals, cum, totmass, obs, s, tv, ple)
-            lt = _even_side(memb, k, off, rvals, rcum, totmass, -obs, s, tv, pge)
+            g = _even_side(memb, k, off, vals, cum, obs, s, tv, ple)
+            lt = _even_side(memb, k, off, rvals, rcum, -obs, s, tv, pge)
         e = 1.0 - g - lt
         p_gt += weight * g
         p_eq += weight * e

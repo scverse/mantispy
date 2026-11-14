@@ -191,6 +191,57 @@ def test_a_gene_keeps_its_pvalues_when_other_genes_are_dropped():
     pd.testing.assert_series_equal(_table(adata).loc["G2"], _table(subset).loc["G2"])
 
 
+@pytest.mark.parametrize(("n", "p"), [(40, 0.3), (1500, 0.5), (20000, 0.37), (5000, 0.999)])
+def test_binomial_cdf_matches_scipy(n, p):
+    from scipy.stats import binom
+
+    from mantispy.tl._bootstrap import _binom_cdf
+
+    for k in sorted({0, n // 4, int(n * p) - 1, int(n * p), n // 2, n - 1}):
+        assert _binom_cdf(k, n, p) == pytest.approx(binom.cdf(k, n, p), abs=1e-12, rel=1e-9)
+
+
+def test_guides_of_thousands_of_cells_match_a_simulation():
+    """Binomial and order-statistic terms that underflow for thousands of draws are formed in log space."""
+    rng = np.random.default_rng(8)
+    groups = [("nontargeting", f"nt{i}", 50, 0.0, "a") for i in range(6)]
+    groups += [("BIG", f"big{i}", 2400, 0.0, "a") for i in range(2)]
+    adata = _cells(groups, rng, n_features=3)
+    mt.tl.bootstrap_features(adata)
+
+    x = np.asarray(adata.X)
+    obs = adata.obs
+    controls = [x[(obs["Metadata_sgRNA"] == f"nt{i}").to_numpy()] for i in range(6)]
+    big = [x[(obs["Metadata_sgRNA"] == f"big{i}").to_numpy()] for i in range(2)]
+    n_sims = 4000
+    # equal-sized control guides, so each is drawn with equal probability
+    nulls = [
+        [np.median(controls[rng.integers(6)][rng.integers(0, 50, size=cells.shape[0])], axis=0) for _ in range(n_sims)]
+        for cells in big
+    ]
+    gene_null = np.median(np.array(nulls), axis=0)
+    gene_obs = np.median([np.median(cells, axis=0) for cells in big], axis=0)
+    one = (gene_null > gene_obs).mean(axis=0)
+    simulated = 2 * np.minimum(one, 1 - one)
+    exact = _table(adata).loc["BIG", adata.var_names].to_numpy()
+    np.testing.assert_allclose(exact, simulated, atol=0.06)
+
+
+def test_a_guide_with_no_null_mass_beyond_the_observed_median():
+    """A gene far out in the tail: its large guides' nulls keep no atom past the observed median.
+
+    Their exact probability of lying there is far below the pruned atoms', so the boundary of a
+    resample that puts them there has no shape to draw from; it must be left out, not divided by zero.
+    """
+    rng = np.random.default_rng(9)
+    groups = [("nontargeting", f"nt{i}", 60, 0.0, "a") for i in range(6)]
+    groups += [("FAR", f"far{i}", n, -1.5, "a") for i, n in enumerate((3, 3, 200, 200))]
+    adata = _cells(groups, rng, n_features=2, guide_sd=0.0)
+    mt.tl.bootstrap_features(adata)
+    p = _table(adata).loc["FAR"].to_numpy()
+    assert np.all((p >= 0.0) & (p < 1e-3))
+
+
 def _two_conditions(rng):
     """Controls shifted in condition "b"; gene SAME is like the controls of its condition; FLIP moves only in "b"."""
     shift = np.array([1.5, 0.0, 0.0, 0.0])
