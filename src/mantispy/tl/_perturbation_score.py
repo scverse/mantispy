@@ -207,20 +207,82 @@ def _replicate_codes(obs: pd.DataFrame, replicate: str | Sequence[str]) -> np.nd
     return np.unique(np.column_stack(ranks), axis=0, return_inverse=True)[1].ravel()
 
 
+@njit(cache=True, nogil=True)
+def _group_folds(y: np.ndarray, group: np.ndarray, perm: np.ndarray, n_splits: int) -> np.ndarray:
+    """Each row's fold from :class:`~sklearn.model_selection.StratifiedGroupKFold`'s greedy assignment, for a binary ``y``.
+
+    ``group`` numbers each row's group by its sorted position, as :func:`numpy.unique` does, and ``perm`` is the
+    splitter's shuffle of the groups. The groups are taken in decreasing spread of their class counts, ties in shuffled
+    order, and each joins the fold that keeps the class proportions most even across the folds, ties going to the
+    emptier fold. Every quantity is computed with the operations and summation order numpy uses there, so the
+    comparisons, ties included, come out as sklearn's do.
+    """
+    n_groups = perm.size
+    inverse = np.empty(n_groups, dtype=np.int64)
+    for k in range(n_groups):
+        inverse[perm[k]] = k
+    counts = np.zeros((n_groups, 2))  # class counts of each group, in shuffled order
+    totals = np.zeros(2)
+    for i in range(y.size):
+        counts[inverse[group[i]], y[i]] += 1.0
+        totals[y[i]] += 1.0
+    spread = np.empty(n_groups)
+    for k in range(n_groups):
+        mean = (counts[k, 0] + counts[k, 1]) / 2
+        spread[k] = np.sqrt(((counts[k, 0] - mean) ** 2 + (counts[k, 1] - mean) ** 2) / 2)
+    in_fold = np.zeros((n_splits, 2))
+    assigned = np.empty(n_groups, dtype=np.int8)
+    for position in np.argsort(-spread, kind="mergesort"):
+        k = int(position)
+        best, best_eval, best_size = 0, np.inf, np.inf
+        for f in range(n_splits):
+            in_fold[f] += counts[k]
+            evaluation = 0.0
+            for c in range(2):  # np.std over the folds of each class's share, then np.mean over the two classes
+                mean = 0.0
+                for g in range(n_splits):
+                    mean += in_fold[g, c] / totals[c]
+                mean /= n_splits
+                squares = 0.0
+                for g in range(n_splits):
+                    squares += (in_fold[g, c] / totals[c] - mean) ** 2
+                evaluation += np.sqrt(squares / n_splits)
+            evaluation /= 2
+            in_fold[f] -= counts[k]
+            size = in_fold[f, 0] + in_fold[f, 1]
+            close = best_eval != np.inf and abs(evaluation - best_eval) <= 1e-8 + 1e-5 * abs(best_eval)  # np.isclose
+            if evaluation < best_eval or (close and size < best_size):
+                best, best_eval, best_size = f, evaluation, size
+        in_fold[best] += counts[k]
+        assigned[k] = best
+    fold = np.empty(y.size, dtype=np.int8)
+    for i in range(y.size):
+        fold[i] = assigned[inverse[group[i]]]
+    return fold
+
+
 def _folds(y: np.ndarray, replicates: np.ndarray | None, n_folds: int, seed: int) -> tuple[np.ndarray, int]:
-    """Each row's cross-validation fold, from the splitter :func:`~sklearn.model_selection.cross_val_predict` would use."""
-    from sklearn.model_selection import StratifiedGroupKFold, StratifiedKFold
+    """Each row's cross-validation fold, as the splitter :func:`~sklearn.model_selection.cross_val_predict` would use draws it.
+
+    With replicates the fold is :class:`~sklearn.model_selection.StratifiedGroupKFold`'s, its greedy assignment in
+    :func:`_group_folds` and its shuffle drawn from the same ``RandomState`` stream; without, :class:`~sklearn.model_selection.StratifiedKFold`'s.
+    """
+    from sklearn.model_selection import StratifiedKFold
 
     if replicates is None:
         folds = min(n_folds, int(np.bincount(y).min()))
     else:
         folds = min(n_folds, *(np.unique(replicates[y == side]).size for side in (0, 1)))
-    fold = np.empty(y.size, dtype=np.int8)
     if folds < 2:
-        return fold, 0
-    splitter = StratifiedKFold if replicates is None else StratifiedGroupKFold
-    cv = splitter(n_splits=folds, shuffle=True, random_state=seed)
-    for number, (_, test) in enumerate(cv.split(np.empty((y.size, 1)), y, replicates)):
+        return np.empty(y.size, dtype=np.int8), 0
+    if replicates is not None:
+        group = np.unique(replicates, return_inverse=True)[1]
+        perm = np.arange(group.max() + 1)
+        np.random.RandomState(seed).shuffle(perm)  # StratifiedGroupKFold's check_random_state(seed), then rng.shuffle
+        return _group_folds(y, group, perm, folds), folds
+    fold = np.empty(y.size, dtype=np.int8)
+    cv = StratifiedKFold(n_splits=folds, shuffle=True, random_state=seed)
+    for number, (_, test) in enumerate(cv.split(np.empty((y.size, 1)), y)):
         fold[test] = number
     return fold, folds
 

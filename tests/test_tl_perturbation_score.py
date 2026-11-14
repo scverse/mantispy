@@ -280,6 +280,34 @@ def test_string_and_categorical_replicates_give_the_same_folds():
     np.testing.assert_array_equal(as_string.obs["perturbation_score"], as_category.obs["perturbation_score"])
 
 
+@pytest.mark.parametrize("seed", range(40))
+def test_folds_by_replicate_are_sklearns(seed):
+    from sklearn.model_selection import StratifiedGroupKFold
+
+    from mantispy.tl._perturbation_score import _folds
+
+    rng = np.random.default_rng(seed)
+    n_groups = int(rng.integers(4, 60))
+    # Equal sizes and one class per group tie the spread sort and the fold scores; mixed sizes and classes do not.
+    sizes = np.full(n_groups, int(rng.integers(1, 30))) if seed % 4 == 0 else rng.integers(1, 200, n_groups)
+    groups = np.repeat(rng.permutation(n_groups) * 7, sizes)  # labels not in 0..n - 1, and not in row order
+    if seed % 4 == 1:
+        y = rng.random(groups.size) < rng.uniform(0.05, 0.95)  # classes mixed within groups
+    else:
+        y = np.isin(
+            groups, rng.choice(np.unique(groups), size=max(2, n_groups // int(rng.integers(2, 6))), replace=False)
+        )
+    y = y.astype(np.int8)
+    if min(np.unique(groups[y == side]).size for side in (0, 1)) < 2:
+        return
+    fold, folds = _folds(y, groups, 5, seed)
+    cv = StratifiedGroupKFold(n_splits=folds, shuffle=True, random_state=seed)
+    expected = np.empty(y.size, dtype=np.int8)
+    for number, (_, test) in enumerate(cv.split(np.empty((y.size, 1)), y, groups)):
+        expected[test] = number
+    np.testing.assert_array_equal(fold, expected)
+
+
 def test_n_jobs_is_gone():
     with pytest.raises(TypeError, match="n_jobs"):
         mt.tl.perturbation_score(_cells(), n_jobs=2)
