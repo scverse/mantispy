@@ -338,13 +338,11 @@ def test_permutation_null_does_not_depend_on_where_its_keys_come_from(mode, monk
     if mode == "multilabel":
         meta["moa"] = meta["Metadata_Perturbation"].map(lambda p: [] if p == "ctrl" else [f"m{int(p[1:]) % 3}"])
         spec, column = (["moa"], ["Metadata_Perturbation"], [], ["moa"]), "moa"
-    shared = _permutation(meta, x, spec, 500, 0, multilabel_col=column)["p_value"]
-    monkeypatch.setattr(map_permutation, "_TABLE_BUDGET", 4 * len(meta) ** 2 // 3)  # too small for the shared one
-    per_group = _permutation(meta, x, spec, 500, 0, multilabel_col=column)["p_value"]
-    monkeypatch.setattr(map_permutation, "_TABLE_BUDGET", 0)
-    scored = _permutation(meta, x, spec, 500, 0, multilabel_col=column)["p_value"]
-    np.testing.assert_array_equal(shared, per_group)
-    np.testing.assert_array_equal(shared, scored)
+    default = _permutation(meta, x, spec, 500, 0, multilabel_col=column)["p_value"]
+    # smaller budgets drop the shared table, then some groups' own tables, then every table
+    for budget in (4 * len(meta) ** 2 // 3, 2000, 0):
+        monkeypatch.setattr(map_permutation, "_TABLE_BUDGET", budget)
+        np.testing.assert_array_equal(_permutation(meta, x, spec, 500, 0, multilabel_col=column)["p_value"], default)
 
 
 def test_blas_positives_are_scored_in_chunks(monkeypatch):
