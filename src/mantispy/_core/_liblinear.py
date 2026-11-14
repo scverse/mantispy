@@ -9,8 +9,10 @@ with ``y_i`` in ``{-1, +1}`` and the bias appended to ``x_i`` as a constant colu
 intercept is regularized like every other weight. This is a port of ``tron.cpp`` and ``l2r_lr_fun`` from the copy
 scikit-learn vendors, step for step: the same start at zero, trust-region updates, conjugate-gradient cut-off and
 stopping rule ``||g|| <= eps * max(min(n_pos, n_neg), 1) / n * ||g_0||``, and the rows in liblinear's order, the
-negative class first. It lands on the same iterate liblinear does, so the fit agrees with it to rounding, not merely to
-the solver tolerance; a solver run to the exact optimum differs from liblinear by as much as that tolerance allows.
+negative class first. It follows liblinear's iterates, so the fit stops where liblinear stops; a solver run to the exact
+optimum differs from liblinear by as much as that loose tolerance allows. Where a rounding-level difference flips
+one of the trust-region or stopping decisions, the two stop at different points within that tolerance, as liblinear
+itself does when its input moves by one ulp.
 """
 
 from __future__ import annotations

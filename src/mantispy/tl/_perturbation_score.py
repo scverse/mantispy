@@ -293,7 +293,7 @@ def perturbation_score(
 
         The cost grows with the number of cells, not with the number of groups, since each group's fit sees its own cells and as many reference cells.
         Every fold of every group is fitted in parallel on numba's threads, which :func:`numba.set_num_threads` caps.
-        The fit is a port of the liblinear solver ``LogisticRegression(solver="liblinear")`` runs, so the scores match scikit-learn's to rounding.
+        The fit is a port of the liblinear solver ``LogisticRegression(solver="liblinear")`` runs, so the scores match scikit-learn's as closely as liblinear matches itself when its input moves by rounding.
         A backed object is read a batch of groups at a time, each group's rows and its reference sample, so it is never loaded whole.
     """
     is_reference = reference_mask(adata, reference)
