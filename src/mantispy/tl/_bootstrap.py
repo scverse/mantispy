@@ -973,7 +973,7 @@ def bootstrap_features(
 
         The null resamples a control guide's own cells, so it carries that sample's error on top of the spread between control guides, while a tested guide carries only its own.
         The test therefore runs conservative when guides barely differ from one another, and near the nominal rate when they differ by more than the error of a guide's median.
-        Check the rate on your own screen by grouping held-out control guides into pseudo-genes and testing them against the other control guides.
+        Check the rate on your own screen with :func:`~mantispy.pp.pseudogenes`, which groups held-out control guides into pseudo-genes to test against the other control guides.
     """
     if control_scope not in CONTROL_SCOPES:
         raise ValueError(f"control_scope must be one of {CONTROL_SCOPES}, got {control_scope!r}")
