@@ -1,0 +1,128 @@
+"""mAP equivalence against copairs, the reference implementation mantispy's kernels replace."""
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from mantispy._core import _average_precision as ap_kernel
+
+copairs_map = pytest.importorskip("copairs.map")
+copairs_multilabel = pytest.importorskip("copairs.map.multilabel")
+
+#: The pair definitions of tl.map's presets, on the columns of :func:`_screen`.
+MODES = {
+    "activity": (["Metadata_Perturbation", "ref"], [], ["Metadata_Plate"], ["Metadata_Perturbation", "ref"]),
+    "replicability": (["Metadata_Perturbation"], [], ["Metadata_Plate"], ["Metadata_Perturbation"]),
+    "cross_plate": (["Metadata_Perturbation"], ["Metadata_Plate"], [], ["Metadata_Perturbation"]),
+}
+DISTANCES = ["cosine", "abs_cosine", "correlation", "euclidean", "manhattan", "chebyshev", "cityblock", "braycurtis"]
+
+
+def _screen(seed: int = 0, ties: bool = False, n_features: int = 150) -> tuple[pd.DataFrame, np.ndarray]:
+    """Three plates of twelve perturbations in triplicate beside eight controls; ``ties`` duplicates and rounds profiles."""
+    rng = np.random.default_rng(seed)
+    perturbations = [f"g{g}" for g in range(12) for _ in range(3)] + ["ctrl"] * 8
+    meta = pd.DataFrame(
+        {
+            "Metadata_Plate": np.repeat([f"P{p}" for p in range(3)], len(perturbations)),
+            "Metadata_Perturbation": perturbations * 3,
+        }
+    )
+    control = meta["Metadata_Perturbation"].eq("ctrl").to_numpy()
+    meta["ref"] = np.where(control, np.arange(len(meta)), -1)
+    effects = {name: rng.standard_normal(n_features) for name in meta["Metadata_Perturbation"].unique()}
+    x = rng.standard_normal((len(meta), n_features)) + 0.4 * np.stack(
+        [effects[p] for p in meta["Metadata_Perturbation"]]
+    )
+    x = x.astype(np.float32)
+    if ties:  # exact duplicates and coarse values tie similarities across positives and negatives
+        x[1::5] = x[0::5][: len(x[1::5])]
+        x = np.round(x)
+    return meta, x
+
+
+def _ours(meta, x, spec, distance="cosine", solver="exact", multilabel_col=None):
+    lay = ap_kernel.layout(meta, *spec, multilabel_col=multilabel_col)
+    return lay, ap_kernel.average_precision(lay, x, distance, solver)
+
+
+@pytest.mark.parametrize("ties", [False, True])
+@pytest.mark.parametrize("mode", list(MODES))
+@pytest.mark.parametrize("distance", DISTANCES)
+def test_average_precision_matches_copairs(mode, distance, ties):
+    """Every similarity is copairs' float32 value, so ranks, ties included, and pair counts are identical."""
+    meta, x = _screen(ties=ties)
+    expected = copairs_map.average_precision(meta, x, *MODES[mode], distance=distance, progress_bar=False)
+    _, result = _ours(meta, x, MODES[mode], distance)
+
+    np.testing.assert_array_equal(result.n_pos_pairs, expected["n_pos_pairs"])
+    np.testing.assert_array_equal(result.n_total_pairs, expected["n_total_pairs"])
+    np.testing.assert_allclose(result.average_precision, expected["average_precision"], rtol=0, atol=1e-12)
+    normalized = ap_kernel.normalized_average_precision(
+        result.average_precision, result.n_pos_pairs, result.n_total_pairs
+    )
+    np.testing.assert_allclose(normalized, expected["normalized_average_precision"], rtol=0, atol=1e-12)
+
+
+@pytest.mark.parametrize("distance", ap_kernel.BLAS_DISTANCES)
+def test_blas_similarities_match_copairs_without_near_ties(distance):
+    """BLAS rounds differently, which moves a rank only where two similarities lie within float32 rounding."""
+    meta, x = _screen(seed=1)
+    expected = copairs_map.average_precision(meta, x, *MODES["replicability"], distance=distance, progress_bar=False)
+    _, result = _ours(meta, x, MODES["replicability"], distance, solver="blas")
+    np.testing.assert_array_equal(result.n_total_pairs, expected["n_total_pairs"])
+    np.testing.assert_allclose(result.average_precision, expected["average_precision"], atol=1e-12)
+
+
+@pytest.mark.parametrize("ties", [False, True])
+@pytest.mark.parametrize(
+    "spec",
+    [
+        (["moa"], ["Metadata_Perturbation"], [], ["moa"]),  # tl.map's consistency preset
+        (["moa"], [], ["Metadata_Plate"], ["moa"]),
+        (["moa", "Metadata_Plate"], [], [], ["moa"]),
+    ],
+)
+def test_multilabel_average_precision_matches_copairs(spec, ties):
+    """A positive shares a label, a negative shares none; a profile is scored once per label, in copairs' row order."""
+    meta, x = _screen(ties=ties)
+    labels = {f"g{g}": [f"m{g % 4}"] + ([f"m{(g + 1) % 4}"] if g % 3 == 0 else []) for g in range(12)}
+    meta["moa"] = meta["Metadata_Perturbation"].map(labels | {"ctrl": []})
+    meta["row"] = np.arange(len(meta))
+    expected = copairs_multilabel.average_precision(meta, x, *spec, multilabel_col="moa", progress_bar=False)
+    lay, result = _ours(meta, x, spec, multilabel_col="moa")
+
+    np.testing.assert_array_equal(result.row_profile, expected["row"])
+    np.testing.assert_array_equal(lay.label_values[result.row_label], expected["moa"])
+    np.testing.assert_array_equal(result.n_pos_pairs, expected["n_pos_pairs"])
+    np.testing.assert_array_equal(result.n_total_pairs, expected["n_total_pairs"])
+    np.testing.assert_allclose(result.average_precision, expected["average_precision"], rtol=0, atol=1e-12)
+
+
+@pytest.mark.parametrize("n_features", [5, 8, 128, 129, 300, 1483])
+def test_exact_similarity_is_copairs_float32_value(n_features):
+    """The pairwise-summation tree, evaluated without recursion, reproduces numpy's float32 sums bit for bit."""
+    from copairs import compute
+
+    rng = np.random.default_rng(n_features)
+    a, b = (rng.standard_normal((200, n_features)).astype(np.float32) for _ in range(2))
+    expected = compute.pairwise_cosine(a, b)
+    rows, scale = ap_kernel.prepare_rows(np.concatenate([a, b]), "cosine")
+    leaf_lo, leaf_n, ops = ap_kernel.summation_plan(n_features)
+    stack = np.empty(64, np.float32)
+    ours = np.array(
+        [ap_kernel._similarity(rows, scale, i, 200 + i, 0, leaf_lo, leaf_n, ops, stack) for i in range(200)],
+        dtype=np.float32,
+    )
+    np.testing.assert_array_equal(ours.view(np.uint32), expected.view(np.uint32))
+
+
+def test_unsupported_distances_are_refused():
+    meta, x = _screen()
+    lay = ap_kernel.layout(meta, *MODES["replicability"])
+    with pytest.raises(ValueError, match="estimates its scale"):
+        ap_kernel.average_precision(lay, x, "mahalanobis")
+    with pytest.raises(ValueError, match="'blas' supports"):
+        ap_kernel.average_precision(lay, x, "manhattan", solver="blas")
+    with pytest.raises(ValueError, match="distance must be one of"):
+        ap_kernel.average_precision(lay, x, "nonsense")
