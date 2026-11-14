@@ -7,4 +7,4 @@ export NUMBA_CACHE_DIR=$W/perf-map-nb-out/numba_cache NUMBA_NUM_THREADS=${SLURM_
 cd $W/perf-map-nb
 PY=$(hatch env find hatch-test.py3.14-stable)/bin/python
 echo "== $1 $2 $3 on $(hostname), $(nproc) cpus allotted"
-/usr/bin/time -v $PY scratch/map_numba/bench.py "$1" "$2" "$3" $W/perf-map-nb-out/results
+$PY scratch/map_numba/bench.py "$1" "$2" "$3" $W/perf-map-nb-out/results
