@@ -156,7 +156,7 @@ def aconcagua(cache_dir: str | Path | None = None) -> AnnData:
         :cite:t:`Di_Bernardo_2026`, the Brieflow reanalysis; :cite:p:`Funk_2022`, the screen it reanalyses.
         The per-cell measurements are from brieflow; the subset is available through the CZ Biohub OPS Explorer.
     """
-    return _fetch_variant("aconcagua", "aconcagua_guide_well_v2.h5ad", cache_dir)
+    return _fetch_variant("aconcagua", "aconcagua_guide_well.h5ad", cache_dir)
 
 
 def aconcagua_cells(cache_dir: str | Path | None = None) -> AnnData:
@@ -176,7 +176,7 @@ def aconcagua_cells(cache_dir: str | Path | None = None) -> AnnData:
     References:
         :cite:t:`Di_Bernardo_2026`, the Brieflow reanalysis; :cite:p:`Funk_2022`, the screen it reanalyses.
     """
-    return _fetch_variant("aconcagua", "aconcagua_cells_v2.h5ad", cache_dir)
+    return _fetch_variant("aconcagua", "aconcagua_cells.h5ad", cache_dir)
 
 
 #: The (aggregated, feature_selected) combination each rehosted bbbc021 variant answers to.
