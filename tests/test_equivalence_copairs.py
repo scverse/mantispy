@@ -6,6 +6,7 @@ import pytest
 
 from mantispy._core import _average_precision as ap_kernel
 from mantispy._core import _map_null as map_null
+from mantispy._core import _map_permutation as map_permutation
 
 copairs_map = pytest.importorskip("copairs.map")
 copairs_multilabel = pytest.importorskip("copairs.map.multilabel")
@@ -207,3 +208,79 @@ def test_joint_null_matches_copairs(mode, ties, multilabel):
         7,
     )
     np.testing.assert_array_equal(p, expected["p_value"])
+
+
+def _permutation(meta, x, spec, null_size, seed, multilabel_col=None):
+    table, groups, tested, result = _our_groups(meta, x, spec, multilabel_col=multilabel_col)
+    lay = ap_kernel.layout(meta, *spec, multilabel_col=multilabel_col)
+    p = map_permutation.permutation_pvalues(
+        lay,
+        result,
+        x,
+        "cosine",
+        table["mean_average_precision"].to_numpy(),
+        groups,
+        tested.index.to_numpy(),
+        null_size,
+        seed,
+    )
+    return table.assign(p_value=p)
+
+
+@pytest.mark.parametrize("ties", [False, True])
+@pytest.mark.parametrize("mode", [*MODES, "multilabel"])
+def test_permutation_null_agrees_with_copairs_in_distribution(mode, ties):
+    """The same null, relabelling within blocks, from other draws: p-values agree within their Monte Carlo error."""
+    meta, x = _screen(seed=3, ties=ties, n_features=40)
+    x = x * 0.2 + np.random.default_rng(4).standard_normal(x.shape).astype(
+        np.float32
+    )  # weak effects spread the p-values
+    spec, column = MODES.get(mode), None
+    if mode == "multilabel":
+        labels = {f"g{g}": [f"m{g % 4}"] + ([f"m{(g + 1) % 4}"] if g % 3 == 0 else []) for g in range(12)}
+        meta["moa"] = meta["Metadata_Perturbation"].map(labels | {"ctrl": []})
+        spec, column = (["moa"], ["Metadata_Perturbation"], [], ["moa"]), "moa"
+    expected, sameby = _copairs_groups(meta, x, spec, "permutation", null_size=4000, multilabel_col=column)
+    ours = _permutation(meta, x, spec, 4000, 0, multilabel_col=column)
+    joined = expected.merge(ours, on=sameby, suffixes=("_copairs", ""))
+    p = joined["p_value_copairs"].to_numpy()
+    error = np.sqrt(2 * p * (1 - p) / 4000)
+    assert np.all(np.abs(joined["p_value"] - p) <= 4 * error + 3 / 4001)
+
+
+def test_permutation_null_is_uniform_on_null_data():
+    """Labels assigned at random to identically distributed profiles: p-values are uniform, so the type-I rate holds."""
+    from scipy.stats import binomtest, kstest
+
+    rng = np.random.default_rng(5)
+    n_groups, reps, n_plates = 150, 3, 4
+    meta = pd.DataFrame(
+        {
+            "Metadata_Plate": np.repeat([f"P{p}" for p in range(n_plates)], n_groups * reps + 40),
+            "Metadata_Perturbation": np.tile(
+                np.concatenate([np.repeat([f"g{g}" for g in range(n_groups)], reps), ["ctrl"] * 40]), n_plates
+            ),
+        }
+    )
+    meta["Metadata_Perturbation"] = meta["Metadata_Perturbation"] + "_" + meta["Metadata_Plate"]
+    meta.loc[meta["Metadata_Perturbation"].str.startswith("ctrl"), "Metadata_Perturbation"] = "ctrl"
+    x = rng.standard_normal((len(meta), 30)).astype(np.float32)
+    spec = MODES["replicability"]
+    p = _permutation(meta, x, spec, 999, 0)
+    p = p.loc[p["Metadata_Perturbation"] != "ctrl", "p_value"].to_numpy()
+    assert kstest(p, "uniform").pvalue > 1e-3
+    for alpha in (0.05, 0.01):
+        assert binomtest(int((p <= alpha).sum()), len(p), alpha).pvalue > 1e-3
+
+
+def test_permutation_null_refuses_positives_outside_the_group():
+    """Relabelling a group cannot move a positive it does not hold."""
+    meta, x = _screen()
+    lay, result = _ours(meta, x, MODES["replicability"])
+    ap = ap_kernel.ap_frame(meta, lay, result)
+    ap = ap.drop(index=0)  # a replicate whose partners still count it as a positive
+    table, groups, tested = map_null.group_scores(ap, ["Metadata_Perturbation"])
+    with pytest.raises(ValueError, match="positives to be its other members"):
+        map_permutation.permutation_pvalues(
+            lay, result, x, "cosine", table["mean_average_precision"].to_numpy(), groups, tested.index.to_numpy(), 10, 0
+        )

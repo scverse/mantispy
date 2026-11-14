@@ -557,6 +557,7 @@ class APResult:
     n_total_pairs: np.ndarray
     pos_ptr: np.ndarray  # positives of AP row r: partner[pos_ptr[r]:pos_ptr[r + 1]]
     partner: np.ndarray
+    n_neg: np.ndarray  # the negatives of every profile
 
 
 def average_precision(
@@ -625,7 +626,7 @@ def average_precision(
     n_total = n_pos + n_neg[row_profile]
     return APResult(
         row_profile=row_profile, row_label=lay.lab[row_entry], average_precision=ap, n_pos_pairs=n_pos,
-        n_total_pairs=n_total, pos_ptr=pos_ptr, partner=partner,
+        n_total_pairs=n_total, pos_ptr=pos_ptr, partner=partner, n_neg=n_neg,
     )  # fmt: skip
 
 
