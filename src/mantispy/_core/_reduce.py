@@ -460,10 +460,9 @@ def reduce_grouped(
         matrix = materialize(source)
     else:
         matrix = get_matrix(adata, layer, use_rep=use_rep)
-    if selected is not None:
-        codes, matrix = codes[selected], matrix[selected]
-    values = grouped_stat(matrix, codes, len(keys), stat, q=q, ddof=ddof)
-    return values, keys, group_counts(codes, len(keys))
+    # The kernel skips the rows the mask leaves out, so they are never copied out of the matrix.
+    values = grouped_stat(matrix, codes, len(keys), stat, q=q, ddof=ddof, mask=selected)
+    return values, keys, group_counts(codes if selected is None else codes[selected], len(keys))
 
 
 def transform_grouped(
@@ -482,7 +481,7 @@ def transform_grouped(
     ``func(key, block)`` receives a group's rows as :func:`get_matrix` reads them and returns the replacement block.
     The output is written into one preallocated array of that same dtype, so the peak cost is the input plus the output, with no full-size temporaries in a wider dtype.
     ``rowwise=True`` declares that ``func`` transforms every row on its own, as a fitted centre and scale do, so a lazy (dask) matrix can hand it a group's rows one chunk at a time; the result is then lazy too, in the same row chunks, and computed when it is read or written.
-    It also hands ``func`` a group in slices that fit :attr:`~mantispy.settings.stream_bytes`, which bounds the temporaries it makes.
+    In memory it also hands ``func`` a group in slices that fit :attr:`~mantispy.settings.stream_bytes`, which bounds the temporaries it makes.
     Otherwise every group reaches ``func`` whole, as a ranking needs.
     ``use_rep`` rewrites ``adata.obsm[use_rep]`` instead of ``X`` or a layer, and ``n_cols`` sets the width of the result when ``func`` changes it.
     ``grouping`` reuses a ``(codes, keys)`` pair already computed with :func:`group_codes` for ``by``.
@@ -495,12 +494,20 @@ def transform_grouped(
         return _transform_lazy(source, codes, keys, func, dtype, width)
     # Shaped from the source, not read off it: get_matrix with no rows reads all of it.
     out = np.empty((source.shape[0], width), dtype=dtype)
-    # A row-wise func is fed slices of a group, so the float64 temporaries it makes stay inside the read budget.
-    step = max(settings.stream_bytes // (max(width, source.shape[1]) * 8), 1) if rowwise else None
+    if rowwise and not _reads_from_disk(source):
+        # A row-wise func is fed a group a slice at a time, read straight from the matrix, so neither the group's copy nor the temporaries func makes outgrow the read budget.
+        step = max(settings.stream_bytes // (max(width, source.shape[1]) * 8), 1)
+        order, offsets = group_offsets(codes, len(keys))
+        for group, key in enumerate(keys):
+            rows = order[offsets[group] : offsets[group + 1]]
+            for start in range(0, rows.size, step):
+                picked = rows[start : start + step]
+                block = get_matrix(adata, layer, rows=picked, use_rep=use_rep)
+                out[picked] = func(key, block).astype(dtype, copy=False)
+        return out
     for key, rows, block in iter_groups(adata, by, layer=layer, use_rep=use_rep, grouping=(codes, keys)):
-        for start in range(0, rows.size, step or max(rows.size, 1)):
-            stop = start + (step or rows.size)
-            out[rows[start:stop]] = func(key, block[start:stop]).astype(dtype, copy=False)
+        if rows.size:
+            out[rows] = func(key, block).astype(dtype, copy=False)
     return out
 
 

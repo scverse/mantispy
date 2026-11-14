@@ -50,11 +50,8 @@ def _median_and_spread(
             )
         return centre, scale
 
-    matrix = get_matrix(adata, layer)
-    # Masking copies the whole matrix, so it is skipped when the reference is every row.
-    if not mask.all():
-        codes, matrix = codes[mask], matrix[mask]
-    return grouped_median_spread(matrix, codes, len(keys), spread)
+    # The kernel skips the rows outside the reference, so they are never copied out of the matrix.
+    return grouped_median_spread(get_matrix(adata, layer), codes, len(keys), spread, mask=None if mask.all() else mask)
 
 
 def _mean_and_std(
@@ -243,7 +240,9 @@ def normalize(
 
     def _rescale(key: Any, block: np.ndarray) -> np.ndarray:
         index = lookup[key]
-        scaled = (block - centre[index]) / scale[index]
+        scaled = block - centre[index]
+        # In place, so a slice makes one temporary rather than two.
+        scaled /= scale[index]
         # A feature with no spread among this group's reference rows has no scale, so its values are undefined here.
         scaled[:, spreadless[index]] = np.nan
         return scaled
