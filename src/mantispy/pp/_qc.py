@@ -189,10 +189,10 @@ def filter_cells(
         keep &= np.bincount(codes[keep], minlength=len(keys))[codes] >= min_cells_per_well
 
     dropped = int((~keep).sum())
-    if dropped:
-        get_logger().info(
-            "filter_cells dropped %d of %d cells (%.1f%%)", dropped, adata.n_obs, 100 * dropped / adata.n_obs
-        )
+    if not dropped:
+        # Nothing fails the checks, so the subset would copy the whole matrix only to return the same rows.
+        return None
+    get_logger().info("filter_cells dropped %d of %d cells (%.1f%%)", dropped, adata.n_obs, 100 * dropped / adata.n_obs)
     if not keep.any():
         get_logger().warning("filter_cells: removed every cell", deep="check qc_fail and min_cells_per_well")
     adata._inplace_subset_obs(keep)

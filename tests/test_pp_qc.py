@@ -35,6 +35,16 @@ def test_filter_cells_drops_failures_and_small_wells(adata):
     assert mt.pp.filter_cells(adata, min_cells_per_well=21, require_qc=False, copy=True).n_obs == 0
 
 
+def test_filter_cells_does_not_copy_when_nothing_is_dropped(adata):
+    """With no failing cell and no well floor the subset would copy the whole matrix only to return the same rows, so filter_cells leaves the object, and its matrix, untouched."""
+    mt.pp.calculate_qc_metrics(adata)
+    adata.obs["qc_fail"] = False
+    x_before, n_before = adata.X, adata.n_obs
+    assert mt.pp.filter_cells(adata, min_cells_per_well=0, require_qc=True) is None
+    assert adata.n_obs == n_before
+    assert adata.X is x_before
+
+
 def test_filter_cells_without_metrics_says_what_to_run(adata):
     with pytest.raises(KeyError, match="calculate_qc_metrics"):
         mt.pp.filter_cells(adata)

@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import numpy as np
-from numba import njit
+from numba import get_num_threads, njit
 
 if TYPE_CHECKING:
     # numba's prange iterates like range, but its own type says nothing about that.
@@ -317,6 +317,112 @@ def grouped_median_spread(
     X = _kernel_input(X)
     order, offsets = group_offsets(codes, n_groups)
     return _grouped_median_spread(X, order, offsets, n_groups, int(spread))
+
+
+@njit(cache=True, nogil=True)
+def _select_kth(buffer: np.ndarray, n: int, k: int) -> float:
+    """Place the ``k``-th smallest of ``buffer[:n]`` at ``buffer[k]`` by quickselect, reordering ``buffer[:n]``.
+
+    Hoare partition, median-of-the-ends-and-middle pivot. On return ``buffer[:k]`` are all at or below ``buffer[k]`` and ``buffer[k + 1 : n]`` all at or above it, the selection ``np.partition`` gives.
+    """
+    lo, hi = 0, n - 1
+    while lo < hi:
+        pivot = buffer[(lo + hi) >> 1]
+        i, j = lo, hi
+        while i <= j:
+            while buffer[i] < pivot:
+                i += 1
+            while buffer[j] > pivot:
+                j -= 1
+            if i <= j:
+                buffer[i], buffer[j] = buffer[j], buffer[i]
+                i += 1
+                j -= 1
+        if k <= j:
+            hi = j
+        elif k >= i:
+            lo = i
+        else:
+            break
+    return buffer[k]
+
+
+@njit(cache=True, nogil=True)
+def _median_inplace(buffer: np.ndarray, n: int) -> float:
+    """Median of ``buffer[:n]`` by selection, reordering it in place, matching ``np.median``.
+
+    For an even count the lower neighbour is the maximum of the selected lower half, so the result is the same linearly interpolated median ``np.nanmedian`` returns, with no allocation.
+    """
+    if n == 0:
+        return np.nan
+    middle = n // 2
+    upper = _select_kth(buffer, n, middle)
+    if n % 2 == 1:
+        return upper
+    lower = buffer[0]
+    for k in range(1, middle):
+        if buffer[k] > lower:
+            lower = buffer[k]
+    return 0.5 * (lower + upper)
+
+
+@njit(parallel=True, cache=True, nogil=True)
+def _column_max_robust_z(X: np.ndarray, columns: np.ndarray, mad_to_sigma: float) -> np.ndarray:
+    """Largest robust z-score of each selected column, columns shared out over the threads.
+
+    For column ``j`` this is ``max|value - median| / (mad_to_sigma * MAD)`` over its finite values, where ``MAD`` is
+    the median of ``|value - median|``. A column with no finite value, or a zero or non-finite scale (a constant
+    feature), scores ``0``, matching ``np.nan_to_num(..., nan=0.0)`` on the division.
+
+    ``columns`` indexes into ``X``'s features, so the whole matrix is read without first copying the kept block.
+    Each thread gathers into one buffer reused across its columns, since allocating inside the ``prange`` body
+    serializes the loop on numba's allocator lock, and the median and MAD come from the same selection
+    ``np.nanmedian`` uses, so the result matches it per column.
+    """
+    n_obs = X.shape[0]
+    n_columns = columns.size
+    out = np.zeros(n_columns, dtype=np.float64)
+    n_threads = get_num_threads()
+    for thread in prange(n_threads):
+        buffer = np.empty(n_obs, dtype=np.float64)
+        for c in range(thread, n_columns, n_threads):
+            j = columns[c]
+            n = 0
+            for i in range(n_obs):
+                value = X[i, j]
+                if not np.isnan(value):
+                    buffer[n] = value
+                    n += 1
+            if n == 0:
+                continue
+            median = _median_inplace(buffer, n)
+            largest = 0.0
+            for k in range(n):
+                deviation = abs(buffer[k] - median)
+                buffer[k] = deviation
+                if deviation > largest:
+                    largest = deviation
+            scale = mad_to_sigma * _median_inplace(buffer, n)
+            if scale != 0.0 and np.isfinite(scale):
+                out[c] = largest / scale
+    return out
+
+
+def column_max_robust_z(X: np.ndarray, columns: np.ndarray, mad_to_sigma: float) -> np.ndarray:
+    """Per-column largest robust z-score over the given feature indices, read column-major in parallel.
+
+    Args:
+        X: ``(n_obs, n_vars)`` matrix, read in its own dtype if that is ``float32`` or ``float64`` and as ``float64`` otherwise.
+        columns: Feature indices to score, each read straight from ``X`` without copying the kept block out.
+        mad_to_sigma: The scale factor turning a median absolute deviation into a standard-deviation estimate.
+
+    Returns:
+        ``(columns.size,)`` float64, the largest ``|value - median| / (mad_to_sigma * MAD)`` of each column, and ``0``
+        for a column with no finite value or a zero/non-finite scale.
+    """
+    X = np.asarray(X)
+    X = X if X.dtype in (np.float32, np.float64) else X.astype(np.float64)
+    return _column_max_robust_z(X, np.ascontiguousarray(columns, dtype=np.int64), float(mad_to_sigma))
 
 
 @njit(cache=True, nogil=True)

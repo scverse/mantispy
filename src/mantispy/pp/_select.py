@@ -14,6 +14,7 @@ import pandas as pd
 from anndata import AnnData
 
 from mantispy._core._corr import _blockwise, correlated_pairs, rank_revealing_subset
+from mantispy._core._numba import column_max_robust_z
 from mantispy._core._reduce import get_matrix, group_codes, group_offsets
 from mantispy._core._stats import MAD_TO_SIGMA, nanvar
 from mantispy._core.features import feature_kind_of, load_blocklist, var_blocklist_hits
@@ -434,22 +435,13 @@ def _warn_extreme(adata: AnnData, full: np.ndarray, kept: np.ndarray, cutoff: fl
 
     Each feature is scaled by its own median and MAD, so the check means the same on raw and on normalized values, and ``outlier_cutoff`` is the bound ``drop_outliers`` would apply to a robustly scaled feature.
     """
-    extreme: list[int] = []
-    # A few columns at a time, reducing each block in place to its largest robust z-score instead of
-    # materialising the whole score matrix: this only needs the per-column maximum, not every value.
-    for start in range(0, kept.size, 32):
-        columns = kept[start : start + 32]
-        block = full[:, columns].astype(np.float64)
-        median = np.nanmedian(block, axis=0)
-        block -= median
-        np.abs(block, out=block)  # block now holds |value - median|
-        mad = MAD_TO_SIGMA * np.nanmedian(block, axis=0)
-        mad = np.where((mad == 0) | ~np.isfinite(mad), np.nan, mad)
-        # max|z| = max|value - median| / mad, since mad is a positive per-column scalar; a zero/non-finite
-        # mad (a constant feature) gives no evidence, matching robust_zscore's zero score there.
-        largest = np.nan_to_num(np.nanmax(block, axis=0, initial=0.0) / mad, nan=0.0)
-        extreme.extend(columns[largest > cutoff])
-    if extreme:
+    if not kept.size:
+        return
+    # One parallel pass over the kept columns, each read straight from the matrix: no float64 copy of the
+    # kept block and no per-column Python dispatch, which is otherwise the whole cost of feature_select.
+    largest = column_max_robust_z(full, kept, MAD_TO_SIGMA)
+    extreme = kept[largest > cutoff]
+    if extreme.size:
         names = [str(adata.var_names[index]) for index in extreme]
         shown = ", ".join(names[:5]) + (f" and {len(names) - 5} more" if len(names) > 5 else "")
         get_logger().warning(
