@@ -378,6 +378,24 @@ def test_permutation_null_does_not_depend_on_where_its_keys_come_from(mode, monk
     np.testing.assert_array_equal(_permutation(meta, x, spec, 500, 0, multilabel_col=column)["p_value"], default)
 
 
+@pytest.mark.parametrize("ties", [False, True])
+@pytest.mark.parametrize("mode", ["replicability", "cross_plate"])
+def test_permutation_null_rank_table_draws_agree_with_the_sorted_keys(mode, ties, monkeypatch):
+    """Ranks within each profile's sorted row, duplicates and ties included, give the p-values the keys give."""
+    meta, x = _screen(seed=6, ties=ties, n_features=20)
+    calls = []
+    rank_hits = map_permutation._rank_hits
+    monkeypatch.setattr(map_permutation, "_rank_hits", lambda *args: calls.append(1) or rank_hits(*args))
+    ranked = _permutation(meta, x, MODES[mode], 500, 0)
+    assert calls == [1]
+    # a table above the budget falls back to the sorted keys
+    monkeypatch.setattr(map_permutation, "RANK_BUDGET", 2 * len(meta) ** 2 - 1)
+    keyed = _permutation(meta, x, MODES[mode], 500, 0)
+    assert calls == [1]
+    pd.testing.assert_frame_equal(ranked, keyed)
+    assert ranked["p_value"].nunique() > 3
+
+
 @pytest.mark.parametrize("mode", list(MODES))
 def test_permutation_null_does_not_depend_on_the_fixed_set_it_ranks_against(mode, monkeypatch):
     """Ranking against the references plus the undrawn members, or the whole bucket less its outsiders, counts the same."""

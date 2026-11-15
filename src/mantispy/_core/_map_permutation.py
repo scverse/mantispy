@@ -19,7 +19,9 @@ All a draw needs is, for each slot, how many of its negatives rank before each o
 negatives form a fixed set per profile and block, so each (profile, set) is scored and sorted once, shared by every
 group and draw that ranks against it, and a draw binary-searches it; only the handful of profiles a draw adds to or
 takes out of that set are scored during the draw. The keys between the drawn profiles, which give both a slot's
-positives and the profiles it takes out, are scored once per draw. Draw ``j`` of a group is a pure function of the
+positives and the profiles it takes out, are scored once per draw. When every block ranks against its whole bucket,
+a table of each key's rank within its profile's sorted row replaces both: the negatives before a positive are its
+rank less the ranks of the drawn profiles below it, so a draw scores and searches nothing. Draw ``j`` of a group is a pure function of the
 seed, the group's members and ``j``, so it does not depend on the threads or on the other groups.
 """
 
@@ -55,6 +57,8 @@ else:
 
 #: Bytes of sorted keys the null may hold; beyond it the call refuses and names the nulls that need none.
 STORE_BUDGET = 2**33
+#: Bytes of the rank table (two per pair of pool profiles) the null may hold; beyond it the draws read the sorted keys.
+RANK_BUDGET = 2**34
 #: A block ranks against its whole ``neg_sameby`` bucket, which every group in the bucket shares, unless the bucket's
 #: profiles that are neither its members nor its references outnumber its pool this many times over.
 _MAX_EXPLICIT = 4
@@ -282,6 +286,135 @@ def _sort_head(values, n):
     values[:n].sort()
 
 
+@njit(nogil=True, cache=True, inline="always")
+def _draw(group_key, j, b0, b1, s0, block_slot, block_pool, chosen, slot_entry):
+    """Draw ``j`` of a group: each block's slots filled with Floyd's k-subset of its pool, then a uniform order."""
+    state = mix(group_key ^ mix(np.uint64(j) + np.uint64(0x632BE59BD9B4E019)))
+    for b in range(b0, b1):
+        kk = block_slot[b + 1] - block_slot[b]
+        pp = block_pool[b + 1] - block_pool[b]
+        for c in range(kk):
+            t = pp - kk + c
+            state, u = uniform(state)
+            r = min(np.int64(u * (t + 1)), t)
+            for z in range(c):
+                if chosen[z] == r:
+                    r = t
+                    break
+            chosen[c] = r
+        for z in range(kk - 1, 0, -1):
+            state, u = uniform(state)
+            r = min(np.int64(u * (z + 1)), z)
+            chosen[z], chosen[r] = chosen[r], chosen[z]
+        for c in range(kk):
+            slot_entry[block_slot[b] + c - s0] = block_pool[b] + chosen[c]
+
+
+@njit(nogil=True, cache=True, inline="always")
+def _below(keys, lo, hi, key):
+    """How many of the sorted ``keys[lo:hi]`` are below ``key``."""
+    a = lo
+    while a < hi:
+        mid = (a + hi) >> 1
+        if keys[mid] < key:
+            a = mid + 1
+        else:
+            hi = mid
+    return a - lo
+
+
+@njit(parallel=True, nogil=True, cache=True)
+def _rank_rows(
+    rows, scale, metric, leaf_lo, leaf_n, ops, depth, prof, row_lo, row_hi, store, items, ranks, bad, n_chunks
+):  # fmt: skip
+    """``ranks[i, k]``: the keys of the sorted row ``store[row_lo[i]:row_hi[i]]`` below the key of ``prof[i]`` to ``prof[k]``.
+
+    ``items[t] = (r_lo, r_hi, c_lo, c_hi)`` pairs the rows ``r_lo:r_hi`` with the columns ``c_lo:c_hi``, ``c_lo >= r_lo``.
+    A key is symmetric to the bit, so each pair ``i < k`` is scored once and fills both ``ranks[i, k]`` and
+    ``ranks[k, i]``; the diagonal is never read. ``bad[chunk]`` is set when a key is NaN, which no count can rank.
+    """
+    one = np.float32(1.0)
+    for chunk in prange(n_chunks):
+        panel = np.zeros((rows.shape[1], PANEL), np.float32)
+        acc = np.zeros((QUERIES, 8, PANEL), np.float32)
+        stack = np.zeros((depth, QUERIES, PANEL), np.float32)
+        sims = np.zeros((QUERIES, PANEL), np.float32)
+        qs = np.empty(QUERIES, np.int64)
+        for t in range(chunk, items.shape[0], n_chunks):
+            r_lo, r_hi, c_lo, c_hi = items[t, 0], items[t, 1], items[t, 2], items[t, 3]
+            cand = prof[c_lo:c_hi]
+            fill_panel(rows, cand, c_hi - c_lo, panel)
+            for q0 in range(r_lo, r_hi, QUERIES):
+                nq = min(QUERIES, r_hi - q0)
+                for q in range(nq):
+                    qs[q] = prof[q0 + q]
+                panel_similarity(
+                    rows, scale, metric, leaf_lo, leaf_n, ops, qs, nq, cand, c_hi - c_lo, panel, acc, stack, sims
+                )
+                for q in range(nq):
+                    i = q0 + q
+                    for w in range(max(0, i + 1 - c_lo), c_hi - c_lo):
+                        k = c_lo + w
+                        key = one - sims[q, w]
+                        if key != key:
+                            bad[chunk] = True
+                        ranks[i, k] = _below(store, row_lo[i], row_hi[i], key)
+                        ranks[k, i] = _below(store, row_lo[k], row_hi[k], key)
+
+
+@njit(parallel=True, nogil=True, cache=True)
+def _rank_hits(
+    group_slot, group_block, group_key, thresholds, slot_block, adj_ptr, adj, block_slot, block_pool, entry_rank,
+    ranks, items, max_slots, n_chunks,
+):  # fmt: skip
+    """:func:`_permutation_hits` when every block ranks against its whole bucket, read from the rank table.
+
+    ``ranks[entry_rank[e], entry_rank[f]]`` counts the keys of entry ``e``'s row below its key to ``f``. A slot's
+    negatives are its row less the other profiles drawn into its block, and a drawn profile's key is below a
+    positive's exactly when its rank is, so the negatives before a positive are its rank less the drawn ranks below
+    it. Positives of equal rank have equal counts, so ordering them by rank sums the same terms in the same order.
+    """
+    hits = np.zeros(items.shape[0], np.int64)
+    for chunk in prange(n_chunks):
+        slot_entry = np.empty(max_slots, np.int64)
+        chosen = np.empty(max_slots, np.int64)
+        removed = np.empty(max_slots, np.int64)
+        pos_rank = np.empty(max_slots, np.int64)
+        for k in range(chunk, items.shape[0], n_chunks):
+            g, d_lo, d_hi = items[k, 0], items[k, 1], items[k, 2]
+            s0, s1 = group_slot[g], group_slot[g + 1]
+            b0, b1 = group_block[g], group_block[g + 1]
+            for j in range(d_lo, d_hi):
+                _draw(group_key[g], j, b0, b1, s0, block_slot, block_pool, chosen, slot_entry)
+                total = 0.0
+                for s in range(s0, s1):
+                    a = s - s0
+                    row = ranks[entry_rank[slot_entry[a]]]
+                    b = slot_block[s]
+                    n_rem = 0
+                    for t in range(block_slot[b] - s0, block_slot[b + 1] - s0):  # the other drawn profiles leave
+                        if t != a:
+                            removed[n_rem] = row[entry_rank[slot_entry[t]]]
+                            n_rem += 1
+                    _sort_head(removed, n_rem)
+                    deg = adj_ptr[s + 1] - adj_ptr[s]
+                    for t in range(deg):
+                        pos_rank[t] = row[entry_rank[slot_entry[adj[adj_ptr[s] + t] - s0]]]
+                    _sort_head(pos_rank, deg)
+                    i_rem = 0
+                    acc_ap = 0.0
+                    for q in range(deg):
+                        r = pos_rank[q]
+                        while i_rem < n_rem and removed[i_rem] < r:
+                            i_rem += 1
+                        before = r - i_rem
+                        acc_ap += (q + 1) / (q + 1 + before)
+                    total += acc_ap / deg
+                if total / (s1 - s0) >= thresholds[g]:
+                    hits[k] += 1
+    return hits
+
+
 @njit(parallel=True, nogil=True, cache=True)
 def _permutation_hits(
     rows, scale, metric, leaf_lo, leaf_n, ops, depth, group_slot, group_block, group_key, thresholds, group_table,
@@ -322,27 +455,9 @@ def _permutation_hits(
             at = group_table[g]
             size = group_size[g]
             for j in range(d_lo, d_hi):
-                state = mix(group_key[g] ^ mix(np.uint64(j) + np.uint64(0x632BE59BD9B4E019)))
-                for b in range(b0, b1):  # Floyd's k-subset of the block's pool, then a uniform order
-                    kk = block_slot[b + 1] - block_slot[b]
-                    pp = block_pool[b + 1] - block_pool[b]
-                    for c in range(kk):
-                        t = pp - kk + c
-                        state, u = uniform(state)
-                        r = min(np.int64(u * (t + 1)), t)
-                        for z in range(c):
-                            if chosen[z] == r:
-                                r = t
-                                break
-                        chosen[c] = r
-                    for z in range(kk - 1, 0, -1):
-                        state, u = uniform(state)
-                        r = min(np.int64(u * (z + 1)), z)
-                        chosen[z], chosen[r] = chosen[r], chosen[z]
-                    for c in range(kk):
-                        e = block_pool[b] + chosen[c]
-                        slot_entry[block_slot[b] + c - s0] = e
-                        drawn[e - e0] = True
+                _draw(group_key[g], j, b0, b1, s0, block_slot, block_pool, chosen, slot_entry)
+                for a in range(s1 - s0):
+                    drawn[slot_entry[a] - e0] = True
                 _drawn_keys(
                     slot_entry, s1 - s0, e0, tidx, at, size, n_shared, table, rows, scale, profile, metric, leaf_lo,
                     leaf_n, ops, stack1, panel, acc, stack, sims, qs, cand, keys,
@@ -593,20 +708,34 @@ def permutation_pvalues(
     )
     group_slot, group_block, block_pool = plan.group_slot, plan.group_block, plan.block_pool
     profile = plan.entry_profile
+    items = _draw_items(np.diff(group_slot), null_size)
+    max_slots = int(np.diff(group_slot).max(initial=1))
+    group_key = np.array(plan.group_key, np.uint64)
+    thresholds = tie_thresholds(np.asarray(scores, dtype=np.float64))
+    draw_chunks = max(1, min(n_chunks, len(items)))
+    ranked = _rank_table(
+        lay, plan, store_ptr, store, entry_row, entry_sub_row, x, scale, metric, leaf_lo, leaf_n, ops, depth, n_chunks
+    )
+    if ranked is not None:
+        del store  # the draws read the ranks alone
+        entry_rank, ranks = ranked
+        hits = _rank_hits(
+            group_slot, group_block, group_key, thresholds, plan.slot_block, plan.adj_ptr, plan.adj, plan.block_slot,
+            block_pool, entry_rank, ranks, items, max_slots, draw_chunks,
+        )  # fmt: skip
+        return (np.bincount(items[:, 0], weights=hits, minlength=len(groups)) + 1) / (null_size + 1)
     group_table, group_size, tidx, n_shared, table = _tables(
         plan, group_slot, group_block, block_pool, profile, null_size, x, scale, metric, leaf_lo, leaf_n, ops, depth,
         n_chunks,
     )  # fmt: skip
-    items = _draw_items(np.diff(group_slot), null_size)
     pool_size = block_pool[group_block[1:]] - block_pool[group_block[:-1]]
-    max_slots = int(np.diff(group_slot).max(initial=1))
     max_scored = 2 * max_slots + int(np.diff(plan.lone_ptr).max(initial=0)) + 1
     hits = _permutation_hits(
-        x, scale, metric, leaf_lo, leaf_n, ops, depth, group_slot, group_block, np.array(plan.group_key, np.uint64),
-        tie_thresholds(np.asarray(scores, dtype=np.float64)), group_table, group_size, tidx, n_shared, table,
-        plan.slot_block, plan.adj_ptr, plan.adj, plan.block_slot, block_pool, plan.block_kind, profile, entry_row,
-        entry_sub_row, plan.entry_lone, plan.lone_ptr, plan.lone, lay.neg_bucket, lay.neg_diff, lay.lab_ptr, lay.lab,
-        store_ptr, store, items, max_slots, int(pool_size.max(initial=1)), max_scored, max(1, min(n_chunks, len(items))),
+        x, scale, metric, leaf_lo, leaf_n, ops, depth, group_slot, group_block, group_key, thresholds, group_table,
+        group_size, tidx, n_shared, table, plan.slot_block, plan.adj_ptr, plan.adj, plan.block_slot, block_pool,
+        plan.block_kind, profile, entry_row, entry_sub_row, plan.entry_lone, plan.lone_ptr, plan.lone, lay.neg_bucket,
+        lay.neg_diff, lay.lab_ptr, lay.lab, store_ptr, store, items, max_slots, int(pool_size.max(initial=1)),
+        max_scored, draw_chunks,
     )  # fmt: skip
     per_group = np.bincount(items[:, 0], weights=hits, minlength=len(groups))
     return (per_group + 1) / (null_size + 1)
@@ -624,6 +753,43 @@ def _draw_items(n_slots: np.ndarray, null_size: int) -> np.ndarray:
     first = (np.arange(len(group)) - np.repeat(np.cumsum(n_items) - n_items, n_items)) * per_item[group]
     items = np.stack([group, first, np.minimum(first + per_item[group], null_size)], axis=1).astype(np.int64)
     return items[np.argsort(-n_slots[group], kind="stable")]
+
+
+def _rank_table(lay, plan, store_ptr, store, entry_row, entry_sub_row, x, scale, metric, leaf_lo, leaf_n, ops, depth,
+                n_chunks):  # fmt: skip
+    """Each pool entry's row of the rank table and the table, when the draws need nothing else, else ``None``.
+
+    That holds when every block ranks against its whole bucket with nothing subtracted, so a profile has one sorted
+    row whatever group it is drawn into, the rows are short enough for ``uint16`` counts, no key is NaN and the
+    table fits in :data:`RANK_BUDGET`.
+    """
+    if lay.disjoint or (plan.block_kind != _BUCKET).any() or (entry_sub_row >= 0).any():
+        return None
+    used = np.zeros(lay.n, bool)
+    used[plan.entry_profile] = True
+    prof = np.flatnonzero(used)
+    m = len(prof)
+    if 2 * m * m > RANK_BUDGET:
+        return None
+    entry_rank = (np.cumsum(used) - 1)[plan.entry_profile]
+    row = np.empty(m, np.int64)
+    row[entry_rank] = entry_row
+    row_lo, row_hi = store_ptr[row], store_ptr[row + 1]
+    if (row_hi - row_lo).max(initial=0) > np.iinfo(np.uint16).max:
+        return None
+    starts = np.arange(0, m, PANEL)
+    rb, cb = np.triu_indices(len(starts))
+    items = np.stack(
+        [starts[rb], np.minimum(starts[rb] + PANEL, m), starts[cb], np.minimum(starts[cb] + PANEL, m)], axis=1
+    ).astype(np.int64)
+    ranks = np.empty((m, m), np.uint16)
+    n_chunks = max(1, min(n_chunks, len(items)))
+    bad = np.zeros(n_chunks, bool)
+    if len(items):
+        _rank_rows(
+            x, scale, metric, leaf_lo, leaf_n, ops, depth, prof, row_lo, row_hi, store, items, ranks, bad, n_chunks
+        )
+    return None if bad.any() else (entry_rank, ranks)
 
 
 def _panel_items(row_lo: int, row_hi: int, col_lo: int, col_hi: int, first: int) -> list[tuple[int, ...]]:
@@ -650,13 +816,14 @@ def _tables(plan, group_slot, group_block, block_pool, profile, null_size, x, sc
     n_slots = np.diff(group_slot)
     scored = null_size * (adj_ptr[group_slot[1:]] - adj_ptr[group_slot[:-1]] + 2 * n_slots * n_slots)
     owner = np.repeat(np.arange(n_groups), size)
-    # profiles in the pools of more than one group
-    pairs = np.unique(profile * max(n_groups, 1) + owner)
-    candidates, n_owners = np.unique(pairs // max(n_groups, 1), return_counts=True)
-    shared = candidates[n_owners > 1]
+    # profiles in the pools of more than one group; a group's pool entries are distinct profiles
+    shared = np.flatnonzero(np.bincount(profile) > 1)
     if not (4 * len(shared) ** 2 <= _TABLE_BUDGET and len(shared) ** 2 < np.minimum(size * size, scored).sum()):
         shared = shared[:0]
     n_shared = len(shared)
+    if not n_shared and not ((size * size <= scored) & (size > 0) & (4 * size * size <= _TABLE_BUDGET)).any():
+        # nothing to table: every key is scored during the draws
+        return np.full(n_groups, -1, np.int64), size, np.full(len(profile), -1, np.int64), 0, np.zeros(0, np.float32)
     tidx = np.searchsorted(shared, profile).astype(np.int64)
     is_shared = (
         (tidx < n_shared) & (shared[np.minimum(tidx, max(n_shared - 1, 0))] == profile)
