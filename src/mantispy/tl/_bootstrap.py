@@ -90,11 +90,29 @@ def _binom_cdf_from_k(k: int, n: int, p: float) -> float:
 
 
 @njit(cache=True, nogil=True)
+def _count_below(v, lo, hi, x, inclusive):
+    """How many of the sorted ``v[lo:hi]`` are below ``x`` (or at most ``x``, if ``inclusive``).
+
+    ``np.searchsorted`` on that slice gives the same, but a slice of an array the threads share touches
+    its reference count from every thread, which serializes them in the innermost loops.
+    """
+    left = lo
+    right = hi
+    while left < right:
+        mid = (left + right) // 2
+        if v[mid] < x or (inclusive and v[mid] == x):
+            left = mid + 1
+        else:
+            right = mid
+    return left - lo
+
+
+@njit(cache=True, nogil=True)
 def _median_gt(v: np.ndarray, lo: int, n: int, m: int, x: float) -> float:
     """``P(median of m draws with replacement from v[lo:lo+n] (sorted asc, no nan) > x)``."""
     if n == 0:
         return 0.0
-    cle = np.searchsorted(v[lo : lo + n], x, side="right")  # count <= x
+    cle = _count_below(v, lo, lo + n, x, True)  # count <= x
     f_le = cle / n
     t = m // 2
     if m % 2 == 1:
@@ -128,7 +146,7 @@ def _median_gt(v: np.ndarray, lo: int, n: int, m: int, x: float) -> float:
                 else:
                     left = mid + 1
             if left < lo + n:
-                ge = n - np.searchsorted(v[lo : lo + n], v[left], side="left")  # count >= v[left]
+                ge = n - _count_below(v, lo, lo + n, v[left], False)  # count >= v[left]
                 contrib += pmax * (ge / nhigh) ** t
         i = j
     return out + pk * contrib
@@ -139,7 +157,7 @@ def _median_lt(v: np.ndarray, lo: int, n: int, m: int, x: float) -> float:
     """``P(median of m draws from v[lo:lo+n] (sorted asc, no nan) < x)``. Mirror of :func:`_median_gt`."""
     if n == 0:
         return 0.0
-    hi = np.searchsorted(v[lo : lo + n], x, side="left")  # count < x
+    hi = _count_below(v, lo, lo + n, x, False)  # count < x
     f_lt = hi / n
     t = m // 2
     if m % 2 == 1:
@@ -523,40 +541,39 @@ def _build_construct(
 
 
 @njit(cache=True, nogil=True)
-def _step(src, dst, nlo, nhi, stay, up, down):
-    """Add one guide to the distribution of ``#high - #low``, from ``src`` into ``dst[nlo:nhi+1]``.
+def _step(dp, src, dst, nlo, nhi, stay, up, down):
+    """Add one guide to the distribution of ``#high - #low``, from row ``src`` of ``dp`` into ``dst[nlo:nhi+1]``.
 
     The guide is nan with probability ``stay``, high with ``up`` and low with ``down``. Counts outside
-    ``[nlo, nhi]`` are dropped, which prunes those that can no longer reach the one asked for; ``src`` is
-    zero for two entries past its own range, and ``dst`` is left so.
+    ``[nlo, nhi]`` are dropped, which prunes those that can no longer reach the one asked for; row ``src``
+    is zero for two entries past its own range, and ``dst`` is left so. Rows are indexed rather than
+    sliced, since a slice of the shared scratch would touch its reference count from every thread.
     """
     for d in range(nlo, nhi + 1):
-        dst[d] = src[d] * stay + src[d - 1] * up + src[d + 1] * down
-    dst[nlo - 2] = dst[nlo - 1] = dst[nhi + 1] = dst[nhi + 2] = 0.0
+        dp[dst, d] = dp[src, d] * stay + dp[src, d - 1] * up + dp[src, d + 1] * down
+    dp[dst, nlo - 2] = dp[dst, nlo - 1] = dp[dst, nhi + 1] = dp[dst, nhi + 2] = 0.0
 
 
 @njit(cache=True, nogil=True)
-def _start(row, o):
-    """A count distribution at zero, ``row[o] = 1``, zero-padded as :func:`_step` expects."""
-    row[o - 2] = row[o - 1] = row[o + 1] = row[o + 2] = 0.0
-    row[o] = 1.0
+def _start(dp, row, o):
+    """A count distribution at zero, ``dp[row, o] = 1``, zero-padded as :func:`_step` expects."""
+    dp[row, o - 2] = dp[row, o - 1] = dp[row, o + 1] = dp[row, o + 2] = 0.0
+    dp[row, o] = 1.0
 
 
 @njit(cache=True, nogil=True)
 def _count_above(k, up, down, stay, dp):
     """``P(#high > #low)`` over ``k`` independent guides, by a dynamic program over the guides.
 
-    The distribution of ``#high - #low`` sits in ``dp[0]``/``dp[1]``, centred at ``k + 2``.
+    The distribution of ``#high - #low`` sits in rows 0 and 1 of ``dp``, centred at ``k + 2``.
     """
     o = k + 2
-    a, b = dp[0], dp[1]
-    _start(a, o)
+    _start(dp, 0, o)
     for c in range(k):
-        _step(a, b, o - c - 1, o + c + 1, stay[c], up[c], down[c])
-        a, b = b, a
+        _step(dp, c % 2, 1 - c % 2, o - c - 1, o + c + 1, stay[c], up[c], down[c])
     total = 0.0
     for d in range(o + 1, o + k + 1):
-        total += a[d]
+        total += dp[k % 2, d]
     return total
 
 
@@ -567,8 +584,8 @@ def _count_at(k, skip, target, up, down, stay, dp):
     if abs(target) > rem:
         return 0.0
     o = k + 2
-    a, b = dp[0], dp[1]
-    _start(a, o)
+    _start(dp, 0, o)
+    row = 0
     lo = hi = o
     for c in range(k):
         if c == skip:
@@ -576,9 +593,9 @@ def _count_at(k, skip, target, up, down, stay, dp):
         rem -= 1
         lo = max(lo - 1, o + target - rem)
         hi = min(hi + 1, o + target + rem)
-        _step(a, b, lo, hi, stay[c], up[c], down[c])
-        a, b = b, a
-    return a[o + target]
+        _step(dp, row, 1 - row, lo, hi, stay[c], up[c], down[c])
+        row = 1 - row
+    return dp[row, o + target]
 
 
 @njit(cache=True, nogil=True)
@@ -586,13 +603,14 @@ def _count_tied_at(k, hit, low_lt, low_eq, up, stay, dp):
     """``P(#high == #low and some low guide sits at the current atom)`` over ``k`` guides.
 
     A low guide is below the atom with probability ``low_lt`` and at it with ``low_eq`` (zero unless
-    ``hit``); ``dp[0..1]`` hold the counts with no low guide at the atom yet, ``dp[2..3]`` those with one.
+    ``hit``); rows 0 and 1 of ``dp`` hold the counts with no low guide at the atom yet, rows 2 and 3
+    those with one.
     """
     o = k + 2
-    a0, b0, a1, b1 = dp[0], dp[1], dp[2], dp[3]
-    _start(a0, o)
-    _start(a1, o)
-    a1[o] = 0.0
+    _start(dp, 0, o)
+    _start(dp, 2, o)
+    dp[2, o] = 0.0
+    src = 0
     lo = hi = o
     for c in range(k):
         rem = k - c - 1
@@ -602,14 +620,25 @@ def _count_tied_at(k, hit, low_lt, low_eq, up, stay, dp):
         hi_w = up[c]
         lt = low_lt[c]
         eq = low_eq[c] if hit[c] else 0.0
+        dst = 1 - src
         for d in range(lo, hi + 1):
-            b0[d] = a0[d] * st + a0[d - 1] * hi_w + a0[d + 1] * lt
-            b1[d] = a1[d] * st + a1[d - 1] * hi_w + a1[d + 1] * (lt + eq) + a0[d + 1] * eq
-        b0[lo - 2] = b0[lo - 1] = b0[hi + 1] = b0[hi + 2] = 0.0
-        b1[lo - 2] = b1[lo - 1] = b1[hi + 1] = b1[hi + 2] = 0.0
-        a0, b0 = b0, a0
-        a1, b1 = b1, a1
-    return a1[o]
+            dp[dst, d] = dp[src, d] * st + dp[src, d - 1] * hi_w + dp[src, d + 1] * lt
+            dp[dst + 2, d] = (
+                dp[src + 2, d] * st + dp[src + 2, d - 1] * hi_w + dp[src + 2, d + 1] * (lt + eq) + dp[src, d + 1] * eq
+            )
+        for r in (dst, dst + 2):
+            dp[r, lo - 2] = dp[r, lo - 1] = dp[r, hi + 1] = dp[r, hi + 2] = 0.0
+        src = dst
+    return dp[src + 2, o]
+
+
+@njit(cache=True, nogil=True)
+def _any_positive(x, k):
+    """Whether any of ``x[:k]`` is positive, without slicing ``x``."""
+    for i in range(k):
+        if x[i] > 0.0:
+            return True
+    return False
 
 
 @njit(cache=True, nogil=True)
@@ -630,7 +659,7 @@ def _boundary(k, lo_c, hi_c, vals, cum, obs, plow, phigh, pnan, fs, ints, dp):
     for a in range(k):
         lo = lo_c[a]
         hi = hi_c[a]
-        cnt_le = np.searchsorted(vals[lo:hi], obs, side="right")
+        cnt_le = _count_below(vals, lo, hi, obs, True)
         at_obs = cum[lo + cnt_le - 1] if cnt_le > 0 else 0.0
         top[a] = cum[hi - 1] if hi > lo else 0.0
         inv_low[a] = 1.0 / at_obs if at_obs > 0.0 else 0.0
@@ -784,6 +813,7 @@ def _gene_pvalues(
     gene_cost = np.empty(n_genes, dtype=np.float64)
     for j in range(n_features):
         row = pool_sorted[j]
+        nn_row = sub_nn[j]
         used[:] = False
         for c in range(n_constructs):
             if construct_null[j, c] >= 0:
@@ -798,7 +828,7 @@ def _gene_pvalues(
                 p = null_pool[u]
                 end = _build_construct(
                     row,
-                    sub_nn[j],
+                    nn_row,
                     sub_start,
                     sub_stop,
                     pool_sub_start[p],
@@ -831,7 +861,7 @@ def _gene_pvalues(
                 p = null_pool[u]
                 end = _build_construct(
                     row,
-                    sub_nn[j],
+                    nn_row,
                     sub_start,
                     sub_stop,
                     pool_sub_start[p],
@@ -868,21 +898,23 @@ def _gene_pvalues(
             gene_cost[g] = tot * (1.0 + (k % 2 == 0) * k) + 1.0
         gene_order, gene_start = _deal(gene_cost, n_slots)
         for t in prange(n_slots):
+            # the slot's scratch views, taken once: each view touches the shared reference count
+            lo_c, hi_c = lohi_t[t, 0], lohi_t[t, 1]
+            gt_arr, lt_arr, le_arr, ge_arr, nan_arr, meas_arr = (
+                tails_t[t, 0],
+                tails_t[t, 1],
+                tails_t[t, 2],
+                tails_t[t, 3],
+                tails_t[t, 4],
+                tails_t[t, 5],
+            )
+            fs, ints, dp = fs_t[t], ints_t[t], dp_t[t]
             for gi in range(gene_start[t], gene_start[t + 1]):
                 g = gene_order[gi]
                 obs = gene_observed[g, j]
                 if np.isnan(obs):
                     out[g, j] = np.nan
                     continue
-                lo_c, hi_c = lohi_t[t, 0], lohi_t[t, 1]
-                gt_arr, lt_arr, le_arr, ge_arr, nan_arr, meas_arr = (
-                    tails_t[t, 0],
-                    tails_t[t, 1],
-                    tails_t[t, 2],
-                    tails_t[t, 3],
-                    tails_t[t, 4],
-                    tails_t[t, 5],
-                )
                 k = 0
                 for c in range(gene_offsets[g], gene_offsets[g + 1]):
                     u = construct_null[j, c]
@@ -895,7 +927,7 @@ def _gene_pvalues(
                     p = null_pool[u]
                     gt_arr[k], lt_arr[k], le_arr[k], ge_arr[k], nan_arr[k], meas_arr[k] = _pool_tails(
                         row,
-                        sub_nn[j],
+                        nn_row,
                         sub_start,
                         sub_stop,
                         pool_sub_start[p],
@@ -907,20 +939,17 @@ def _gene_pvalues(
                     k += 1
                 # more high than low guides puts the median above obs; as many of each leaves the
                 # midpoint of the two central guides to decide, possible for an even measured count
-                above = _count_above(k, gt_arr, le_arr, nan_arr, dp_t[t])
-                below = _count_above(k, lt_arr, ge_arr, nan_arr, dp_t[t])
-                if k >= 2 and (k % 2 == 0 or nan_arr[:k].max() > 0.0):
-                    above += _boundary(
-                        k, lo_c, hi_c, vals, cum, obs, le_arr, gt_arr, nan_arr, fs_t[t], ints_t[t], dp_t[t]
-                    )
-                    below += _boundary(
-                        k, lo_c, hi_c, rvals, rcum, -obs, ge_arr, lt_arr, nan_arr, fs_t[t], ints_t[t], dp_t[t]
-                    )
+                above = _count_above(k, gt_arr, le_arr, nan_arr, dp)
+                below = _count_above(k, lt_arr, ge_arr, nan_arr, dp)
                 all_nan = 1.0
+                any_measured = False
                 for ci in range(k):
                     all_nan *= nan_arr[ci]
-                measured = 1.0 - all_nan if meas_arr[:k].max() > 0.0 else 0.0
-                out[g, j] = _two_sided(above, below, measured)
+                    any_measured |= meas_arr[ci] > 0.0
+                if k >= 2 and (k % 2 == 0 or _any_positive(nan_arr, k)):
+                    above += _boundary(k, lo_c, hi_c, vals, cum, obs, le_arr, gt_arr, nan_arr, fs, ints, dp)
+                    below += _boundary(k, lo_c, hi_c, rvals, rcum, -obs, ge_arr, lt_arr, nan_arr, fs, ints, dp)
+                out[g, j] = _two_sided(above, below, 1.0 - all_nan if any_measured else 0.0)
     return out, overflow
 
 
