@@ -1045,7 +1045,9 @@ def bootstrap_features(
     logger = get_logger()
     values = _kernel_input(get_matrix(adata, layer))
     unit_codes, unit_keys = group_codes(adata, by)
-    sub_codes, sub_keys = group_codes(adata, [replicate] if condition is None else [replicate, condition])
+    # a guide is its group and its label, so control guides of two control genes that share a label stay apart
+    sub_by = [*by, replicate, *([condition] if condition is not None and condition not in by else [])]
+    sub_codes, sub_keys = group_codes(adata, sub_by)
 
     if control_scope == "within_perturbation":
         in_reference = (obs[condition].astype(str) == str(reference_condition)).to_numpy()
@@ -1210,7 +1212,7 @@ def bootstrap_features(
     )
     table["qvalue"] = benjamini_hochberg(table["pvalue"].to_numpy())
 
-    sub_labels = [str(key[0] if isinstance(key, tuple) else key) for key in sub_keys]
+    sub_labels = [str(sub_keys[s][len(by)]) for s in range(len(sub_keys))]
     guides = pd.DataFrame(
         {
             "group": np.repeat([gene_labels[g] for g in gene_of_construct], n_features),
@@ -1222,7 +1224,9 @@ def bootstrap_features(
         }
     )
     if condition is not None:
-        guides.insert(2, condition, np.repeat([str(sub_keys[s][1]) for s in construct_sub], n_features))
+        guides.insert(
+            2, condition, np.repeat([str(sub_keys[s][sub_by.index(condition)]) for s in construct_sub], n_features)
+        )
     guides["qvalue"] = benjamini_hochberg(guides["pvalue"].to_numpy())
 
     logger.info(

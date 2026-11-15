@@ -303,6 +303,24 @@ def test_missing_values_are_skipped_and_an_unmeasured_feature_is_nan():
     assert np.isnan(guides["Cells_Intensity_F2"])
 
 
+def test_control_guides_of_two_control_genes_stay_apart_when_they_share_a_label():
+    """A guide is its gene and its label, so two control genes that both number their guides g0, g1 keep four guides."""
+    rng = np.random.default_rng(14)
+    groups = [
+        (control, f"g{i}", 30, 1.0 * (control == "intergenic"), "a")
+        for control in ("nontargeting", "intergenic")
+        for i in range(2)
+    ]
+    groups += [("G", "x0", 20, 0.0, "a"), ("G", "x1", 25, 0.0, "a")]
+    shared = _cells(groups, rng, n_features=2)
+    shared.obs["Metadata_Control_Type"] = np.where(shared.obs["Metadata_Gene"] == "G", "treatment", "negcon")
+    distinct = shared.copy()
+    distinct.obs["Metadata_sgRNA"] = distinct.obs["Metadata_Gene"].str[:2] + distinct.obs["Metadata_sgRNA"]
+    for adata in (shared, distinct):
+        mt.tl.bootstrap_features(adata)
+    pd.testing.assert_frame_equal(_table(shared), _table(distinct))
+
+
 def test_a_gene_keeps_its_pvalues_when_other_genes_are_dropped():
     """A gene's p-values use only its guides and the controls, so dropping other genes cannot change them."""
     rng = np.random.default_rng(4)
