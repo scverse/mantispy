@@ -541,16 +541,22 @@ def _build_construct(
 
 
 @njit(cache=True, nogil=True)
-def _step(dp, src, dst, nlo, nhi, stay, up, down):
+def _step(dp, src, dst, nlo, nhi, stay, up, down, stride=1):
     """Add one guide to the distribution of ``#high - #low``, from row ``src`` of ``dp`` into ``dst[nlo:nhi+1]``.
 
     The guide is nan with probability ``stay``, high with ``up`` and low with ``down``. Counts outside
     ``[nlo, nhi]`` are dropped, which prunes those that can no longer reach the one asked for; row ``src``
     is zero for two entries past its own range, and ``dst`` is left so. Rows are indexed rather than
     sliced, since a slice of the shared scratch would touch its reference count from every thread.
+    With no guide ever nan, the counts after a given number of guides share one parity, so
+    ``stride=2`` visits only those.
     """
-    for d in range(nlo, nhi + 1):
-        dp[dst, d] = dp[src, d] * stay + dp[src, d - 1] * up + dp[src, d + 1] * down
+    if stride == 2:
+        for d in range(nlo, nhi + 1, 2):
+            dp[dst, d] = dp[src, d - 1] * up + dp[src, d + 1] * down
+    else:
+        for d in range(nlo, nhi + 1):
+            dp[dst, d] = dp[src, d] * stay + dp[src, d - 1] * up + dp[src, d + 1] * down
     dp[dst, nlo - 2] = dp[dst, nlo - 1] = dp[dst, nhi + 1] = dp[dst, nhi + 2] = 0.0
 
 
@@ -578,8 +584,11 @@ def _count_above(k, up, down, stay, dp):
 
 
 @njit(cache=True, nogil=True)
-def _count_at(k, skip, target, up, down, stay, dp):
-    """``P(#high - #low == target)`` over the ``k`` guides other than ``skip`` (``-1`` for none)."""
+def _count_at(k, skip, target, up, down, stay, dp, stride=1):
+    """``P(#high - #low == target)`` over the ``k`` guides other than ``skip`` (``-1`` for none).
+
+    ``stride=2`` (see :func:`_step`) needs the count of guides taken and ``target`` of equal parity.
+    """
     rem = k - 1 if skip >= 0 else k
     if abs(target) > rem:
         return 0.0
@@ -593,43 +602,32 @@ def _count_at(k, skip, target, up, down, stay, dp):
         rem -= 1
         lo = max(lo - 1, o + target - rem)
         hi = min(hi + 1, o + target + rem)
-        _step(dp, row, 1 - row, lo, hi, stay[c], up[c], down[c])
+        _step(dp, row, 1 - row, lo, hi, stay[c], up[c], down[c], stride)
         row = 1 - row
     return dp[row, o + target]
 
 
 @njit(cache=True, nogil=True)
-def _count_tied_at(k, hit, low_lt, low_eq, up, stay, dp):
-    """``P(#high == #low and some low guide sits at the current atom)`` over ``k`` guides.
+def _count_tied_pair(k, up0, up1, down, stay, dp, stride):
+    """``P(#high == #low)`` over ``k`` guides for two sets of high weights at once, ``up0`` and ``up1``.
 
-    A low guide is below the atom with probability ``low_lt`` and at it with ``low_eq`` (zero unless
-    ``hit``); rows 0 and 1 of ``dp`` hold the counts with no low guide at the atom yet, rows 2 and 3
-    those with one.
+    One pass of :func:`_count_at` per set, sharing the loop: rows 0 and 1 of ``dp`` carry ``up0``, rows 2
+    and 3 ``up1``.
     """
     o = k + 2
     _start(dp, 0, o)
     _start(dp, 2, o)
-    dp[2, o] = 0.0
     src = 0
     lo = hi = o
     for c in range(k):
         rem = k - c - 1
         lo = max(lo - 1, o - rem)
         hi = min(hi + 1, o + rem)
-        st = stay[c]
-        hi_w = up[c]
-        lt = low_lt[c]
-        eq = low_eq[c] if hit[c] else 0.0
         dst = 1 - src
-        for d in range(lo, hi + 1):
-            dp[dst, d] = dp[src, d] * st + dp[src, d - 1] * hi_w + dp[src, d + 1] * lt
-            dp[dst + 2, d] = (
-                dp[src + 2, d] * st + dp[src + 2, d - 1] * hi_w + dp[src + 2, d + 1] * (lt + eq) + dp[src, d + 1] * eq
-            )
-        for r in (dst, dst + 2):
-            dp[r, lo - 2] = dp[r, lo - 1] = dp[r, hi + 1] = dp[r, hi + 2] = 0.0
+        _step(dp, src, dst, lo, hi, stay[c], up0[c], down[c], stride)
+        _step(dp, src + 2, dst + 2, lo, hi, stay[c], up1[c], down[c], stride)
         src = dst
-    return dp[src + 2, o]
+    return dp[src, o], dp[src + 2, o]
 
 
 @njit(cache=True, nogil=True)
@@ -649,13 +647,18 @@ def _boundary(k, lo_c, hi_c, vals, cum, obs, plow, phigh, pnan, fs, ints, dp):
     measured guides, half of them at most ``obs`` (low). Guide ``a``'s atoms are ``vals[lo_c[a]:hi_c[a]]``,
     sorted and distinct, with ``cum`` their running mass from that list's start. ``plow``/``phigh``/``pnan``
     are its exact probabilities of being low, high or nan, so the count part stays exact; the atoms give
-    only the shape within each side. One ascending sweep over the atoms at most ``obs`` takes each as the
-    largest low value in turn; per atom, a dynamic program over the guides sums every split into low,
-    high and nan guides at once, with the high ones restricted to the atoms whose float midpoint with it
-    exceeds ``obs``. ``fs`` (7 rows), ``ints`` (6 rows) and ``dp`` (4 rows of ``2 k + 5``) are scratch.
+    only the shape within each side.
+
+    One ascending sweep over the atoms at most ``obs`` takes each value ``a`` in turn as the largest low
+    one. The high guides must then sit past the cut, the atoms whose float midpoint with ``a`` exceeds
+    ``obs``. With ``F`` the probability of as many low as high guides, the low ones at most a given value
+    and the high ones past the cut (a dynamic program over the guides, :func:`_count_at`), the term of
+    ``a`` is ``F(at most a) - F(below a)``. While the cut stays put these terms telescope, so ``F`` is
+    evaluated only where it moves. ``fs`` (6 rows), ``ints`` (4 rows) and ``dp`` (4 rows of ``2 k + 5``)
+    are scratch.
     """
-    inv_low, inv_high, top, wl, wh, wlt, weq = fs[0], fs[1], fs[2], fs[3], fs[4], fs[5], fs[6]
-    le_end, gt_start, lptr, cut, hit, hits = ints[0], ints[1], ints[2], ints[3], ints[4], ints[5]
+    inv_low, inv_high, top, wl, wh, wh_old = fs[0], fs[1], fs[2], fs[3], fs[4], fs[5]
+    le_end, gt_start, lptr, cut = ints[0], ints[1], ints[2], ints[3]
     for a in range(k):
         lo = lo_c[a]
         hi = hi_c[a]
@@ -666,24 +669,24 @@ def _boundary(k, lo_c, hi_c, vals, cum, obs, plow, phigh, pnan, fs, ints, dp):
         inv_high[a] = 1.0 / (top[a] - at_obs) if top[a] > at_obs else 0.0
         wl[a] = plow[a] if inv_low[a] > 0.0 else 0.0  # for the check below: low with an atom to sweep
         wh[a] = phigh[a] if inv_high[a] > 0.0 else 0.0
-        hit[a] = 0
         le_end[a] = lo + cnt_le  # one past the last atom <= obs
         gt_start[a] = lo + cnt_le  # first atom > obs
         lptr[a] = lo  # next atom <= obs not yet swept
         cut[a] = hi  # atoms [cut, hi) have midpoint (aval + .)/2 > obs
+    # with no guide ever nan the count here is even, and every count the program reaches keeps a parity
+    stride = 1 if _any_positive(pnan, k) else 2
     # no split into as many low as high guides, each with atoms on its side, can happen: nothing to sweep
     all_nan = 1.0
     for a in range(k):
         all_nan *= pnan[a]
-    if _count_at(k, -1, 0, wh, wl, pnan, dp) <= all_nan:
+    if _count_at(k, -1, 0, wh, wl, pnan, dp, stride) <= all_nan:
         return 0.0
     for a in range(k):
         wl[a] = 0.0  # P(low and at most the current atom)
-        wh[a] = 0.0  # P(high and past the current atom's cut)
+        wh[a] = 0.0  # P(high and past the current cut)
     total = 0.0
-    last = -1  # the guide _count_at last left out, while no other guide's weights have moved since
-    others = 0.0
-    n_high = 0  # guides with a high atom past the cut; a split needs one, and far below obs there is none
+    start_prev = 0.0  # F when the current cut took effect, with the low guides as they were then
+    n_high = 0  # guides with an atom past the cut; until one has, F is zero
     while True:
         aval = np.inf
         for a in range(k):
@@ -691,23 +694,16 @@ def _boundary(k, lo_c, hi_c, vals, cum, obs, plow, phigh, pnan, fs, ints, dp):
                 aval = vals[lptr[a]]
         if aval == np.inf:
             break
-        nhit = 0
+        # the cut only moves down as aval grows; where it moves, close the run of terms under the old one
+        moved = False
+        had_high = n_high > 0
         for a in range(k):
-            p = lptr[a]
-            if p < le_end[a] and vals[p] == aval:
-                below = cum[p - 1] if p > lo_c[a] else 0.0
-                wlt[a] = plow[a] * below * inv_low[a]  # P(low and below aval)
-                weq[a] = plow[a] * (cum[p] - below) * inv_low[a]  # P(low and at aval)
-                wl[a] = plow[a] * cum[p] * inv_low[a]
-                lptr[a] = p + 1
-                hit[a] = 1
-                hits[nhit] = a
-                nhit += 1
-                if a != last:
-                    last = -1
-            # the high atoms whose midpoint with aval exceeds obs; the cut only moves down as aval grows
             q = cut[a]
             if q > gt_start[a] and (aval + vals[q - 1]) / 2.0 > obs:
+                if not moved:
+                    for b in range(k):
+                        wh_old[b] = wh[b]
+                moved = True
                 q -= 1
                 while q > gt_start[a] and (aval + vals[q - 1]) / 2.0 > obs:
                     q -= 1
@@ -715,26 +711,18 @@ def _boundary(k, lo_c, hi_c, vals, cum, obs, plow, phigh, pnan, fs, ints, dp):
                 past = phigh[a] * (top[a] - (cum[q - 1] if q > lo_c[a] else 0.0)) * inv_high[a]
                 n_high += wh[a] == 0.0 and past > 0.0
                 wh[a] = past
-                if a != last:
-                    last = -1
-        if n_high == 0 or (nhit == 1 and n_high == 1 and wh[hits[0]] > 0.0):
-            pass  # no high guide to balance the low one at aval
-        elif nhit == 1:
-            # the usual case: the one guide at aval is the largest low one, and the others balance it
-            h = hits[0]
-            if weq[h] > 0.0:
-                if h != last:
-                    others = _count_at(k, h, 1, wh, wl, pnan, dp)
-                    last = h
-                total += weq[h] * others
-        else:
-            last = -1
-            for a in range(k):
-                if not hit[a]:
-                    wlt[a] = wl[a]
-            total += _count_tied_at(k, hit, wlt, weq, wh, pnan, dp)
-        for i in range(nhit):
-            hit[hits[i]] = 0
+        if moved and n_high > 0:
+            closing, start = _count_tied_pair(k, wh_old, wh, wl, pnan, dp, stride)
+            if had_high:
+                total += closing - start_prev
+            start_prev = start
+        for a in range(k):
+            p = lptr[a]
+            if p < le_end[a] and vals[p] == aval:
+                wl[a] = plow[a] * cum[p] * inv_low[a]
+                lptr[a] = p + 1
+    if n_high > 0:
+        total += _count_at(k, -1, 0, wh, wl, pnan, dp, stride) - start_prev
     return total
 
 
@@ -803,8 +791,8 @@ def _gene_pvalues(
     row_k = max_k + 8
     lohi_t = np.empty((n_slots, 2, row_k), dtype=np.int64)
     tails_t = np.empty((n_slots, 6, row_k), dtype=np.float64)
-    fs_t = np.empty((n_slots, 7, row_k), dtype=np.float64)
-    ints_t = np.empty((n_slots, 6, row_k), dtype=np.int64)
+    fs_t = np.empty((n_slots, 6, row_k), dtype=np.float64)
+    ints_t = np.empty((n_slots, 4, row_k), dtype=np.int64)
     dp_t = np.empty((n_slots, 4, 2 * max_k + 5 + 8), dtype=np.float64)
     used = np.empty(n_nulls, dtype=np.bool_)
     counts = np.empty(n_nulls, dtype=np.int64)
