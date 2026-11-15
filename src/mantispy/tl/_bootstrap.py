@@ -1332,11 +1332,13 @@ def bootstrap_features(
     )
     table["qvalue"] = benjamini_hochberg(table["pvalue"].to_numpy())
 
-    sub_labels = [str(sub_keys[s][len(by)]) for s in range(len(sub_keys))]
+    def sub_level(position: int) -> np.ndarray:
+        return sub_keys.get_level_values(position).astype(str).to_numpy()[construct_sub]
+
     guides = pd.DataFrame(
         {
             "group": np.repeat([gene_labels[g] for g in gene_of_construct], n_features),
-            "replicate": np.repeat([sub_labels[s] for s in construct_sub], n_features),
+            "replicate": np.repeat(sub_level(len(by)), n_features),
             "n_cells": np.repeat(construct_size, n_features),
             "feature": np.tile(features, constructs.size),
             "effect": (construct_observed - pool_median[construct_pool]).ravel(),
@@ -1344,9 +1346,7 @@ def bootstrap_features(
         }
     )
     if condition is not None:
-        guides.insert(
-            2, condition, np.repeat([str(sub_keys[s][sub_by.index(condition)]) for s in construct_sub], n_features)
-        )
+        guides.insert(2, condition, np.repeat(sub_level(sub_by.index(condition)), n_features))
     guides["qvalue"] = benjamini_hochberg(guides["pvalue"].to_numpy())
 
     logger.info(
