@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Annotated
 
 from platformdirs import user_cache_dir
+from pydantic import Field
 from scverse_misc import Settings
 
 
@@ -34,12 +36,13 @@ class MantispySettings(Settings):
     cache_dir: Path = Path(user_cache_dir("mantispy"))
     """Where :mod:`mantispy.ds` keeps the datasets it downloads."""
 
-    stream_bytes: int = _default_stream_bytes()
+    stream_bytes: Annotated[int, Field(gt=0)] = _default_stream_bytes()
     """How many bytes of a matrix that is not in memory a grouped operation reads at once.
 
     The default is a sixteenth of the machine's memory, between 256 MB and 4 GB.
     Groups are packed into reads of about this size, and a group larger than that is read a block of columns at a time, so a smaller value lowers the peak memory and a larger one reads the file in fewer passes.
     :func:`mantispy.io.read` with ``lazy=True`` also sizes its chunks so that one per dask worker fits in this many bytes.
+    It must be positive.
     """
 
     map_table_bytes: int = _default_map_table_bytes()

@@ -171,6 +171,9 @@ def get_matrix(
         # anndata's CSRDataset and CSCDataset have no ``__array__``, so np.asarray below would raise on them.
         matrix = matrix[:]
 
+    if is_lazy(matrix):
+        # Computed into the result chunk by chunk, where np.asarray would also hold the chunks it concatenates.
+        return materialize(matrix)
     if hasattr(matrix, "toarray"):
         matrix = matrix.toarray()
     return np.asarray(matrix, dtype=float_dtype(matrix.dtype))
@@ -206,12 +209,19 @@ def is_lazy(matrix: Any) -> bool:
 def materialize(matrix: Any) -> np.ndarray:
     """Compute a lazy matrix into one array, in the dtype :func:`float_dtype` gives it.
 
-    Each chunk is stored into the result as it is computed, where computing the whole would also hold the chunks to concatenate.
+    Row chunks are computed a few at a time, as many as fit :attr:`~mantispy.settings.stream_bytes`, and copied into the result, where computing the whole would also hold the chunks to concatenate.
+    Each computation returns its block to this process, so the result is filled under any dask scheduler, including a ``dask.distributed`` cluster whose workers are separate processes.
     """
-    import dask.array as da
-
     out = np.empty(matrix.shape, dtype=float_dtype(matrix.dtype))
-    da.store(matrix, out, lock=False)
+    bounds = np.cumsum((0, *matrix.chunks[0]))
+    row_bytes = max(matrix.shape[1], 1) * out.itemsize
+    start = 0
+    while start < len(bounds) - 1:
+        stop = start + 1
+        while stop < len(bounds) - 1 and (bounds[stop + 1] - bounds[start]) * row_bytes <= settings.stream_bytes:
+            stop += 1
+        out[bounds[start] : bounds[stop]] = matrix[bounds[start] : bounds[stop]].compute()
+        start = stop
     return out
 
 
@@ -483,6 +493,9 @@ def transform_grouped(
     width = source.shape[1] if n_cols is None else n_cols
     if rowwise and is_lazy(source):
         return _transform_lazy(source, codes, keys, func, dtype, width)
+    if is_lazy(source):
+        # The result is held in memory whole, however the groups are read.
+        _warn_if_whole_read(source)
     # Shaped from the source, not read off it: get_matrix with no rows reads all of it.
     out = np.empty((source.shape[0], width), dtype=dtype)
     if rowwise and not _reads_from_disk(source):
