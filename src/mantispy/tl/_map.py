@@ -112,20 +112,21 @@ def _list_valued(series: pd.Series) -> bool:
 
 
 def _refuse_unrankable(features: np.ndarray, names: pd.Index, distance: str) -> None:
-    """Raise when a profile holds an infinite value or, for a cosine distance, has a zero or overflowing norm.
+    """Raise when a profile holds an infinite value or, for a cosine or correlation distance, has a zero or overflowing norm.
 
     Such a profile is zeroed by the cosine, so every similarity it has ties and its replicates rank first, scoring an
     average precision of one that inflates the mAP without a sign that anything went wrong.
     """
     bad = ~np.isfinite(features).all(axis=1)
-    if "cosine" in distance:
-        with np.errstate(over="ignore"):
-            norm = np.linalg.norm(features, axis=1)
+    if distance in ("cosine", "abs_cosine", "correlation"):
+        with np.errstate(over="ignore", invalid="ignore"):
+            rows = features - features.mean(axis=1, keepdims=True) if distance == "correlation" else features
+            norm = np.linalg.norm(rows, axis=1)
         bad |= ~np.isfinite(norm) | (norm == 0)
     if bad.any():
         raise ValueError(
             f"mAP cannot rank {int(bad.sum())} profile(s) with an infinite value, or a zero or overflowing norm "
-            f"under distance={distance!r} (e.g. {', '.join(str(name) for name in names[bad][:5])}). Drop the features with no "
+            f"under distance={distance!r} (e.g. in {', '.join(str(name) for name in names[bad].unique()[:5])}). Drop the features with no "
             "spread that normalize flags in var['degenerate_scale'], or features with extreme values, first."
         )
 
@@ -176,6 +177,9 @@ def _score_map(
     from mantispy._core import _map_null, _map_permutation
     from mantispy._core._stats import benjamini_hochberg
 
+    group_columns = [column for column in settings["pos_sameby"] if column != REFERENCE_COLUMN]
+    _refuse_unrankable(features, pd.Index(meta[group_columns].astype(str).agg("/".join, axis=1)), distance)
+
     _check_null(null, null_sampler, seed)
     lay = ap_kernel.layout(
         meta, settings["pos_sameby"], settings["pos_diffby"], settings["neg_sameby"], settings["neg_diffby"],
@@ -185,7 +189,6 @@ def _score_map(
     precision = ap_kernel.ap_frame(meta, lay, result, multilabel_col)
     if drop_positions is not None:
         precision = precision[~precision[ap_kernel.PROFILE].isin(drop_positions)]
-    group_columns = [column for column in settings["pos_sameby"] if column != REFERENCE_COLUMN]
 
     queries = precision["n_pos_pairs"] > 0
     if not queries.any():
@@ -402,7 +405,6 @@ def map(
             "affected features with mt.pp.feature_select(adata, na_cutoff=0.0, subset=True); the default "
             "na_cutoff=0.05 keeps features with up to 5% missing values."
         )
-    _refuse_unrankable(features, adata.obs_names, distance)
     obs = as_frame(adata.obs)
     # The scoring reads the Metadata_ columns plus every obs column the pair spec or label names, so a column
     # without the prefix (batch="source", a user-added label) is matched like any other.
