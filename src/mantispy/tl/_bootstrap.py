@@ -14,7 +14,7 @@ import pandas as pd
 from anndata import AnnData
 from numba import njit
 
-from mantispy._core._numba import MEDIAN, _kernel_input, grouped_stat
+from mantispy._core._numba import MEDIAN, _counting_order, _kernel_input, grouped_stat
 from mantispy._core._reduce import get_matrix, group_codes
 from mantispy._core._stats import benjamini_hochberg
 from mantispy._core.frames import as_frame
@@ -136,48 +136,13 @@ def _median_gt(v: np.ndarray, lo: int, n: int, m: int, x: float) -> float:
 
 @njit(cache=True, nogil=True)
 def _median_lt(v: np.ndarray, lo: int, n: int, m: int, x: float) -> float:
-    """``P(median of m draws from v[lo:lo+n] (sorted asc, no nan) < x)``. Mirror of :func:`_median_gt`."""
+    """``P(median of m draws from v[lo:lo+n] (sorted asc, no nan) < x)``.
+
+    Every median is a float64, so it is below ``x`` exactly when it is not above the float just below ``x``.
+    """
     if n == 0:
         return 0.0
-    hi = np.searchsorted(v[lo : lo + n], x, side="left")  # count < x
-    f_lt = hi / n
-    t = m // 2
-    if m % 2 == 1:
-        return 1.0 - _binom_cdf(t, m, f_lt)  # P(#{<x} >= t+1)
-    out = 1.0 - _binom_cdf(t, m, f_lt)  # both central order stats < x
-    nlow = hi
-    nge = n - hi
-    if nlow == 0 or nge == 0:
-        return out
-    pk = _binom_cdf(t, m, f_lt) - _binom_cdf(t - 1, m, f_lt)  # P(exactly t draws < x)
-    if pk <= 0.0:
-        return out
-    contrib = 0.0
-    i = lo + hi
-    end = lo + n
-    while i < end:
-        b = np.float64(v[i])
-        j = i
-        while j < end and v[j] == b:
-            j += 1
-        c_ge = end - i
-        c_gt = end - j
-        pmin = (c_ge / nge) ** t - (c_gt / nge) ** t  # P(min of t high draws == b)
-        if pmin > 0.0:
-            # largest low value a with the actual midpoint (a+b)/2 < x
-            left = int(lo)
-            right = int(lo + hi)
-            while left < right:
-                mid = (left + right) // 2
-                if (v[mid] + b) / 2.0 < x:
-                    left = mid + 1
-                else:
-                    right = mid
-            take = left - lo
-            if take > 0:
-                contrib += pmin * (take / nlow) ** t
-        i = j
-    return out + pk * contrib
+    return 1.0 - _median_gt(v, lo, n, m, np.nextafter(x, -np.inf))
 
 
 @njit(cache=True, nogil=True)
@@ -236,20 +201,31 @@ def _guide_pvalues(
                 continue
             row = pool_sorted[j]
             m = construct_nn[c, j]
-            gt = 0.0
-            lt = 0.0
-            measured = 0.0
-            for sub in range(s0, s1):
-                a = sub_start[sub]
-                width = sub_stop[sub] - a
-                nn = sub_nn[j, sub]
-                w = width / width_total
-                g, l_, na = _sub_tail(row, a, nn, width, m, obs)
-                gt += w * g
-                lt += w * l_
-                measured += w * (1.0 - na)
+            gt, lt, _, _, _, measured = _pool_tails(row, sub_nn[j], sub_start, sub_stop, s0, s1, width_total, m, obs)
             out[c, j] = _two_sided(gt, lt, measured)
     return out
+
+
+@njit(cache=True, nogil=True)
+def _pool_tails(row, sub_nn_row, sub_start, sub_stop, s0, s1, width_total, m, x):
+    """A guide null's exact tails at ``x``: the cell-count-weighted mixture of its control guides' :func:`_sub_tail`.
+
+    Returns ``P(> x)``, ``P(< x)``, ``P(<= x)``, ``P(>= x)``, ``P(nan)`` and ``P(measured)``, each summed
+    directly so that a small one keeps its digits.
+    """
+    gt = lt = le = ge = na = meas = 0.0
+    for sub in range(s0, s1):
+        a = sub_start[sub]
+        width = sub_stop[sub] - a
+        w = width / width_total
+        g, l_, n_ = _sub_tail(row, a, sub_nn_row[sub], width, m, x)
+        gt += w * g
+        lt += w * l_
+        le += w * (1.0 - g - n_)
+        ge += w * (1.0 - l_ - n_)
+        na += w * n_
+        meas += w * (1.0 - n_)
+    return gt, lt, le, ge, na, meas
 
 
 @njit(cache=True, nogil=True)
@@ -712,13 +688,7 @@ def _deal(cost, n_slots):
         s = np.argmin(load)
         slot[i] = s
         load[s] += cost[i]
-    order = np.argsort(slot, kind="mergesort")
-    start = np.zeros(n_slots + 1, dtype=np.int64)
-    for i in range(n):
-        start[slot[i] + 1] += 1
-    for s in range(n_slots):
-        start[s + 1] += start[s]
-    return order, start
+    return _counting_order(slot, n_slots)
 
 
 @njit(parallel=True, cache=True, nogil=True)
@@ -888,20 +858,17 @@ def _gene_pvalues(
                     # exact tails from the sub-tail mixture, so the gene count that decides
                     # significance never depends on the atom coarsening
                     p = null_pool[u]
-                    m = construct_nn[c, j]
-                    gt = lt = le = ge = na = meas = 0.0
-                    for sub in range(pool_sub_start[p], pool_sub_stop[p]):
-                        aa = sub_start[sub]
-                        width = sub_stop[sub] - aa
-                        w = width / pool_width[p]
-                        gsub, lsub, nasub = _sub_tail(row, aa, sub_nn[j, sub], width, m, obs)
-                        gt += w * gsub
-                        lt += w * lsub
-                        le += w * (1.0 - gsub - nasub)
-                        ge += w * (1.0 - lsub - nasub)
-                        na += w * nasub
-                        meas += w * (1.0 - nasub)
-                    gt_arr[k], lt_arr[k], le_arr[k], ge_arr[k], nan_arr[k], meas_arr[k] = gt, lt, le, ge, na, meas
+                    gt_arr[k], lt_arr[k], le_arr[k], ge_arr[k], nan_arr[k], meas_arr[k] = _pool_tails(
+                        row,
+                        sub_nn[j],
+                        sub_start,
+                        sub_stop,
+                        pool_sub_start[p],
+                        pool_sub_stop[p],
+                        pool_width[p],
+                        construct_nn[c, j],
+                        obs,
+                    )
                     k += 1
                 # more high than low guides puts the median above obs; as many of each leaves the
                 # midpoint of the two central guides to decide, possible for an even measured count
@@ -1118,7 +1085,9 @@ def bootstrap_features(
     construct_unit, construct_sub = constructs // n_subs, constructs % n_subs
     first_row = rows_kept[np.unique(row_construct, return_index=True)[1]]
     construct_pool = np.searchsorted(pool_keys, row_pool_key[first_row]).astype(np.int64)
-    construct_observed = grouped_stat(values[rows_kept], row_construct, constructs.size, MEDIAN)
+    construct_of_row = np.zeros(adata.n_obs, dtype=np.int64)
+    construct_of_row[rows_kept] = row_construct
+    construct_observed = grouped_stat(values, construct_of_row, constructs.size, MEDIAN, mask=tested)
     construct_size = np.bincount(row_construct, minlength=constructs.size).astype(np.int64)
     # the cells each guide measures per feature: its null draws that many, as its median is over them
     by_construct = np.argsort(row_construct, kind="stable")
@@ -1127,14 +1096,12 @@ def bootstrap_features(
         np.searchsorted(row_construct[by_construct], np.arange(constructs.size)),
         axis=0,
     ).astype(np.int64)
-    pool_t = np.ascontiguousarray(values[pool_rows].T)
-    pool_median = grouped_stat(
-        values[pool_rows], np.searchsorted(pool_keys, pool_of_row[pool_rows]), pool_keys.size, MEDIAN
-    )
+    in_pool = pool_of_row >= 0
+    pool_median = grouped_stat(values, np.searchsorted(pool_keys, pool_of_row), pool_keys.size, MEDIAN, mask=in_pool)
 
     # Sort each control guide's cells, per feature, so the kernels can read order statistics; a guide's
     # non-nan values come first (nan sorts last) and sub_nn counts them. Lay out the pool-to-guide index.
-    pool_sorted = pool_t.copy()
+    pool_sorted = np.ascontiguousarray(values[pool_rows].T)
     n_features = pool_sorted.shape[0]
     n_subs_total = sub_start.size
     sub_nn = np.empty((n_features, n_subs_total), dtype=np.int64)
