@@ -47,8 +47,8 @@ def phate(
     neighbours, turns it into a random walk, and runs the walk for ``t`` steps.
     Each row's ``-log`` transition probabilities form its diffusion potential, and metric MDS on distances between
     potentials gives the embedding.
-    The walk smooths noise along the data's manifold, so branches and gradients that a kNN graph splits into
-    islands stay connected.
+    Running the walk for several steps averages each row over its neighbourhood, so a gradual change between groups
+    of rows stays continuous in the embedding instead of breaking into separate groups.
 
     The affinity graph is written in the layout :func:`scanpy.pp.neighbors` uses, so
     :func:`mantispy.tl.cluster` with ``neighbors_key=key_added``, or :func:`scanpy.tl.leiden` with the same key,
@@ -57,8 +57,8 @@ def phate(
     ``use_rep="X_phate_potential"`` and ``covariance="identity"`` tests each perturbation's distance from the
     controls in it.
 
-    This is a native implementation of the method, not a wrapper of the ``phate`` package.
-    Its parameter names and defaults follow ``phate.PHATE``, and the kernel and potential agree with it for the same
+    mantispy implements the method itself rather than wrapping the ``phate`` package.
+    The parameter names and defaults follow ``phate.PHATE``, and the kernel and potential agree with it for the same
     ``t``; the automatic ``t`` uses a published knee rule and can land on a different power than ``phate``.
 
     Args:

@@ -470,9 +470,9 @@ def kmeans(x: np.ndarray, n_clusters: int, seed: int, max_iter: int = 20) -> np.
 
     Each assignment takes the distances to the centres from one matrix product per block of rows.
     """
-    from mantispy._core._numba import group_offsets
-
     from sklearn.cluster import kmeans_plusplus
+
+    from mantispy._core._numba import group_offsets
 
     x = np.ascontiguousarray(x, dtype=np.float64)
     n = x.shape[0]
