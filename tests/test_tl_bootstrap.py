@@ -1,6 +1,7 @@
 """tl.bootstrap_features: exactness, calibration, ties, missing values, control scopes and the shared layout."""
 
 import itertools
+import warnings
 
 import anndata as ad
 import matplotlib
@@ -18,8 +19,9 @@ def _brute_pvalues(adata):
     """Exact p-values by full enumeration of every resample; only for tiny screens.
 
     The guide null draws one control guide (probability proportional to its cell count), then draws
-    as many of its cells as the guide has, with replacement, and takes the median; the gene null is
-    the median over its guides of independent such draws. Two-sided, a tie counts half, no floor.
+    as many of its cells as the guide has measured, with replacement, and takes the median of the
+    measured draws; the gene null is the median over its measured guides of independent such draws.
+    Two-sided, a tie counts half, conditioned on a measured null median, no floor.
     """
     x = np.asarray(adata.X, dtype=float)
     obs = adata.obs
@@ -31,9 +33,8 @@ def _brute_pvalues(adata):
     weights = sizes / sizes.sum()
     n_feat = x.shape[1]
 
-    def construct_pmf(cells, feat):
-        """{value: prob} of the guide null for one feature, and P(nan)."""
-        m = cells.shape[0]
+    def construct_pmf(m, feat):
+        """{value: prob} of the null of a guide measuring m cells, for one feature, and P(nan)."""
         pmf, nan = {}, 0.0
         for w, pool in zip(weights, ctrl_guides, strict=True):
             col = pool[:, feat]
@@ -49,9 +50,11 @@ def _brute_pvalues(adata):
         return pmf, nan
 
     def two_sided(pmf, nan, o):
+        if nan >= 1.0 - 1e-12:
+            return np.nan
         gt = sum(p for v, p in pmf.items() if v > o)
         eq = sum(p for v, p in pmf.items() if v == o)
-        one = gt + 0.5 * eq
+        one = (gt + 0.5 * eq) / (1.0 - nan)
         return 2.0 * min(one, 1.0 - one)
 
     guide_p, gene_p = {}, {}
@@ -59,11 +62,17 @@ def _brute_pvalues(adata):
         constructs = sorted(set(sgrna[(gene == g)]))
         cells = {c: x[sgrna == c] for c in constructs}
         for feat in range(n_feat):
-            cpmfs = [construct_pmf(cells[c], feat) for c in constructs]
-            for c, (pmf, nan) in zip(constructs, cpmfs, strict=True):
-                o = float(np.median(cells[c][:, feat]))
-                guide_p[(g, c, feat)] = two_sided(pmf, nan, o)
-            # gene null: enumerate the joint over its constructs
+            measured = {c: cells[c][~np.isnan(cells[c][:, feat]), feat] for c in constructs}
+            kept = [c for c in constructs if measured[c].size]
+            cpmfs = [construct_pmf(measured[c].size, feat) for c in kept]
+            for c in constructs:
+                guide_p[(g, c, feat)] = np.nan
+            for c, (pmf, nan) in zip(kept, cpmfs, strict=True):
+                guide_p[(g, c, feat)] = two_sided(pmf, nan, float(np.median(measured[c])))
+            if not kept:
+                gene_p[(g, feat)] = np.nan
+                continue
+            # gene null: enumerate the joint over its measured constructs
             gpmf, gnan = {}, 0.0
             items = [list(pmf.items()) + ([(np.nan, nan)] if nan > 0 else []) for pmf, nan in cpmfs]
             for combo in itertools.product(*items):
@@ -77,9 +86,21 @@ def _brute_pvalues(adata):
                     gnan += prob
                 else:
                     gpmf[float(np.median(good))] = gpmf.get(float(np.median(good)), 0.0) + prob
-            og = float(np.median([np.median(cells[c][:, feat]) for c in constructs]))
+            og = float(np.median([np.median(measured[c]) for c in kept]))
             gene_p[(g, feat)] = two_sided(gpmf, gnan, og)
     return gene_p, guide_p
+
+
+def _assert_matches_brute_force(adata):
+    gene_p, guide_p = _brute_pvalues(adata)
+    features = list(adata.var_names)
+    table = adata.uns["mantispy"]["bootstrap"]
+    for row in table.itertuples():
+        np.testing.assert_allclose(row.pvalue, gene_p[(row.group, features.index(row.feature))], atol=1e-9)
+    guides = adata.uns["mantispy"]["bootstrap_guides"]
+    for row in guides.itertuples():
+        expected = guide_p[(row.group, row.replicate, features.index(row.feature))]
+        np.testing.assert_allclose(row.pvalue, expected, atol=1e-9)
 
 
 def test_exact_pvalues_match_brute_force_enumeration():
@@ -95,16 +116,28 @@ def test_exact_pvalues_match_brute_force_enumeration():
     adata = _cells(groups, rng, n_features=3)
     adata.X = rng.integers(0, 4, size=adata.X.shape).astype(float)
     mt.tl.bootstrap_features(adata)
-    gene_p, guide_p = _brute_pvalues(adata)
-    table = adata.uns["mantispy"]["bootstrap"]
-    features = list(adata.var_names)
-    for _, row in table.iterrows():
-        feat = features.index(row["feature"])
-        assert abs(row["pvalue"] - gene_p[(row["group"], feat)]) < 1e-9
-    guides = adata.uns["mantispy"]["bootstrap_guides"]
-    for _, row in guides.iterrows():
-        feat = features.index(row["feature"])
-        assert abs(row["pvalue"] - guide_p[(row["group"], row["replicate"], feat)]) < 1e-9
+    _assert_matches_brute_force(adata)
+
+
+@pytest.mark.parametrize(("dtype", "missing"), [(np.float32, 0.0), (np.float32, 0.2), (np.float64, 0.2)])
+def test_missing_cells_match_brute_force_enumeration(dtype, missing):
+    """Missing cells in control and tested guides: the null draws the measured count and skips nan draws.
+
+    A guide measuring nothing leaves its gene, and a null median that is missing counts neither way.
+    Values on a grid of halves make even-count midpoints that float32 would round differently.
+    """
+    rng = np.random.default_rng(1)
+    groups = [("G0", "g0_0", 3, 0.0, "a"), ("G0", "g0_1", 4, 0.0, "a"), ("G1", "g1_0", 2, 0.0, "a")]
+    groups += [("G1", "g1_1", 3, 0.0, "a"), ("G1", "g1_2", 2, 0.0, "a")]
+    groups += [("nontargeting", f"nt{s}", 4, 0.0, "a") for s in range(3)]
+    adata = _cells(groups, rng, n_features=3)
+    x = rng.integers(0, 7, size=adata.X.shape) * 0.55
+    if missing:
+        x[rng.random(x.shape) < missing] = np.nan
+        x[(adata.obs["Metadata_sgRNA"] == "g1_2").to_numpy(), 1] = np.nan
+    adata.X = x.astype(dtype)
+    mt.tl.bootstrap_features(adata)
+    _assert_matches_brute_force(adata)
 
 
 def _cells(groups, rng, n_features=4, guide_sd=0.1):
@@ -138,6 +171,72 @@ def test_nontargeting_pseudogenes_are_called_at_the_nominal_rate():
     for key in ("bootstrap", "bootstrap_guides"):
         pvalues = adata.uns["mantispy"][key]["pvalue"].to_numpy()
         assert 0.025 < (pvalues < 0.05).mean() < 0.085
+
+
+def test_a_guide_missing_a_feature_leaves_its_gene_for_that_feature():
+    """Pseudo-genes of two guides, one of which measures nothing in any feature: still called at the nominal rate."""
+    rng = np.random.default_rng(0)
+    groups = [("nontargeting", f"nt{i}", int(rng.integers(30, 90)), 0.0, "a") for i in range(30)]
+    groups += [(f"pseudo{i // 2}", f"ps{i}", int(rng.integers(30, 90)), 0.0, "a") for i in range(80)]
+    adata = _cells(groups, rng, n_features=40, guide_sd=0.3)
+    unmeasured = adata.obs["Metadata_sgRNA"].isin([f"ps{i}" for i in range(0, 80, 2)]).to_numpy()
+    adata.X[unmeasured] = np.nan
+    mt.tl.bootstrap_features(adata)
+    gene = adata.uns["mantispy"]["bootstrap"]
+    assert 0.02 < (gene["pvalue"] < 0.05).mean() < 0.085
+    guides = adata.uns["mantispy"]["bootstrap_guides"].set_index(["replicate", "feature"])["pvalue"]
+    measured = guides.drop([f"ps{i}" for i in range(0, 80, 2)], level="replicate")
+    np.testing.assert_allclose(np.sort(gene["pvalue"]), np.sort(measured), atol=1e-12)
+
+
+def _simulated_gene_pvalue(adata, gene, feature, n_sims, rng):
+    """Two-sided p of one gene and feature from a simulation of the documented null, skipping nan draws."""
+    x = np.asarray(adata.X[:, feature], dtype=float)
+    obs = adata.obs
+    sgrna = obs["Metadata_sgRNA"].to_numpy()
+    is_ctrl = (obs["Metadata_Control_Type"] == "negcon").to_numpy()
+    controls = [x[(sgrna == c) & is_ctrl] for c in sorted(set(sgrna[is_ctrl]))]
+    sizes = np.array([c.size for c in controls], dtype=float)
+    guides = [x[sgrna == c] for c in sorted(set(sgrna[(obs["Metadata_Gene"] == gene).to_numpy()]))]
+    nulls = []
+    for cells in guides:
+        m = int((~np.isnan(cells)).sum())
+        pick = rng.choice(len(controls), size=n_sims, p=sizes / sizes.sum())
+        draws = np.stack([controls[i][rng.integers(0, controls[i].size, size=m)] for i in pick])
+        nulls.append(np.nanmedian(draws, axis=1))
+    null = np.nanmedian(np.array(nulls), axis=0)
+    observed = np.median([np.nanmedian(cells) for cells in guides])
+    one = ((null > observed).mean() + 0.5 * (null == observed).mean()) / (~np.isnan(null)).mean()
+    return 2 * min(one, 1 - one)
+
+
+def test_sporadic_missing_control_cells_match_a_simulation():
+    """A missing cell in every control guide gives each guide null one band per measured draw count."""
+    rng = np.random.default_rng(10)
+    groups = [("nontargeting", f"nt{i}", 50, 0.0, "a") for i in range(6)]
+    groups += [("TWO", "two0", 40, 0.0, "a"), ("TWO", "two1", 30, 0.0, "a"), ("ONE", "one0", 40, 0.0, "a")]
+    adata = _cells(groups, rng, n_features=2)
+    for i in range(6):
+        adata.X[np.flatnonzero((adata.obs["Metadata_sgRNA"] == f"nt{i}").to_numpy())[0], 0] = np.nan
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        mt.tl.bootstrap_features(adata)
+    gene = _table(adata)
+    guide = adata.uns["mantispy"]["bootstrap_guides"].pivot(index="replicate", columns="feature", values="pvalue")
+    np.testing.assert_allclose(gene.loc["ONE"], guide.loc["one0"], atol=1e-12)
+    simulated = _simulated_gene_pvalue(adata, "TWO", 0, 20_000, rng)
+    assert gene.loc["TWO", "Cells_Intensity_F0"] == pytest.approx(simulated, abs=0.03)
+
+
+def test_a_one_guide_gene_against_large_control_guides_has_its_guide_pvalue():
+    """Every median atom of a two-cell guide's null is tiny when the control guides are large; the count stays exact."""
+    rng = np.random.default_rng(11)
+    groups = [("nontargeting", f"nt{i}", 15_000, 0.0, "a") for i in range(2)] + [("G", "g0", 2, 0.0, "a")]
+    adata = _cells(groups, rng, n_features=1)
+    mt.tl.bootstrap_features(adata)
+    gene = adata.uns["mantispy"]["bootstrap"]["pvalue"].to_numpy()
+    guide = adata.uns["mantispy"]["bootstrap_guides"]["pvalue"].to_numpy()
+    assert 0.0 < gene[0] == pytest.approx(guide[0], abs=1e-12)
 
 
 def test_a_shifted_gene_is_called_with_the_sign_of_its_shift():
@@ -174,10 +273,13 @@ def test_missing_values_are_skipped_and_an_unmeasured_feature_is_nan():
     is_gene = (adata.obs["Metadata_Gene"] == "G").to_numpy()
     adata.X[is_gene, 0] = np.nan
     adata.X[rng.random(adata.n_obs) < 0.2, 1] = np.nan
+    adata.X[~is_gene, 2] = np.nan  # no control cell measures it, so there is no null
     mt.tl.bootstrap_features(adata)
     row = _table(adata).loc["G"]
-    assert np.isnan(row["Cells_Intensity_F0"])
-    assert np.isfinite(row.drop("Cells_Intensity_F0")).all()
+    assert np.isnan(row[["Cells_Intensity_F0", "Cells_Intensity_F2"]]).all()
+    assert np.isfinite(row.drop(["Cells_Intensity_F0", "Cells_Intensity_F2"])).all()
+    guides = adata.uns["mantispy"]["bootstrap_guides"].set_index("feature")["pvalue"]
+    assert np.isnan(guides["Cells_Intensity_F2"])
 
 
 def test_a_gene_keeps_its_pvalues_when_other_genes_are_dropped():
