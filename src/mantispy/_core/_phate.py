@@ -26,7 +26,7 @@ else:
 THRESHOLD = 1e-4
 #: Added inside the log of the potential, so a transition probability of zero stays finite.
 LOG_OFFSET = 1e-7
-#: Entries of one block of the brute-force neighbour search, which bounds its scratch memory.
+#: Entries of one block of inner products in the neighbour search and k-means, which bounds their scratch memory.
 _BLOCK_ENTRIES = 1 << 24
 #: How much faster a dense product runs per operation than the sparse kernel; it sets where powering switches.
 _DENSE_PRODUCT_SPEEDUP = 10
@@ -36,31 +36,37 @@ _N_SVD = 100
 
 @njit(parallel=True, cache=True, nogil=True)
 def _select_neighbours(
-    gram: np.ndarray, chosen: np.ndarray, norms: np.ndarray, first: int, out_idx: np.ndarray, out_sq: np.ndarray
+    gram: np.ndarray,
+    chosen: np.ndarray,
+    first_column: int,
+    norms: np.ndarray,
+    first: int,
+    out_idx: np.ndarray,
+    out_sq: np.ndarray,
 ) -> None:
-    """The ``k`` nearest rows of each of ``chosen`` into rows ``first ..`` of the outputs, ties broken by row.
+    """Offer a block of candidates to the running ``k`` nearest of each chosen row, ties broken by row.
 
-    ``gram`` holds the inner products of the chosen rows with every row, so the squared distance is read off it and
-    the norms without forming a distance matrix; each row's own column goes first at distance zero.
+    ``gram`` holds the inner products of the chosen rows with rows ``first_column ..``, so each squared distance is
+    read off it and the norms without forming a distance matrix; each row's own column goes first at distance zero.
+    The candidate lists in rows ``first ..`` of the outputs carry over between calls.
     """
-    n_rows, n = gram.shape
+    n_rows, n_columns = gram.shape
     k = out_idx.shape[1]
     n_chunks = min(N_CHUNKS, n_rows)
     for chunk in prange(n_chunks):
         for r in range(chunk * n_rows // n_chunks, (chunk + 1) * n_rows // n_chunks):
             best_d = out_sq[first + r]
             best_i = out_idx[first + r]
-            best_d[:] = np.inf
-            best_i[:] = n
             own = chosen[r]
             base = norms[own]
             row = gram[r]
-            for j in range(n):
+            for c in range(n_columns):
+                j = first_column + c
                 if j == own:
                     d = -1.0
                 else:
                     # The expansion can dip just below zero for near-identical rows.
-                    d = max(base + norms[j] - 2.0 * row[j], 0.0)
+                    d = max(base + norms[j] - 2.0 * row[c], 0.0)
                 if d > best_d[k - 1] or (d == best_d[k - 1] and j > best_i[k - 1]):
                     continue
                 slot = k - 1
@@ -81,15 +87,15 @@ def nearest_neighbours(x: np.ndarray, k: int, rows: np.ndarray | None = None) ->
     n = x.shape[0]
     rows = np.arange(n, dtype=np.int64) if rows is None else rows.astype(np.int64)
     norms = np.einsum("ij,ij->i", x, x)
-    idx = np.empty((rows.size, k), dtype=np.int64)
-    sq = np.empty((rows.size, k), dtype=np.float64)
+    idx = np.full((rows.size, k), n, dtype=np.int64)
+    sq = np.full((rows.size, k), np.inf, dtype=np.float64)
     block = max(1, _BLOCK_ENTRIES // max(n, 1))
     gram = np.empty((min(block, rows.size), n), dtype=np.float64)
     for start in range(0, rows.size, block):
         chosen = rows[start : start + block]
         out = gram[: chosen.size]
         np.matmul(x[chosen], x.T, out=out)
-        _select_neighbours(out, chosen, norms, start, idx, sq)
+        _select_neighbours(out, chosen, 0, norms, start, idx, sq)
     sq[:, 0] = 0.0
     return idx, np.sqrt(sq)
 
@@ -105,7 +111,7 @@ def knn_with_tail(x: np.ndarray, knn: int, decay: float | None) -> tuple[np.ndar
     if decay is None:
         return nearest_neighbours(x, knn + 1)
     reach = (-math.log(THRESHOLD)) ** (1.0 / decay)
-    width = min(n, 3 * (knn + 1))
+    width = min(n, 4 * (knn + 1))
     idx, dist = nearest_neighbours(x, width)
     open_rows = np.flatnonzero(dist[:, -1] <= reach * dist[:, knn]) if width < n else np.empty(0, int)
     while open_rows.size:
@@ -257,7 +263,7 @@ def _interpolate(indptr: np.ndarray, indices: np.ndarray, data: np.ndarray, q: n
 
 def interpolate(transitions: sp.csr_matrix, values: np.ndarray, dtype: type = np.float64) -> np.ndarray:
     """Each row's transition-weighted mean of the landmarks' ``values``, written straight into ``dtype``."""
-    out = np.empty((transitions.shape[0], values.shape[1]), dtype=dtype)
+    out: np.ndarray = np.empty((transitions.shape[0], values.shape[1]), dtype=dtype)
     _interpolate(
         transitions.indptr.astype(np.int64),
         transitions.indices.astype(np.int64),

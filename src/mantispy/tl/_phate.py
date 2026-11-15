@@ -183,7 +183,7 @@ def phate(
         store_potential = n_obs <= POTENTIAL_MAX_OBS
     adata.obsm[f"X_{key_added}"] = np.asarray(embedding, dtype=np.float64)
     if store_potential:
-        if row_potential is None:
+        if transitions is not None:
             row_potential = _phate.interpolate(transitions, landmark_potential, np.float32)
         adata.obsm[f"X_{key_added}_potential"] = np.asarray(row_potential, dtype=np.float32)
     adata.obsp[f"{key_added}_connectivities"] = kernel
