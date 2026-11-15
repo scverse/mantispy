@@ -3,10 +3,13 @@
 The test dependency group pins that version, because the exact null samplers replay its random streams.
 """
 
+import logging
+
 import numpy as np
 import pandas as pd
 import pytest
 
+import mantispy as mt
 from mantispy._core import _average_precision as ap_kernel
 from mantispy._core import _map_null as map_null
 from mantispy._core import _map_permutation as map_permutation
@@ -376,6 +379,27 @@ def test_permutation_null_does_not_depend_on_where_its_keys_come_from(mode, monk
     # without tables, the keys between the drawn profiles come from panels rather than one pair at a time
     monkeypatch.setattr(map_permutation, "_PANEL_SLOTS", 1)
     np.testing.assert_array_equal(_permutation(meta, x, spec, 500, 0, multilabel_col=column)["p_value"], default)
+
+
+@pytest.mark.parametrize("ties", [False, True])
+@pytest.mark.parametrize("mode", ["replicability", "cross_plate"])
+def test_permutation_null_rank_table_draws_agree_with_the_sorted_keys(mode, ties, monkeypatch, caplog):
+    """Ranks within each profile's sorted row, duplicates and ties included, give the p-values the keys give."""
+    meta, x = _screen(seed=6, ties=ties, n_features=20)
+    calls = []
+    rank_hits = map_permutation._rank_hits
+    monkeypatch.setattr(map_permutation, "_rank_hits", lambda *args: calls.append(1) or rank_hits(*args))
+    ranked = _permutation(meta, x, MODES[mode], 500, 0)
+    assert calls == [1]
+    # a table that does not fit beside the sorted keys falls back to them, and says why
+    n_keys = len(meta) * (len(meta) - 1 if mode == "cross_plate" else len(meta) // 3 - 1)
+    monkeypatch.setattr(mt.settings, "map_table_bytes", 4 * n_keys + 2 * len(meta) ** 2 - 1)
+    with caplog.at_level(logging.INFO, logger="scverse.mantispy"):
+        keyed = _permutation(meta, x, MODES[mode], 500, 0)
+    assert calls == [1]
+    assert "mt.settings.map_table_bytes" in caplog.text
+    pd.testing.assert_frame_equal(ranked, keyed)
+    assert ranked["p_value"].nunique() > 3
 
 
 @pytest.mark.parametrize("mode", list(MODES))

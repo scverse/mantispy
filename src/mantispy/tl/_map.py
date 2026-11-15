@@ -331,7 +331,7 @@ def map(
             ``"joint"``
                 Draws the members' average precisions together, so a positive pair between two members is one random rank in both of their lists.
             ``"permutation"``
-                Moves the group's label at random among the profiles its members are ranked with, and recomputes the mAP from the observed similarities. It is the slowest of the three. It needs every profile holding a label in the scored table, so it fails on a multilabel annotation where a profile has no negative pair, and it ranks by the six named distances, not by a scipy metric. It holds at most 8 GiB of sorted similarities and 4 GiB of similarity tables, about 12 GiB in all, and refuses a screen that would need more.
+                Moves the group's label at random among the profiles its members are ranked with, and recomputes the mAP from the observed similarities. It is the slowest of the three. It needs every profile holding a label in the scored table, so it fails on a multilabel annotation where a profile has no negative pair, and it ranks by the six named distances, not by a scipy metric. It holds at most :attr:`mantispy.settings.map_table_bytes` of sorted similarities, half of the machine's memory by default, and refuses a screen that would need more.
         null_sampler: How the ``"copied"`` null is drawn.
             ``"exact"`` gives the same p-values as copairs for the same seed, so published copairs numbers reproduce.
             ``"floyd"`` is faster on large screens and draws from the same null distribution, but its p-values differ from copairs' by the random error of the draws. Keep ``"exact"`` for numbers you report.
