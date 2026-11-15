@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 
-from mantispy._core._reduce import get_matrix, group_codes
+from mantispy._core._reduce import get_matrix, group_codes, out_of_core
 from mantispy._core._stats import nanvar
 from mantispy._core.frames import as_frame
 from mantispy._core.schema import get_resolution
@@ -241,11 +241,14 @@ def qc(
             axes[1, 0].set_xlabel(group_label)
         axes[1, 0].legend(fontsize=6)
 
-    # pp.calculate_qc_metrics writes qc_variance only on request, so fall back to computing it here.
+    # pp.calculate_qc_metrics writes qc_variance only on request, so fall back to computing it from an in-memory X;
+    # a backed or lazy X is not read whole for one panel.
     if "qc_variance" in adata.var:
         variance = as_frame(adata.var)["qc_variance"].to_numpy(dtype=float)
-    else:
+    elif adata.X is not None and not out_of_core(adata):
         variance = nanvar(get_matrix(adata))
+    else:
+        variance = np.empty(0)
     variance = variance[np.isfinite(variance) & (variance > 0)]
     if variance.size:
         axes[1, 1].hist(np.log10(variance), bins=40)

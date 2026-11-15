@@ -87,6 +87,19 @@ def test_qc_draws_the_variance_panel_without_the_column(plotted):
     plt.close("all")
 
 
+def test_qc_leaves_the_variance_panel_empty_rather_than_read_a_backed_or_missing_matrix(plotted, tmp_path):
+    import anndata as ad
+
+    plotted.write_h5ad(tmp_path / "plotted.h5ad")
+    backed = ad.read_h5ad(tmp_path / "plotted.h5ad", backed="r")
+    without_x = ad.AnnData(obs=plotted.obs.copy(), var=plotted.var.copy(), uns=plotted.uns)
+    for adata in (backed, without_x):
+        assert mt.pl.qc(adata) is None
+        assert not plt.gcf().axes[3].patches
+        plt.close("all")
+    backed.file.close()
+
+
 def test_plate_one_panel_per_plate_and_rejects_unknown_color(plotted):
     # plate owns the figure over both plates, so it draws and returns None; count the panels it drew.
     assert mt.pl.plate(plotted, color=plotted.var_names[0]) is None
