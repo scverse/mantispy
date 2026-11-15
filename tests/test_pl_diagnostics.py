@@ -121,3 +121,18 @@ def test_control_drift_auto_matches_the_full_solver_embedding():
     for auto_group, full_group in zip(auto.collections, full.collections, strict=True):
         np.testing.assert_allclose(auto_group.get_offsets().data, full_group.get_offsets().data, rtol=1e-4, atol=1e-4)
     plt.close("all")
+
+
+def test_control_drift_keeps_its_components_under_a_large_float32_mean():
+    """The controls are centred before the covariance path, which in float32 would lose the variance under the mean."""
+    adata = _tall_controls()
+    exact = mt.pl.control_drift(adata, svd_solver="full", ax=plt.subplots()[1])
+    adata.X = adata.X + np.float32(1e4)
+    shifted = mt.pl.control_drift(adata, ax=plt.subplots()[1])
+    for exact_group, shifted_group in zip(exact.collections, shifted.collections, strict=True):
+        np.testing.assert_allclose(
+            np.abs(shifted_group.get_offsets().data), np.abs(exact_group.get_offsets().data), rtol=1e-2, atol=1e-2
+        )
+    with pytest.raises(TypeError, match="positional"):
+        mt.pl.control_drift(adata, "Metadata_Plate", 2, None)
+    plt.close("all")

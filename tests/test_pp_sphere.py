@@ -271,6 +271,15 @@ def test_a_string_epsilon_other_than_auto_is_rejected():
         mt.pp.sphere(adata, method="ZCA", epsilon="small")
 
 
+def test_sphere_rejects_an_unknown_svd_solver_and_a_positional_copy():
+    """A misspelled solver used to run the full SVD silently, and a positional True after batch used to overwrite X."""
+    adata = _plantable()
+    with pytest.raises(ValueError, match="svd_solver must be"):
+        mt.pp.sphere(adata, method="ZCA", svd_solver="covariance-eigh")
+    with pytest.raises(TypeError, match="positional"):
+        mt.pp.sphere(adata, "ZCA", "negcon", 1e-2, None, None, "Metadata_Perturbation", "Metadata_Plate", True)
+
+
 def test_a_float_epsilon_is_unchanged_and_records_no_sweep():
     """The float path still whitens deterministically and leaves no sweep behind it."""
     reference = mt.pp.sphere(_plantable(), method="ZCA", epsilon=1e-2, copy=True)
@@ -381,6 +390,16 @@ def test_sphere_auto_eigendecomposes_a_tall_reference_matching_full_zca_exactly(
         _tall_reference(), method="ZCA", reference="negcon", key_added="s", svd_solver="full", copy=True
     )
     np.testing.assert_allclose(np.asarray(auto.layers["s"]), np.asarray(full.layers["s"]), rtol=1e-6, atol=1e-6)
+
+
+def test_sphere_forced_covariance_eigh_pads_a_wide_reference_as_the_full_svd_does():
+    """Fewer reference rows than features leave null directions, which both solvers pad with the smallest non-zero singular value."""
+    reference = _tall_reference(n=40, n_features=20)
+    # Fifteen controls for twenty features; the treated rows reach into the directions the controls do not span.
+    reference.obs["Metadata_Control_Type"] = np.where(np.arange(40) < 15, "negcon", "trt")
+    full = mt.pp.sphere(reference.copy(), method="ZCA", reference="negcon", svd_solver="full", copy=True)
+    eigh = mt.pp.sphere(reference.copy(), method="ZCA", reference="negcon", svd_solver="covariance_eigh", copy=True)
+    np.testing.assert_allclose(np.asarray(eigh.X), np.asarray(full.X), rtol=1e-6, atol=1e-6)
 
 
 def test_sphere_auto_matches_full_pca_up_to_the_sign_of_each_component():

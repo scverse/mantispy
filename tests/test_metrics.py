@@ -374,6 +374,40 @@ def test_scib_get_results_keeps_the_public_seam_we_read():
     assert (aggregate == "Aggregate score").all()
 
 
+def test_evaluate_integration_baseline_survives_a_large_float32_mean(monkeypatch):
+    """The covariance path of the baseline PCA is centred first, so a float32 matrix far from zero keeps its components."""
+    pytest.importorskip("scib_metrics")
+    import scib_metrics.benchmark
+
+    from mantispy.metrics import _evaluate
+
+    seen = {}
+
+    class Capture:
+        def __init__(self, adata, **kwargs):
+            seen["baseline"] = adata.obsm[kwargs["pre_integrated_embedding_obsm_key"]]
+
+        def benchmark(self):
+            pass
+
+        def get_results(self, min_max_scale):
+            return pd.DataFrame()
+
+    monkeypatch.setattr(scib_metrics.benchmark, "Benchmarker", Capture)
+    adata = _scib_ready()
+    adata.X = np.random.default_rng(1).normal(size=adata.shape) * np.linspace(0.5, 3.0, adata.n_vars)
+    expected = adata.X - adata.X.mean(axis=0)
+    adata.X = (adata.X + 1e4).astype(np.float32)
+    _evaluate._benchmark(
+        adata, reps=("X_pca",), label_key="Metadata_Perturbation", batch_key="Metadata_Batch", min_max_scale=False
+    )
+
+    # The PCs of the exact centred matrix, compared through the variance each captures since a sign is free.
+    _, singular, _ = np.linalg.svd(expected, full_matrices=False)
+    captured = np.linalg.norm(seen["baseline"][:, :3], axis=0)
+    np.testing.assert_allclose(captured, singular[:3], rtol=1e-2)
+
+
 def _gene_map(n_sets=4, per_set=3, n_background=24, n_features=16, noise=0.1, seed=0):
     """One profile per gene, where the genes of a set share a direction and the rest are noise."""
     import anndata as ad
@@ -613,6 +647,8 @@ def test_evaluate_integration_baseline_solver_auto_matches_arpack(monkeypatch):
     adata = _scib_ready()
     assert pca_solver(adata.n_obs, adata.n_vars, fallback="arpack") == "covariance_eigh"
 
+    with pytest.raises(ValueError, match="svd_solver must be"):
+        mt.metrics.evaluate_integration(_scib_ready(), reps=("X_pca",), svd_solver="covariance-eigh")
     auto = mt.metrics.evaluate_integration(_scib_ready(), reps=("X_pca",), svd_solver=None)
     arpack = mt.metrics.evaluate_integration(_scib_ready(), reps=("X_pca",), svd_solver="arpack")
     np.testing.assert_allclose(

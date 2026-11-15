@@ -28,6 +28,9 @@ _MAP_TOKENS = frozenset({"map"})
 #: obsm key of the unintegrated PCA scib's PC-regression comparison reads, on mantispy's own copy.
 _UNINTEGRATED = "_mantispy_unintegrated_pca"
 
+#: The solver names scanpy's PCA understands, any of which ``svd_solver=`` may force.
+_SVD_SOLVERS = ("arpack", "auto", "covariance_eigh", "full", "randomized", "tsqr")
+
 
 def _has_scib() -> bool:
     """Whether scib-metrics, the engine behind the benchmark panel, can be imported."""
@@ -145,10 +148,15 @@ def _benchmark(
 
     # scib writes its unintegrated PCA into obsm["X_pca"], so it gets a copy holding only what it reads, and the
     # baseline is computed here the way scib computes it, under a key no representation can share.
-    slim = ad.AnnData(get_matrix(adata), obs=as_frame(adata.obs)[list(dict.fromkeys((batch_key, label_key)))].copy())
+    matrix = get_matrix(adata)
+    solver = pca_solver(matrix.shape[0], matrix.shape[1], svd_solver, fallback="arpack")
+    if solver == "covariance_eigh":
+        # The covariance path subtracts the mean only after forming the feature covariance, which in float32 loses
+        # the variance under a large mean, so the baseline is centred first; that leaves its components as they are.
+        matrix = matrix - matrix.mean(axis=0, dtype=np.float64).astype(np.result_type(matrix.dtype, np.float32))
+    slim = ad.AnnData(matrix, obs=as_frame(adata.obs)[list(dict.fromkeys((batch_key, label_key)))].copy())
     for rep in reps:
         slim.obsm[rep] = adata.obsm[rep]
-    solver = pca_solver(slim.n_obs, slim.n_vars, svd_solver, fallback="arpack")
     sc.tl.pca(slim, svd_solver=solver, mask=None, key_added=_UNINTEGRATED)
     # progress_bar=False keeps the tqdm bars out of executed notebooks and test logs.
     bm = Benchmarker(
@@ -234,7 +242,7 @@ def evaluate_integration(
         ImportError: ``metrics`` asks for a scib metric and scib-metrics is not installed.
         ValueError: The scib panel is requested with no features in ``adata.X``; the mAP is requested but
             ``label_key`` has no replicates or is confounded with ``batch_key``; or ``metrics`` names an unknown
-            metric or selects nothing runnable.
+            metric or selects nothing runnable; or ``svd_solver`` is not a scanpy solver name.
         KeyError: ``obs`` is missing ``label_key`` or ``batch_key``.
 
     Notes:
@@ -242,6 +250,8 @@ def evaluate_integration(
     """
     from mantispy.pl._evaluation import _integration_heatmap
 
+    if svd_solver is not None and svd_solver not in _SVD_SOLVERS:
+        raise ValueError(f"svd_solver must be None or one of {_SVD_SOLVERS}, got {svd_solver!r}")
     have_scib = _has_scib()
 
     reps = tuple(dict.fromkeys(reps))  # a duplicate rep would draw two identically-labelled rows

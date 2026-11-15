@@ -16,19 +16,7 @@ from mantispy._core.masks import CONTROL_CLASSES, reference_mask
 from mantispy._core.mutation import inplace_or_copy
 
 METHODS = ("ZCA", "ZCA-cor", "PCA", "PCA-cor")
-
-
-def _flip_signs(right: np.ndarray) -> np.ndarray:
-    """Give each right-singular vector a deterministic sign, so a decomposition does not flip run to run.
-
-    The sign of a singular vector is free, and a different solver may return the opposite one. Making the
-    largest-magnitude entry of every vector positive is scikit-learn's convention, so the eigendecomposition
-    path lands on the same signs the sklearn-backed sites do.
-    """
-    columns = np.argmax(np.abs(right), axis=1)
-    signs = np.sign(right[np.arange(right.shape[0]), columns])
-    signs[signs == 0] = 1.0
-    return right * signs[:, np.newaxis]
+SVD_SOLVERS = ("covariance_eigh", "full")
 
 
 def _decompose(
@@ -83,16 +71,17 @@ def _decompose(
             "Use more control wells, or reduce the feature set with mt.pp.feature_select."
         )
 
-    # A tall, narrow reference is full rank, so the null-direction padding below never applies and the small
-    # feature covariance can be eigendecomposed in place of the full matrix.
     if pca_solver(n_obs, n_vars, svd_solver, fallback="full") == "covariance_eigh":
+        from sklearn.utils.extmath import svd_flip
+
+        # The small feature covariance is eigendecomposed in place of the full matrix. The sign of each vector is
+        # free, so it is fixed by scikit-learn's convention, the one the sklearn-backed sites land on.
         eigenvalues, vectors = np.linalg.eigh(centered.T @ centered)
         singular = np.sqrt(np.clip(eigenvalues[::-1], 0.0, None))
-        right = _flip_signs(vectors[:, ::-1].T)
-        return centre, scale, singular, right, n_obs
-
-    # Only an underdetermined reference needs the null directions; full_matrices allocates an (n_obs, n_obs) factor.
-    _, singular, right = np.linalg.svd(centered, full_matrices=n_obs <= n_vars)
+        right = svd_flip(None, vectors[:, ::-1].T, u_based_decision=False)[1]
+    else:
+        # Only an underdetermined reference needs the null directions; full_matrices allocates an (n_obs, n_obs) factor.
+        _, singular, right = np.linalg.svd(centered, full_matrices=n_obs <= n_vars)
     if n_obs <= n_vars:
         singular = np.concatenate((singular[:rank], np.repeat(singular[rank - 1], n_vars - rank)))
     return centre, scale, singular, right, n_obs
@@ -289,6 +278,7 @@ def sphere(
     key_added: str | None = None,
     label: str = "Metadata_Perturbation",
     batch: str = "Metadata_Plate",
+    *,
     svd_solver: str | None = None,
     copy: bool = False,
 ) -> AnnData | None:
@@ -301,8 +291,8 @@ def sphere(
             ``"PCA"`` and ``"PCA-cor"`` return principal components, which ``var`` no longer describes, and warn about it unless ``key_added`` is set.
             The ``-cor`` variants whiten the correlation instead of the covariance, so high-variance features do not dominate.
         reference: Rows to fit on: ``"negcon"`` for the controls, ``None`` for everything, or the name of a boolean ``obs`` column.
-        epsilon: Regularization added to the singular values, or ``None`` to pick it from the data.
-            ``None`` scores each candidate by the mean of its activity and replicability mAP on the transformed profiles and keeps the argmax, starting from the jump-profiling-recipe grid and then sampling past both ends and between points when the best sits there, so the chosen value can fall outside the recipe's range.
+        epsilon: Regularization added to the singular values, or ``"auto"`` to pick it from the data.
+            ``"auto"`` scores each candidate by the mean of its activity and replicability mAP on the transformed profiles and keeps the argmax, starting from the jump-profiling-recipe grid and then sampling past both ends and between points when the best sits there, so the chosen value can fall outside the recipe's range.
             It needs the ``label`` and ``batch`` columns and a negcon reference; the search is global, so ``by`` only changes how the chosen value is applied.
             Every candidate, its score and the chosen value are written to ``uns["mantispy"]["sphere_epsilon"]``.
         by: Fit and apply separately within each group of this column, e.g. per batch.
@@ -317,10 +307,12 @@ def sphere(
         Writes ``X`` or ``layers[key_added]``.
 
     Raises:
-        ValueError: If ``method`` is unknown, ``epsilon`` is neither a float nor ``None``, ``reference`` selects no rows, a group has fewer than two reference rows, the reference holds missing or infinite values, a ``-cor`` method meets a zero-variance feature, the reference matrix is not full rank, ``epsilon="auto"`` is asked without the columns and reference the sweep needs, or every ``epsilon="auto"`` candidate scored non-finite.
+        ValueError: If ``method`` is unknown, ``epsilon`` is neither a float nor ``"auto"``, ``svd_solver`` is not ``None``, ``"covariance_eigh"`` or ``"full"``, ``reference`` selects no rows, a group has fewer than two reference rows, the reference holds missing or infinite values, a ``-cor`` method meets a zero-variance feature, the reference matrix is not full rank, ``epsilon="auto"`` is asked without the columns and reference the sweep needs, or every ``epsilon="auto"`` candidate scored non-finite.
     """
     if method not in METHODS:
         raise ValueError(f"method must be one of {METHODS}, got {method!r}")
+    if svd_solver is not None and svd_solver not in SVD_SOLVERS:
+        raise ValueError(f"svd_solver must be None or one of {SVD_SOLVERS}, got {svd_solver!r}")
     if method.startswith("PCA") and key_added is None:
         warnings.warn(
             f"{method} rotates out of the feature basis, so X holds principal components while var still names "
@@ -492,7 +484,7 @@ def _fit_tvn(
     return align, int(rotation.n_components_)
 
 
-@inplace_or_copy(expects=("object", "well", "aggregate"))
+@inplace_or_copy()
 def tvn(
     adata: AnnData,
     batch_key: str = "Metadata_Batch",
@@ -500,6 +492,7 @@ def tvn(
     use_rep: str | None = "X_pca",
     key_added: str = "X_tvn",
     epsilon: float = 0.5,
+    *,
     svd_solver: str | None = None,
     copy: bool = False,
 ) -> AnnData | None:
@@ -565,7 +558,7 @@ def tvn(
         )
 
     codes, keys = group_codes(adata, batch_key)
-    # Only the control rows are read to fit, so a lazy representation is never loaded whole.
+    # Only the control rows are read to fit, so a lazy X is never loaded whole.
     fitted = get_matrix(adata, rows=np.flatnonzero(controls), use_rep=use_rep).astype(np.float64)
     align, width = _fit_tvn(fitted, codes[controls], keys, reference, epsilon, svd_solver)
     position = {key: index for index, key in enumerate(keys)}
