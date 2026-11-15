@@ -21,5 +21,4 @@ Add `consistency` on the active perturbations to ask whether they group by mecha
 Use `hit_calling` when the deliverable is a hit list, and `edistance` when the deliverable is a distance.
 Report `percent_replicating` only for comparison with earlier work.
 
-`tl.map` needs the optional copairs extra.
 See {doc}`screen_quality` for the readouts applied to a screen, and the {func}`~mantispy.tl.map` reference for the pair definitions behind each mode.

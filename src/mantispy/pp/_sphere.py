@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib.util
 import math
 import warnings
 from collections.abc import Callable
@@ -183,13 +182,6 @@ def _select_epsilon(
 
     The jump-profiling-recipe's fixed grid gives a reproducible base; each candidate is fitted on the reference and scored by the mean of its activity and replicability mAP. The search then samples past both ends of the grid and between points when the best sits there, so the chosen value can fall outside the recipe's range. The finite argmax, the full set of candidates and their scores are written to ``uns["mantispy"]["sphere_epsilon"]``.
     """
-    # Fail here with a friendly message when copairs is absent; the scoring imports it for real.
-    if importlib.util.find_spec("copairs") is None:  # pragma: no cover - exercised only without the extra
-        raise ImportError(
-            "sphere(epsilon='auto') scores candidates with copairs, an optional extra. "
-            "Install it with pip install 'mantispy[map]', or pass a float epsilon."
-        )
-
     from mantispy._core.frames import as_frame
     from mantispy.tl._map import REFERENCE_COLUMN, _resolve_mode, _score_map
 
@@ -311,7 +303,7 @@ def sphere(
         reference: Rows to fit on: ``"negcon"`` for the controls, ``None`` for everything, or the name of a boolean ``obs`` column.
         epsilon: Regularization added to the singular values, or ``None`` to pick it from the data.
             ``None`` scores each candidate by the mean of its activity and replicability mAP on the transformed profiles and keeps the argmax, starting from the jump-profiling-recipe grid and then sampling past both ends and between points when the best sits there, so the chosen value can fall outside the recipe's range.
-            It needs copairs, the ``label`` and ``batch`` columns and a negcon reference; the search is global, so ``by`` only changes how the chosen value is applied.
+            It needs the ``label`` and ``batch`` columns and a negcon reference; the search is global, so ``by`` only changes how the chosen value is applied.
             Every candidate, its score and the chosen value are written to ``uns["mantispy"]["sphere_epsilon"]``.
         by: Fit and apply separately within each group of this column, e.g. per batch.
         key_added: Write to ``layers[key_added]`` instead of overwriting ``X``.
@@ -325,7 +317,6 @@ def sphere(
         Writes ``X`` or ``layers[key_added]``.
 
     Raises:
-        ImportError: ``epsilon="auto"`` was asked but copairs, the extra the sweep scores with, is not installed.
         ValueError: If ``method`` is unknown, ``epsilon`` is neither a float nor ``None``, ``reference`` selects no rows, a group has fewer than two reference rows, the reference holds missing or infinite values, a ``-cor`` method meets a zero-variance feature, the reference matrix is not full rank, ``epsilon="auto"`` is asked without the columns and reference the sweep needs, or every ``epsilon="auto"`` candidate scored non-finite.
     """
     if method not in METHODS:

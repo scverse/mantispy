@@ -36,15 +36,6 @@ uv add 'mantispy[spatial]'  # in a uv project
 pip install 'mantispy[spatial]'  # or with pip
 ```
 
-### Mean average precision
-
-{func}`~mantispy.tl.map` runs copairs, an optional extra:
-
-```console
-uv add 'mantispy[map]'  # in a uv project
-pip install 'mantispy[map]'  # or with pip
-```
-
 ### Integration metrics
 
 {func}`~mantispy.metrics.evaluate_integration` delegates to scib-metrics:

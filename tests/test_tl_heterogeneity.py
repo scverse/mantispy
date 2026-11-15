@@ -360,7 +360,6 @@ def test_a_well_with_no_assigned_cell_is_left_out(clustered):
 
     assert wells[0] not in set(composition.obs["Metadata_Well"])
     assert not np.isnan(np.asarray(composition.X)).any(), "the result stays mappable"
-    pytest.importorskip("copairs")  # tl.map below; copairs declares requires-python <3.13
     mt.tl.map(composition, mode="activity", null_size=50)
 
 

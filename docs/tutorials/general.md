@@ -12,6 +12,7 @@ profiles/normalize_and_select
 profiles/artifacts
 profiles/screen_quality
 profiles/choosing_a_readout
+profiles/map_and_copairs
 data/cellprofiler
 data/profiles
 data/embeddings

@@ -34,7 +34,7 @@ def warn_resolution(adata: AnnData, expected: str | tuple[str, ...]) -> None:
         )
 
 
-def inplace_or_copy(expects: str | tuple[str, ...] | None = None) -> Callable[[F], F]:
+def inplace_or_copy(expects: str | tuple[str, ...] | None = None, record_by_key: bool = False) -> Callable[[F], F]:
     """Give a function the standard mantispy mutation contract.
 
     The wrapped function receives the object to mutate and mutates it.
@@ -43,6 +43,8 @@ def inplace_or_copy(expects: str | tuple[str, ...] | None = None) -> Callable[[F
     * ``copy=True`` hands the function a copy and returns it; ``copy=False`` mutates the caller's object and returns ``None``.
     * The call's parameters are recorded into ``uns["mantispy"]["params"]``, read from the signature rather than a hand-written dict, so provenance cannot drift from the arguments the function accepts.
     * ``expects`` optionally emits the advisory resolution warning.
+    * ``record_by_key`` records the parameters under ``"<function>:<key_added>"``, for a function whose result is
+      stored under ``key_added``, so calls that store their results under different keys keep their own parameters.
 
     Only for functions that mutate in place.
     Functions that return a new object (``tl.aggregate``, ``pp.subset_features``) do not use it.
@@ -105,7 +107,7 @@ def inplace_or_copy(expects: str | tuple[str, ...] | None = None) -> Callable[[F
                 raise
 
             written = params.get("key_added")
-            name = f"{func.__name__}:{written}" if writes_layer and written else func.__name__
+            name = f"{func.__name__}:{written}" if (writes_layer or record_by_key) and written else func.__name__
             call_params = {**params, **extra}
             record_params(target, name, call_params)
             return target if copy else None

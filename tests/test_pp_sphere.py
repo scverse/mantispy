@@ -126,7 +126,6 @@ def _combined_map(adata):
 
 def test_auto_starts_from_the_recipe_grid_and_is_seed_deterministic():
     """The search still scores the recipe's fixed grid, reproduced from the same seed, and is deterministic."""
-    pytest.importorskip("copairs")
     adata = _plantable()
     mt.pp.sphere(adata, method="ZCA", epsilon="auto")
 
@@ -144,7 +143,6 @@ def test_auto_starts_from_the_recipe_grid_and_is_seed_deterministic():
 
 def test_auto_probes_both_epsilon_regimes():
     """Opportunistic sampling always steps past both the low and the high end of the recipe grid."""
-    pytest.importorskip("copairs")
     adata = _plantable()
     mt.pp.sphere(adata, method="ZCA", epsilon="auto")
 
@@ -156,7 +154,6 @@ def test_auto_probes_both_epsilon_regimes():
 
 def test_auto_records_chosen_value_grid_and_scores():
     """uns holds the chosen float alongside every candidate and its score, sorted by epsilon."""
-    pytest.importorskip("copairs")
     adata = _plantable()
     mt.pp.sphere(adata, method="ZCA", epsilon="auto")
 
@@ -173,7 +170,6 @@ def test_auto_records_chosen_value_grid_and_scores():
 
 def test_auto_beats_the_fixed_default_and_picks_an_interior_candidate():
     """The planted screen has an interior optimum, so the sweep beats both grid edges and the below-grid default."""
-    pytest.importorskip("copairs")
     adata = _plantable()
     auto = mt.pp.sphere(adata, method="ZCA", epsilon="auto", copy=True)
 
@@ -234,7 +230,6 @@ def test_extend_epsilon_refines_an_interior_optimum():
 
 def test_auto_without_the_columns_or_reference_it_needs_names_the_gap():
     """Asking for auto without the replicate grouping or a negcon reference raises, naming each gap."""
-    pytest.importorskip("copairs")
     adata = _plantable()
 
     missing_label = adata.copy()
@@ -250,7 +245,6 @@ def test_auto_without_the_columns_or_reference_it_needs_names_the_gap():
 
 def test_auto_without_replicate_pairs_raises():
     """A screen where every perturbation is a singleton cannot be scored, so the guard fires."""
-    pytest.importorskip("copairs")
     adata = _plantable()
     treated = ~adata.obs["Metadata_Control"].to_numpy(dtype=bool)
     labels = adata.obs["Metadata_Perturbation"].to_numpy().copy()
@@ -263,7 +257,6 @@ def test_auto_without_replicate_pairs_raises():
 
 def test_auto_with_no_treated_wells_raises():
     """An all-controls object leaves nothing to score, and an empty count must not read nan < 2 as False."""
-    pytest.importorskip("copairs")
     adata = _plantable()
     adata.obs["Metadata_Control"] = np.ones(adata.n_obs, dtype=bool)
     adata.obs["Metadata_Control_Type"] = "negcon"
@@ -352,7 +345,6 @@ def test_tvn_says_when_a_batch_cannot_scale_a_dimension(caplog):
 
 
 def test_auto_epsilon_honours_label_and_batch():
-    pytest.importorskip("copairs")
     adata = _plantable()
     adata.obs["Metadata_Gene"] = adata.obs.pop("Metadata_Perturbation")
     adata.obs["Metadata_Batch"] = adata.obs.pop("Metadata_Plate")
