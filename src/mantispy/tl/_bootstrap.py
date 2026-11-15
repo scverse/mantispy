@@ -895,6 +895,10 @@ def _gene_pvalues(
     grow = np.empty(n_nulls, dtype=np.int64)
     null_order, null_start = _deal(null_caps.astype(np.float64), n_slots)
     gene_cost = np.empty(n_genes, dtype=np.float64)
+    vals = np.empty(0, dtype=np.float64)  # the atom values of every used null, back to back
+    cum = np.empty(0, dtype=np.float64)  # running mass from each list's start
+    rvals = np.empty(0, dtype=np.float64)  # each list negated and reversed, for the < side
+    rcum = np.empty(0, dtype=np.float64)
     for j in range(n_features):
         row = pool_sorted[j]
         nn_row = sub_nn[j]
@@ -906,10 +910,11 @@ def _gene_pvalues(
         # (every null, at the first feature) is built again once the store has grown to hold it
         for u in range(n_nulls):
             offs[u + 1] = offs[u] + (reserve[u] if used[u] else 0)
-        vals = np.empty(offs[n_nulls], dtype=np.float64)
-        cum = np.empty(offs[n_nulls], dtype=np.float64)  # running mass from the list's start
-        rvals = np.empty(offs[n_nulls], dtype=np.float64)  # the list negated and reversed, for the < side
-        rcum = np.empty(offs[n_nulls], dtype=np.float64)
+        if offs[n_nulls] > vals.size:  # the store is kept across features, so its pages are touched once
+            vals = np.empty(offs[n_nulls], dtype=np.float64)
+            cum = np.empty(offs[n_nulls], dtype=np.float64)
+            rvals = np.empty(offs[n_nulls], dtype=np.float64)
+            rcum = np.empty(offs[n_nulls], dtype=np.float64)
         for t in prange(n_slots):
             for ui in range(null_start[t], null_start[t + 1]):
                 u = null_order[ui]
@@ -930,7 +935,7 @@ def _gene_pvalues(
                 n_grow += 1
         if n_grow > 0:
             for i in range(n_grow):
-                reserve[grow[i]] = counts[grow[i]]
+                reserve[grow[i]] = counts[grow[i]] + counts[grow[i]] // 4  # room for the next features' nulls
             offs2 = np.zeros(n_nulls + 1, dtype=np.int64)
             for u in range(n_nulls):
                 offs2[u + 1] = offs2[u] + (reserve[u] if used[u] else 0)
