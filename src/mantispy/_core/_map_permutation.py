@@ -49,16 +49,14 @@ from mantispy._core._average_precision import (
 )
 from mantispy._core._map_null import mix, tie_thresholds, uniform
 from mantispy._core._numba import N_CHUNKS, group_offsets
+from mantispy._core.logging import get_logger
+from mantispy._settings import settings
 
 if TYPE_CHECKING:
     from builtins import range as prange
 else:
     from numba import prange
 
-#: Bytes of sorted keys the null may hold; beyond it the call refuses and names the nulls that need none.
-STORE_BUDGET = 2**33
-#: Bytes of the rank table (two per pair of pool profiles) the null may hold; beyond it the draws read the sorted keys.
-RANK_BUDGET = 2**34
 #: A block ranks against its whole ``neg_sameby`` bucket, which every group in the bucket shares, unless the bucket's
 #: profiles that are neither its members nor its references outnumber its pool this many times over.
 _MAX_EXPLICIT = 4
@@ -660,7 +658,8 @@ def permutation_pvalues(
     Raises:
         ValueError: A group's positives leave it, a negative joins two of its members, members of one group rank
             against overlapping but different references, a multilabel group does not hold every profile of its
-            label, the distance has no compiled similarity, or the sorted keys would exceed :data:`STORE_BUDGET`.
+            label, the distance has no compiled similarity, or the sorted keys would exceed
+            :attr:`~mantispy.settings.map_table_bytes`.
     """
     if distance not in BUILTIN:
         raise ValueError(f"null='permutation' supports distance in {sorted(BUILTIN)}, got {distance!r}")
@@ -769,7 +768,13 @@ def _rank_table(lay, plan, store_ptr, store, entry_row, entry_sub_row, x, scale,
     used[plan.entry_profile] = True
     prof = np.flatnonzero(used)
     m = len(prof)
-    if 2 * m * m > RANK_BUDGET:
+    need, held, budget = 2 * m * m, 4 * len(store), settings.map_table_bytes
+    if need + held > budget:
+        get_logger().info(
+            "map: the permutation null's rank table would need %.1f GiB beside %.1f GiB of sorted similarities, "
+            "above mt.settings.map_table_bytes (%.1f GiB), so its draws search the sorted similarities",
+            need / 2**30, held / 2**30, budget / 2**30,
+        )  # fmt: skip
         return None
     entry_rank = (np.cumsum(used) - 1)[plan.entry_profile]
     row = np.empty(m, np.int64)
@@ -987,10 +992,10 @@ def _store(lay, result, plan, x, scale, metric, leaf_lo, leaf_n, ops, depth, ord
     sizes[rows_f] = hi_f - lo_f - inside
     sizes[~fixed] = result.n_neg[owner[~fixed]]
     store_ptr = _ptr(sizes)
-    if 4 * int(store_ptr[-1]) > STORE_BUDGET:
+    if 4 * int(store_ptr[-1]) > settings.map_table_bytes:
         _refuse(
             f"The permutation null would hold {4 * int(store_ptr[-1]) / 2**30:.1f} GiB of sorted similarities, "
-            f"above its {STORE_BUDGET // 2**30} GiB budget."
+            f"above mt.settings.map_table_bytes ({settings.map_table_bytes / 2**30:.1f} GiB)."
         )
     store = np.empty(int(store_ptr[-1]), np.float32)
     if len(rows_f):
