@@ -8,6 +8,7 @@ These tutorials aggregate reagents to genes and read the screen as clusters of g
 
 genetics/interpreting_a_screen
 genetics/hit_calling_methods
+genetics/coming_from_brieflow
 ```
 
 ## Worked examples
