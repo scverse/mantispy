@@ -52,6 +52,7 @@ def calculate_qc_metrics(
     border_margin: int = 10,
     max_nan_fraction: float = 0.5,
     area_feature: str | None = None,
+    *,
     qc_metrics: Sequence[str] = ("nan", "border", "area_outlier"),
     copy: bool = False,
 ) -> AnnData | None:
@@ -73,8 +74,9 @@ def calculate_qc_metrics(
 
     Returns:
         ``None``, or the modified copy.
-        Writes the columns of each metric in `qc_metrics`, and ``obs["qc_fail"]``.
+        Writes the columns of each metric in `qc_metrics`, and ``obs["qc_fail"]`` when `qc_metrics` names a per-cell flag (``"nan"``, ``"border"`` or ``"area_outlier"``).
         Every ``qc_*`` boolean is ``True`` for a problem, matching the ecosystem convention; ``qc_fail`` is the union of the computed flags and of a missing fraction above `max_nan_fraction`, and is the flag :func:`filter_cells` reads.
+        A call with only the per-feature ``"variance"`` and ``"n_unique"`` leaves an existing ``qc_fail`` as it is.
         When no area column is found and `area_feature` is not given, ``qc_area_outlier`` is skipped (left all ``False``) with a warning and the other metrics are still computed.
 
     Raises:
@@ -114,7 +116,9 @@ def calculate_qc_metrics(
     if "n_unique" in qc_metrics:
         adata.var["qc_n_unique"] = _n_unique(X, missing if "nan" in qc_metrics else np.isnan(X))
 
-    adata.obs["qc_fail"] = fail
+    # The per-feature metrics flag no cell, so a call with only those keeps the qc_fail an earlier call wrote.
+    if {"nan", "border", "area_outlier"} & set(qc_metrics):
+        adata.obs["qc_fail"] = fail
     return None
 
 
