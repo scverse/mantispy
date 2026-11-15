@@ -12,6 +12,7 @@ import pandas as pd
 
 from mantispy._core._reduce import get_matrix, group_codes
 from mantispy._core.frames import as_frame
+from mantispy._core.logging import get_logger
 from mantispy.pl._common import axes as _axes
 from mantispy.pl._common import maybe_interactive as _maybe_interactive
 from mantispy.pl._common import obs_or_feature as _obs_or_feature
@@ -25,6 +26,10 @@ if TYPE_CHECKING:
     from matplotlib.axes import Axes
 
 PHASE_COLOURS = {"G1": "tab:blue", "S": "tab:grey", "G2M": "tab:red", "sub-2N": "black", "above-4N": "tab:purple"}
+
+#: A category with fewer cells than this in a panel gets no density there, since a few cells give a spike that is
+#: not a density and would set the scale every density shares.
+_MIN_DENSITY_CELLS = 20
 
 
 def cluster_composition(
@@ -81,7 +86,7 @@ def cell_cycle(
     key: str = "cell_cycle_phase",
     layer: str | None = None,
     ncols: int | None = None,
-) -> np.ndarray | None:
+) -> None:
     """DNA per group colored by phase.
 
     One panel per group of ``by`` shows the DNA distribution colored by phase. Two separated peaks with the phases
@@ -138,7 +143,7 @@ def cell_cycle(
     ]
     axes[0].legend(handles=handles, fontsize=6)
     figure.tight_layout()
-    return _returned(np.array(axes), owned=True)
+    return None
 
 
 def _draw_positions(quantiles: np.ndarray, levels: np.ndarray, seed: int = 0) -> np.ndarray:
@@ -265,6 +270,7 @@ def _palette(shown: list[str], palette: Mapping[str, Any] | Sequence[Any] | str 
     does, and grey past the largest.
     """
     import matplotlib.pyplot as plt
+    from matplotlib.colors import to_hex
     from scanpy.plotting.legacy.palettes import default_20, default_28, default_102
 
     if isinstance(palette, str):
@@ -275,9 +281,11 @@ def _palette(shown: list[str], palette: Mapping[str, Any] | Sequence[Any] | str 
     given = palette or {}
     unnamed = sum(not (given.get(name) or PHASE_COLOURS.get(name)) for name in shown)
     others: Any = cycle(plt.get_cmap("tab10")([1, 2, 5, 6, 8, 9]))
+    phase_colours = {to_hex(colour) for colour in PHASE_COLOURS.values()}
     for scheme in (default_20, default_28, default_102):
-        if 6 < unnamed <= len(scheme):
-            others = iter(scheme)
+        free = [colour for colour in scheme if to_hex(colour) not in phase_colours]
+        if 6 < unnamed <= len(free):
+            others = iter(free)
             break
     else:
         if unnamed > len(default_102):
@@ -333,7 +341,7 @@ def cell_cycle_clock(
     reads from the ring's height. ``kind="ridge"`` draws the same densities as rows over a straight cycle axis, which
     stays readable for many groups. Densities share one scale within a panel and across panels with the same number of
     rings or rows, and each density reads against its own dashed line, which marks the height of cells spread evenly
-    over the cycle. Within a prior arc the shape of a density follows the prior, so compare how much of each group sits
+    over the cycle. A category with too few cells in a panel to give a density gets none there, with a warning. Within a prior arc the shape of a density follows the prior, so compare how much of each group sits
     in an arc rather than its shape there.
 
     The colour and legend parameters follow :func:`scanpy.pl.embedding`.
@@ -378,7 +386,7 @@ def cell_cycle_clock(
             cycle.
         reference: A category, such as the controls, whose density becomes the dashed line of every ring and row
             instead of the even spread, so a group's arrest shows where it rises above the reference. It is a
-            category of ``color``, drawn first, or of ``groupby`` when ``color`` is ``None``. A panel without
+            category of ``color``, drawn first, or of ``groupby`` when ``color`` is ``None``. A panel with too few
             reference cells compares to the reference cells of every panel.
         kwargs: Passed to the scatter, overriding its defaults; ``norm`` sets a numeric scale.
 
@@ -390,8 +398,8 @@ def cell_cycle_clock(
         ValueError: ``color`` is both an ``obs`` column and a feature, ``groups`` is given without a categorical
             ``color``, a name in ``groups`` is not a category of ``color``, ``ax`` is given with ``groupby``,
             ``legend_loc`` is not one of its options, ``vmin`` or ``vmax`` is a string that is not a percentile,
-            ``kind`` is not one of its options, ``kind`` draws densities of a numeric ``color``, or ``reference`` is
-            not a category of ``color`` or ``groupby``.
+            ``kind`` is not one of its options, ``kind`` draws densities of a numeric ``color``, ``bandwidth`` is not
+            positive, or ``reference`` is not a category of ``color`` or ``groupby``.
     """
     import matplotlib.pyplot as plt
     from matplotlib.colors import to_rgba_array
@@ -404,7 +412,7 @@ def cell_cycle_clock(
         raise ValueError(f"legend_loc must be 'right margin', 'on data' or None, not {legend_loc!r}")
     if kind not in ("cells", "rings", "ridge"):
         raise ValueError(f"kind must be 'cells', 'rings' or 'ridge', not {kind!r}")
-    if kind != "cells" and bandwidth <= 0:
+    if kind != "cells" and not bandwidth > 0:
         raise ValueError(f"bandwidth must be > 0, not {bandwidth}")
     obs = as_frame(adata.obs)
     placed, position, edges = _placed(adata, key, seed)
@@ -668,20 +676,30 @@ def _draw_clock_densities(
     else:
         members = {name: placed & (text == name) for name in shown}
 
-    # Each panel draws only the categories it has cells of, so its rings or rows share the space between them.
+    # Each panel draws only the categories it has enough cells of, so its rings or rows share the space between them.
     masks = [codes == index for index in range(len(keys))]
+    counts = [{name: int((rows & mask).sum()) for name, rows in members.items()} for mask in masks]
     curves = [
         {
-            name: _circular_density(position[panel], bandwidth)
+            name: _circular_density(position[rows & masks[index]], bandwidth)
             for name, rows in members.items()
-            if (panel := rows & masks[index]).any()
+            if counts[index][name] >= _MIN_DENSITY_CELLS
         }
         for index in range(len(keys))
     ]
+    sparse = sorted({name for panel in counts for name, count in panel.items() if 0 < count < _MIN_DENSITY_CELLS})
+    if sparse:
+        get_logger().warning(
+            "cell_cycle_clock: categories with fewer than %d cells in a panel get no density there: %s",
+            _MIN_DENSITY_CELLS,
+            ", ".join(sparse[:10]),
+        )
     references = [
         None
         if compared is None
-        else _circular_density(position[sel if (sel := compared & masks[index]).any() else compared], bandwidth)
+        else _circular_density(
+            position[sel if (sel := compared & masks[index]).sum() >= _MIN_DENSITY_CELLS else compared], bandwidth
+        )
         for index in range(len(keys))
     ]
     all_curves = [curve for panel in curves for curve in panel.values()]
@@ -795,7 +813,11 @@ def _draw_clock_densities(
         if groupby is not None:
             axes[slot].set_title(str(keys[index]), fontsize=8, pad=10 if kind == "rings" else 4)
     if kind == "rings" and color is not None and legend_loc == "right margin":
-        patches = [Patch(color=colours_of[name], alpha=0.6, label=name) for name in members]
+        drawn = {name for panel in curves for name in panel}
+        patches = [
+            Patch(color=colours_of[name], alpha=0.6, label=name if name in drawn else f"{name} (too few cells)")
+            for name in members
+        ]
         _margin_legend(axes[0], groupby is not None, patches, f"{label}, outer to inner", legend_fontsize)
     return _returned(axes[0]) if groupby is None else None
 
