@@ -136,13 +136,48 @@ def _median_gt(v: np.ndarray, lo: int, n: int, m: int, x: float) -> float:
 
 @njit(cache=True, nogil=True)
 def _median_lt(v: np.ndarray, lo: int, n: int, m: int, x: float) -> float:
-    """``P(median of m draws from v[lo:lo+n] (sorted asc, no nan) < x)``.
-
-    Every median is a float64, so it is below ``x`` exactly when it is not above the float just below ``x``.
-    """
+    """``P(median of m draws from v[lo:lo+n] (sorted asc, no nan) < x)``. Mirror of :func:`_median_gt`."""
     if n == 0:
         return 0.0
-    return 1.0 - _median_gt(v, lo, n, m, np.nextafter(x, -np.inf))
+    hi = np.searchsorted(v[lo : lo + n], x, side="left")  # count < x
+    f_lt = hi / n
+    t = m // 2
+    if m % 2 == 1:
+        return 1.0 - _binom_cdf(t, m, f_lt)  # P(#{<x} >= t+1)
+    out = 1.0 - _binom_cdf(t, m, f_lt)  # both central order stats < x
+    nlow = hi
+    nge = n - hi
+    if nlow == 0 or nge == 0:
+        return out
+    pk = _binom_cdf(t, m, f_lt) - _binom_cdf(t - 1, m, f_lt)  # P(exactly t draws < x)
+    if pk <= 0.0:
+        return out
+    contrib = 0.0
+    i = lo + hi
+    end = lo + n
+    while i < end:
+        b = np.float64(v[i])
+        j = i
+        while j < end and v[j] == b:
+            j += 1
+        c_ge = end - i
+        c_gt = end - j
+        pmin = (c_ge / nge) ** t - (c_gt / nge) ** t  # P(min of t high draws == b)
+        if pmin > 0.0:
+            # largest low value a with the actual midpoint (a+b)/2 < x
+            left = int(lo)
+            right = int(lo + hi)
+            while left < right:
+                mid = (left + right) // 2
+                if (v[mid] + b) / 2.0 < x:
+                    left = mid + 1
+                else:
+                    right = mid
+            take = left - lo
+            if take > 0:
+                contrib += pmin * (take / nlow) ** t
+        i = j
+    return out + pk * contrib
 
 
 @njit(cache=True, nogil=True)
@@ -488,63 +523,62 @@ def _build_construct(
 
 
 @njit(cache=True, nogil=True)
-def _step(src, dst, lo, hi, nlo, nhi, stay, up, down):
-    """Add one guide to the distribution of ``#high - #low``, from ``src[lo:hi+1]`` into ``dst[nlo:nhi+1]``.
+def _step(src, dst, nlo, nhi, stay, up, down):
+    """Add one guide to the distribution of ``#high - #low``, from ``src`` into ``dst[nlo:nhi+1]``.
 
-    The guide is nan with probability ``stay``, high with ``up`` and low with ``down``; entries outside
-    ``[nlo, nhi]`` are dropped, which prunes counts that can no longer reach the one asked for.
+    The guide is nan with probability ``stay``, high with ``up`` and low with ``down``. Counts outside
+    ``[nlo, nhi]`` are dropped, which prunes those that can no longer reach the one asked for; ``src`` is
+    zero for two entries past its own range, and ``dst`` is left so.
     """
     for d in range(nlo, nhi + 1):
-        dst[d] = 0.0
-    for d in range(max(lo, nlo), min(hi, nhi) + 1):
-        dst[d] += src[d] * stay
-    for d in range(max(lo, nlo - 1), min(hi, nhi - 1) + 1):
-        dst[d + 1] += src[d] * up
-    for d in range(max(lo, nlo + 1), min(hi, nhi + 1) + 1):
-        dst[d - 1] += src[d] * down
+        dst[d] = src[d] * stay + src[d - 1] * up + src[d + 1] * down
+    dst[nlo - 2] = dst[nlo - 1] = dst[nhi + 1] = dst[nhi + 2] = 0.0
+
+
+@njit(cache=True, nogil=True)
+def _start(row, o):
+    """A count distribution at zero, ``row[o] = 1``, zero-padded as :func:`_step` expects."""
+    row[o - 2] = row[o - 1] = row[o + 1] = row[o + 2] = 0.0
+    row[o] = 1.0
 
 
 @njit(cache=True, nogil=True)
 def _count_above(k, up, down, stay, dp):
     """``P(#high > #low)`` over ``k`` independent guides, by a dynamic program over the guides.
 
-    The distribution of ``#high - #low`` sits in ``dp[0]``/``dp[1]`` at offset ``k``.
+    The distribution of ``#high - #low`` sits in ``dp[0]``/``dp[1]``, centred at ``k + 2``.
     """
+    o = k + 2
     a, b = dp[0], dp[1]
-    a[k] = 1.0
-    lo = hi = k
+    _start(a, o)
     for c in range(k):
-        _step(a, b, lo, hi, lo - 1, hi + 1, stay[c], up[c], down[c])
-        lo -= 1
-        hi += 1
+        _step(a, b, o - c - 1, o + c + 1, stay[c], up[c], down[c])
         a, b = b, a
     total = 0.0
-    for d in range(k + 1, hi + 1):
+    for d in range(o + 1, o + k + 1):
         total += a[d]
     return total
 
 
 @njit(cache=True, nogil=True)
 def _count_at(k, skip, target, up, down, stay, dp):
-    """``P(#high - #low == target)`` over the ``k`` guides other than ``skip``."""
-    if abs(target) > k - 1:
+    """``P(#high - #low == target)`` over the ``k`` guides other than ``skip`` (``-1`` for none)."""
+    rem = k - 1 if skip >= 0 else k
+    if abs(target) > rem:
         return 0.0
+    o = k + 2
     a, b = dp[0], dp[1]
-    a[k] = 1.0
-    lo = hi = k
-    rem = k - 1
+    _start(a, o)
+    lo = hi = o
     for c in range(k):
         if c == skip:
             continue
         rem -= 1
-        nlo = max(lo - 1, k + target - rem)
-        nhi = min(hi + 1, k + target + rem)
-        if nlo > nhi:
-            return 0.0
-        _step(a, b, lo, hi, nlo, nhi, stay[c], up[c], down[c])
-        lo, hi = nlo, nhi
+        lo = max(lo - 1, o + target - rem)
+        hi = min(hi + 1, o + target + rem)
+        _step(a, b, lo, hi, stay[c], up[c], down[c])
         a, b = b, a
-    return a[k + target]
+    return a[o + target]
 
 
 @njit(cache=True, nogil=True)
@@ -552,37 +586,30 @@ def _count_tied_at(k, hit, low_lt, low_eq, up, stay, dp):
     """``P(#high == #low and some low guide sits at the current atom)`` over ``k`` guides.
 
     A low guide is below the atom with probability ``low_lt`` and at it with ``low_eq`` (zero unless
-    ``hit``); a flag in ``dp[0..1]`` (not yet) and ``dp[2..3]`` (some guide at the atom) tracks which.
+    ``hit``); ``dp[0..1]`` hold the counts with no low guide at the atom yet, ``dp[2..3]`` those with one.
     """
+    o = k + 2
     a0, b0, a1, b1 = dp[0], dp[1], dp[2], dp[3]
-    a0[k] = 1.0
-    a1[k] = 0.0
-    lo = hi = k
+    _start(a0, o)
+    _start(a1, o)
+    a1[o] = 0.0
+    lo = hi = o
     for c in range(k):
         rem = k - c - 1
-        nlo = max(lo - 1, k - rem)
-        nhi = min(hi + 1, k + rem)
+        lo = max(lo - 1, o - rem)
+        hi = min(hi + 1, o + rem)
+        st = stay[c]
+        hi_w = up[c]
         lt = low_lt[c]
         eq = low_eq[c] if hit[c] else 0.0
-        for d in range(nlo, nhi + 1):
-            b0[d] = 0.0
-            b1[d] = 0.0
         for d in range(lo, hi + 1):
-            x0 = a0[d]
-            x1 = a1[d]
-            if nlo <= d <= nhi:
-                b0[d] += x0 * stay[c]
-                b1[d] += x1 * stay[c]
-            if nlo <= d + 1 <= nhi:
-                b0[d + 1] += x0 * up[c]
-                b1[d + 1] += x1 * up[c]
-            if nlo <= d - 1 <= nhi:
-                b0[d - 1] += x0 * lt
-                b1[d - 1] += x0 * eq + x1 * (lt + eq)
-        lo, hi = nlo, nhi
+            b0[d] = a0[d] * st + a0[d - 1] * hi_w + a0[d + 1] * lt
+            b1[d] = a1[d] * st + a1[d - 1] * hi_w + a1[d + 1] * (lt + eq) + a0[d + 1] * eq
+        b0[lo - 2] = b0[lo - 1] = b0[hi + 1] = b0[hi + 2] = 0.0
+        b1[lo - 2] = b1[lo - 1] = b1[hi + 1] = b1[hi + 2] = 0.0
         a0, b0 = b0, a0
         a1, b1 = b1, a1
-    return a1[k]
+    return a1[o]
 
 
 @njit(cache=True, nogil=True)
@@ -596,12 +623,10 @@ def _boundary(k, lo_c, hi_c, vals, cum, obs, plow, phigh, pnan, fs, ints, dp):
     only the shape within each side. One ascending sweep over the atoms at most ``obs`` takes each as the
     largest low value in turn; per atom, a dynamic program over the guides sums every split into low,
     high and nan guides at once, with the high ones restricted to the atoms whose float midpoint with it
-    exceeds ``obs``. ``fs`` (7 rows), ``ints`` (6 rows) and ``dp`` (4 rows of ``2 k + 1``) are scratch.
+    exceeds ``obs``. ``fs`` (7 rows), ``ints`` (6 rows) and ``dp`` (4 rows of ``2 k + 5``) are scratch.
     """
     inv_low, inv_high, top, wl, wh, wlt, weq = fs[0], fs[1], fs[2], fs[3], fs[4], fs[5], fs[6]
     le_end, gt_start, lptr, cut, hit, hits = ints[0], ints[1], ints[2], ints[3], ints[4], ints[5]
-    any_low = False
-    any_high = False
     for a in range(k):
         lo = lo_c[a]
         hi = hi_c[a]
@@ -610,20 +635,26 @@ def _boundary(k, lo_c, hi_c, vals, cum, obs, plow, phigh, pnan, fs, ints, dp):
         top[a] = cum[hi - 1] if hi > lo else 0.0
         inv_low[a] = 1.0 / at_obs if at_obs > 0.0 else 0.0
         inv_high[a] = 1.0 / (top[a] - at_obs) if top[a] > at_obs else 0.0
-        any_low |= inv_low[a] > 0.0 and plow[a] > 0.0
-        any_high |= inv_high[a] > 0.0 and phigh[a] > 0.0
-        wl[a] = 0.0  # P(low and at most the current atom)
-        wh[a] = 0.0  # P(high and past the current atom's cut)
+        wl[a] = plow[a] if inv_low[a] > 0.0 else 0.0  # for the check below: low with an atom to sweep
+        wh[a] = phigh[a] if inv_high[a] > 0.0 else 0.0
         hit[a] = 0
         le_end[a] = lo + cnt_le  # one past the last atom <= obs
         gt_start[a] = lo + cnt_le  # first atom > obs
         lptr[a] = lo  # next atom <= obs not yet swept
         cut[a] = hi  # atoms [cut, hi) have midpoint (aval + .)/2 > obs
-    if not (any_low and any_high):
+    # no split into as many low as high guides, each with atoms on its side, can happen: nothing to sweep
+    all_nan = 1.0
+    for a in range(k):
+        all_nan *= pnan[a]
+    if _count_at(k, -1, 0, wh, wl, pnan, dp) <= all_nan:
         return 0.0
+    for a in range(k):
+        wl[a] = 0.0  # P(low and at most the current atom)
+        wh[a] = 0.0  # P(high and past the current atom's cut)
     total = 0.0
     last = -1  # the guide _count_at last left out, while no other guide's weights have moved since
     others = 0.0
+    n_high = 0  # guides with a high atom past the cut; a split needs one, and far below obs there is none
     while True:
         aval = np.inf
         for a in range(k):
@@ -652,10 +683,14 @@ def _boundary(k, lo_c, hi_c, vals, cum, obs, plow, phigh, pnan, fs, ints, dp):
                 while q > gt_start[a] and (aval + vals[q - 1]) / 2.0 > obs:
                     q -= 1
                 cut[a] = q
-                wh[a] = phigh[a] * (top[a] - (cum[q - 1] if q > lo_c[a] else 0.0)) * inv_high[a]
+                past = phigh[a] * (top[a] - (cum[q - 1] if q > lo_c[a] else 0.0)) * inv_high[a]
+                n_high += wh[a] == 0.0 and past > 0.0
+                wh[a] = past
                 if a != last:
                     last = -1
-        if nhit == 1:
+        if n_high == 0 or (nhit == 1 and n_high == 1 and wh[hits[0]] > 0.0):
+            pass  # no high guide to balance the low one at aval
+        elif nhit == 1:
             # the usual case: the one guide at aval is the largest low one, and the others balance it
             h = hits[0]
             if weq[h] > 0.0:
@@ -741,7 +776,7 @@ def _gene_pvalues(
     tails_t = np.empty((n_slots, 6, row_k), dtype=np.float64)
     fs_t = np.empty((n_slots, 7, row_k), dtype=np.float64)
     ints_t = np.empty((n_slots, 6, row_k), dtype=np.int64)
-    dp_t = np.empty((n_slots, 4, 2 * max_k + 1 + 8), dtype=np.float64)
+    dp_t = np.empty((n_slots, 4, 2 * max_k + 5 + 8), dtype=np.float64)
     used = np.empty(n_nulls, dtype=np.bool_)
     counts = np.empty(n_nulls, dtype=np.int64)
     offs = np.zeros(n_nulls + 1, dtype=np.int64)
@@ -822,7 +857,7 @@ def _gene_pvalues(
                     rvals[lo + z] = -val_t[t, end - 1 - z]
                     running += prob_t[t, end - 1 - z]
                     rcum[lo + z] = running
-        # a gene costs about its guides' atom count, times the guide-count program run at each atom
+        # a gene costs about its guides' atom count, more when an even count sends it through the boundary sweep
         for g in range(n_genes):
             tot = 0
             k = 0
@@ -830,7 +865,7 @@ def _gene_pvalues(
                 if construct_null[j, c] >= 0:
                     tot += counts[construct_null[j, c]]
                     k += 1
-            gene_cost[g] = tot * (1.0 + k * k) + 1.0
+            gene_cost[g] = tot * (1.0 + (k % 2 == 0) * k) + 1.0
         gene_order, gene_start = _deal(gene_cost, n_slots)
         for t in prange(n_slots):
             for gi in range(gene_start[t], gene_start[t + 1]):
