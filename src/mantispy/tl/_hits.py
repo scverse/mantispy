@@ -26,7 +26,7 @@ from mantispy._core.mutation import inplace_or_copy
 
 METHODS = ("mahalanobis", "ks", "hellinger", "mp_value")
 
-COVARIANCES = ("empirical", "robust")
+COVARIANCES = ("empirical", "robust", "identity")
 
 _REPLICATE_MIN = 16
 
@@ -218,6 +218,7 @@ def hit_calling(
         covariance: Scatter the Mahalanobis distance is measured in.
             ``"empirical"`` uses every fitting control row.
             ``"robust"`` uses the minimum covariance determinant subset, so a few stray control wells stop widening the covariance in their own direction and masking real hits there; it needs more control rows than features, so pair it with ``use_rep``.
+            ``"identity"`` measures plain Euclidean distance from the controls' centre, for a representation whose axes are already on one scale and too many for the controls to fit a covariance, such as the diffusion potential :func:`~mantispy.tl.phate` writes; it applies to ``method="mahalanobis"`` and ``method="ks"`` only.
             Under ``method="hellinger"`` and ``method="mp_value"`` it is the location and scatter both sides are fitted with, refitted on every permutation; under ``method="mp_value"`` the group then needs more rows than features too.
         use_rep: Score ``obsm[use_rep]`` instead of ``X``.
             When the covariance-fitting half of the controls has no more rows than there are features, the covariance is singular and a warning suggests a PCA representation.
@@ -242,7 +243,7 @@ def hit_calling(
         Which rows those are is written to ``obs[key_added + "_reference_held_out"]``, true for the controls that did not fit, so that a scale taken from the controls can be taken from the honest half.
 
     Raises:
-        ValueError: ``method`` is not one of ``METHODS``, ``reference`` selects fewer than four rows, or ``replicate`` is not given on a pooled design at cell resolution.
+        ValueError: ``method`` is not one of ``METHODS``, ``covariance="identity"`` is combined with ``method="hellinger"`` or ``method="mp_value"``, ``reference`` selects fewer than four rows, or ``replicate`` is not given on a pooled design at cell resolution.
 
     Notes:
         The controls are split in half.
@@ -291,6 +292,8 @@ def hit_calling(
         raise ValueError(f"method must be one of {METHODS}, got {method!r}")
     if covariance not in COVARIANCES:
         raise ValueError(f"covariance must be one of {COVARIANCES}, got {covariance!r}")
+    if covariance == "identity" and method in ("hellinger", "mp_value"):
+        raise ValueError(f"covariance='identity' has no scatter for method={method!r} to fit; use 'empirical'")
 
     is_control = reference_mask(adata, reference)
     replicate_codes = _default_replicate(adata, replicate=replicate, reference=is_control)
@@ -327,7 +330,7 @@ def hit_calling(
     else:
         fit_rows, null_rows = split_reference(control_rows, generator)
         replicate_codes = None
-    if not refit and fit_rows.size <= values.shape[1]:
+    if not refit and covariance != "identity" and fit_rows.size <= values.shape[1]:
         get_logger().warning(
             "hit_calling: covariance from %d of %d reference rows for %d features is singular",
             fit_rows.size,
@@ -344,10 +347,14 @@ def hit_calling(
         centre, scatter = cov_mcd(reference_rows[~np.isnan(reference_rows).any(axis=1)], seed=seed)
         eigenvalues, eigenvectors = np.linalg.eigh(scatter)
         whitening = eigenvectors @ np.diag(1.0 / np.sqrt(np.clip(eigenvalues, 1e-6, None))) @ eigenvectors.T
+    elif covariance == "identity":
+        centre, whitening = np.nanmedian(values[fit_rows], axis=0), None
     else:
         centre, whitening = mahalanobis_transform(values[fit_rows], robust=covariance == "robust", seed=seed)
     # Fill gaps before whitening, which mixes columns; one NaN would otherwise zero the row's distance.
-    to_control = np.linalg.norm(np.nan_to_num(values - centre) @ whitening, axis=1)
+    offsets = np.nan_to_num(values - centre)
+    to_control = np.linalg.norm(offsets if whitening is None else offsets @ whitening, axis=1)
+    del offsets
     fitted = np.zeros(adata.n_obs, dtype=bool)
     if not refit:
         fitted[fit_rows] = True

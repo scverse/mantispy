@@ -76,6 +76,26 @@ def test_more_features_than_controls_warns_and_names_the_way_out(scored, caplog)
     assert "use_rep" in record.deep
 
 
+def test_an_identity_covariance_scores_plain_distance_from_the_controls(scored, caplog):
+    """More features than controls leaves no covariance to fit; the identity needs none and does not warn."""
+    few = scored[scored.obs["Metadata_Perturbation"] != "DMSO"].copy()
+    is_control = np.arange(few.n_obs) < 10
+    few.obs["Metadata_Control"] = is_control
+    few.obs["Metadata_Control_Type"] = np.where(is_control, "negcon", "treatment")
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
+        mt.tl.hit_calling(few, covariance="identity", n_permutations=50, replicate=["Metadata_Plate", "Metadata_Well"])
+    assert not any("singular" in record.getMessage() for record in caplog.records)
+    fitted = is_control & ~few.obs["hits_reference_held_out"].to_numpy(dtype=bool)
+    centre = np.median(np.asarray(few.X, dtype=np.float64)[fitted], axis=0)
+    expected = np.linalg.norm(np.asarray(few.X, dtype=np.float64) - centre, axis=1)
+    np.testing.assert_allclose(few.obs["hits_row_distance"].to_numpy(), expected)
+
+
+def test_an_identity_covariance_is_refused_where_a_scatter_is_refitted(scored):
+    with pytest.raises(ValueError, match="identity"):
+        mt.tl.hit_calling(scored, method="mp_value", covariance="identity")
+
+
 def test_the_vectorised_ks_matches_scipy():
     rng = np.random.default_rng(0)
     reference = rng.normal(size=300)
