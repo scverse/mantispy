@@ -84,6 +84,11 @@ def mixed_adata():
             "Metadata_Well": rng.choice(["A01", "B12", "A2", "H09"], n),
             # A numeric key so 0.4 and 0.40 stay one group and the dtype is not stringified.
             "Metadata_Dose": rng.choice([0.4, 10.0, 2.0], n),
+            # Categories out of value order, with one unused, as a platemap join can leave them.
+            "Metadata_Batch": pd.Categorical(rng.choice(["b1", "b3", "b2"], n), categories=["b3", "b1", "b2", "b0"]),
+            "Metadata_Level": pd.Categorical(
+                rng.choice(["lo", "hi", "mid"], n), categories=["lo", "mid", "hi"], ordered=True
+            ),
         }
     )
     return ad.AnnData(X=rng.standard_normal((n, 5)).astype(np.float32), obs=obs)
@@ -97,6 +102,9 @@ def mixed_adata():
         ["Metadata_Plate", "Metadata_Well", "Metadata_Dose"],
         # A column named twice, as when a caller joins its own keys to a by= that already holds one of them.
         ["Metadata_Plate", "Metadata_Well", "Metadata_Plate"],
+        # Categorical columns group by value, as the tuple keys always did, not by category order.
+        ["Metadata_Batch", "Metadata_Plate"],
+        ["Metadata_Plate", "Metadata_Level"],
     ],
 )
 def test_group_codes_matches_the_multiindex_path(mixed_adata, by):

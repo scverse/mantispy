@@ -280,37 +280,28 @@ def group_codes(adata: AnnData, by: str | Sequence[str] | None) -> tuple[np.ndar
 def _multi_group_codes(frame: pd.DataFrame, columns: list[str]) -> tuple[np.ndarray, pd.Index]:
     """``group_codes`` for several columns, without the object-tuple array ``MultiIndex.factorize`` builds.
 
-    Each column is factorized on its own (a hash over the values, dtype kept), and the per-column codes are
-    folded into one mixed-radix integer. Because every column's codes are sorted, that integer is monotone in
-    lexicographic order, so factorizing it reproduces ``MultiIndex.factorize(sort=True)``'s codes and key order.
+    Groups come in the order ``MultiIndex.factorize(sort=True)`` gives them: sorted by value, column by column.
+    A categorical column is sorted by its values too, not by the order of its categories.
+    Each column is factorized on its own, with its dtype kept, and the per-column codes are combined into one integer per row that sorts in that same order.
     Materializing the tuples instead costs an object array per row, which dominates grouping at screen scale.
     """
-    # By position, so a column named twice in ``columns`` is read as a Series rather than a two-column frame.
-    per_column = [pd.factorize(frame.iloc[:, position], sort=True) for position in range(len(columns))]
-    sizes = [len(uniques) for _, uniques in per_column]
-    product = 1
-    for size in sizes:
-        product *= max(size, 1)
-        if product > (1 << 62):
-            # The mixed-radix fold would overflow int64; the object-tuple path is correct whatever the sizes.
-            codes, uniques = pd.MultiIndex.from_frame(frame).factorize(sort=True)
-            return codes.astype(np.int32), uniques if isinstance(uniques, pd.Index) else pd.Index(uniques)
-    composite = per_column[0][0].astype(np.int64)
-    for (column_codes, _), size in zip(per_column[1:], sizes[1:], strict=True):
-        composite = composite * size + column_codes
+    per_column = []
+    for position in range(len(columns)):
+        # By position, so a column named twice in ``columns`` is read as a Series rather than a two-column frame.
+        column = frame.iloc[:, position]
+        if isinstance(column.dtype, pd.CategoricalDtype):
+            column = column.astype(column.cat.categories.dtype)
+        per_column.append(pd.factorize(column, sort=True))
+    sizes = tuple(max(len(uniques), 1) for _, uniques in per_column)
+    if np.prod(sizes, dtype=np.float64) > np.iinfo(np.intp).max:
+        # Too many combinations for one integer; the object-tuple path is correct whatever the sizes.
+        codes, uniques = pd.MultiIndex.from_frame(frame).factorize(sort=True)
+        return codes.astype(np.int32), uniques if isinstance(uniques, pd.Index) else pd.Index(uniques)
+    composite = np.ravel_multi_index([column_codes for column_codes, _ in per_column], sizes)
     codes, present = pd.factorize(composite, sort=True)
-    # Decode each present combination back to its per-column position, then name the groups with the
-    # original values, so keys is the same MultiIndex as the object-tuple path would have produced.
-    remainder = np.asarray(present, dtype=np.int64)
-    decoded = []
-    for size in reversed(sizes[1:]):
-        decoded.append(remainder % size)
-        remainder = remainder // size
-    decoded.append(remainder)
-    decoded.reverse()
-    levels = [uniques.take(position) for (_, uniques), position in zip(per_column, decoded, strict=True)]
-    keys = pd.MultiIndex.from_arrays(levels, names=columns)
-    return codes.astype(np.int32), keys
+    positions = np.unravel_index(np.asarray(present), sizes)
+    levels = [uniques.take(taken) for (_, uniques), taken in zip(per_column, positions, strict=True)]
+    return codes.astype(np.int32), pd.MultiIndex.from_arrays(levels, names=columns)
 
 
 def iter_waves(
