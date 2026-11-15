@@ -603,7 +603,7 @@ def _orthonormal(block: np.ndarray) -> np.ndarray:
     return np.ascontiguousarray(block)
 
 
-def _leading_eigenpairs(matrix: sp.csr_matrix, k: int, seed: int, n_iter: int = 5) -> tuple[np.ndarray, np.ndarray]:
+def _leading_eigenpairs(matrix: sp.csr_matrix, k: int, seed: int, n_iter: int = 15) -> tuple[np.ndarray, np.ndarray]:
     """Leading ``k`` eigenpairs by magnitude of a symmetric sparse ``matrix``, by randomized subspace iteration.
 
     Each round multiplies the subspace by the matrix in parallel and re-orthonormalises it; the eigenpairs then come

@@ -19,8 +19,8 @@ def _manifold(n, n_features, seed):
     return np.tanh(latent @ rng.normal(size=(5, n_features))) + 0.2 * rng.normal(size=(n, n_features))
 
 
-def _reference(x, **kwargs):
-    operator = phate.PHATE(n_pca=None, random_state=0, verbose=0, **kwargs)
+def _reference(x, random_state=0, **kwargs):
+    operator = phate.PHATE(n_pca=None, random_state=random_state, verbose=0, **kwargs)
     embedding = operator.fit_transform(x)
     return operator, embedding
 
@@ -39,14 +39,22 @@ def test_the_exact_path_matches_phate_for_the_same_t(knn, decay, seed):
     assert procrustes(adata.obsm["X_phate"], embedding)[2] < 5e-3
 
 
-def test_the_landmark_path_tracks_phate():
-    """Landmarks are k-means clusters on both sides, so they differ; the potential distances and layout still agree."""
+def test_the_landmark_path_tracks_phate_as_closely_as_phate_tracks_itself():
+    """Landmarks are k-means clusters, so they move with the seed in phate too; that spread sets the tolerance.
+
+    The two implementations choose landmarks from different diffusion coordinates, which costs a little more agreement
+    than a change of seed, hence the margin.
+    """
     x = _manifold(3000, 10, 2)
-    operator, embedding = _reference(x, n_landmark=300)
+    t = 25
+    first, embedding = _reference(x, n_landmark=300, t=t)
+    second, _ = _reference(x, n_landmark=300, t=t, random_state=1)
     adata = ad.AnnData(np.zeros((x.shape[0], 1)), obsm={"X_pca": x})
-    mt.tl.phate(adata, n_landmark=300, t=int(operator.optimal_t))
+    mt.tl.phate(adata, n_landmark=300, t=t)
 
     rows = np.arange(0, x.shape[0], 5)
-    ours, theirs = adata.obsm["X_phate_potential"][rows], np.asarray(operator.diff_potential)[rows]
-    assert spearmanr(pdist(ours), pdist(theirs))[0] > 0.95
+    theirs = pdist(np.asarray(first.diff_potential)[rows])
+    across_seeds = spearmanr(theirs, pdist(np.asarray(second.diff_potential)[rows]))[0]
+    ours = spearmanr(theirs, pdist(adata.obsm["X_phate_potential"][rows]))[0]
+    assert ours > across_seeds - 0.05
     assert procrustes(adata.obsm["X_phate"], embedding)[2] < 0.05
