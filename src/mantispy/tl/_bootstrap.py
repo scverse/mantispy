@@ -791,6 +791,34 @@ def _boundary(k, lo_c, hi_c, vals, cum, obs, plow, phigh, pnan, fs, ints, dp):
 
 
 @njit(cache=True, nogil=True)
+def _build_into(
+    row, nn_row, sub_start, sub_stop, pool_sub_start, pool_sub_stop, pool_width, p, m, eps,
+    val_buf, prob_buf, stack, sval, sfl, sgt, vals, cum, rvals, rcum, lo, room,
+):  # fmt: skip
+    """Build the null of pool ``p`` at ``m`` draws and, if its merged atoms fit ``room``, write them at ``lo``.
+
+    The store keeps the atom values, their running mass from the bottom (``cum``) and, negated and reversed,
+    from the top (``rvals``/``rcum``). Returns the merged count, or ``-1`` if the atoms overflow the buffer.
+    """
+    end = _build_construct(
+        row, nn_row, sub_start, sub_stop, pool_sub_start[p], pool_sub_stop[p], pool_width[p], m, eps,
+        val_buf, prob_buf, stack, sval, sfl, sgt,
+    )  # fmt: skip
+    if 0 <= end <= room:
+        running = 0.0
+        for z in range(end):
+            vals[lo + z] = val_buf[z]
+            running += prob_buf[z]
+            cum[lo + z] = running
+        running = 0.0
+        for z in range(end):
+            rvals[lo + z] = -val_buf[end - 1 - z]
+            running += prob_buf[end - 1 - z]
+            rcum[lo + z] = running
+    return end
+
+
+@njit(cache=True, nogil=True)
 def _deal(cost, n_slots):
     """Deal items to ``n_slots`` slots, costliest first onto the least-loaded slot.
 
@@ -863,6 +891,8 @@ def _gene_pvalues(
     used = np.empty(n_nulls, dtype=np.bool_)
     counts = np.empty(n_nulls, dtype=np.int64)
     offs = np.zeros(n_nulls + 1, dtype=np.int64)
+    reserve = np.zeros(n_nulls, dtype=np.int64)  # the merged length each null's stretch of the store holds
+    grow = np.empty(n_nulls, dtype=np.int64)
     null_order, null_start = _deal(null_caps.astype(np.float64), n_slots)
     gene_cost = np.empty(n_genes, dtype=np.float64)
     for j in range(n_features):
@@ -872,37 +902,10 @@ def _gene_pvalues(
         for c in range(n_constructs):
             if construct_null[j, c] >= 0:
                 used[construct_null[j, c]] = True
-        # size each used null's merged atom list, then build it again into its slot of the store
-        for t in prange(n_slots):
-            for ui in range(null_start[t], null_start[t + 1]):
-                u = null_order[ui]
-                counts[u] = 0
-                if not used[u]:
-                    continue
-                p = null_pool[u]
-                end = _build_construct(
-                    row,
-                    nn_row,
-                    sub_start,
-                    sub_stop,
-                    pool_sub_start[p],
-                    pool_sub_stop[p],
-                    pool_width[p],
-                    null_size[u],
-                    eps,
-                    val_t[t],
-                    prob_t[t],
-                    stack_t[t],
-                    sval_t[t],
-                    sfl_t[t],
-                    sgt_t[t],
-                )
-                if end < 0:
-                    overflow[u] = True
-                else:
-                    counts[u] = end
+        # build each used null once into its reserved stretch of the store; a null longer than its reserve
+        # (every null, at the first feature) is built again once the store has grown to hold it
         for u in range(n_nulls):
-            offs[u + 1] = offs[u] + counts[u]
+            offs[u + 1] = offs[u] + (reserve[u] if used[u] else 0)
         vals = np.empty(offs[n_nulls], dtype=np.float64)
         cum = np.empty(offs[n_nulls], dtype=np.float64)  # running mass from the list's start
         rvals = np.empty(offs[n_nulls], dtype=np.float64)  # the list negated and reversed, for the < side
@@ -910,37 +913,48 @@ def _gene_pvalues(
         for t in prange(n_slots):
             for ui in range(null_start[t], null_start[t + 1]):
                 u = null_order[ui]
-                if counts[u] == 0:
-                    continue
-                p = null_pool[u]
-                end = _build_construct(
-                    row,
-                    nn_row,
-                    sub_start,
-                    sub_stop,
-                    pool_sub_start[p],
-                    pool_sub_stop[p],
-                    pool_width[p],
-                    null_size[u],
-                    eps,
-                    val_t[t],
-                    prob_t[t],
-                    stack_t[t],
-                    sval_t[t],
-                    sfl_t[t],
-                    sgt_t[t],
-                )
-                lo = offs[u]
-                running = 0.0
-                for z in range(end):
-                    vals[lo + z] = val_t[t, z]
-                    running += prob_t[t, z]
-                    cum[lo + z] = running
-                running = 0.0
-                for z in range(end):
-                    rvals[lo + z] = -val_t[t, end - 1 - z]
-                    running += prob_t[t, end - 1 - z]
-                    rcum[lo + z] = running
+                counts[u] = 0
+                if used[u]:
+                    counts[u] = _build_into(
+                        row, nn_row, sub_start, sub_stop, pool_sub_start, pool_sub_stop, pool_width, null_pool[u],
+                        null_size[u], eps, val_t[t], prob_t[t], stack_t[t], sval_t[t], sfl_t[t], sgt_t[t],
+                        vals, cum, rvals, rcum, offs[u], reserve[u],
+                    )  # fmt: skip
+        n_grow = 0
+        for u in range(n_nulls):
+            if counts[u] < 0:  # more atoms than the null's buffer holds
+                overflow[u] = True
+                counts[u] = 0
+            elif counts[u] > reserve[u]:
+                grow[n_grow] = u
+                n_grow += 1
+        if n_grow > 0:
+            for i in range(n_grow):
+                reserve[grow[i]] = counts[grow[i]]
+            offs2 = np.zeros(n_nulls + 1, dtype=np.int64)
+            for u in range(n_nulls):
+                offs2[u + 1] = offs2[u] + (reserve[u] if used[u] else 0)
+            vals2 = np.empty(offs2[n_nulls], dtype=np.float64)
+            cum2 = np.empty(offs2[n_nulls], dtype=np.float64)
+            rvals2 = np.empty(offs2[n_nulls], dtype=np.float64)
+            rcum2 = np.empty(offs2[n_nulls], dtype=np.float64)
+            for u in prange(n_nulls):
+                if used[u] and counts[u] <= offs[u + 1] - offs[u]:
+                    for z in range(counts[u]):
+                        vals2[offs2[u] + z] = vals[offs[u] + z]
+                        cum2[offs2[u] + z] = cum[offs[u] + z]
+                        rvals2[offs2[u] + z] = rvals[offs[u] + z]
+                        rcum2[offs2[u] + z] = rcum[offs[u] + z]
+            vals, cum, rvals, rcum = vals2, cum2, rvals2, rcum2
+            offs[:] = offs2
+            for t in prange(n_slots):
+                for i in range(t, n_grow, n_slots):
+                    u = grow[i]
+                    _build_into(
+                        row, nn_row, sub_start, sub_stop, pool_sub_start, pool_sub_stop, pool_width, null_pool[u],
+                        null_size[u], eps, val_t[t], prob_t[t], stack_t[t], sval_t[t], sfl_t[t], sgt_t[t],
+                        vals, cum, rvals, rcum, offs[u], reserve[u],
+                    )  # fmt: skip
         # a gene costs about its guides' atom count, more when an even count sends it through the boundary sweep
         for g in range(n_genes):
             tot = 0
@@ -975,7 +989,7 @@ def _gene_pvalues(
                     if u < 0:  # its observed median is nan, so it is not in the gene's median either
                         continue
                     lo_c[k] = offs[u]
-                    hi_c[k] = offs[u + 1]
+                    hi_c[k] = offs[u] + counts[u]
                     # exact tails from the sub-tail mixture, so the gene count that decides
                     # significance never depends on the atom coarsening
                     p = null_pool[u]
