@@ -665,12 +665,20 @@ def _close_run(k, lo_c, cum, plow, inv_low, run_ptr, lptr, wh, pnan, below, grow
     Guide ``a`` swept the atoms ``[run_ptr[a], lptr[a])`` in the run, so its low weight grew from the
     mass below ``run_ptr[a]`` by the mass of those atoms; ``below``/``grown`` are scratch for both.
     """
+    n_grown = 0
+    last = 0
     for a in range(k):
         lo = lo_c[a]
         p0 = run_ptr[a]
         start = cum[p0 - 1] if p0 > lo else 0.0
         below[a] = plow[a] * start * inv_low[a]
         grown[a] = plow[a] * ((cum[lptr[a] - 1] if lptr[a] > lo else 0.0) - start) * inv_low[a]
+        if grown[a] > 0.0:
+            n_grown += 1
+            last = a
+    if n_grown == 1:
+        # F is linear in one guide's low weight: its growth times the others balancing it, one high to spare
+        return grown[last] * _count_at(k, last, 1, wh, below, pnan, dp, stride)
     return _count_grown(k, below, grown, wh, pnan, dp, stride)
 
 
@@ -1023,18 +1031,22 @@ def _null_caps(sub_nn, sub_start, sub_stop, pool_sub_start, pool_sub_stop, null_
     Hoeffding's bound those lie within ``sqrt(m log(1/eps) / 2)`` of ``m`` times its measured share.
     """
     widths = (sub_stop - sub_start).astype(np.int64)
-    partial = [np.unique(col[(col > 0) & (col < width)]) for col, width in zip(sub_nn.T, widths, strict=True)]
+    # the measured counts short of the full guide, for the control guides with any missing cell
+    partial = {
+        sub: np.unique(sub_nn[(sub_nn[:, sub] > 0) & (sub_nn[:, sub] < widths[sub]), sub])
+        for sub in np.flatnonzero(((sub_nn > 0) & (sub_nn < widths)).any(axis=0))
+    }
     caps = np.empty(null_pool.size, dtype=np.int64)
     for u, (p, m) in enumerate(zip(null_pool, null_size, strict=True)):
-        subs = slice(pool_sub_start[p], pool_sub_stop[p])
-        bound = _sub_atom_bound(widths[subs], np.int64(m))
-        for i, nn in enumerate(partial[subs]):
-            if nn.size:
-                spread = np.sqrt(m * np.log(1.0 / eps) / 2.0)
-                r_lo = np.maximum(1, np.floor(m * nn / widths[subs][i] - spread)).astype(np.int64)
-                r_hi = np.minimum(m, np.ceil(m * nn / widths[subs][i] + spread)).astype(np.int64)
-                bands = np.maximum(r_hi - r_lo + 1, 0) * _sub_atom_bound(nn, r_lo)
-                bound[i] = max(bound[i], int(bands.max()))
+        lo, hi = pool_sub_start[p], pool_sub_stop[p]
+        bound = _sub_atom_bound(widths[lo:hi], np.int64(m))
+        for sub in (sub for sub in partial if lo <= sub < hi):
+            nn = partial[sub]
+            spread = np.sqrt(m * np.log(1.0 / eps) / 2.0)
+            r_lo = np.maximum(1, np.floor(m * nn / widths[sub] - spread)).astype(np.int64)
+            r_hi = np.minimum(m, np.ceil(m * nn / widths[sub] + spread)).astype(np.int64)
+            bands = np.maximum(r_hi - r_lo + 1, 0) * _sub_atom_bound(nn, r_lo)
+            bound[sub - lo] = max(bound[sub - lo], int(bands.max()))
         caps[u] = min(int(bound.sum()) + 16, _ATOM_CAP_MAX)
     return caps
 
@@ -1200,12 +1212,16 @@ def bootstrap_features(
     construct_observed = grouped_stat(values, construct_of_row, constructs.size, MEDIAN, mask=tested)
     construct_size = np.bincount(row_construct, minlength=constructs.size).astype(np.int64)
     # the cells each guide measures per feature: its null draws that many, as its median is over them
-    by_construct = np.argsort(row_construct, kind="stable")
-    construct_nn = np.add.reduceat(
-        ~np.isnan(values[rows_kept[by_construct]]),
-        np.searchsorted(row_construct[by_construct], np.arange(constructs.size)),
-        axis=0,
-    ).astype(np.int64)
+    has_nan = bool(np.isnan(values).any())
+    if has_nan:
+        by_construct = np.argsort(row_construct, kind="stable")
+        construct_nn = np.add.reduceat(
+            ~np.isnan(values[rows_kept[by_construct]]),
+            np.searchsorted(row_construct[by_construct], np.arange(constructs.size)),
+            axis=0,
+        ).astype(np.int64)
+    else:
+        construct_nn = np.repeat(construct_size[:, None], values.shape[1], axis=1)
     in_pool = pool_of_row >= 0
     pool_median = grouped_stat(values, np.searchsorted(pool_keys, pool_of_row), pool_keys.size, MEDIAN, mask=in_pool)
 
@@ -1245,11 +1261,15 @@ def bootstrap_features(
     )
     # a guide's null depends only on its pool and measured cell count, so guides sharing both share it
     stride = construct_nn.max() + 1
-    null_of = (construct_pool[:, None] * stride + construct_nn).T
-    measured = null_of % stride > 0
-    null_keys, inverse = np.unique(null_of[measured], return_inverse=True)
-    construct_null = np.full(null_of.shape, -1, dtype=np.int64)
-    construct_null[measured] = inverse
+    if has_nan:
+        null_of = (construct_pool[:, None] * stride + construct_nn).T
+        measured = null_of % stride > 0
+        null_keys, inverse = np.unique(null_of[measured], return_inverse=True)
+        construct_null = np.full(null_of.shape, -1, dtype=np.int64)
+        construct_null[measured] = inverse
+    else:  # every guide measures every feature, so its null is the same in each
+        null_keys, inverse = np.unique(construct_pool * stride + construct_size, return_inverse=True)
+        construct_null = np.tile(inverse.astype(np.int64), (n_features, 1))
     null_pool, null_size = np.divmod(null_keys, stride)
     n_threads = numba.get_num_threads()
     # threads take gene slots one at a time as they free up, so one costly gene does not hold up the rest
