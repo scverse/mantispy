@@ -306,7 +306,7 @@ def _multi_group_codes(frame: pd.DataFrame, columns: list[str]) -> tuple[np.ndar
         # By position, so a column named twice in ``columns`` is read as a Series rather than a two-column frame.
         column = frame.iloc[:, position]
         if isinstance(column.dtype, pd.CategoricalDtype):
-            column = column.astype(column.cat.categories.dtype)
+            column = column.cat.reorder_categories(column.cat.categories.sort_values())
         per_column.append(pd.factorize(column, sort=True))
     sizes = tuple(max(len(uniques), 1) for _, uniques in per_column)
     if np.prod(sizes, dtype=np.float64) > np.iinfo(np.intp).max:
