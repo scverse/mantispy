@@ -245,10 +245,12 @@ def qc(
     # a backed or lazy X is not read whole for one panel.
     if "qc_variance" in adata.var:
         variance = as_frame(adata.var)["qc_variance"].to_numpy(dtype=float)
-    elif adata.X is not None and not out_of_core(adata):
-        variance = nanvar(get_matrix(adata))
     else:
-        variance = np.empty(0)
+        try:
+            in_memory = not out_of_core(adata)
+        except ValueError:  # no X to read
+            in_memory = False
+        variance = nanvar(get_matrix(adata)) if in_memory else np.empty(0)
     variance = variance[np.isfinite(variance) & (variance > 0)]
     if variance.size:
         axes[1, 1].hist(np.log10(variance), bins=40)

@@ -241,7 +241,8 @@ def evaluate_integration(
     Raises:
         ImportError: ``metrics`` asks for a scib metric and scib-metrics is not installed.
         ValueError: The scib panel is requested with no features in ``adata.X``; the mAP is requested but
-            ``label_key`` has no replicates or is confounded with ``batch_key``; or ``metrics`` names an unknown
+            ``label_key`` has no replicates or is confounded with ``batch_key``, or a representation holds a profile
+            the mAP cannot rank (an infinite value, or a zero norm under a cosine or correlation distance); or ``metrics`` names an unknown
             metric or selects nothing runnable; or ``svd_solver`` is not a scanpy solver name.
         KeyError: ``obs`` is missing ``label_key`` or ``batch_key``.
 

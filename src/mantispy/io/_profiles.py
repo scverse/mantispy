@@ -17,6 +17,7 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
+from mantispy._core._reduce import held_matrices
 from mantispy._core.features import (
     _BARE_NON_FEATURES,
     _KNOWN_GROUPS,
@@ -654,9 +655,7 @@ _LAZY_SOURCES: dict[str, Path] = {}
 def _lazy_reads_from(adata: ad.AnnData, path: Path) -> bool:
     """Whether a lazy matrix of ``adata`` still reads its chunks from the file at ``path``."""
     target = path.resolve()
-    raw = None if adata.raw is None else adata.raw.X
-    matrices = [adata.X, *adata.layers.values(), *adata.obsm.values(), raw]
-    for matrix in matrices:
+    for matrix in held_matrices(adata):
         layers = getattr(getattr(matrix, "dask", None), "layers", None)
         if layers is not None and any(_LAZY_SOURCES.get(name) == target for name in layers):
             return True

@@ -40,3 +40,22 @@ def test_feature_select_corr_window_drops_one_of_a_pair():
     assert selected.shape == (6,)
     assert int(selected.sum()) == 5
     assert not (bool(selected.iloc[0]) and bool(selected.iloc[1]))
+
+
+def test_the_extreme_value_kernel_caches_its_compilation(tmp_path):
+    """A second process loads column_max_robust_z's machine code from the cache instead of compiling it again."""
+    import os
+    import subprocess
+    import sys
+
+    script = (
+        "import warnings, numpy as np\n"
+        "warnings.simplefilter('error')\n"
+        "from mantispy._core._numba import _column_max_robust_z, column_max_robust_z\n"
+        "column_max_robust_z(np.ones((4, 3)), np.arange(3), 1.4826)\n"
+        "print(sum(_column_max_robust_z.stats.cache_hits.values()))\n"
+    )
+    env = {**os.environ, "NUMBA_CACHE_DIR": str(tmp_path)}
+    runs = [subprocess.run([sys.executable, "-c", script], env=env, capture_output=True, text=True) for _ in range(2)]
+    assert all(run.returncode == 0 for run in runs), [run.stderr for run in runs]
+    assert [run.stdout.strip() for run in runs] == ["0", "1"]

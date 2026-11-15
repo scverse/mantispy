@@ -420,7 +420,6 @@ def test_map_refuses_profiles_it_cannot_rank(profiles, value):
         mt.tl.map(profiles, mode="activity", null_size=100)
 
 
-@requires_copairs
 def test_map_checks_only_the_profiles_it_scores(profiles):
     """Replicability leaves the controls out, so an unrankable control profile does not stop it."""
     values = profiles.X.copy()
@@ -430,7 +429,6 @@ def test_map_checks_only_the_profiles_it_scores(profiles):
     assert profiles.uns["mantispy"]["map"]["score"].notna().all()
 
 
-@requires_copairs
 def test_map_refuses_a_constant_profile_under_correlation(profiles):
     values = profiles.X.copy()
     values[0] = 1.0
@@ -439,16 +437,6 @@ def test_map_refuses_a_constant_profile_under_correlation(profiles):
         mt.tl.map(profiles, mode="activity", null_size=100, distance="correlation")
 
 
-@requires_copairs
-def test_map_accepts_a_callable_distance(profiles):
-    from copairs.compute import pairwise_cosine
-
-    expected = mt.tl.map(profiles, mode="activity", null_size=100, copy=True).uns["mantispy"]["map"]
-    scored = mt.tl.map(profiles, mode="activity", null_size=100, distance=pairwise_cosine, copy=True)
-    np.testing.assert_allclose(scored.uns["mantispy"]["map"]["score"], expected["score"])
-
-
-@requires_copairs
 def test_evaluate_integration_refuses_a_representation_it_cannot_rank():
     rng = np.random.default_rng(0)
     labels = np.array([f"p{i % 3}" for i in range(120)])

@@ -102,6 +102,12 @@ def _source(adata: AnnData, layer: str | None, use_rep: str | None) -> Any:
     return matrix
 
 
+def held_matrices(adata: AnnData) -> list[Any]:
+    """Every matrix the object holds, unread: ``X``, each layer, each ``obsm`` entry and ``raw.X``, skipping absent ones."""
+    raw = None if adata.raw is None else adata.raw.X
+    return [matrix for matrix in (adata.X, *adata.layers.values(), *adata.obsm.values(), raw) if matrix is not None]
+
+
 def out_of_core(adata: AnnData, layer: str | None = None, *, use_rep: str | None = None) -> bool:
     """Whether the matrix :func:`get_matrix` reads is on disk or lazy, so that a grouped operation has to stream it."""
     return _reads_from_disk(_source(adata, layer, use_rep))

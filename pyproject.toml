@@ -233,7 +233,6 @@ overrides = [
     "plotly.*",
     "plottable.*",
     "pooch.*",
-    "pyarrow.*",
     "pycytominer.*",
     "pyod.*",
     "scanpy.*",
