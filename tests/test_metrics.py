@@ -612,6 +612,17 @@ def test_evaluate_integration_baseline_solver_auto_matches_arpack(monkeypatch):
 
     adata = _scib_ready()
     assert pca_solver(adata.n_obs, adata.n_vars, fallback="arpack") == "covariance_eigh"
+    # scib's kBET diffuses each label's graph through scipy's eigsh with a random start vector it does not let us
+    # seed, and on this small object that start can move kBET by 0.05; fix it so both runs see the same one.
+    import scipy.sparse.linalg
+
+    eigsh = scipy.sparse.linalg.eigsh
+
+    def seeded_eigsh(matrix, *args, **kwargs):
+        kwargs.setdefault("v0", np.random.default_rng(0).uniform(-1.0, 1.0, matrix.shape[0]))
+        return eigsh(matrix, *args, **kwargs)
+
+    monkeypatch.setattr(scipy.sparse.linalg, "eigsh", seeded_eigsh)
 
     auto = mt.metrics.evaluate_integration(_scib_ready(), reps=("X_pca",), svd_solver=None)
     arpack = mt.metrics.evaluate_integration(_scib_ready(), reps=("X_pca",), svd_solver="arpack")
