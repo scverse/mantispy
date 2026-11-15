@@ -698,14 +698,20 @@ def _boundary(k, lo_c, hi_c, vals, cum, obs, plow, phigh, pnan, fs, ints, dp):
     ``obs``. With ``F`` the probability of as many low as high guides, the low ones at most a given value
     and the high ones past the cut, the term of ``a`` is ``F(at most a) - F(below a)``. While the cut stays
     put these terms telescope, so a run of atoms under one cut is summed at once, by a dynamic program
-    over the guides (:func:`_count_grown`) that keeps every term positive. ``fs`` (7 rows), ``ints``
-    (5 rows) and ``dp`` (4 rows of ``2 k + 5``) are scratch.
+    over the guides (:func:`_count_grown`) that keeps every term positive. ``fs`` (6 rows), ``ints``
+    (6 rows) and ``dp`` (4 rows of ``2 k + 5``) are scratch.
     """
-    inv_low, inv_high, top, wl, wh, wh_old, grown = fs[0], fs[1], fs[2], fs[3], fs[4], fs[5], fs[6]
-    le_end, gt_start, lptr, cut, run_ptr = ints[0], ints[1], ints[2], ints[3], ints[4]
+    inv_low, inv_high, top, wl, wh, grown = fs[0], fs[1], fs[2], fs[3], fs[4], fs[5]
+    le_end, gt_start, lptr, cut, run_ptr, twin = ints[0], ints[1], ints[2], ints[3], ints[4], ints[5]
     for a in range(k):
         lo = lo_c[a]
         hi = hi_c[a]
+        # guides that share a null (the same pool and cell count) sweep alike, so the later ones copy the first
+        twin[a] = -1
+        for b in range(a):
+            if lo_c[b] == lo and hi_c[b] == hi and twin[b] < 0:
+                twin[a] = b
+                break
         cnt_le = _count_below(vals, lo, hi, obs, True)
         at_obs = cum[lo + cnt_le - 1] if cnt_le > 0 else 0.0
         top[a] = cum[hi - 1] if hi > lo else 0.0
@@ -730,37 +736,47 @@ def _boundary(k, lo_c, hi_c, vals, cum, obs, plow, phigh, pnan, fs, ints, dp):
         wh[a] = 0.0  # P(high and past the current cut)
     total = 0.0
     n_high = 0  # guides with an atom past the cut; until one has, every term is zero
+    # the largest high atom not yet past any cut: until an atom's midpoint with it exceeds obs, no cut moves,
+    # so each run under one cut is found guide by guide rather than atom value by atom value
+    vtop = -np.inf
+    for a in range(k):
+        if cut[a] > gt_start[a]:
+            vtop = max(vtop, vals[cut[a] - 1])
     while True:
-        aval = np.inf
+        aval = np.inf  # the first atom, over the guides, where a cut moves
         for a in range(k):
-            if lptr[a] < le_end[a] and vals[lptr[a]] < aval:
-                aval = vals[lptr[a]]
+            if twin[a] >= 0:
+                lptr[a] = lptr[twin[a]]
+                continue
+            p = lptr[a]
+            while p < le_end[a] and (vals[p] + vtop) / 2.0 <= obs:
+                p += 1
+            lptr[a] = p
+            if p < le_end[a]:
+                aval = min(aval, vals[p])
         if aval == np.inf:
             break
-        # the cut only moves down as aval grows; where it moves, close the run of terms under the old one
-        moved = False
+        if n_high > 0:
+            total += _close_run(k, lo_c, cum, plow, inv_low, run_ptr, lptr, wh, pnan, wl, grown, dp, stride)
+        vtop = -np.inf
         for a in range(k):
+            run_ptr[a] = lptr[a]
             q = cut[a]
-            if q > gt_start[a] and (aval + vals[q - 1]) / 2.0 > obs:
-                if not moved:
-                    for b in range(k):
-                        wh_old[b] = wh[b]
-                moved = True
+            if twin[a] >= 0:
+                q = cut[twin[a]]
+            while q > gt_start[a] and (aval + vals[q - 1]) / 2.0 > obs:
                 q -= 1
-                while q > gt_start[a] and (aval + vals[q - 1]) / 2.0 > obs:
-                    q -= 1
+            if q < cut[a]:
                 cut[a] = q
-                past = phigh[a] * (top[a] - (cum[q - 1] if q > lo_c[a] else 0.0)) * inv_high[a]
+                past = (
+                    wh[twin[a]]
+                    if twin[a] >= 0
+                    else phigh[a] * (top[a] - (cum[q - 1] if q > lo_c[a] else 0.0)) * inv_high[a]
+                )
                 n_high += wh[a] == 0.0 and past > 0.0
                 wh[a] = past
-        if moved:
-            if _any_positive(wh_old, k):
-                total += _close_run(k, lo_c, cum, plow, inv_low, run_ptr, lptr, wh_old, pnan, wl, grown, dp, stride)
-            for a in range(k):
-                run_ptr[a] = lptr[a]
-        for a in range(k):
-            if lptr[a] < le_end[a] and vals[lptr[a]] == aval:
-                lptr[a] += 1
+            if q > gt_start[a]:
+                vtop = max(vtop, vals[q - 1])
     if n_high > 0:
         total += _close_run(k, lo_c, cum, plow, inv_low, run_ptr, lptr, wh, pnan, wl, grown, dp, stride)
     return total
@@ -801,14 +817,16 @@ def _gene_pvalues(
     gene_observed,
     eps,
     n_slots,
+    n_gene_slots,
 ):
     """Two-sided p-value of every gene against its guides' control pools, exactly.
 
     A guide's null depends only on its pool and measured cell count, so per feature each distinct
     ``(null_pool, null_size)`` null is built once into a shared atom store, and the genes then only
     read it; ``construct_null[j, c]`` names guide ``c``'s null in feature ``j``, ``-1`` where the guide
-    measures nothing and so leaves the gene. Work is dealt to ``n_slots`` slots (see :func:`_deal`),
-    each with its own scratch. Also returns which nulls had more atoms than their buffer holds; those
+    measures nothing and so leaves the gene. The nulls are dealt to ``n_slots`` slots and the genes to
+    ``n_gene_slots`` (see :func:`_deal`), each with its own scratch; more gene slots than threads let a
+    thread that finishes early take another. Also returns which nulls had more atoms than their buffer holds; those
     keep no atoms, so the even-count boundary they enter counts as a tie.
     """
     n_genes = gene_offsets.size - 1
@@ -829,11 +847,11 @@ def _gene_pvalues(
     # per gene: lo_c, hi_c, its guides' tails, and the _boundary scratch; rows written at every atom,
     # padded by a cache line so that slots on different cores share none
     row_k = max_k + 8
-    lohi_t = np.empty((n_slots, 2, row_k), dtype=np.int64)
-    tails_t = np.empty((n_slots, 6, row_k), dtype=np.float64)
-    fs_t = np.empty((n_slots, 7, row_k), dtype=np.float64)
-    ints_t = np.empty((n_slots, 5, row_k), dtype=np.int64)
-    dp_t = np.empty((n_slots, 4, 2 * max_k + 5 + 8), dtype=np.float64)
+    lohi_t = np.empty((n_gene_slots, 2, row_k), dtype=np.int64)
+    tails_t = np.empty((n_gene_slots, 6, row_k), dtype=np.float64)
+    fs_t = np.empty((n_gene_slots, 6, row_k), dtype=np.float64)
+    ints_t = np.empty((n_gene_slots, 6, row_k), dtype=np.int64)
+    dp_t = np.empty((n_gene_slots, 4, 2 * max_k + 5 + 8), dtype=np.float64)
     used = np.empty(n_nulls, dtype=np.bool_)
     counts = np.empty(n_nulls, dtype=np.int64)
     offs = np.zeros(n_nulls + 1, dtype=np.int64)
@@ -924,8 +942,8 @@ def _gene_pvalues(
                     tot += counts[construct_null[j, c]]
                     k += 1
             gene_cost[g] = tot * (1.0 + (k % 2 == 0) * k) + 1.0
-        gene_order, gene_start = _deal(gene_cost, n_slots)
-        for t in prange(n_slots):
+        gene_order, gene_start = _deal(gene_cost, n_gene_slots)
+        for t in prange(n_gene_slots):
             # the slot's scratch views, taken once: each view touches the shared reference count
             lo_c, hi_c = lohi_t[t, 0], lohi_t[t, 1]
             gt_arr, lt_arr, le_arr, ge_arr, nan_arr, meas_arr = (
@@ -1233,24 +1251,28 @@ def bootstrap_features(
     construct_null = np.full(null_of.shape, -1, dtype=np.int64)
     construct_null[measured] = inverse
     null_pool, null_size = np.divmod(null_keys, stride)
-    gene_p, overflow = _gene_pvalues(
-        pool_sorted,
-        sub_nn,
-        sub_start,
-        sub_stop,
-        pool_sub_start,
-        pool_sub_stop,
-        pool_width,
-        construct_nn,
-        construct_null,
-        null_pool.astype(np.int64),
-        null_size.astype(np.int64),
-        _null_caps(sub_nn, sub_start, sub_stop, pool_sub_start, pool_sub_stop, null_pool, null_size, _ATOM_EPS),
-        gene_offsets,
-        gene_observed,
-        _ATOM_EPS,
-        numba.get_num_threads(),
-    )
+    n_threads = numba.get_num_threads()
+    # threads take gene slots one at a time as they free up, so one costly gene does not hold up the rest
+    with numba.parallel_chunksize(1):
+        gene_p, overflow = _gene_pvalues(
+            pool_sorted,
+            sub_nn,
+            sub_start,
+            sub_stop,
+            pool_sub_start,
+            pool_sub_stop,
+            pool_width,
+            construct_nn,
+            construct_null,
+            null_pool.astype(np.int64),
+            null_size.astype(np.int64),
+            _null_caps(sub_nn, sub_start, sub_stop, pool_sub_start, pool_sub_stop, null_pool, null_size, _ATOM_EPS),
+            gene_offsets,
+            gene_observed,
+            _ATOM_EPS,
+            n_threads,
+            8 * n_threads,
+        )
     if overflow.any():
         logger.warning(
             "bootstrap_features: %d guide null(s) have too many distinct medians to hold, so a gene whose "
