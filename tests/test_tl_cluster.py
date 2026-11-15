@@ -222,3 +222,19 @@ def test_cluster_is_silent_on_balanced_groups(planted, caplog):
     with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.tl.cluster(planted, use_rep=None)
     assert "degenerate" not in caplog.text
+
+
+def test_leiden_clusters_on_a_stored_graph_without_building_one(planted):
+    planted.obsm["X_pca"] = planted.X.astype(np.float64)
+    mt.tl.phate(planted, knn=4, t=5)
+    mt.tl.cluster(planted, method="leiden", neighbors_key="phate", resolution=0.5)
+    assert "neighbors" not in planted.uns
+    # Brieflow cast the resolution to int, which runs 0.5 as 0 and returns a single cluster.
+    assert adjusted_rand_score(np.repeat([0, 1, 2], 8), planted.obs["cluster"].to_numpy()) == pytest.approx(1.0)
+
+
+def test_a_missing_or_misplaced_graph_key_raises(planted):
+    with pytest.raises(KeyError, match="no graph"):
+        mt.tl.cluster(planted, method="leiden", neighbors_key="phate")
+    with pytest.raises(ValueError, match="neighbors_key"):
+        mt.tl.cluster(planted, use_rep=None, neighbors_key="phate")
