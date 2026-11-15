@@ -13,7 +13,7 @@ from mantispy._core.masks import reference_groups
 from mantispy._core.mutation import inplace_or_copy
 
 METHODS = ("knn", "reference_median", "zero")
-#: Rows imputed per KNN call, which bounds the distance block sklearn holds at once.
+#: Rows imputed per KNN call, which bounds the distance block held at once.
 KNN_BATCH = 1_000
 
 
@@ -124,6 +124,7 @@ def impute(
         A value is left missing, with a warning, when no reference row of its group measured that feature.
 
     Raises:
+        KeyError: If ``by`` or ``reference`` names a column that ``obs`` does not have.
         ValueError: If ``method`` is unknown, ``n_neighbors`` or ``n_donors`` is below 1, or ``reference`` selects no rows at all or none in some group.
     """
     if method not in METHODS:
@@ -133,18 +134,25 @@ def impute(
 
     source = get_matrix(adata, layer)
     column = "n_imputed" if key_added is None else f"n_imputed_{key_added}"
+    if method != "zero":
+        # Checked whether or not a value is missing, so a mistyped column fails on a complete matrix too.
+        mask, codes, keys = reference_groups(adata, reference, by)
 
-    if method == "zero":
+    if not _any_missing(source):
+        # Nothing is missing: no value is filled, so skip the matrix copy and the neighbour search entirely.
+        out = None
+        missing = None
+        filled = None
+    elif method == "zero":
         out = np.array(source, copy=True)
         missing = np.isnan(out)
         out[missing] = 0.0
         filled = missing  # a filled NaN is no longer NaN, so every missing value is counted as imputed
-    elif _any_missing(source):
+    else:
         out = np.array(source, copy=True)
         missing = np.isnan(out)
-        mask, codes, keys = reference_groups(adata, reference, by)
         if method == "reference_median":
-            median = grouped_stat(out[mask], codes[mask], len(keys), MEDIAN)
+            median = grouped_stat(out, codes, len(keys), MEDIAN, mask=mask)
             rows, columns = np.nonzero(missing)
             out[rows, columns] = median[codes[rows], columns]
         else:
@@ -165,26 +173,20 @@ def impute(
                 block = _knn(finite[targets], finite[donors], n_neighbors)
                 out[targets] = np.where(missing[targets], block, out[targets])
         filled = missing & ~np.isnan(out)
-    else:
-        # Nothing is missing: no value is filled, so skip the matrix copy, the grouping and the neighbour
-        # search entirely. X already holds the final values and is left untouched.
-        out = None
-        missing = None
-        filled = None
 
     if filled is None:
         adata.var[column] = np.zeros(adata.n_vars, dtype=np.int64)
     else:
         adata.var[column] = filled.sum(axis=0).astype(np.int64)
 
+    if out is None and (layer is not None or key_added is not None):
+        # No value changed, but the output still holds the source: X when reading a layer, or the named layer.
+        out = np.array(source, copy=True)
     if out is not None:
         if key_added is None:
             adata.X = out
         else:
             adata.layers[key_added] = out
-    elif key_added is not None:
-        # No value changed, but the documented layer must still exist.
-        adata.layers[key_added] = np.array(source, copy=True)
 
     if filled is not None:
         left = missing & ~filled

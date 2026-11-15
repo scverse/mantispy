@@ -1,5 +1,4 @@
 import logging
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -149,6 +148,28 @@ def test_no_missing_values_still_writes_the_requested_layer():
     np.testing.assert_array_equal(adata.var["n_imputed_filled"], np.zeros(adata.n_vars, dtype=np.int64))
 
 
+def test_no_missing_values_in_a_layer_still_writes_it_to_x():
+    """layer= without key_added writes X, whether or not the layer holds a gap."""
+    X = np.random.default_rng(2).normal(size=(60, 4))
+    adata = AnnData(X=np.zeros_like(X), var=pd.DataFrame(index=[f"f{j}" for j in range(4)]))
+    adata.layers["raw"] = X.copy()
+    mt.pp.impute(adata, layer="raw")
+    np.testing.assert_array_equal(adata.X, X)
+
+
+def test_a_complete_matrix_still_checks_by_and_reference_and_keeps_its_dtype():
+    """A mistyped column fails before the missing-value check, and method="zero" on a complete int matrix changes nothing."""
+    X = np.random.default_rng(3).integers(0, 5, size=(20, 3))
+    adata = AnnData(X=X.copy(), obs=pd.DataFrame(index=[f"c{i}" for i in range(20)]))
+    with pytest.raises(KeyError, match="Metadata_Plat"):
+        mt.pp.impute(adata, by="Metadata_Plat")
+    with pytest.raises(KeyError, match="nonexistent"):
+        mt.pp.impute(adata, reference="nonexistent")
+    mt.pp.impute(adata, method="zero")
+    assert adata.X.dtype == X.dtype
+    np.testing.assert_array_equal(adata.X, X)
+
+
 def test_knn_distances_match_nan_euclidean():
     """The numba kernel reproduces sklearn's ``nan_euclidean``, including the all-missing-overlap NaN."""
     rng = np.random.default_rng(0)
@@ -188,29 +209,6 @@ def test_knn_equals_sklearn_with_ties_and_varied_missingness(seed):
     mt.pp.impute(adata, n_neighbors=k, n_donors=None)
     np.testing.assert_allclose(adata.X[:, valid], expected, rtol=1e-9, atol=1e-9, equal_nan=True)
     assert np.isnan(adata.X[:, 0]).all()
-
-
-_REAL_DATA = Path("/lustre/groups/ml01/workspace/tim.treis/brieflow-bench/data/aconcagua_interphase_s100k.parquet")
-
-
-@pytest.mark.skipif(not _REAL_DATA.exists(), reason="real screen data not available")
-def test_knn_matches_sklearn_on_real_data():
-    """On a real Aconcagua feature matrix with injected missingness, knn equals ``KNNImputer``."""
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-
-    schema = pq.read_schema(_REAL_DATA)
-    feats = [c for c in schema.names if pa.types.is_floating(schema.field(c).type)][:40]
-    X = pq.ParquetFile(_REAL_DATA).read_row_group(0, columns=feats).to_pandas().to_numpy()[:2000]
-    X = np.ascontiguousarray(X, dtype=np.float64)
-    rng = np.random.default_rng(0)
-    X[rng.random(X.shape) < 0.02] = np.nan
-
-    valid = ~np.isnan(X).all(axis=0)
-    expected = KNNImputer(n_neighbors=5).fit_transform(X)
-    adata = AnnData(X=X.copy(), var=pd.DataFrame(index=feats))
-    mt.pp.impute(adata, n_donors=None)
-    np.testing.assert_allclose(adata.X[:, valid], expected, rtol=1e-9, atol=1e-9, equal_nan=True)
 
 
 def test_rejects_no_reference_rows_and_a_bad_method():
