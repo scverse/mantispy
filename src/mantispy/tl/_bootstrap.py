@@ -557,7 +557,15 @@ def _step(dp, src, dst, nlo, nhi, stay, up, down, stride=1):
     else:
         for d in range(nlo, nhi + 1):
             dp[dst, d] = dp[src, d] * stay + dp[src, d - 1] * up + dp[src, d + 1] * down
-    dp[dst, nlo - 2] = dp[dst, nlo - 1] = dp[dst, nhi + 1] = dp[dst, nhi + 2] = 0.0
+    _pad(dp, dst, nlo, nhi, stride)
+
+
+@njit(cache=True, nogil=True)
+def _pad(dp, row, lo, hi, stride):
+    """Zero the entries past ``[lo, hi]`` that the next :func:`_step` reads, of the parity it reads."""
+    dp[row, lo - 2] = dp[row, hi + 2] = 0.0
+    if stride == 1:
+        dp[row, lo - 1] = dp[row, hi + 1] = 0.0
 
 
 @njit(cache=True, nogil=True)
@@ -608,26 +616,62 @@ def _count_at(k, skip, target, up, down, stay, dp, stride=1):
 
 
 @njit(cache=True, nogil=True)
-def _count_tied_pair(k, up0, up1, down, stay, dp, stride):
-    """``P(#high == #low)`` over ``k`` guides for two sets of high weights at once, ``up0`` and ``up1``.
+def _count_grown(k, below, grown, up, stay, dp, stride):
+    """``P(#high == #low and some low guide in its grown part)`` over ``k`` guides.
 
-    One pass of :func:`_count_at` per set, sharing the loop: rows 0 and 1 of ``dp`` carry ``up0``, rows 2
-    and 3 ``up1``.
+    A low guide lies in ``below`` with that probability and in ``grown`` with that one, so the result is
+    ``F(below + grown) - F(below)`` for ``F`` the probability of as many low as high guides, summed as
+    positive terms. Rows 0 and 1 of ``dp`` hold the counts with no low guide in its grown part yet, rows
+    2 and 3 those with one. ``stride`` as in :func:`_step`, for an even ``k``.
     """
     o = k + 2
     _start(dp, 0, o)
     _start(dp, 2, o)
+    dp[2, o] = 0.0
     src = 0
     lo = hi = o
     for c in range(k):
         rem = k - c - 1
         lo = max(lo - 1, o - rem)
         hi = min(hi + 1, o + rem)
+        st = stay[c]
+        hi_w = up[c]
+        lt = below[c]
+        eq = grown[c]
         dst = 1 - src
-        _step(dp, src, dst, lo, hi, stay[c], up0[c], down[c], stride)
-        _step(dp, src + 2, dst + 2, lo, hi, stay[c], up1[c], down[c], stride)
+        if stride == 2:
+            for d in range(lo, hi + 1, 2):
+                dp[dst, d] = dp[src, d - 1] * hi_w + dp[src, d + 1] * lt
+                dp[dst + 2, d] = dp[src + 2, d - 1] * hi_w + dp[src + 2, d + 1] * (lt + eq) + dp[src, d + 1] * eq
+        else:
+            for d in range(lo, hi + 1):
+                dp[dst, d] = dp[src, d] * st + dp[src, d - 1] * hi_w + dp[src, d + 1] * lt
+                dp[dst + 2, d] = (
+                    dp[src + 2, d] * st
+                    + dp[src + 2, d - 1] * hi_w
+                    + dp[src + 2, d + 1] * (lt + eq)
+                    + dp[src, d + 1] * eq
+                )
+        _pad(dp, dst, lo, hi, stride)
+        _pad(dp, dst + 2, lo, hi, stride)
         src = dst
-    return dp[src, o], dp[src + 2, o]
+    return dp[src + 2, o]
+
+
+@njit(cache=True, nogil=True)
+def _close_run(k, lo_c, cum, plow, inv_low, run_ptr, lptr, wh, pnan, below, grown, dp, stride):
+    """The terms of a run of swept atoms under one cut: ``F`` at its end minus ``F`` at its start.
+
+    Guide ``a`` swept the atoms ``[run_ptr[a], lptr[a])`` in the run, so its low weight grew from the
+    mass below ``run_ptr[a]`` by the mass of those atoms; ``below``/``grown`` are scratch for both.
+    """
+    for a in range(k):
+        lo = lo_c[a]
+        p0 = run_ptr[a]
+        start = cum[p0 - 1] if p0 > lo else 0.0
+        below[a] = plow[a] * start * inv_low[a]
+        grown[a] = plow[a] * ((cum[lptr[a] - 1] if lptr[a] > lo else 0.0) - start) * inv_low[a]
+    return _count_grown(k, below, grown, wh, pnan, dp, stride)
 
 
 @njit(cache=True, nogil=True)
@@ -652,13 +696,13 @@ def _boundary(k, lo_c, hi_c, vals, cum, obs, plow, phigh, pnan, fs, ints, dp):
     One ascending sweep over the atoms at most ``obs`` takes each value ``a`` in turn as the largest low
     one. The high guides must then sit past the cut, the atoms whose float midpoint with ``a`` exceeds
     ``obs``. With ``F`` the probability of as many low as high guides, the low ones at most a given value
-    and the high ones past the cut (a dynamic program over the guides, :func:`_count_at`), the term of
-    ``a`` is ``F(at most a) - F(below a)``. While the cut stays put these terms telescope, so ``F`` is
-    evaluated only where it moves. ``fs`` (6 rows), ``ints`` (4 rows) and ``dp`` (4 rows of ``2 k + 5``)
-    are scratch.
+    and the high ones past the cut, the term of ``a`` is ``F(at most a) - F(below a)``. While the cut stays
+    put these terms telescope, so a run of atoms under one cut is summed at once, by a dynamic program
+    over the guides (:func:`_count_grown`) that keeps every term positive. ``fs`` (7 rows), ``ints``
+    (5 rows) and ``dp`` (4 rows of ``2 k + 5``) are scratch.
     """
-    inv_low, inv_high, top, wl, wh, wh_old = fs[0], fs[1], fs[2], fs[3], fs[4], fs[5]
-    le_end, gt_start, lptr, cut = ints[0], ints[1], ints[2], ints[3]
+    inv_low, inv_high, top, wl, wh, wh_old, grown = fs[0], fs[1], fs[2], fs[3], fs[4], fs[5], fs[6]
+    le_end, gt_start, lptr, cut, run_ptr = ints[0], ints[1], ints[2], ints[3], ints[4]
     for a in range(k):
         lo = lo_c[a]
         hi = hi_c[a]
@@ -672,6 +716,7 @@ def _boundary(k, lo_c, hi_c, vals, cum, obs, plow, phigh, pnan, fs, ints, dp):
         le_end[a] = lo + cnt_le  # one past the last atom <= obs
         gt_start[a] = lo + cnt_le  # first atom > obs
         lptr[a] = lo  # next atom <= obs not yet swept
+        run_ptr[a] = lo  # where the current run of atoms under one cut began
         cut[a] = hi  # atoms [cut, hi) have midpoint (aval + .)/2 > obs
     # with no guide ever nan the count here is even, and every count the program reaches keeps a parity
     stride = 1 if _any_positive(pnan, k) else 2
@@ -682,11 +727,9 @@ def _boundary(k, lo_c, hi_c, vals, cum, obs, plow, phigh, pnan, fs, ints, dp):
     if _count_at(k, -1, 0, wh, wl, pnan, dp, stride) <= all_nan:
         return 0.0
     for a in range(k):
-        wl[a] = 0.0  # P(low and at most the current atom)
         wh[a] = 0.0  # P(high and past the current cut)
     total = 0.0
-    start_prev = 0.0  # F when the current cut took effect, with the low guides as they were then
-    n_high = 0  # guides with an atom past the cut; until one has, F is zero
+    n_high = 0  # guides with an atom past the cut; until one has, every term is zero
     while True:
         aval = np.inf
         for a in range(k):
@@ -696,7 +739,6 @@ def _boundary(k, lo_c, hi_c, vals, cum, obs, plow, phigh, pnan, fs, ints, dp):
             break
         # the cut only moves down as aval grows; where it moves, close the run of terms under the old one
         moved = False
-        had_high = n_high > 0
         for a in range(k):
             q = cut[a]
             if q > gt_start[a] and (aval + vals[q - 1]) / 2.0 > obs:
@@ -711,18 +753,16 @@ def _boundary(k, lo_c, hi_c, vals, cum, obs, plow, phigh, pnan, fs, ints, dp):
                 past = phigh[a] * (top[a] - (cum[q - 1] if q > lo_c[a] else 0.0)) * inv_high[a]
                 n_high += wh[a] == 0.0 and past > 0.0
                 wh[a] = past
-        if moved and n_high > 0:
-            closing, start = _count_tied_pair(k, wh_old, wh, wl, pnan, dp, stride)
-            if had_high:
-                total += closing - start_prev
-            start_prev = start
+        if moved:
+            if _any_positive(wh_old, k):
+                total += _close_run(k, lo_c, cum, plow, inv_low, run_ptr, lptr, wh_old, pnan, wl, grown, dp, stride)
+            for a in range(k):
+                run_ptr[a] = lptr[a]
         for a in range(k):
-            p = lptr[a]
-            if p < le_end[a] and vals[p] == aval:
-                wl[a] = plow[a] * cum[p] * inv_low[a]
-                lptr[a] = p + 1
+            if lptr[a] < le_end[a] and vals[lptr[a]] == aval:
+                lptr[a] += 1
     if n_high > 0:
-        total += _count_at(k, -1, 0, wh, wl, pnan, dp, stride) - start_prev
+        total += _close_run(k, lo_c, cum, plow, inv_low, run_ptr, lptr, wh, pnan, wl, grown, dp, stride)
     return total
 
 
@@ -791,8 +831,8 @@ def _gene_pvalues(
     row_k = max_k + 8
     lohi_t = np.empty((n_slots, 2, row_k), dtype=np.int64)
     tails_t = np.empty((n_slots, 6, row_k), dtype=np.float64)
-    fs_t = np.empty((n_slots, 6, row_k), dtype=np.float64)
-    ints_t = np.empty((n_slots, 4, row_k), dtype=np.int64)
+    fs_t = np.empty((n_slots, 7, row_k), dtype=np.float64)
+    ints_t = np.empty((n_slots, 5, row_k), dtype=np.int64)
     dp_t = np.empty((n_slots, 4, 2 * max_k + 5 + 8), dtype=np.float64)
     used = np.empty(n_nulls, dtype=np.bool_)
     counts = np.empty(n_nulls, dtype=np.int64)
