@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import warnings
 
 import numpy as np
 from anndata import AnnData
@@ -32,11 +33,20 @@ def _lof_scores(X: np.ndarray, n_fit: int | None, rng: np.random.Generator) -> n
     # sklearn, where it still runs, gets the same threads as the numba kernels.
     n_jobs = get_num_threads()
     scores = np.full(X.shape[0], np.nan)
-    # LOF needs complete input; a row missing every selected feature, filled with zero, would collapse onto
-    # the origin and inflate the density of nearby cells, so those rows are left out of the fit and unscored.
-    present = ~np.isnan(X).all(axis=1)
-    # X[present] already copies, so clean it in place rather than allocating a second array.
-    fitted = np.nan_to_num(X[present], nan=0.0, posinf=0.0, neginf=0.0, copy=False)
+    # LOF needs complete, finite input. A row with no finite selected feature would collapse onto one point
+    # whatever it is filled with and inflate the density there, so those rows are left out of the fit and unscored.
+    present = np.isfinite(X).any(axis=1)
+    fitted = X[present]
+    # A missing or infinite value elsewhere takes the mean of the feature's finite values, as ECOD fills a missing
+    # one, so the row is scored on the features it measured. X[present] already copies, so it is filled in place.
+    gaps = ~np.isfinite(fitted)
+    if gaps.any():
+        fitted[gaps] = np.nan
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)  # a feature with no finite value has no mean
+            mean = np.nan_to_num(np.nanmean(fitted, axis=0), nan=0.0)
+        rows, columns = np.nonzero(gaps)
+        fitted[rows, columns] = mean[columns]
     n = fitted.shape[0]
     if n < 2:
         scores[present] = 0.0
@@ -48,7 +58,11 @@ def _lof_scores(X: np.ndarray, n_fit: int | None, rng: np.random.Generator) -> n
 
         sample = np.sort(rng.choice(n, size=n_fit, replace=False))
         model = LocalOutlierFactor(n_neighbors=min(20, n_fit - 1), novelty=True, n_jobs=n_jobs).fit(fitted[sample])
-        scores[present] = -model.score_samples(fitted)
+        block = -model.score_samples(fitted)
+        # score_samples treats every row as new, so a sampled row would count itself among its own neighbours;
+        # the sample takes the scores it was fitted with instead.
+        block[sample] = -model.negative_outlier_factor_
+        scores[present] = block
         return scores
     nof = None
     if fitted.shape[1] <= _LOF_FAST_MAX_FEATURES:
@@ -96,6 +110,7 @@ def outliers(
     by: str | None = None,
     seed: int = 0,
     ecod_aggregation: str = "pyod",
+    *,
     n_fit: int | None = None,
     key_added: str = "qc_outlier",
     copy: bool = False,
@@ -107,6 +122,7 @@ def outliers(
     Args:
         adata: Object to flag.
         method: ``"ecod"`` :cite:p:`Li_2023` needs no tuning and is interpretable per feature, ``"isolation_forest"`` catches outliers defined by feature interactions, ``"lof"`` is sklearn's local outlier factor with its default 20 neighbours, which scores a cell against the density of its neighbourhood, and ``"mad"`` takes the largest robust z-score across features, which is easy to explain but sees each feature alone.
+            ``"ecod"`` and ``"lof"`` fill a missing value with the mean of the feature's finite values, and ``"lof"`` reads an infinite value as missing; a cell with no finite selected feature is left unscored and unflagged by ``"lof"``.
         contamination: Fraction of cells to flag, rounded up to a whole cell within each ``by`` group, so a non-empty group always flags its most outlying cell and the flagged fraction is higher than asked for in a group smaller than ``1 / contamination``.
             Ignored when ``score_cutoff`` is given.
         score_cutoff: Threshold the score absolutely instead of by quantile.
@@ -172,7 +188,7 @@ def outliers(
         unscored = int(np.isnan(scores).sum())
         if unscored:
             get_logger().warning(
-                "outliers(lof): %d cell(s) have no selected feature measured and stay unscored and unflagged",
+                "outliers(lof): %d cell(s) have no finite selected feature and stay unscored and unflagged",
                 unscored,
                 deep="impute them first with mt.pp.impute, or drop them",
             )
