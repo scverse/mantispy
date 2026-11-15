@@ -500,7 +500,7 @@ def transform_grouped(
     out = np.empty((source.shape[0], width), dtype=dtype)
     if rowwise and not _reads_from_disk(source):
         # A row-wise func is fed a group a slice at a time, read straight from the matrix, so neither the group's copy nor the temporaries func makes outgrow the read budget.
-        step = max(settings.stream_bytes // (max(width, source.shape[1]) * 8), 1)
+        step = max(settings.stream_bytes // (max(width, source.shape[1], 1) * 8), 1)
         order, offsets = group_offsets(codes, len(keys))
         for group, key in enumerate(keys):
             rows = order[offsets[group] : offsets[group + 1]]

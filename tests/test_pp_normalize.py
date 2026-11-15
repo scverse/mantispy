@@ -31,6 +31,32 @@ def test_a_feature_without_spread_among_the_controls_becomes_nan(adata, method, 
     assert adata.var["degenerate_scale"].tolist() == [True] + [False] * (adata.n_vars - 1)
 
 
+def test_a_mad_that_epsilon_dwarfs_counts_as_no_spread(adata, caplog):
+    """A MAD of 1e-30 is not zero, but dividing by 1.4826 * 1e-30 + 1e-18 still scaled the feature up by about 1e18."""
+    plate = adata.obs["Metadata_Plate"].astype(str).to_numpy()
+    control = adata.obs["Metadata_Control"].to_numpy(dtype=bool)
+    first = plate == sorted(set(plate))[0]
+    values = adata.X.astype(np.float64)
+    values[first & control, 0] = np.random.default_rng(0).normal(scale=1e-30, size=int((first & control).sum()))
+    adata.X = values
+
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
+        mt.pp.normalize(adata, by="Metadata_Plate")
+
+    assert "no reference spread" in caplog.text
+    assert np.isnan(adata.X[first, 0]).all()
+    assert adata.var["degenerate_scale"].tolist() == [True] + [False] * (adata.n_vars - 1)
+
+
+@pytest.mark.parametrize("method", ["mad_robustize", "standardize", "robustize", "center"])
+def test_an_object_without_features_normalizes_to_an_empty_matrix(adata, method):
+    empty = adata[:, []].copy()
+
+    mt.pp.normalize(empty, method=method, by="Metadata_Plate")
+
+    assert empty.X.shape == (adata.n_obs, 0)
+
+
 def test_normalize_raises_when_no_feature_can_be_scaled(adata):
     adata.X = np.ones_like(adata.X)
     with pytest.raises(ValueError, match="every feature has no spread"):

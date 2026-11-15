@@ -91,19 +91,23 @@ def _center_and_scale(
     The two overlap: a feature can be constant in one group and unmeasured in another, and both facts have to reach the caller.
     """
     if method == "standardize":
-        centre, scale = _mean_and_std(adata, by, codes, keys, layer, mask)
+        centre, spread = _mean_and_std(adata, by, codes, keys, layer, mask)
+        scale = spread
     elif method == "mad_robustize":
         centre, mad = _median_and_spread(adata, MAD_STAT, codes, keys, layer, mask)
-        scale = MAD_TO_SIGMA * mad + epsilon
+        spread = MAD_TO_SIGMA * mad
+        scale = spread + epsilon
     elif method == "center":
         centre, _ = _median_and_spread(adata, MAD_STAT, codes, keys, layer, mask)
         # Centring only: a feature with no spread is still centred correctly, so nothing is degenerate on scale.
         return _centre_only(centre, matrix_dtype(adata, layer))
     else:  # robustize: median and interquartile range, as sklearn's RobustScaler
-        centre, scale = _median_and_spread(adata, IQR, codes, keys, layer, mask)
+        centre, spread = _median_and_spread(adata, IQR, codes, keys, layer, mask)
+        scale = spread
 
-    # A NaN or infinite scale fails this comparison, so it is left to `uncentred`.
-    no_spread = scale <= epsilon
+    # Compared before epsilon is added, so a spread that epsilon dwarfs is caught as well as one of exactly zero.
+    # A NaN or infinite spread fails this comparison, so it is left to `uncentred`.
+    no_spread = spread <= epsilon
     # Repairing only the scale would subtract a NaN centre from every row of the group, wiping the non-reference values.
     uncentred = ~(np.isfinite(centre) & np.isfinite(scale))
     centre = np.where(np.isfinite(centre), centre, 0.0)
