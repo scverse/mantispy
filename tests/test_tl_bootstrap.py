@@ -198,13 +198,20 @@ def _simulated_gene_pvalue(adata, gene, feature, n_sims, rng):
     controls = [x[(sgrna == c) & is_ctrl] for c in sorted(set(sgrna[is_ctrl]))]
     sizes = np.array([c.size for c in controls], dtype=float)
     guides = [x[sgrna == c] for c in sorted(set(sgrna[(obs["Metadata_Gene"] == gene).to_numpy()]))]
+    padded = np.full((len(controls), int(sizes.max())), np.nan)
+    for i, cells in enumerate(controls):
+        padded[i, : cells.size] = cells
     nulls = []
     for cells in guides:
         m = int((~np.isnan(cells)).sum())
         pick = rng.choice(len(controls), size=n_sims, p=sizes / sizes.sum())
-        draws = np.stack([controls[i][rng.integers(0, controls[i].size, size=m)] for i in pick])
-        nulls.append(np.nanmedian(draws, axis=1))
-    null = np.nanmedian(np.array(nulls), axis=0)
+        draws = padded[pick[:, None], rng.integers(0, sizes[pick].astype(int)[:, None], size=(n_sims, m))]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)  # a draw of only missing cells
+            nulls.append(np.nanmedian(draws, axis=1))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        null = np.nanmedian(np.array(nulls), axis=0)
     observed = np.median([np.nanmedian(cells) for cells in guides])
     one = ((null > observed).mean() + 0.5 * (null == observed).mean()) / (~np.isnan(null)).mean()
     return 2 * min(one, 1 - one)
@@ -226,6 +233,20 @@ def test_sporadic_missing_control_cells_match_a_simulation():
     np.testing.assert_allclose(gene.loc["ONE"], guide.loc["one0"], atol=1e-12)
     simulated = _simulated_gene_pvalue(adata, "TWO", 0, 20_000, rng)
     assert gene.loc["TWO", "Cells_Intensity_F0"] == pytest.approx(simulated, abs=0.03)
+
+
+@pytest.mark.parametrize("n_guides", [64, 65])
+def test_a_gene_of_many_guides_matches_a_simulation(n_guides):
+    """The gene null sums over its guides by a dynamic program, so a gene of many guides costs no more than a few."""
+    rng = np.random.default_rng(12)
+    groups = [("nontargeting", f"nt{i}", 20, 0.0, "a") for i in range(8)]
+    groups += [("BIG", f"big{i}", 5, np.array([0.0, 0.08]), "a") for i in range(n_guides)]
+    adata = _cells(groups, rng, n_features=2)
+    adata.X[rng.random(adata.X.shape) < 0.05] = np.nan
+    mt.tl.bootstrap_features(adata)
+    exact = _table(adata).loc["BIG", adata.var_names].to_numpy()
+    simulated = [_simulated_gene_pvalue(adata, "BIG", f, 4000, rng) for f in range(2)]
+    np.testing.assert_allclose(exact, simulated, atol=0.06)
 
 
 def test_a_one_guide_gene_against_large_control_guides_has_its_guide_pvalue():
@@ -383,6 +404,23 @@ def test_control_scopes_pick_the_null():
     assert set(own.index) == {"('SAME', 'b')", "('FLIP', 'b')", "('nontargeting', 'b')"}
     assert own["('nontargeting', 'b')"] < 0.01 and own["('SAME', 'b')"] < 0.01
     assert own["('FLIP', 'b')"] > 0.05, "FLIP in b sits where FLIP in a does"
+
+
+def test_within_perturbation_tests_a_control_gene_of_many_guides():
+    """Each gene is its own control, so the non-targeting group, with all its guides, is tested too."""
+    rng = np.random.default_rng(13)
+    groups = [("nontargeting", f"nt{i}", 5, 0.0, condition) for condition in "ab" for i in range(63)]
+    groups += [("G", f"g{i}", 5, 0.0, condition) for condition in "ab" for i in range(2)]
+    adata = _cells(groups, rng, n_features=2)
+    mt.tl.bootstrap_features(
+        adata,
+        groupby=["Metadata_Gene", "Metadata_Treatment"],
+        control_scope="within_perturbation",
+        condition="Metadata_Treatment",
+        reference_condition="a",
+    )
+    p = _table(adata).loc["('nontargeting', 'b')"].to_numpy()
+    assert np.all((p > 0.0) & (p <= 1.0))
 
 
 def test_a_group_without_a_reference_arm_is_left_out(caplog):
