@@ -16,7 +16,7 @@ import pandas as pd
 
 from mantispy._settings import settings
 
-from ._numba import MAD, MEAN, MEDIAN, QUANTILE, STD, group_counts, group_offsets, grouped_stat
+from ._numba import MAD, MEAN, MEDIAN, QUANTILE, STD, _masked_offsets, group_counts, group_offsets, grouped_stat
 from .features import annotation
 from .frames import as_frame
 from .logging import get_logger
@@ -334,11 +334,7 @@ def iter_waves(
     codes, keys = grouping
     source = _source(adata, layer, use_rep)
     _warn_if_not_streamable(source)
-    order, offsets = group_offsets(codes, len(keys))
-    if mask is not None:
-        # Selecting from the stable ordering keeps every group's rows in increasing order.
-        order = order[mask[order]]
-        offsets = np.concatenate([[0], np.cumsum(np.bincount(codes[mask], minlength=len(keys)))])
+    order, offsets = _masked_offsets(codes, len(keys), mask)
     sizes = np.diff(offsets)
     row_bytes = max(source.shape[1], 1) * float_dtype(source.dtype).itemsize
     limit = max(settings.stream_bytes // row_bytes, 1)
