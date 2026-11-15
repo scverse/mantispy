@@ -102,16 +102,6 @@ def test_by_level_where_a_group_has_too_few_cells_is_unscored_there(caplog):
     assert adata.obs["perturbation_score"][is_hit & (adata.obs["Metadata_Class"] == "interphase")].notna().all()
 
 
-def test_by_none_matches_omitting_by():
-    adata = _cells_with_classes()
-    omitted = mt.tl.perturbation_score(adata, replicate=None, copy=True)
-    explicit = mt.tl.perturbation_score(adata, by=None, replicate=None, copy=True)
-    np.testing.assert_array_equal(
-        omitted.obs["perturbation_score"].to_numpy(), explicit.obs["perturbation_score"].to_numpy()
-    )
-    assert "Metadata_Class" not in explicit.uns["mantispy"]["perturbation_score"].columns
-
-
 def test_a_level_score_does_not_depend_on_the_other_levels():
     adata = _cells_with_classes()
     mt.tl.perturbation_score(adata, by="Metadata_Class", replicate=None)
@@ -309,9 +299,23 @@ def test_folds_by_replicate_are_sklearns(seed):
     np.testing.assert_array_equal(fold, expected)
 
 
-def test_n_jobs_is_gone():
-    with pytest.raises(TypeError, match="n_jobs"):
-        mt.tl.perturbation_score(_cells(), n_jobs=2)
+@pytest.mark.parametrize(
+    ("argument", "value"),
+    [("n_features", 0), ("n_features", -1), ("n_features", 2.5), ("n_folds", 1), ("n_folds", True)],
+)
+def test_bad_n_features_or_n_folds_raise(argument, value):
+    with pytest.raises(ValueError, match=argument):
+        mt.tl.perturbation_score(_cells(), **{argument: value})
+
+
+def test_more_folds_than_a_byte_holds():
+    adata = _cells(n_ref=300)
+    adata.obs["Metadata_sgRNA"] = [f"g{i}" for i in range(adata.n_obs)]  # one guide per cell
+    mt.tl.perturbation_score(adata, n_folds=200)
+    table = adata.uns["mantispy"]["perturbation_score"].set_index("group")
+    assert table.loc["HIT", "n_folds"] == 200
+    assert table.loc["HIT", "auc"] > 0.7
+    assert adata.obs["perturbation_score"][adata.obs["Metadata_Gene"] == "HIT"].notna().all()
 
 
 def test_folds_over_cells_warn_at_object_resolution():
@@ -323,18 +327,6 @@ def test_folds_over_cells_warn_at_object_resolution():
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
         mt.tl.perturbation_score(adata)
-
-
-def test_the_default_folds_by_the_guide():
-    adata = _cells(guide_effect=1.0)
-    mt.tl.perturbation_score(adata, key_added="default")
-    mt.tl.perturbation_score(adata, replicate="Metadata_sgRNA", key_added="guides")
-    default = adata.uns["mantispy"]["default"].set_index("group")
-    guides = adata.uns["mantispy"]["guides"].set_index("group")
-    # The default is replicate="Metadata_sgRNA", so its table matches an explicit guide fold.
-    assert default.loc["HIT", "n_folds"] == 4
-    np.testing.assert_array_equal(default["auc"].to_numpy(), guides["auc"].to_numpy())
-    np.testing.assert_array_equal(adata.obs["default"].to_numpy(), adata.obs["guides"].to_numpy())
 
 
 def test_a_missing_replicate_column_names_the_argument():

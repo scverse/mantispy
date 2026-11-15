@@ -231,7 +231,7 @@ def _group_folds(y: np.ndarray, group: np.ndarray, perm: np.ndarray, n_splits: i
         mean = (counts[k, 0] + counts[k, 1]) / 2
         spread[k] = np.sqrt(((counts[k, 0] - mean) ** 2 + (counts[k, 1] - mean) ** 2) / 2)
     in_fold = np.zeros((n_splits, 2))
-    assigned = np.empty(n_groups, dtype=np.int8)
+    assigned = np.empty(n_groups, dtype=np.int64)
     for position in np.argsort(-spread, kind="mergesort"):
         k = int(position)
         best, best_eval, best_size = 0, np.inf, np.inf
@@ -255,7 +255,7 @@ def _group_folds(y: np.ndarray, group: np.ndarray, perm: np.ndarray, n_splits: i
                 best, best_eval, best_size = f, evaluation, size
         in_fold[best] += counts[k]
         assigned[k] = best
-    fold = np.empty(y.size, dtype=np.int8)
+    fold = np.empty(y.size, dtype=np.int64)
     for i in range(y.size):
         fold[i] = assigned[inverse[group[i]]]
     return fold
@@ -274,13 +274,13 @@ def _folds(y: np.ndarray, replicates: np.ndarray | None, n_folds: int, seed: int
     else:
         folds = min(n_folds, *(np.unique(replicates[y == side]).size for side in (0, 1)))
     if folds < 2:
-        return np.empty(y.size, dtype=np.int8), 0
+        return np.empty(y.size, dtype=np.int64), 0
     if replicates is not None:
         group = np.unique(replicates, return_inverse=True)[1]
         perm = np.arange(group.max() + 1)
         np.random.RandomState(seed).shuffle(perm)  # StratifiedGroupKFold's check_random_state(seed), then rng.shuffle
         return _group_folds(y, group, perm, folds), folds
-    fold = np.empty(y.size, dtype=np.int8)
+    fold = np.empty(y.size, dtype=np.int64)
     cv = StratifiedKFold(n_splits=folds, shuffle=True, random_state=seed)
     for number, (_, test) in enumerate(cv.split(np.empty((y.size, 1)), y)):
         fold[test] = number
@@ -343,7 +343,7 @@ def perturbation_score(
         Writes ``uns["mantispy"][key_added]``, one row per group with ``group``, ``n_cells``, ``n_reference`` (the size of its reference sample), ``n_folds`` and ``auc``, which is missing for an unscored group; with `by`, one row per group and level and a column named for `by` holding the level.
 
     Raises:
-        ValueError: `reference` selects no cells, or a scored cell or a reference cell has a missing feature value.
+        ValueError: `n_features` is not a positive integer, `n_folds` is not an integer of at least two, `reference` selects no cells, or a scored cell or a reference cell has a missing feature value.
         KeyError: `groupby`, `replicate` or `by` names a column that ``obs`` lacks.
 
     Notes:
@@ -358,6 +358,9 @@ def perturbation_score(
         The fit is a port of the liblinear solver ``LogisticRegression(solver="liblinear")`` runs, so the scores match scikit-learn's as closely as liblinear matches itself when its input moves by rounding.
         A backed object is read a batch of groups at a time, each group's rows and its reference sample, so it is never loaded whole.
     """
+    for name, value, least in (("n_features", n_features, 1), ("n_folds", n_folds, 2)):
+        if not isinstance(value, int | np.integer) or isinstance(value, bool) or value < least:
+            raise ValueError(f"{name} must be an integer of at least {least}, got {value!r}")
     is_reference = reference_mask(adata, reference)
     if not is_reference.any():
         raise ValueError(f"reference={reference!r} selects no cells")
