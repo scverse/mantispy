@@ -89,11 +89,11 @@ def test_the_exact_path_is_deterministic_and_order_free():
 
 def test_landmarks_place_every_row_and_follow_the_seed():
     adata = _blobs(n_per=100, spread=1.5)
-    mt.tl.phate(adata, n_landmark=60, t=8, random_state=3)
-    assert adata.uns["phate"]["params"]["n_landmark"] <= 60
+    mt.tl.phate(adata, n_landmark=100, t=8, random_state=3)
+    assert adata.uns["phate"]["params"]["n_landmark"] <= 100
     assert adata.obsm["X_phate_potential"].shape == (adata.n_obs, adata.uns["phate"]["params"]["n_landmark"])
     first = adata.obsm["X_phate"].copy()
-    mt.tl.phate(adata, n_landmark=60, t=8, random_state=3)
+    mt.tl.phate(adata, n_landmark=100, t=8, random_state=3)
     np.testing.assert_array_equal(first, adata.obsm["X_phate"])
     # Landmarks approximate the exact walk, so the layout matches the exact one up to rotation and scale.
     mt.tl.phate(adata, n_landmark=None, t=8)

@@ -36,67 +36,154 @@ _N_SVD = 100
 
 @njit(parallel=True, cache=True, nogil=True)
 def _select_neighbours(
-    gram: np.ndarray,
-    chosen: np.ndarray,
-    first_column: int,
-    norms: np.ndarray,
-    first: int,
-    out_idx: np.ndarray,
-    out_sq: np.ndarray,
+    gram: np.ndarray, chosen: np.ndarray, half_norms: np.ndarray, first: int, out_idx: np.ndarray, out_sq: np.ndarray
 ) -> None:
-    """Offer a block of candidates to the running ``k`` nearest of each chosen row, ties broken by row.
+    """The ``k`` nearest rows of each of ``chosen`` into rows ``first ..`` of the outputs, ties broken by row.
 
-    ``gram`` holds the inner products of the chosen rows with rows ``first_column ..``, so each squared distance is
-    read off it and the norms without forming a distance matrix; each row's own column goes first at distance zero.
-    The candidate lists in rows ``first ..`` of the outputs carry over between calls.
+    ``gram`` holds the inner products of the chosen rows with every row. A squared distance is
+    ``|a|^2 + |b|^2 - 2 a.b``, so a candidate is ranked by ``|b|^2 / 2 - a.b`` alone and the full distance is formed
+    only for the few that enter the list; each row's own column goes first at distance zero.
     """
-    n_rows, n_columns = gram.shape
+    n_rows, n = gram.shape
     k = out_idx.shape[1]
     n_chunks = min(N_CHUNKS, n_rows)
     for chunk in prange(n_chunks):
         for r in range(chunk * n_rows // n_chunks, (chunk + 1) * n_rows // n_chunks):
             best_d = out_sq[first + r]
             best_i = out_idx[first + r]
+            best_d[:] = np.inf
+            best_i[:] = n
             own = chosen[r]
-            base = norms[own]
+            best_d[0] = -np.inf
+            best_i[0] = own
+            base = 2.0 * half_norms[own]
             row = gram[r]
-            for c in range(n_columns):
-                j = first_column + c
-                if j == own:
-                    d = -1.0
-                else:
-                    # The expansion can dip just below zero for near-identical rows.
-                    d = max(base + norms[j] - 2.0 * row[c], 0.0)
-                if d > best_d[k - 1] or (d == best_d[k - 1] and j > best_i[k - 1]):
+            if k < 2:
+                best_d[0] = 0.0
+                continue
+            # Rank key of the current k-th candidate; the k-th is replaced only by a strictly nearer row.
+            limit = np.inf
+            for j in range(n):
+                key = half_norms[j] - np.float64(row[j])
+                if key >= limit or j == own:
                     continue
+                d = max(base + 2.0 * key, 0.0)
                 slot = k - 1
-                while slot > 0 and best_d[slot - 1] > d:
+                while slot > 1 and best_d[slot - 1] > d:
                     best_d[slot] = best_d[slot - 1]
                     best_i[slot] = best_i[slot - 1]
                     slot -= 1
                 best_d[slot] = d
                 best_i[slot] = j
+                if best_d[k - 1] < np.inf:
+                    limit = (best_d[k - 1] - base) / 2.0
+            best_d[0] = 0.0
+
+
+@njit(parallel=True, cache=True, nogil=True)
+def _refine(
+    x: np.ndarray,
+    rows: np.ndarray,
+    candidates: np.ndarray,
+    screened: np.ndarray,
+    bound: np.ndarray,
+    out_idx: np.ndarray,
+    out_sq: np.ndarray,
+    exact: np.ndarray,
+) -> None:
+    """Exact squared distances to each row's screened candidates, the ``k`` nearest kept, ties broken by row.
+
+    A row is marked exact when no row outside its candidates can be nearer than its ``k``-th: everything left out
+    was screened at least as far as the last candidate, and the screening is wrong by at most ``bound``.
+    """
+    n_rows, width = candidates.shape
+    k = out_idx.shape[1]
+    d = x.shape[1]
+    n_chunks = min(N_CHUNKS, n_rows)
+    order_d = np.empty((n_chunks, width), dtype=np.float64)
+    order_i = np.empty((n_chunks, width), dtype=np.int64)
+    for chunk in prange(n_chunks):
+        best_d, best_i = order_d[chunk], order_i[chunk]
+        for r in range(chunk * n_rows // n_chunks, (chunk + 1) * n_rows // n_chunks):
+            own = rows[r]
+            filled = 0
+            for c in range(width):
+                j = candidates[r, c]
+                if j == own:
+                    dist = -1.0  # the row itself always comes first
+                else:
+                    dist = 0.0
+                    for f in range(d):
+                        diff = x[own, f] - x[j, f]
+                        dist += diff * diff
+                slot = filled
+                while slot > 0 and (best_d[slot - 1] > dist or (best_d[slot - 1] == dist and best_i[slot - 1] > j)):
+                    best_d[slot] = best_d[slot - 1]
+                    best_i[slot] = best_i[slot - 1]
+                    slot -= 1
+                best_d[slot] = dist
+                best_i[slot] = j
+                filled += 1
+            for c in range(k):
+                out_idx[r, c] = best_i[c]
+                out_sq[r, c] = max(best_d[c], 0.0)
+            exact[r] = screened[r, width - 1] - bound[r] > out_sq[r, k - 1]
+
+
+def _screen(x: np.ndarray, rows: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
+    """The ``k`` nearest rows of each of ``rows`` by inner products in ``x``'s own precision, one block at a time."""
+    n = x.shape[0]
+    half_norms = np.einsum("ij,ij->i", x, x, dtype=np.float64) / 2.0
+    idx = np.empty((rows.size, k), dtype=np.int64)
+    sq = np.empty((rows.size, k), dtype=np.float64)
+    block = max(1, _BLOCK_ENTRIES // max(n, 1))
+    gram = np.empty((min(block, rows.size), n), dtype=x.dtype)
+    for start in range(0, rows.size, block):
+        chosen = rows[start : start + block]
+        out = gram[: chosen.size]
+        np.matmul(x[chosen], x.T, out=out)
+        _select_neighbours(out, chosen, half_norms, start, idx, sq)
+    return idx, sq
 
 
 def nearest_neighbours(x: np.ndarray, k: int, rows: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
     """Exact ``k`` nearest neighbours of ``rows`` (all rows by default) among the rows of ``x``, self included first.
 
     Returns ``(indices, distances)``, each ``(len(rows), k)``, distances Euclidean and ascending.
-    Inner products come from one matrix product per block of rows, so memory stays bounded at any size.
+    Candidates are screened in single precision, twice as many as asked for, and their distances recomputed exactly;
+    a row whose screening cannot rule out a nearer row outside its candidates is searched again in double precision.
     """
     n = x.shape[0]
     rows = np.arange(n, dtype=np.int64) if rows is None else rows.astype(np.int64)
-    norms = np.einsum("ij,ij->i", x, x)
-    idx = np.full((rows.size, k), n, dtype=np.int64)
-    sq = np.full((rows.size, k), np.inf, dtype=np.float64)
-    block = max(1, _BLOCK_ENTRIES // max(n, 1))
-    gram = np.empty((min(block, rows.size), n), dtype=np.float64)
-    for start in range(0, rows.size, block):
-        chosen = rows[start : start + block]
-        out = gram[: chosen.size]
-        np.matmul(x[chosen], x.T, out=out)
-        _select_neighbours(out, chosen, 0, norms, start, idx, sq)
-    sq[:, 0] = 0.0
+    centred = np.ascontiguousarray(x - x.mean(axis=0), dtype=np.float64)
+    width = min(n, 2 * k)
+    idx = np.empty((rows.size, k), dtype=np.int64)
+    sq = np.empty((rows.size, k), dtype=np.float64)
+    exact = np.zeros(rows.size, dtype=np.bool_)
+    norms = np.einsum("ij,ij->i", centred, centred)
+    if width < n:
+        candidates, screened = _screen(centred.astype(np.float32), rows, width)
+        # Rounding the rows to single precision and the inner products in it bound the error of a screened distance.
+        unit = (2.0 * (centred.shape[1] + 2) + 2.0) * 2.0**-23
+        bound = unit * (norms[rows] + norms.max())
+        _refine(centred, rows, candidates, screened, bound, idx, sq, exact)
+    redo = np.flatnonzero(~exact)
+    if redo.size:
+        candidates, screened = _screen(centred, rows[redo], k)
+        sub_idx = np.empty((redo.size, k), dtype=np.int64)
+        sub_sq = np.empty((redo.size, k), dtype=np.float64)
+        # A double-precision search is exact; the refine only recomputes its distances from differences.
+        _refine(
+            centred,
+            rows[redo],
+            candidates,
+            np.full_like(screened, np.inf),
+            np.zeros(redo.size),
+            sub_idx,
+            sub_sq,
+            np.empty(redo.size, dtype=np.bool_),
+        )
+        idx[redo], sq[redo] = sub_idx, sub_sq
     return idx, np.sqrt(sq)
 
 
@@ -472,7 +559,7 @@ def _recentre(x: np.ndarray, order: np.ndarray, offsets: np.ndarray, centres: np
 
 
 def kmeans(x: np.ndarray, n_clusters: int, seed: int, max_iter: int = 20) -> np.ndarray:
-    """Lloyd's k-means from k-means++ seeds, until no row changes centre or ``max_iter`` rounds.
+    """Lloyd's k-means from k-means++ seeds, until almost no row changes centre or ``max_iter`` rounds.
 
     Each assignment takes the distances to the centres from one matrix product per block of rows.
     """
@@ -495,11 +582,47 @@ def kmeans(x: np.ndarray, n_clusters: int, seed: int, max_iter: int = 20) -> np.
             out = gram[: min(block, n - lo)]
             np.matmul(x[lo : lo + block], centres.T, out=out)
             _nearest_centre(out, sizes, labels[lo : lo + block])
-        if np.array_equal(labels, previous):
+        # Landmarks need a good partition, not a converged one: stop once almost no row moves.
+        if np.count_nonzero(labels != previous) <= n // 1000:
             break
         order, offsets = group_offsets(labels, n_clusters)
         _recentre(x, order, offsets, centres)
     return labels
+
+
+def _orthonormal(block: np.ndarray) -> np.ndarray:
+    """An orthonormal basis of a tall block's columns, by Cholesky QR applied twice, which costs two matrix products."""
+    from scipy.linalg import cholesky, solve_triangular
+
+    for _ in range(2):
+        try:
+            factor = cholesky(block.T @ block, lower=False)
+        except np.linalg.LinAlgError:
+            return np.ascontiguousarray(np.linalg.qr(block)[0])
+        block = solve_triangular(factor, block.T, trans="T", lower=False).T
+    return np.ascontiguousarray(block)
+
+
+def _leading_eigenpairs(matrix: sp.csr_matrix, k: int, seed: int, n_iter: int = 5) -> tuple[np.ndarray, np.ndarray]:
+    """Leading ``k`` eigenpairs by magnitude of a symmetric sparse ``matrix``, by randomized subspace iteration.
+
+    Each round multiplies the subspace by the matrix in parallel and re-orthonormalises it; the eigenpairs then come
+    from the small projected matrix (Halko, Martinsson and Tropp, 2011).
+    """
+    n = matrix.shape[0]
+    width = min(n, k + 10)
+    indptr = matrix.indptr.astype(np.int64)
+    indices = matrix.indices.astype(np.int64)
+    data = matrix.data.astype(np.float64)
+    basis = _orthonormal(np.random.default_rng(seed).standard_normal((n, width)))
+    product = np.empty_like(basis)
+    for _ in range(n_iter):
+        _sparse_times_dense(indptr, indices, data, basis, product)
+        basis = _orthonormal(product)
+    _sparse_times_dense(indptr, indices, data, basis, product)
+    values, vectors = np.linalg.eigh(basis.T @ product)
+    order = np.argsort(np.abs(values))[::-1][:k]
+    return values[order], basis @ vectors[:, order]
 
 
 def landmarks(kernel: sp.csr_matrix, degree: np.ndarray, n_landmark: int, seed: int) -> np.ndarray:
@@ -508,11 +631,9 @@ def landmarks(kernel: sp.csr_matrix, degree: np.ndarray, n_landmark: int, seed: 
     The coordinates are the leading eigenvectors of the operator's symmetric conjugate, scaled by their eigenvalues.
     Returns each row's landmark, numbered ``0 .. m - 1`` over the landmarks that kept a row.
     """
-    from sklearn.utils.extmath import randomized_svd
-
     n = kernel.shape[0]
     scale = 1.0 / np.sqrt(degree)
     conjugate = (sp.diags(scale) @ kernel @ sp.diags(scale)).tocsr()
-    u, s, _ = randomized_svd(conjugate, n_components=min(_N_SVD, n - 1), random_state=seed)
-    labels = kmeans(scale[:, None] * u * s, n_landmark, seed)
+    values, vectors = _leading_eigenpairs(conjugate, min(_N_SVD, n - 1), seed)
+    labels = kmeans(scale[:, None] * vectors * np.abs(values), n_landmark, seed)
     return np.unique(labels, return_inverse=True)[1].astype(np.int64)
