@@ -9,24 +9,13 @@ with ``y_i`` in ``{-1, +1}`` and the bias appended to ``x_i`` as a constant colu
 intercept is regularized like every other weight. This is a port of ``tron.cpp`` and ``l2r_lr_fun`` from the copy
 scikit-learn vendors, step for step: the same start at zero, trust-region updates, conjugate-gradient cut-off and
 stopping rule ``||g|| <= eps * max(min(n_pos, n_neg), 1) / n * ||g_0||``, and the rows in liblinear's order, the
-negative class first. It follows liblinear's iterates, so the fit stops where liblinear stops; a solver run to the exact
-optimum differs from liblinear by as much as that loose tolerance allows. Where a rounding-level difference flips
-one of the trust-region or stopping decisions, the two stop at different points within that tolerance, as liblinear
-itself does when its input moves by one ulp.
+negative class first, so the fit stops where liblinear stops rather than at the exact optimum.
 """
 
 from __future__ import annotations
 
 import numpy as np
 from numba import njit
-
-
-@njit(cache=True, nogil=True)
-def _dot(a: np.ndarray, b: np.ndarray) -> float:
-    total = 0.0
-    for j in range(a.size):
-        total += a[j] * b[j]
-    return total
 
 
 @njit(cache=True, nogil=True)
@@ -39,9 +28,9 @@ def _axpy(alpha: float, x: np.ndarray, y: np.ndarray) -> None:
 @njit(cache=True, nogil=True)
 def _loss(x: np.ndarray, y: np.ndarray, c: np.ndarray, w: np.ndarray, z: np.ndarray) -> float:
     """The objective at ``w``, leaving the margins ``x @ w`` in ``z`` for :func:`_gradient`."""
-    f = 0.5 * _dot(w, w)
+    f = 0.5 * np.dot(w, w)
     for i in range(x.shape[0]):
-        z[i] = _dot(x[i], w)
+        z[i] = np.dot(x[i], w)
         yz = y[i] * z[i]
         if yz >= 0:
             f += c[i] * np.log(1 + np.exp(-yz))
@@ -67,7 +56,7 @@ def _hessian_times(x: np.ndarray, curvature: np.ndarray, s: np.ndarray, out: np.
     """``(I + X' diag(curvature) X) s`` into ``out``."""
     out[:] = s
     for i in range(x.shape[0]):
-        _axpy(curvature[i] * _dot(x[i], s), x[i], out)
+        _axpy(curvature[i] * np.dot(x[i], s), x[i], out)
 
 
 @njit(cache=True, nogil=True)
@@ -85,16 +74,16 @@ def _conjugate_gradient(
     s[:] = 0.0
     r[:] = -g
     d[:] = r
-    cgtol = 0.1 * np.sqrt(_dot(g, g))
-    rtr = _dot(r, r)
-    while np.sqrt(_dot(r, r)) > cgtol:
+    cgtol = 0.1 * np.sqrt(np.dot(g, g))
+    rtr = np.dot(r, r)
+    while np.sqrt(np.dot(r, r)) > cgtol:
         _hessian_times(x, curvature, d, hd)
-        alpha = rtr / _dot(d, hd)
+        alpha = rtr / np.dot(d, hd)
         _axpy(alpha, d, s)
-        if np.sqrt(_dot(s, s)) > delta:
+        if np.sqrt(np.dot(s, s)) > delta:
             # Step back and walk along d to the trust-region boundary.
             _axpy(-alpha, d, s)
-            std, sts, dtd = _dot(s, d), _dot(s, s), _dot(d, d)
+            std, sts, dtd = np.dot(s, d), np.dot(s, s), np.dot(d, d)
             dsq = delta * delta
             rad = np.sqrt(std * std + dtd * (dsq - sts))
             alpha = (dsq - sts) / (std + rad) if std >= 0 else (rad - std) / dtd
@@ -102,7 +91,7 @@ def _conjugate_gradient(
             _axpy(-alpha, hd, r)
             return
         _axpy(-alpha, hd, r)
-        rnew = _dot(r, r)
+        rnew = np.dot(r, r)
         beta = rnew / rtr
         for j in range(d.size):
             d[j] = beta * d[j] + r[j]
@@ -134,19 +123,19 @@ def fit_l2_logistic(x: np.ndarray, y: np.ndarray, c: np.ndarray, tol: float, max
     z, curvature = np.empty(n), np.empty(n)
     f = _loss(x, y, c, w, z)
     _gradient(x, y, c, w, z, curvature, g)
-    delta = np.sqrt(_dot(g, g))
+    delta = np.sqrt(np.dot(g, g))
     gnorm0 = delta
     iteration = 1
-    while iteration <= max_iter and np.sqrt(_dot(g, g)) > eps * gnorm0:
+    while iteration <= max_iter and np.sqrt(np.dot(g, g)) > eps * gnorm0:
         _conjugate_gradient(x, curvature, delta, g, s, r, d, hd)
         w_new[:] = w
         _axpy(1.0, s, w_new)
-        gs = _dot(g, s)
-        predicted = -0.5 * (gs - _dot(s, r))
+        gs = np.dot(g, s)
+        predicted = -0.5 * (gs - np.dot(s, r))
         f_new = _loss(x, y, c, w_new, z)
         actual = f - f_new
 
-        snorm = np.sqrt(_dot(s, s))
+        snorm = np.sqrt(np.dot(s, s))
         if iteration == 1:
             delta = min(delta, snorm)
         alpha = 4.0 if f_new - f - gs <= 0 else max(0.25, -0.5 * (gs / (f_new - f - gs)))
