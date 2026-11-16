@@ -115,6 +115,28 @@ def test_group_codes_matches_the_multiindex_path(mixed_adata, by):
     assert keys.equals(ref_uniques)
 
 
+def test_group_codes_keeps_a_categorical_columns_dtype(mixed_adata):
+    """A categorical key comes back in its own dtype, so an ordered one keeps its order and ``max`` reads it."""
+    _, keys = group_codes(mixed_adata, ["Metadata_Plate", "Metadata_Level"])
+    level = keys.get_level_values("Metadata_Level")
+    assert level.dtype == mixed_adata.obs["Metadata_Level"].dtype
+    assert level.max() == "hi"
+
+
+def test_group_codes_sorts_categories_of_mixed_types(mixed_adata):
+    """Plate barcodes that mix numbers and strings, as JUMP's do, group by value without comparing an int to a str."""
+    obs = mixed_adata.obs
+    source = {0.4: "BR00117010", 2.0: 1001, 10.0: 1002}
+    obs["Metadata_Source"] = pd.Categorical(np.array([source[dose] for dose in obs["Metadata_Dose"]], dtype=object))
+    codes, keys = group_codes(mixed_adata, ["Metadata_Source", "Metadata_Plate"])
+    assert keys.get_level_values("Metadata_Source").unique().tolist() == [1001, 1002, "BR00117010"]
+    labels = keys[codes]
+    assert all(
+        label == (source, plate)
+        for label, source, plate in zip(labels, obs["Metadata_Source"], obs["Metadata_Plate"], strict=True)
+    )
+
+
 def test_reduce_grouped_reuses_a_precomputed_grouping(mixed_adata):
     """Passing grouping= must give the same statistic as letting reduce_grouped factorize itself."""
     by = ["Metadata_Plate", "Metadata_Well"]

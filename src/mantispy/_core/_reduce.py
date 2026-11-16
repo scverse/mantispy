@@ -301,13 +301,14 @@ def _multi_group_codes(frame: pd.DataFrame, columns: list[str]) -> tuple[np.ndar
     Each column is factorized on its own, with its dtype kept, and the per-column codes are combined into one integer per row that sorts in that same order.
     Materializing the tuples instead costs an object array per row, which dominates grouping at screen scale.
     """
-    per_column = []
+    per_column: list[tuple[np.ndarray, Any]] = []
     for position in range(len(columns)):
         # By position, so a column named twice in ``columns`` is read as a Series rather than a two-column frame.
         column = frame.iloc[:, position]
         if isinstance(column.dtype, pd.CategoricalDtype):
-            column = column.cat.reorder_categories(column.cat.categories.sort_values())
-        per_column.append(pd.factorize(column, sort=True))
+            per_column.append(_sorted_categorical_codes(column))
+        else:
+            per_column.append(pd.factorize(column, sort=True))
     sizes = tuple(max(len(uniques), 1) for _, uniques in per_column)
     if np.prod(sizes, dtype=np.float64) > np.iinfo(np.intp).max:
         # Too many combinations for one integer; the object-tuple path is correct whatever the sizes.
@@ -318,6 +319,20 @@ def _multi_group_codes(frame: pd.DataFrame, columns: list[str]) -> tuple[np.ndar
     positions = np.unravel_index(np.asarray(present), sizes)
     levels = [uniques.take(taken) for (_, uniques), taken in zip(per_column, positions, strict=True)]
     return codes.astype(np.int32), pd.MultiIndex.from_arrays(levels, names=columns)
+
+
+def _sorted_categorical_codes(column: pd.Series) -> tuple[np.ndarray, pd.Categorical]:
+    """``pd.factorize(column, sort=True)`` for a categorical column, sorted by its values rather than its categories.
+
+    The categories are ranked by ``factorize(sort=True)``, which also orders a mix of numbers and strings, and the
+    uniques keep the column's own dtype, so an ordered categorical comes back with its order.
+    """
+    categories = column.cat.categories
+    position = categories.get_indexer(pd.Index(categories.factorize(sort=True)[1]))  # the category at each sorted rank
+    rank = np.empty(position.size, dtype=np.intp)
+    rank[position] = np.arange(position.size)
+    codes, present = pd.factorize(rank[column.cat.codes.to_numpy()], sort=True)
+    return codes, pd.Categorical.from_codes(position[present], categories=categories, ordered=column.cat.ordered)
 
 
 def iter_waves(
