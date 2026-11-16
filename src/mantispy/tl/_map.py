@@ -111,7 +111,7 @@ def _list_valued(series: pd.Series) -> bool:
     return False
 
 
-def _refuse_unrankable(features: np.ndarray, names: pd.Index, distance: str) -> None:
+def _refuse_unrankable(features: np.ndarray, meta: pd.DataFrame, group_columns: list[str], distance: str) -> None:
     """Raise when a profile holds an infinite value or, for a cosine or correlation distance, has a zero or overflowing norm.
 
     Such a profile is zeroed by the cosine, so every similarity it has ties and its replicates rank first, scoring an
@@ -124,9 +124,11 @@ def _refuse_unrankable(features: np.ndarray, names: pd.Index, distance: str) -> 
             norm = np.linalg.norm(rows, axis=1)
         bad |= ~np.isfinite(norm) | (norm == 0)
     if bad.any():
+        labels = meta.loc[bad, group_columns].astype(str).agg("/".join, axis=1)
+        names = ", ".join(f"{label} ({count})" for label, count in labels.value_counts(sort=False).iloc[:5].items())
         raise ValueError(
             f"mAP cannot rank {int(bad.sum())} profile(s) with an infinite value, or a zero or overflowing norm "
-            f"under distance={distance!r} (e.g. in {', '.join(str(name) for name in names[bad].unique()[:5])}). Drop the features with no "
+            f"under distance={distance!r} (by group: {names}). Drop the features with no "
             "spread that normalize flags in var['degenerate_scale'], or features with extreme values, first."
         )
 
@@ -178,7 +180,7 @@ def _score_map(
     from mantispy._core._stats import benjamini_hochberg
 
     group_columns = [column for column in settings["pos_sameby"] if column != REFERENCE_COLUMN]
-    _refuse_unrankable(features, pd.Index(meta[group_columns].astype(str).agg("/".join, axis=1)), distance)
+    _refuse_unrankable(features, meta, group_columns, distance)
 
     _check_null(null, null_sampler, seed)
     lay = ap_kernel.layout(

@@ -420,6 +420,15 @@ def test_map_refuses_profiles_it_cannot_rank(profiles, value):
         mt.tl.map(profiles, mode="activity", null_size=100)
 
 
+def test_map_names_the_groups_of_the_profiles_it_cannot_rank(profiles):
+    values = profiles.X.copy()
+    values[0] = 0.0
+    profiles.X = values
+    label = profiles.obs["Metadata_Perturbation"].iloc[0]
+    with pytest.raises(ValueError, match=rf"by group: {label} \(1\)"):
+        mt.tl.map(profiles, mode="activity", null_size=100)
+
+
 def test_map_checks_only_the_profiles_it_scores(profiles):
     """Replicability leaves the controls out, so an unrankable control profile does not stop it."""
     values = profiles.X.copy()
@@ -446,7 +455,7 @@ def test_evaluate_integration_refuses_a_representation_it_cannot_rank():
     zeroed = noise.copy()
     zeroed[labels == "p0"] = 0.0
     adata = ad.AnnData(noise.astype(np.float32), obs=obs, obsm={"X_noise": noise, "X_zeroed": zeroed})
-    with pytest.raises(ValueError, match=r"cannot rank 40 profile"):
+    with pytest.raises(ValueError, match=r"obsm\['X_zeroed'\].*cannot rank 40 profile"):
         mt.metrics.evaluate_integration(adata, reps=("X_noise", "X_zeroed"), metrics=["map"])
 
 

@@ -95,7 +95,12 @@ def _rep_map(
         features = features[treated]
 
     # compute_null=False skips the permutation null: only the mean point estimate is read here, not the p-values.
-    table, _ = _score_map(meta, features, settings, null_size=0, threshold=0.05, seed=0, warn=False, compute_null=False)
+    try:
+        table, _ = _score_map(
+            meta, features, settings, null_size=0, threshold=0.05, seed=0, warn=False, compute_null=False
+        )
+    except ValueError as error:
+        raise ValueError(f"obsm[{use_rep!r}]: {error}") from error
     return float(table["score"].mean())
 
 
