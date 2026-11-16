@@ -8,8 +8,6 @@ The Brieflow names refer to functions under `workflow/lib` and `workflow/scripts
 % TODO(maintainer): add the mantispy and Brieflow benchmark comparison from the final re-benchmark here.
 A benchmark comparison of mantispy and Brieflow on the same screen will be added to the page.
 
-`mt.pp.pseudogenes` needs the open pull request [#336](https://github.com/scverse/mantispy/pull/336), and `mt.tl.phate` with `mt.tl.cluster(..., neighbors_key=...)` needs the open pull request [#340](https://github.com/scverse/mantispy/pull/340).
-
 ## Run order
 
   | Step               | Brieflow                                                     | mantispy                                                                                                          |
@@ -23,10 +21,10 @@ A benchmark comparison of mantispy and Brieflow on the same screen will be added
   | TVN and CORAL      | `tvn_on_controls`                                            | {func}`~mantispy.pp.tvn`                                                                                          |
   | Perturbation score | `perturbation_score`                                         | {func}`~mantispy.tl.perturbation_score`                                                                           |
   | Gene aggregation   | `aggregate`                                                  | {func}`~mantispy.tl.aggregate`                                                                                    |
-  | Pseudo-genes       | `create_pseudogene_groups`                                   | `mt.pp.pseudogenes` (#336)                                                                                        |
+  | Pseudo-genes       | `create_pseudogene_groups`                                   | none                                                                                                              |
   | Feature bootstrap  | `run_gene_bootstrap`, `apply_multiple_hypothesis_correction` | {func}`~mantispy.tl.bootstrap_features`                                                                           |
   | mAP                | none                                                         | {func}`~mantispy.tl.map`                                                                                          |
-  | Cluster            | `phate_leiden_pipeline`, `run_benchmark_analysis`            | `mt.tl.phate` (#340), {func}`~mantispy.tl.cluster`, {func}`~mantispy.metrics.known_relationships`                 |
+  | Cluster            | `phate_leiden_pipeline`, `run_benchmark_analysis`            | {func}`~mantispy.tl.phate`, {func}`~mantispy.tl.cluster`, {func}`~mantispy.metrics.known_relationships`           |
 
 The code on the page uses the following imports.
 
@@ -182,21 +180,10 @@ The last line is Brieflow’s `clean_aggregate`, which keeps genes with more tha
 
 ## Pseudo-genes
 
-`mt.pp.pseudogenes` needs [#336](https://github.com/scverse/mantispy/pull/336).
-Brieflow’s `create_pseudogene_groups` groups control guides into pseudo-genes, which have no phenotype, so the share the bootstrap calls estimates its false-positive rate.
-
-```python
-mt.pp.pseudogenes(adata, groupby="Metadata_Gene", replicate="Metadata_sgRNA", size=constructs_per_pseudogene)
-```
-
-The new gene column is `Metadata_Gene_pseudo`.
-`size=None` uses the median number of guides per gene.
-mantispy differs from Brieflow on purpose in how the pseudo-genes are tested.
-
-- {func}`~mantispy.tl.bootstrap_features` tests each pseudo-gene against every control guide except its own. Brieflow keeps a pseudo-gene's own guides in its null, which makes the pseudo-gene look like its null and understates the false-positive rate.
-- The pseudo-genes get Benjamini-Hochberg q-values among themselves, so the real genes get the same q-values as in a run without pseudo-genes. Brieflow corrects real and pseudo-genes together.
-
-The pseudo-genes are pooled from every control guide, and the leftover guides that don’t fill a group stay plain controls, where Brieflow groups each control category apart and keeps the leftover guides as one smaller pseudo-gene.
+Brieflow’s `create_pseudogene_groups` groups control guides into pseudo-genes and counts how many of them the bootstrap calls, as an estimate of its false-positive rate.
+mantispy has no counterpart, because the check can’t see the problems it’s meant to find.
+The bootstrap null is drawn from the same control guides, so plate offsets, differences between control guides and clustering of control cells widen the null as much as they move the pseudo-genes, and the bootstrap calls fewer genes rather than more pseudo-genes.
+With Aconcagua’s 250 control guides, the check could only detect a false-positive rate four to six times too high.
 
 ## Feature bootstrap
 
@@ -206,7 +193,7 @@ It runs on the control-scaled features, not on the TVN components.
 ```python
 mt.tl.bootstrap_features(
     adata,
-    groupby="Metadata_Gene_pseudo",  # "Metadata_Gene" without pseudo-genes
+    groupby="Metadata_Gene",
     replicate="Metadata_sgRNA",
     reference="negcon",
     control_scope="pooled",
@@ -262,9 +249,8 @@ mt.tl.map(guide_profiles, mode="activity", label="Metadata_Gene")
 
 ## PHATE and Leiden
 
-`mt.tl.phate` and the `neighbors_key` argument of {func}`~mantispy.tl.cluster` need [#340](https://github.com/scverse/mantispy/pull/340).
 Brieflow’s `phate_leiden_pipeline` embeds the gene profiles with PHATE (`run_phate`, 10 neighbours) and clusters them with Leiden (`run_leiden_clustering`).
-`mt.tl.phate` implements PHATE in mantispy, with the parameter names and defaults of `phate.PHATE`.
+{func}`~mantispy.tl.phate` implements PHATE in mantispy, with the parameter names and defaults of `phate.PHATE`.
 
 ```python
 genes = genes.copy()  # the filters above return views
@@ -277,15 +263,15 @@ The embedding is in `obsm["X_phate"]` and the clusters are in `obs["cluster"]`.
 
 mantispy clusters on a different graph on purpose.
 Brieflow runs Leiden on PHATE’s diffusion operator, a random walk whose rows are normalized one at a time, averaged with its transpose to make it symmetric.
-`mt.tl.phate` stores PHATE’s symmetric affinity, the kernel before that normalization, in the layout {func}`scanpy.pp.neighbors` uses, and Leiden clusters on that graph.
+{func}`~mantispy.tl.phate` stores PHATE’s symmetric affinity, the kernel before that normalization, in the layout {func}`scanpy.pp.neighbors` uses, and Leiden clusters on that graph.
 The affinity is symmetric to begin with, so it needs no averaging.
 Leiden also runs through {func}`scanpy.tl.leiden` with two iterations, where Brieflow iterates until the partition stops changing.
 
 Brieflow’s `calculate_potential_to_nontargeting` measures each gene’s distance to the controls in PHATE’s diffusion potential, and mantispy deliberately has no counterpart.
 The diffusion averages each row over its neighbours in the graph, so a row’s potential depends on every other row, and the distance of a gene and the distance of a control aren’t comparable draws.
 On Aconcagua’s published gene profiles, a permutation test of distance to the controls in the potential called 14% to 17% of pseudo-genes made only of control guides at p < 0.05, where a calibrated test calls about 5%, and the same test on the principal components called at most about 2%.
-To test genes against the controls, run {func}`~mantispy.tl.bootstrap_features` with pseudo-genes, as above, on the features rather than the potential.
-A pseudo-gene null for {func}`~mantispy.tl.hit_calling` is also planned.
+To test genes against the controls, run {func}`~mantispy.tl.bootstrap_features` on the features rather than on the potential.
+A pseudo-gene null for {func}`~mantispy.tl.hit_calling` is planned.
 
 ## Benchmark against CORUM
 
