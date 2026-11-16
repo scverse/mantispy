@@ -976,7 +976,8 @@ def _real(table):
 def test_the_pseudogene_null_is_calibrated_at_matched_aggregation(func):
     """A gene pools four guides and a control row is one, so the held-out control rows sit further out than any gene.
 
-    Pseudo-genes pool four control guides the way the genes pool theirs, so on pure noise a gene is called at the nominal rate.
+    Pseudo-genes pool four control guides the way the genes pool theirs, and each gene's own guides join their pool, so on pure noise a gene is called at the nominal rate.
+    Pseudo-genes from the held-out guides alone spread a little less than a new gene and called about six in a hundred here.
     """
     pvalues = []
     for seed in range(8):
@@ -986,7 +987,7 @@ def test_the_pseudogene_null_is_calibrated_at_matched_aggregation(func):
         )
         pvalues += list(_real(adata.uns["mantispy"]["hits"])["pvalue"])
     rate = float(np.mean(np.asarray(pvalues) < 0.05))
-    assert 0.03 <= rate <= 0.075, f"called {rate:.1%} of pure noise at a nominal 5%"
+    assert 0.035 <= rate <= 0.065, f"called {rate:.1%} of pure noise at a nominal 5%"
 
 
 def test_the_permutation_null_cannot_call_a_gene_against_single_guides():
@@ -1116,7 +1117,7 @@ def test_the_pseudogene_null_matches_control_guides_to_the_genes_cell_counts(mat
         pvalues += list(_real(cells.uns["mantispy"]["hits"])["pvalue"])
     rate = float(np.mean(np.asarray(pvalues) < 0.05))
     if match_cells:
-        assert 0.025 <= rate <= 0.08, f"called {rate:.1%} of pure noise at a nominal 5%"
+        assert 0.03 <= rate <= 0.07, f"called {rate:.1%} of pure noise at a nominal 5%"
     else:
         assert rate > 0.15, f"unmatched pseudo-genes called only {rate:.1%}"
 
@@ -1134,3 +1135,38 @@ def test_guide_profiles_with_fuller_control_guides_point_to_the_cells():
     adata.obs.loc[adata.obs["Metadata_Control_Type"] == "negcon", "Metadata_CellCount"] = 400
     with pytest.raises(ValueError, match="replicate="):
         mt.tl.hit_calling(adata, groupby="Metadata_Gene", null="pseudogenes")
+
+
+def test_the_pseudogene_null_calls_about_the_same_genes_at_every_seed():
+    """Cells are subsampled afresh in every pseudo-gene, so the seed moves the calls little even with mismatched cell counts."""
+    rng = np.random.default_rng(0)
+    n_genes, n_moved = 80, 30
+    counts = list(rng.integers(20, 40, size=n_genes * 4)) + list(rng.integers(50, 90, size=100))
+    guide = np.repeat(np.arange(len(counts)), counts)
+    effect = np.zeros((len(counts), 5))
+    effect[: n_moved * 4, 0] = rng.uniform(0.3, 1.2, size=n_moved * 4)
+    values = (rng.normal(scale=0.2, size=(len(counts), 5)) + effect)[guide] + rng.normal(size=(guide.size, 5))
+    genes = np.asarray([f"g{index:03d}" for index in range(n_genes) for _ in range(4)] + [f"nt{i}" for i in range(100)])
+    gene = genes[guide]
+    obs = pd.DataFrame(
+        {
+            "Metadata_Gene": gene,
+            "Metadata_sgRNA": [f"sg{index}" for index in guide],
+            "Metadata_Control_Type": np.where(np.char.startswith(gene.astype(str), "nt"), "negcon", "treatment"),
+        },
+        index=[f"c{index}" for index in range(guide.size)],
+    )
+    cells = ad.AnnData(X=values, obs=obs)
+    calls = []
+    for seed in range(3):
+        mt.tl.hit_calling(
+            cells,
+            groupby="Metadata_Gene",
+            replicate="Metadata_sgRNA",
+            null="pseudogenes",
+            n_permutations=1000,
+            seed=seed,
+        )
+        calls.append(int(_real(cells.uns["mantispy"]["hits"])["is_hit"].sum()))
+    assert min(calls) > 0
+    assert max(calls) - min(calls) <= 0.15 * np.mean(calls), calls

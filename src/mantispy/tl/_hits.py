@@ -595,7 +595,7 @@ def hit_calling(
             On cells, each drawn control guide keeps a random subset of its cells, of a size drawn from the tested guides' cell counts.
             On guide profiles it checks ``obs["Metadata_CellCount"]`` instead and raises when the control guides carry clearly more cells than the tested guides.
             ``False`` skips both.
-        n_permutations: Size of the permutation null, or under ``null="pseudogenes"`` the number of pseudo-genes drawn for each group size.
+        n_permutations: Size of the permutation null, or under ``null="pseudogenes"`` the number of pseudo-genes without the group's own guides, drawn once for each group size.
             Applies to ``method="mahalanobis"``, ``method="hellinger"`` and ``method="mp_value"``, and to ``method="ks"`` when a replicate is in use.
             The smallest p-value a group can reach is one over this number plus one, so it sets how small a set of groups Benjamini-Hochberg can call (see Notes).
         threshold: q-value below which a group is called a hit in ``is_hit``.
@@ -655,17 +655,20 @@ def hit_calling(
         A pseudo-gene removes that mismatch, because it draws as many held-out control guides as the gene has guides and combines their rows with ``pseudogene_func``, as the gene's own rows are combined, and its profile's distance from the control centre is the null draw.
         The control guides are split as above, half placing the centre and covariance and half supplying the pseudo-genes.
         A pseudo-gene never holds one guide twice, but the draws are independent, so the same guide recurs across pseudo-genes and their number is not capped by the number of control guides.
-        Each group is ranked against the pseudo-genes of its own size, and its p-value cannot fall below one over their number plus one, or below one over the number of distinct guide sets when that is smaller.
+        A group's own guides join the pool its pseudo-genes are drawn from, as the permutation null pools a group with the controls, so the group's profile is one draw among the ways to pick its number of guides from the pool.
+        Without them, the pseudo-genes of a finite pool share their guides and spread a little less than a new gene does, which in many dimensions calls above the nominal rate.
+        The pseudo-genes without any of the group's guides are drawn once and shared by every group of that size, and those with some of its guides are drawn for each group, as many as their share of the pool calls for.
+        A group's p-value cannot fall below one over the number of its pseudo-genes plus one, which is ``n_permutations`` and the group's own draws together.
         The rows of a group are combined into one profile, so a gene-level object, one row per gene, cannot be tested this way. Aggregate the cells to one row per guide with :func:`~mantispy.tl.aggregate` and pass the gene column as ``groupby``.
         From guide profiles, a gene and a pseudo-gene are built alike; a gene aggregated from pooled cells is not, since a median over cells is a different statistic from a median over guide medians.
         A pseudo-gene must also match a gene in cells per guide.
         A guide's profile is a median over its cells, so a control guide with more cells than a gene guide has less noise, and a pseudo-gene of such guides sits closer to the centre than a gene with no phenotype, which calls too much.
-        On cells, with ``replicate`` naming the guide, ``match_cells`` subsamples each drawn control guide to a cell count drawn from the tested guides'.
+        On cells, with ``replicate`` naming the guide, ``match_cells`` subsamples each drawn control guide to a cell count drawn from the tested guides', afresh in every pseudo-gene, so the null averages over the subsampling and a seed moves the calls little.
+        The centre and covariance are still fitted on every cell of the fitting guides.
         A guide with fewer cells than its draw keeps all of them and is never upsampled, and a warning counts how many fell short.
         Guide profiles no longer hold the cells, so there the control guides cannot be subsampled, and a clear excess of cells in the control guides raises and points to the cells.
-        With few held-out control guides the pseudo-genes share most of their guides, their spread is a little narrower than a new gene's, and the rate runs a little above nominal.
 
-        The held-out control guides are also cut into disjoint pseudo-genes of the typical group size, and each is ranked against the drawn pseudo-genes that share none of its guides.
+        The held-out control guides are also cut into disjoint pseudo-genes of the typical group size, and each is tested like a group against the other held-out guides.
         These are the ``is_pseudogene`` rows of the table.
         Their q-values are corrected among themselves, so the real groups' q-values are the ones they get without them.
         The share of them below a p-value cutoff is a check on the false positive rate, though it cannot see a bias the pseudo-genes and their null share, such as the cells per guide above.
