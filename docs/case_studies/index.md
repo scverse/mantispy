@@ -10,6 +10,7 @@ pre-rendered from committed outputs rather than executed in the build, and re-ru
 learned_embeddings
 cross_laboratory
 optical_pooled_screens
+phate_leiden
 crispr
 empirical_fdr
 gene_aggregation

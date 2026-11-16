@@ -92,6 +92,7 @@ Aggregate profiles and ask what the perturbations did.
    :toctree: generated
 
    tl.cluster
+   tl.phate
    tl.gene_set_network
    tl.ora
    tl.enrich_hits

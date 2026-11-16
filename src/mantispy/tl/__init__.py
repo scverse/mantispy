@@ -29,6 +29,7 @@ from mantispy.tl._moa import moa_enrichment, nn_moa_classify
 from mantispy.tl._network import network_enrichment
 from mantispy.tl._ora import ora
 from mantispy.tl._perturbation_score import perturbation_score
+from mantispy.tl._phate import phate
 from mantispy.tl._signature import feature_signature
 from mantispy.tl._similarity import grit, percent_replicating, similarity
 from mantispy.tl._transport import transport
@@ -71,6 +72,7 @@ __all__ = [
     "percent_replicating",
     "perturbation_score",
     "phase_order",
+    "phate",
     "project_cell_cycle",
     "rank_features",
     "rank_sets",

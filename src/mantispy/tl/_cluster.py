@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numbers
+from collections.abc import Mapping
 from typing import Literal
 
 import numpy as np
@@ -129,6 +130,7 @@ def cluster(
     copy: bool = False,
     *,
     stability_window: tuple[float, float] | None = None,
+    neighbors_key: str | None = None,
 ) -> AnnData | None:
     """Cluster the profiles and store the labels, with the linkage tree for a dendrogram.
 
@@ -151,6 +153,10 @@ def cluster(
         stability_window: Optional ``(low, high)`` height band the ``criterion="stability"`` sweep is restricted to, in the same height units as ``distance_cut`` (for ``metric="correlation"``, height is ``1 - correlation``, so the correlation window 0.4 to 0.7 is ``(0.3, 0.6)``).
             ``None`` (the default) sweeps the full height range.
             Whenever provided it is validated for shape; it is only applied to the ``criterion="stability"`` automatic cut.
+        neighbors_key: For ``method="leiden"``, cluster on the graph a previous call stored under this ``uns`` key,
+            such as the affinity :func:`~mantispy.tl.phate` writes under its ``key_added``, instead of building a
+            kNN graph with :func:`scanpy.pp.neighbors`; ``use_rep`` is then unused.
+            ``None`` (the default) builds the kNN graph.
 
     Returns:
         ``None``, or the modified copy.
@@ -161,7 +167,8 @@ def cluster(
         The score that did not run stays ``nan``.
 
     Raises:
-        ValueError: ``method`` is not one of ``METHODS``, both ``distance_cut`` and ``n_clusters`` are given, ``criterion`` is not ``"silhouette"`` or ``"stability"``, ``stability_window`` is not a length-2 ``(low, high)`` pair of numbers with ``low < high`` or does not overlap the tree's height range, or the object has fewer than two rows to cluster.
+        KeyError: ``uns[neighbors_key]`` does not name a graph in ``obsp``.
+        ValueError: ``method`` is not one of ``METHODS``, ``neighbors_key`` is given without ``method="leiden"`` or equals ``key_added``, both ``distance_cut`` and ``n_clusters`` are given, ``criterion`` is not ``"silhouette"`` or ``"stability"``, ``stability_window`` is not a length-2 ``(low, high)`` pair of numbers with ``low < high`` or does not overlap the tree's height range, or the object has fewer than two rows to cluster.
 
     Notes:
         With neither ``distance_cut`` nor ``n_clusters`` the granularity is chosen automatically.
@@ -187,16 +194,37 @@ def cluster(
             raise ValueError(f"stability_window must be a (low, high) pair of numbers, got {stability_window!r}")
         if not stability_window[0] < stability_window[1]:
             raise ValueError(f"stability_window must have low < high, got {stability_window!r}")
+    if neighbors_key is not None and method != "leiden":
+        raise ValueError(f"neighbors_key is a graph for method='leiden', got method={method!r}")
     if adata.n_obs < 2:
         raise ValueError(f"clustering needs at least two rows, got {adata.n_obs}")
 
     if method == "leiden":
         import scanpy as sc
 
-        if use_rep is not None and use_rep not in adata.obsm:
+        if neighbors_key is not None:
+            if key_added == neighbors_key:
+                raise ValueError(f"key_added={key_added!r} would overwrite the graph record it clusters on")
+            entry = adata.uns.get(neighbors_key)
+            graph = entry.get("connectivities_key") if isinstance(entry, Mapping) else None
+            if graph is None or graph not in adata.obsp:
+                raise KeyError(f"uns has no graph {neighbors_key!r}; run mt.tl.phate or sc.pp.neighbors with that key")
+            graph_args = {"use": f"obsp.{graph}"}
+        elif use_rep is not None and use_rep not in adata.obsm:
             raise KeyError(f"obsm has no representation {use_rep!r}; run sc.pp.pca first, or pass use_rep=None")
-        sc.pp.neighbors(adata, use_rep=use_rep)
-        sc.tl.leiden(adata, resolution=resolution, key_added=key_added, flavor="igraph", n_iterations=2, directed=False)
+        else:
+            # scanpy would read None as X_pca, or compute it, on more than 50 features.
+            sc.pp.neighbors(adata, use_rep="X" if use_rep is None else use_rep)
+            graph_args = {}
+        sc.tl.leiden(
+            adata,
+            resolution=resolution,
+            key_added=key_added,
+            flavor="igraph",
+            n_iterations=2,
+            directed=False,
+            **graph_args,
+        )
         _warn_if_degenerate(adata.obs[key_added].to_numpy())
         return None
 

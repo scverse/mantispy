@@ -105,6 +105,7 @@ test = [
   # metrics.evaluate_integration delegates to scib-metrics; jaxlib ships cp312-cp315 wheels.
   "mantispy[integration]",
   "mantispy[spatial]",
+  "phate==2",              # PHATE parity
   "plotly>=5",
   "pycytominer==1.7.1",
   "pyod>=2",
