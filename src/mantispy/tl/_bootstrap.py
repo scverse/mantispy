@@ -38,6 +38,9 @@ _ATOM_EPS = 1e-8
 #: A gene whose even-count boundary reads a guide null that lacks more than this of its mass, which only a
 #: null whose atoms overflow their buffer does, is left ``NaN`` rather than given a p-value off by that much.
 _MAX_LOST = 1e-6
+#: A gene's boundary below its observed median, read as its split's mass less the part above, is swept directly
+#: when it comes out under this share of the split, so the subtraction cannot cost a small p-value its digits.
+_SWEEP_BOTH = 1e-6
 
 
 @njit(cache=True, nogil=True)
@@ -449,12 +452,64 @@ def _sort2(val, prob, lo, hi, stack):
                 right = j
 
 
+#: Radix digits of :func:`_radix_sort2` are this many bits wide, and its scratch counts one more than their values.
+_RADIX_BITS = 11
+_SORT_SCRATCH = (1 << _RADIX_BITS) + 1
+
+
 @njit(cache=True, nogil=True)
-def _collapse(val_buf, prob_buf, lo, hi, stack):
+def _radix_key(b):
+    """A float64's bits as an unsigned key in the float's order: the sign flipped, or every bit for a negative."""
+    return ~b if b >> np.uint64(63) else b | (np.uint64(1) << np.uint64(63))
+
+
+@njit(cache=True, nogil=True)
+def _radix_sort2(val, prob, lo, hi, val2, prob2, count):
+    """Stable sort of ``val[lo:hi]`` carrying ``prob``, by digits of the float's bits from the lowest up (LSD radix).
+
+    Each pass scatters the range by one digit into ``val2``/``prob2`` and back, a pass whose digit is the same for
+    every value is skipped, and a short range is left to :func:`_sort2`. Linear in the length per digit, where the
+    comparison sort's ``n log n`` dominated building a guide null of millions of atoms. ``count`` is the histogram.
+    """
+    n = hi - lo
+    if n <= 4096:
+        _sort2(val, prob, lo, hi, count)
+        return
+    mask = np.uint64((1 << _RADIX_BITS) - 1)
+    src_b, dst_b = val.view(np.uint64), val2.view(np.uint64)
+    src_p, dst_p = prob, prob2
+    s_off, d_off = lo, 0
+    moved = 0
+    for shift in range(0, 64, _RADIX_BITS):
+        count[:] = 0
+        for i in range(n):
+            count[np.int64((_radix_key(src_b[s_off + i]) >> np.uint64(shift)) & mask) + 1] += 1
+        if count.max() == n:  # every value shares this digit
+            continue
+        for d in range(count.size - 1):
+            count[d + 1] += count[d]
+        for i in range(n):
+            b = src_b[s_off + i]
+            d = np.int64((_radix_key(b) >> np.uint64(shift)) & mask)
+            dst_b[d_off + count[d]] = b
+            dst_p[d_off + count[d]] = src_p[s_off + i]
+            count[d] += 1
+        src_b, dst_b = dst_b, src_b
+        src_p, dst_p = dst_p, src_p
+        s_off, d_off = d_off, s_off
+        moved += 1
+    if moved % 2 == 1:  # the sorted values sit in the scratch
+        for i in range(n):
+            val[lo + i] = val2[i]
+            prob[lo + i] = prob2[i]
+
+
+@njit(cache=True, nogil=True)
+def _collapse(val_buf, prob_buf, lo, hi, val2, prob2, ints):
     """Sort ``[lo, hi)`` by value and merge equal values in place; returns the new end."""
     if hi - lo <= 0:
         return lo
-    _sort2(val_buf, prob_buf, lo, hi, stack)
+    _radix_sort2(val_buf, prob_buf, lo, hi, val2, prob2, ints)
     write = lo
     cur_v = val_buf[lo]
     acc = prob_buf[lo]
@@ -474,7 +529,9 @@ def _collapse(val_buf, prob_buf, lo, hi, stack):
 
 
 @njit(cache=True, nogil=True)
-def _build_construct(pool_sorted_row, sub_nn_row, sub_start, s0, s1, m, eps, val_buf, prob_buf, stack, sval, sfl, sgt):
+def _build_construct(
+    pool_sorted_row, sub_nn_row, sub_start, s0, s1, m, eps, val_buf, prob_buf, val2, prob2, ints, sval, sfl, sgt
+):
     """Build one guide null as merged, sorted atoms in ``val_buf``/``prob_buf``; returns their count.
 
     Mixes every control guide's exact median-atom distribution, weighted as in :func:`_pool_tails`, then
@@ -495,7 +552,7 @@ def _build_construct(pool_sorted_row, sub_nn_row, sub_start, s0, s1, m, eps, val
             return -1
     if cnt == 0:
         return 0
-    return _collapse(val_buf, prob_buf, 0, cnt, stack)
+    return _collapse(val_buf, prob_buf, 0, cnt, val2, prob2, ints)
 
 
 @njit(cache=True, nogil=True)
@@ -650,6 +707,36 @@ def _any_positive(x, k):
 
 
 @njit(cache=True, nogil=True)
+def _tie(k, g, aval, lo_c, le_end, gt_start, cut, vals, cum, obs, plow, phigh, pnan, fs, dp, stride):
+    """The term of :func:`_boundary` for low value ``aval`` whose midpoint with a high atom equals ``obs``.
+
+    That is ``P(#high == #low, the largest low guide at aval, the smallest high one at a midpoint of exactly obs)``:
+    the term of ``aval`` with the cut taken at ``>= obs``, less the one at ``> obs`` that the sweep sums. Guide
+    ``g`` found it; an earlier guide with an atom at ``aval`` has taken it already. The low weights come from
+    each guide's atoms below and at ``aval``, and the cut, as :func:`_boundary` holds it, is the ``> obs`` one.
+    """
+    inv_low, inv_high, top, below, grown, wh, wh_ge = fs[0], fs[1], fs[2], fs[3], fs[5], fs[4], fs[6]
+    for b in range(g):
+        n_lt = _count_below(vals, lo_c[b], le_end[b], aval, False)
+        if lo_c[b] + n_lt < le_end[b] and vals[lo_c[b] + n_lt] == aval:
+            return 0.0
+    for b in range(k):
+        lo = lo_c[b]
+        n_lt = _count_below(vals, lo, le_end[b], aval, False)
+        n_le = _count_below(vals, lo, le_end[b], aval, True)
+        start = cum[lo + n_lt - 1] if n_lt > 0 else 0.0
+        below[b] = plow[b] * start * inv_low[b]
+        grown[b] = plow[b] * ((cum[lo + n_le - 1] if n_le > 0 else 0.0) - start) * inv_low[b]
+        q = cut[b]
+        while q > gt_start[b] and (aval + vals[q - 1]) / 2.0 >= obs:
+            q -= 1
+        wh_ge[b] = wh[b]
+        if q < cut[b]:
+            wh_ge[b] = phigh[b] * (top[b] - (cum[q - 1] if q > lo else 0.0)) * inv_high[b]
+    return _count_grown(k, below, grown, wh_ge, pnan, dp, stride) - _count_grown(k, below, grown, wh, pnan, dp, stride)
+
+
+@njit(cache=True, nogil=True)
 def _boundary(k, lo_c, hi_c, vals, cum, obs, plow, phigh, pnan, fs, ints, dp):
     """``P(#high == #low >= 1 and the midpoint of the largest low and smallest high guide > obs)``.
 
@@ -664,10 +751,16 @@ def _boundary(k, lo_c, hi_c, vals, cum, obs, plow, phigh, pnan, fs, ints, dp):
     ``obs``. With ``F`` the probability of as many low as high guides, the low ones at most a given value
     and the high ones past the cut, the term of ``a`` is ``F(at most a) - F(below a)``. While the cut stays
     put these terms telescope, so a run of atoms under one cut is summed at once, by a dynamic program
-    over the guides (:func:`_count_grown`) that keeps every term positive. ``fs`` (6 rows), ``ints``
+    over the guides (:func:`_count_grown`) that keeps every term positive. ``fs`` (7 rows), ``ints``
     (6 rows) and ``dp`` (4 rows of ``2 k + 5``) are scratch.
+
+    Also returns ``P(#high == #low >= 1)`` over the guides with atoms on their side, the part of it whose
+    midpoint equals ``obs`` (see :func:`_tie`), and whether no atom equals ``obs``: then the rest of that split
+    has its midpoint below ``obs``.
     """
     inv_low, inv_high, top, wl, wh, grown = fs[0], fs[1], fs[2], fs[3], fs[4], fs[5]
+    clean = True
+    tie = 0.0
     le_end, gt_start, lptr, cut, run_ptr, twin = ints[0], ints[1], ints[2], ints[3], ints[4], ints[5]
     for a in range(k):
         lo = lo_c[a]
@@ -679,6 +772,7 @@ def _boundary(k, lo_c, hi_c, vals, cum, obs, plow, phigh, pnan, fs, ints, dp):
                 twin[a] = b
                 break
         cnt_le = _count_below(vals, lo, hi, obs, True)
+        clean &= cnt_le == _count_below(vals, lo, hi, obs, False)  # no atom at obs
         at_obs = cum[lo + cnt_le - 1] if cnt_le > 0 else 0.0
         top[a] = cum[hi - 1] if hi > lo else 0.0
         inv_low[a] = 1.0 / at_obs if at_obs > 0.0 else 0.0
@@ -696,8 +790,9 @@ def _boundary(k, lo_c, hi_c, vals, cum, obs, plow, phigh, pnan, fs, ints, dp):
     all_nan = 1.0
     for a in range(k):
         all_nan *= pnan[a]
-    if _count_at(k, -1, 0, wh, wl, pnan, dp, stride) <= all_nan:
-        return 0.0
+    split = _count_at(k, -1, 0, wh, wl, pnan, dp, stride) - all_nan
+    if split <= 0.0:
+        return 0.0, 0.0, 0.0, clean
     for a in range(k):
         wh[a] = 0.0  # P(high and past the current cut)
     total = 0.0
@@ -716,6 +811,10 @@ def _boundary(k, lo_c, hi_c, vals, cum, obs, plow, phigh, pnan, fs, ints, dp):
                 continue
             p = lptr[a]
             while p < le_end[a] and (vals[p] + vtop) / 2.0 <= obs:
+                if (vals[p] + vtop) / 2.0 == obs:  # vtop is the largest high atom that can tie this one
+                    tie += _tie(
+                        k, a, vals[p], lo_c, le_end, gt_start, cut, vals, cum, obs, plow, phigh, pnan, fs, dp, stride
+                    )
                 p += 1
             lptr[a] = p
             if p < le_end[a]:
@@ -745,13 +844,13 @@ def _boundary(k, lo_c, hi_c, vals, cum, obs, plow, phigh, pnan, fs, ints, dp):
                 vtop = max(vtop, vals[q - 1])
     if n_high > 0:
         total += _close_run(k, lo_c, cum, plow, inv_low, run_ptr, lptr, wh, pnan, wl, grown, dp, stride)
-    return total
+    return total, split, tie, clean
 
 
 @njit(cache=True, nogil=True)
 def _build_into(
     row, nn_row, sub_start, pool_sub_start, pool_sub_stop, p, m, eps,
-    val_buf, prob_buf, stack, sval, sfl, sgt, vals, cum, rvals, rcum, lo, room,
+    val_buf, prob_buf, val2, prob2, ints, sval, sfl, sgt, vals, cum, rvals, rcum, lo, room,
 ):  # fmt: skip
     """Build the null of pool ``p`` at ``m`` draws and, if its merged atoms fit ``room``, write them at ``lo``.
 
@@ -760,8 +859,9 @@ def _build_into(
     and the mass the pruning dropped (all of it on an overflow).
     """
     end = _build_construct(
-        row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], m, eps, val_buf, prob_buf, stack, sval, sfl, sgt
-    )
+        row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], m, eps,
+        val_buf, prob_buf, val2, prob2, ints, sval, sfl, sgt,
+    )  # fmt: skip
     if end < 0:
         return end, 1.0
     kept = 0.0
@@ -845,7 +945,9 @@ def _gene_pvalues(
     max_width = max(1, (sub_stop - sub_start).max())
     val_t = np.empty((n_slots, max_cap), dtype=np.float64)
     prob_t = np.empty((n_slots, max_cap), dtype=np.float64)
-    stack_t = np.empty((n_slots, 128), dtype=np.int64)
+    val2_t = np.empty((n_slots, max_cap), dtype=np.float64)  # the radix sort's other buffer
+    prob2_t = np.empty((n_slots, max_cap), dtype=np.float64)
+    sort_t = np.empty((n_slots, max(_SORT_SCRATCH, 128)), dtype=np.int64)
     sval_t = np.empty((n_slots, max_width), dtype=np.float64)
     sfl_t = np.empty((n_slots, max_width), dtype=np.float64)
     sgt_t = np.empty((n_slots, max_width), dtype=np.float64)
@@ -854,7 +956,7 @@ def _gene_pvalues(
     row_k = max_k + 8
     lohi_t = np.empty((n_gene_slots, 2, row_k), dtype=np.int64)
     tails_t = np.empty((n_gene_slots, 6, row_k), dtype=np.float64)
-    fs_t = np.empty((n_gene_slots, 6, row_k), dtype=np.float64)
+    fs_t = np.empty((n_gene_slots, 7, row_k), dtype=np.float64)
     ints_t = np.empty((n_gene_slots, 6, row_k), dtype=np.int64)
     dp_t = np.empty((n_gene_slots, 4, 2 * max_k + 5 + 8), dtype=np.float64)
     used = np.empty(n_nulls, dtype=np.bool_)
@@ -894,7 +996,7 @@ def _gene_pvalues(
                 if used[u]:
                     counts[u], lost[u] = _build_into(
                         row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool[u], null_size[u], eps,
-                        val_t[t], prob_t[t], stack_t[t], sval_t[t], sfl_t[t], sgt_t[t],
+                        val_t[t], prob_t[t], val2_t[t], prob2_t[t], sort_t[t], sval_t[t], sfl_t[t], sgt_t[t],
                         vals, cum, rvals, rcum, offs[u], reserve[u],
                     )  # fmt: skip
         n_grow = 0
@@ -928,7 +1030,7 @@ def _gene_pvalues(
                     u = grow[i]
                     _build_into(
                         row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool[u], null_size[u], eps,
-                        val_t[t], prob_t[t], stack_t[t], sval_t[t], sfl_t[t], sgt_t[t],
+                        val_t[t], prob_t[t], val2_t[t], prob2_t[t], sort_t[t], sval_t[t], sfl_t[t], sgt_t[t],
                         vals, cum, rvals, rcum, offs[u], reserve[u],
                     )  # fmt: skip
         # a gene costs about its guides' atom count, more when an even count sends it through the boundary sweep
@@ -992,8 +1094,16 @@ def _gene_pvalues(
                         out[g, j] = np.nan
                         unresolved[g, j] = True
                         continue
-                    above += _boundary(k, lo_c, hi_c, vals, cum, obs, le_arr, gt_arr, nan_arr, fs, ints, dp)
-                    below += _boundary(k, lo_c, hi_c, rvals, rcum, -obs, ge_arr, lt_arr, nan_arr, fs, ints, dp)
+                    over, split, tie, clean = _boundary(
+                        k, lo_c, hi_c, vals, cum, obs, le_arr, gt_arr, nan_arr, fs, ints, dp
+                    )
+                    above += over
+                    # With no atom at obs, the split's midpoint is below obs where it is neither above nor on it.
+                    # Read off as the difference only while that keeps its digits, else swept as well.
+                    if clean and split - over - tie >= _SWEEP_BOTH * split:
+                        below += split - over - tie
+                    else:
+                        below += _boundary(k, lo_c, hi_c, rvals, rcum, -obs, ge_arr, lt_arr, nan_arr, fs, ints, dp)[0]
                 out[g, j] = _two_sided(above, below, 1.0 - all_nan if any_measured else 0.0)
     return out, unresolved
 

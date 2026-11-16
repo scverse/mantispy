@@ -424,6 +424,31 @@ def test_binomial_cdf_matches_scipy(n, p):
         assert _binom_cdf(k, n, p) == pytest.approx(binom.cdf(k, n, p), abs=1e-12, rel=1e-9)
 
 
+@pytest.mark.parametrize("decimals", [None, 3])
+@pytest.mark.parametrize("m", [2, 7, 50, 1500])
+def test_a_guide_null_keeps_its_mass(decimals, m):
+    """A guide null's atoms carry all of its mass but its far tails, on continuous and on finely tied values alike."""
+    from mantispy.tl._bootstrap import _ATOM_EPS, _SORT_SCRATCH, _build_construct, _null_caps
+
+    rng = np.random.default_rng(18)
+    n, n_subs = 1000, 2
+    values = rng.normal(size=(n_subs, n))
+    if decimals is not None:
+        values = np.round(values, decimals)
+    row = np.sort(values, axis=1).ravel()
+    start = np.arange(n_subs, dtype=np.int64) * n
+    cap = _null_caps(start, start + n, np.array([0]), np.array([n_subs]), np.array([0]), np.array([m]))[0]
+    val, prob = np.empty(cap), np.empty(cap)
+    scratch = [np.empty(n) for _ in range(3)]
+    sort_scratch = (np.empty(cap), np.empty(cap), np.empty(_SORT_SCRATCH, np.int64))
+    count = _build_construct(
+        row, np.full(n_subs, n), start, 0, n_subs, m, _ATOM_EPS, val, prob, *sort_scratch, *scratch
+    )
+    assert count > 0
+    assert np.all(np.diff(val[:count]) > 0)
+    assert 1.0 - 4 * _ATOM_EPS < prob[:count].sum() <= 1.0 + 1e-12
+
+
 def test_guides_of_thousands_of_cells_match_a_simulation():
     """Binomial and order-statistic terms that underflow for thousands of draws are formed in log space."""
     rng = np.random.default_rng(8)
