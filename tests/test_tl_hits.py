@@ -1089,7 +1089,9 @@ def _guide_cells(cells_per_gene_guide=10, cells_per_control_guide=40, n_genes=15
         {
             "Metadata_Gene": gene,
             "Metadata_sgRNA": [f"sg{index:04d}" for index in guide],
-            "Metadata_Control_Type": np.where(np.char.startswith(gene.astype(str), "nontargeting"), "negcon", "treatment"),
+            "Metadata_Control_Type": np.where(
+                np.char.startswith(gene.astype(str), "nontargeting"), "negcon", "treatment"
+            ),
         },
         index=[f"c{index}" for index in range(guide.size)],
     )
