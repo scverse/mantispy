@@ -494,6 +494,10 @@ def hit_calling(
             ``"pseudogenes"`` ranks each group against pseudo-genes, each built from as many held-out control guides as the group has guides and combined the same way, for a pooled screen whose genes pool several guides (see Notes).
             It needs ``method="mahalanobis"``, and groups made of several guides: one row per guide, or cells with ``replicate`` naming the guide.
         pseudogene_func: How the rows of a group, and of a pseudo-gene, are combined into the profile whose distance is scored under ``null="pseudogenes"``: ``"median"`` or ``"mean"``, as in :func:`~mantispy.tl.aggregate`.
+        match_cells: Under ``null="pseudogenes"``, match the pseudo-gene guides to the tested guides in cells (see Notes).
+            On cells, each drawn control guide keeps a random subset of its cells, of a size drawn from the tested guides' cell counts.
+            On guide profiles it checks ``obs["Metadata_CellCount"]`` instead and raises when the control guides carry clearly more cells than the tested guides.
+            ``False`` skips both.
         n_permutations: Size of the permutation null, or under ``null="pseudogenes"`` the number of pseudo-genes drawn for each group size.
             Applies to ``method="mahalanobis"``, ``method="hellinger"`` and ``method="mp_value"``, and to ``method="ks"`` when a replicate is in use.
             The smallest p-value a group can reach is one over this number plus one, so it sets how small a set of groups Benjamini-Hochberg can call (see Notes).
@@ -513,7 +517,7 @@ def hit_calling(
 
     Raises:
         ValueError: ``method`` is not one of ``METHODS``, ``null`` is not one of ``NULLS``, ``reference`` selects fewer than four rows, or ``replicate`` is not given on a pooled design at cell resolution.
-            Under ``null="pseudogenes"``: ``method`` is not ``"mahalanobis"``, every tested group is a single guide, or a group has more guides than the held-out controls.
+            Under ``null="pseudogenes"``: ``method`` is not ``"mahalanobis"``, every tested group is a single guide, a group has more guides than the held-out controls, or ``match_cells`` finds guide profiles without ``obs["Metadata_CellCount"]`` or with control guides that carry clearly more cells than the tested guides.
 
     Notes:
         The controls are split in half.
@@ -557,7 +561,11 @@ def hit_calling(
         Each group is ranked against the pseudo-genes of its own size, and its p-value cannot fall below one over their number plus one, or below one over the number of distinct guide sets when that is smaller.
         The rows of a group are combined into one profile, so a gene-level object, one row per gene, cannot be tested this way. Aggregate the cells to one row per guide with :func:`~mantispy.tl.aggregate` and pass the gene column as ``groupby``.
         From guide profiles, a gene and a pseudo-gene are built alike; a gene aggregated from pooled cells is not, since a median over cells is a different statistic from a median over guide medians.
-        The match is in guides and not in cells, since a pseudo-gene guide keeps its own cells, so control guides with many more cells than gene guides give pseudo-genes less noise than the genes have.
+        A pseudo-gene must also match a gene in cells per guide.
+        A guide's profile is a median over its cells, so a control guide with more cells than a gene guide has less noise, and a pseudo-gene of such guides sits closer to the centre than a gene with no phenotype, which calls too much.
+        On cells, with ``replicate`` naming the guide, ``match_cells`` subsamples each drawn control guide to a cell count drawn from the tested guides'.
+        A guide with fewer cells than its draw keeps all of them and is never upsampled, and a warning counts how many fell short.
+        Guide profiles no longer hold the cells, so there the control guides cannot be subsampled, and a clear excess of cells in the control guides raises and points to the cells.
         With few held-out control guides the pseudo-genes share most of their guides, their spread is a little narrower than a new gene's, and the rate runs a little above nominal.
 
         The held-out control guides are also cut into disjoint pseudo-genes of the typical group size, and each is ranked against the drawn pseudo-genes that share none of its guides.
