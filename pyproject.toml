@@ -60,7 +60,7 @@ dependencies = [
   "scanpy>=1.13.0b1",
   "scikit-learn>=1.4",
   "scipy>=1.11",
-  "scverse-misc[datasets,rich]>=0.1.8",
+  "scverse-misc[datasets,logging,rich,settings]>=0.1.8",
   # for debug logging (referenced from the issue template)
   "session-info2",
 ]

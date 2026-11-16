@@ -109,3 +109,13 @@ def test_docstrings_carry_no_measured_sizes():
     functions += [obj for name, obj in vars(mt.ds).items() if inspect.isfunction(obj) and not name.startswith("_")]
     offenders = [f.__qualname__ for f in functions if measured.search(inspect.getdoc(f) or "")]
     assert not offenders
+
+
+def test_the_scverse_misc_extras_src_imports_from_are_declared():
+    """Settings needs the settings extra (pydantic-settings) and the logger the logging one (pydantic); src imports both."""
+    import tomllib
+
+    pyproject = tomllib.loads((SRC.parents[1] / "pyproject.toml").read_text())
+    declared = next(r for r in pyproject["project"]["dependencies"] if r.startswith("scverse-misc["))
+    extras = set(re.search(r"\[(.*)\]", declared).group(1).split(","))
+    assert {"logging", "settings"} <= extras
