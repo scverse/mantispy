@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numbers
+from collections.abc import Mapping
 from typing import Literal
 
 import numpy as np
@@ -166,8 +167,8 @@ def cluster(
         The score that did not run stays ``nan``.
 
     Raises:
-        KeyError: ``neighbors_key`` is not in ``uns``.
-        ValueError: ``method`` is not one of ``METHODS``, ``neighbors_key`` is given without ``method="leiden"``, both ``distance_cut`` and ``n_clusters`` are given, ``criterion`` is not ``"silhouette"`` or ``"stability"``, ``stability_window`` is not a length-2 ``(low, high)`` pair of numbers with ``low < high`` or does not overlap the tree's height range, or the object has fewer than two rows to cluster.
+        KeyError: ``uns[neighbors_key]`` does not name a graph in ``obsp``.
+        ValueError: ``method`` is not one of ``METHODS``, ``neighbors_key`` is given without ``method="leiden"`` or equals ``key_added``, both ``distance_cut`` and ``n_clusters`` are given, ``criterion`` is not ``"silhouette"`` or ``"stability"``, ``stability_window`` is not a length-2 ``(low, high)`` pair of numbers with ``low < high`` or does not overlap the tree's height range, or the object has fewer than two rows to cluster.
 
     Notes:
         With neither ``distance_cut`` nor ``n_clusters`` the granularity is chosen automatically.
@@ -202,12 +203,19 @@ def cluster(
         import scanpy as sc
 
         if neighbors_key is not None:
-            if neighbors_key not in adata.uns:
+            if key_added == neighbors_key:
+                raise ValueError(f"key_added={key_added!r} would overwrite the graph record it clusters on")
+            entry = adata.uns.get(neighbors_key)
+            graph = entry.get("connectivities_key") if isinstance(entry, Mapping) else None
+            if graph is None or graph not in adata.obsp:
                 raise KeyError(f"uns has no graph {neighbors_key!r}; run mt.tl.phate or sc.pp.neighbors with that key")
+            graph_args = {"use": f"obsp.{graph}"}
         elif use_rep is not None and use_rep not in adata.obsm:
             raise KeyError(f"obsm has no representation {use_rep!r}; run sc.pp.pca first, or pass use_rep=None")
         else:
-            sc.pp.neighbors(adata, use_rep=use_rep)
+            # scanpy would read None as X_pca, or compute it, on more than 50 features.
+            sc.pp.neighbors(adata, use_rep="X" if use_rep is None else use_rep)
+            graph_args = {}
         sc.tl.leiden(
             adata,
             resolution=resolution,
@@ -215,7 +223,7 @@ def cluster(
             flavor="igraph",
             n_iterations=2,
             directed=False,
-            neighbors_key=neighbors_key,
+            **graph_args,
         )
         _warn_if_degenerate(adata.obs[key_added].to_numpy())
         return None

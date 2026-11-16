@@ -2,11 +2,13 @@
 
 import logging
 import re
+import warnings
 
 import anndata as ad
 import numpy as np
 import pandas as pd
 import pytest
+from scipy.sparse.csgraph import connected_components
 from sklearn.metrics import adjusted_rand_score
 
 import mantispy as mt
@@ -226,10 +228,17 @@ def test_cluster_is_silent_on_balanced_groups(planted, caplog):
 
 def test_leiden_clusters_on_a_stored_graph_without_building_one(planted):
     planted.obsm["X_pca"] = planted.X.astype(np.float64)
-    mt.tl.phate(planted, knn=4, t=5)
-    mt.tl.cluster(planted, method="leiden", neighbors_key="phate", resolution=0.5)
+    # Eight neighbours reach across the groups of eight, so the graph is one component.
+    mt.tl.phate(planted, knn=8, t=5)
+    assert connected_components(planted.obsp["phate_connectivities"])[0] == 1
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        warnings.filterwarnings("ignore", "The argument key_added is deprecated", FutureWarning)
+        mt.tl.cluster(planted, method="leiden", neighbors_key="phate", resolution=0.5)
     assert "neighbors" not in planted.uns
-    # Brieflow cast the resolution to int, which runs 0.5 as 0 and returns a single cluster.
+    # Brieflow cast the resolution to int, which runs 0.5 as 0 and returns a single cluster on a connected graph.
+    assert planted.obs["cluster"].nunique() > 1
+    mt.tl.cluster(planted, method="leiden", neighbors_key="phate", resolution=1.0)
     assert adjusted_rand_score(np.repeat([0, 1, 2], 8), planted.obs["cluster"].to_numpy()) == pytest.approx(1.0)
 
 
@@ -238,3 +247,31 @@ def test_a_missing_or_misplaced_graph_key_raises(planted):
         mt.tl.cluster(planted, method="leiden", neighbors_key="phate")
     with pytest.raises(ValueError, match="neighbors_key"):
         mt.tl.cluster(planted, use_rep=None, neighbors_key="phate")
+    planted.uns["not_a_graph"] = {"params": {}}
+    with pytest.raises(KeyError, match="no graph"):
+        mt.tl.cluster(planted, method="leiden", neighbors_key="not_a_graph")
+
+
+def test_clustering_into_the_graph_key_is_refused(planted):
+    planted.obsm["X_pca"] = planted.X.astype(np.float64)
+    mt.tl.phate(planted, knn=4, t=5)
+    with pytest.raises(ValueError, match="overwrite"):
+        mt.tl.cluster(planted, method="leiden", neighbors_key="phate", key_added="phate")
+    assert planted.uns["phate"]["connectivities_key"] == "phate_connectivities"
+
+
+def test_leiden_without_use_rep_builds_its_graph_on_x():
+    """Past 50 features scanpy would read use_rep=None as X_pca, or compute one."""
+    rng = np.random.default_rng(0)
+    values = np.repeat(rng.normal(size=(3, 60)) * 5.0, 10, axis=0) + rng.normal(scale=0.3, size=(30, 60))
+    adata = ad.AnnData(values.astype(np.float32))
+    adata.obsm["X_pca"] = rng.normal(size=(30, 10))
+    mt.tl.cluster(adata, method="leiden", use_rep=None)
+    assert adjusted_rand_score(np.repeat([0, 1, 2], 10), adata.obs["cluster"].to_numpy()) == pytest.approx(1.0)
+
+
+def test_the_default_leiden_path_passes_no_graph_key(planted):
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        mt.tl.cluster(planted, method="leiden", use_rep=None)
+    assert not any("neighbors_key" in str(w.message) for w in caught)
