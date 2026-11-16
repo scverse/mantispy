@@ -556,6 +556,9 @@ def hit_calling(
     Distance from the controls also rises when a treatment kills cells.
     Read the calls beside a cell count, or beside :func:`mantispy.tl.cytotoxicity`, before taking them for morphology.
 
+    In a CRISPR screen every targeting guide cuts DNA and a non-targeting guide does not, so against non-targeting controls a call includes the response to the cut as well as to the lost gene.
+    A library with cutting controls, such as safe-harbour or intergenic guides or guides against genes the cells do not express like the olfactory receptors, should pass those as ``reference``.
+
     Args:
         adata: Object to score, at cell or well resolution.
         groupby: Column defining the groups to test.
