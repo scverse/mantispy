@@ -218,6 +218,19 @@ def _select_epsilon(
     # Everything that does not depend on the candidate is built once, so each score only re-whitens and re-scores.
     centre, scale, singular, right, n_obs = _decompose(X[is_control], method, svd_solver)
     standardized = (X - centre) / scale
+    # A profile at the reference centre whitens to zero under every candidate, so mAP cannot rank it whatever epsilon
+    # is; it is left out of the scoring, which it could not change, rather than stopping the search.
+    at_centre = ~(standardized != 0).any(axis=1)
+    if at_centre.any():
+        get_logger().warning(
+            "sphere(epsilon='auto'): %d profile(s) equal the reference centre, whiten to zero and are not scored",
+            int(at_centre.sum()),
+        )
+        standardized = standardized[~at_centre]
+        activity_meta = activity_meta[~at_centre].reset_index(drop=True)
+        control_positions = np.flatnonzero(is_control[~at_centre])
+        treated = treated[~at_centre]
+        treated_meta = base_meta[~at_centre][treated].reset_index(drop=True)
 
     def evaluate(candidate: float) -> float:
         """Score one epsilon by the mean of its activity and replicability mAP; -inf when non-finite."""

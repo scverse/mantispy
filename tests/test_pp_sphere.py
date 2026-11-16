@@ -265,6 +265,26 @@ def test_auto_with_no_treated_wells_raises():
         mt.pp.sphere(adata, method="ZCA", epsilon="auto")
 
 
+def test_auto_leaves_out_a_profile_at_the_reference_centre(caplog):
+    """Such a profile, as KNN imputation makes of an empty well, whitens to zero for every candidate and mAP cannot rank it."""
+    adata = _plantable()
+    values = adata.X.astype(np.float64)
+    control = adata.obs["Metadata_Control"].to_numpy(dtype=bool)
+    target = np.flatnonzero(~control)[0]
+    values[target] = values[control].mean(axis=0)
+    adata.X = values
+    without = adata[np.arange(adata.n_obs) != target].copy()
+
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
+        mt.pp.sphere(adata, method="ZCA", epsilon="auto")
+    mt.pp.sphere(without, method="ZCA", epsilon="auto")
+
+    assert "equal the reference centre" in caplog.text
+    chosen = adata.uns["mantispy"]["sphere_epsilon"]
+    assert chosen["epsilon"] == without.uns["mantispy"]["sphere_epsilon"]["epsilon"]
+    np.testing.assert_allclose(chosen["scores"], without.uns["mantispy"]["sphere_epsilon"]["scores"], rtol=1e-12)
+
+
 def test_a_string_epsilon_other_than_auto_is_rejected():
     adata = _plantable()
     with pytest.raises(ValueError, match="epsilon must be a float or 'auto'"):
