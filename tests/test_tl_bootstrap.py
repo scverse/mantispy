@@ -437,12 +437,13 @@ def test_a_guide_null_keeps_its_mass(decimals, m):
         values = np.round(values, decimals)
     row = np.sort(values, axis=1).ravel()
     start = np.arange(n_subs, dtype=np.int64) * n
-    cap = _null_caps(start, start + n, np.array([0]), np.array([n_subs]), np.array([0]), np.array([m]))[0]
+    subs = np.arange(n_subs, dtype=np.int64)
+    cap = _null_caps(start, start + n, subs, np.array([0]), np.array([n_subs]), np.array([0]), np.array([m]))[0]
     val, prob = np.empty(cap), np.empty(cap)
     scratch = [np.empty(n) for _ in range(3)]
     sort_scratch = (np.empty(cap), np.empty(cap), np.empty(_SORT_SCRATCH, np.int64))
     count = _build_construct(
-        row, np.full(n_subs, n), start, 0, n_subs, m, _ATOM_EPS, val, prob, *sort_scratch, *scratch
+        row, np.full(n_subs, n), start, subs, 0, n_subs, m, _ATOM_EPS, val, prob, *sort_scratch, *scratch
     )
     assert count > 0
     assert np.all(np.diff(val[:count]) > 0)
@@ -594,3 +595,239 @@ def test_an_infinite_value_raises(value):
     adata.X[0, 0] = value
     with pytest.raises(ValueError, match="infinite values"):
         mt.tl.bootstrap_features(adata)
+
+
+def _pseudo_screen(rng, n_cells=20, n_control=10, n_control_cells=30, n_features=3, conditions="a", guide_sd=0.1):
+    """Two real genes of two guides, ``n_control`` non-targeting guides, each guide in every condition."""
+    groups = [("GENE_A", f"a{i}", n_cells + i, 1.0, c) for i in range(2) for c in conditions]
+    groups += [("GENE_B", f"b{i}", n_cells - i, 0.0, c) for i in range(2) for c in conditions]
+    groups += [("nontargeting", f"nt{i}", n_control_cells, 0.0, c) for i in range(n_control) for c in conditions]
+    return _cells(groups, rng, n_features=n_features, guide_sd=guide_sd)
+
+
+def _by_hand(adata, name, **kwargs):
+    """A pseudo-gene's test run as a plain one: its kept cells as a gene, against the controls without its guides."""
+    obs = adata.obs
+    control = (obs["Metadata_Control_Type"] == "negcon").to_numpy()
+    kept = (obs["pseudogene"] == name).to_numpy()
+    own = control & obs["Metadata_sgRNA"].isin(obs.loc[kept, "Metadata_sgRNA"]).to_numpy()
+    keep = kept | (control & ~own)
+    alone = adata[keep].copy()
+    alone.obs["Metadata_Gene"] = np.where(kept[keep], name, alone.obs["Metadata_Gene"].astype(str))
+    alone.obs["is_ref"] = ~kept[keep]
+    mt.tl.bootstrap_features(alone, reference="is_ref", **kwargs)
+    return alone.uns["mantispy"]["bootstrap"].set_index(["group", "feature"])
+
+
+@pytest.mark.parametrize("missing", [0.0, 0.2])
+def test_a_pseudogene_is_tested_against_every_control_guide_but_its_own(missing):
+    """Exactly the plain test of its kept cells against the other control guides, missing cells included."""
+    rng = np.random.default_rng(21)
+    adata = _pseudo_screen(rng)
+    if missing:
+        adata.X[rng.random(adata.X.shape) < missing] = np.nan
+    mt.pp.pseudogenes(adata, size=2)
+    mt.tl.bootstrap_features(adata, pseudogenes="pseudogene")
+    ours = adata.uns["mantispy"]["bootstrap"].set_index(["group", "feature"])
+    names = list(adata.obs["pseudogene"].cat.categories)
+    assert len(names) == 5 and set(ours.loc[ours["is_pseudogene"]].index.get_level_values("group")) == set(names)
+    for name in names:
+        alone = _by_hand(adata, name)
+        np.testing.assert_allclose(ours.loc[name, "pvalue"], alone.loc[name, "pvalue"], rtol=1e-12, atol=0)
+        np.testing.assert_array_equal(ours.loc[name, "effect"], alone.loc[name, "effect"])
+
+
+def test_a_pseudogene_split_by_another_column_leaves_all_its_guides_out():
+    """With a second groupby column each split of a pseudo-gene draws from the controls without any of its guides."""
+    rng = np.random.default_rng(22)
+    adata = _pseudo_screen(rng, n_cells=10, n_control_cells=12, conditions="ab")
+    mt.pp.pseudogenes(adata, size=2)
+    by = ["Metadata_Gene", "Metadata_Treatment"]
+    mt.tl.bootstrap_features(adata, groupby=by, pseudogenes="pseudogene")
+    ours = adata.uns["mantispy"]["bootstrap"].set_index(["group", "feature"])
+    for name in adata.obs["pseudogene"].cat.categories:
+        alone = _by_hand(adata, name, groupby=by)
+        for split in alone.index.get_level_values("group").unique():
+            if name in split:
+                np.testing.assert_allclose(ours.loc[split, "pvalue"], alone.loc[split, "pvalue"], rtol=1e-12, atol=0)
+
+
+def test_real_genes_are_unchanged_by_pseudogenes():
+    plain = _pseudo_screen(np.random.default_rng(23))
+    mt.tl.bootstrap_features(plain)
+    with_pseudo = plain.copy()
+    mt.pp.pseudogenes(with_pseudo, size=2)
+    mt.tl.bootstrap_features(with_pseudo, pseudogenes="pseudogene")
+    for key in ("bootstrap", "bootstrap_guides"):
+        table = with_pseudo.uns["mantispy"][key]
+        assert (table["is_pseudogene"] == table["group"].str.startswith("pseudogene_")).all()
+        real = table[~table["is_pseudogene"]].reset_index(drop=True)
+        pd.testing.assert_frame_equal(real, plain.uns["mantispy"][key])
+        assert not plain.uns["mantispy"][key]["is_pseudogene"].any()
+    assert "bootstrap_summary" not in plain.uns["mantispy"]
+
+
+def test_a_gene_whose_guide_is_a_reference_guide_keeps_that_guide_in_its_null():
+    """Without pseudo-genes no group's guides leave its null, even when its label also sits on reference cells."""
+    adata = _pseudo_screen(np.random.default_rng(24), n_cells=6, n_control=4, n_control_cells=8)
+    adata.obs["is_ref"] = (adata.obs["Metadata_Control_Type"] == "negcon").to_numpy() | (
+        adata.obs["Metadata_sgRNA"] == "a0"
+    ).to_numpy()
+    mt.tl.bootstrap_features(adata, reference="is_ref")
+    renamed = adata.copy()
+    renamed.obs["Metadata_Gene"] = np.where(
+        renamed.obs["Metadata_sgRNA"] == "a0", "a0_control", renamed.obs["Metadata_Gene"].astype(str)
+    )
+    mt.tl.bootstrap_features(renamed, reference="is_ref")
+    np.testing.assert_allclose(_table(adata).loc["GENE_A"], _table(renamed).loc["GENE_A"], rtol=1e-12, atol=0)
+
+
+def test_a_pseudogene_with_no_other_control_guide_in_its_scope_is_skipped(caplog):
+    import logging
+
+    rng = np.random.default_rng(25)
+    adata = _pseudo_screen(rng, n_cells=6, n_control=12, n_control_cells=8)
+    mt.pp.pseudogenes(adata, size=4)
+    first = (
+        adata.obs["Metadata_sgRNA"]
+        .isin(adata.obs.loc[adata.obs["pseudogene"] == "pseudogene_01", "Metadata_sgRNA"])
+        .to_numpy()
+    )
+    adata.obs["Metadata_Treatment"] = np.where(first, "a", "b")
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
+        mt.tl.bootstrap_features(
+            adata, control_scope="within_group", condition="Metadata_Treatment", pseudogenes="pseudogene"
+        )
+    assert "1 pseudo-gene group(s) hold every control guide of their scope" in caplog.text
+    groups = set(adata.uns["mantispy"]["bootstrap"]["group"])
+    assert "pseudogene_01" not in groups and {"pseudogene_02", "pseudogene_03", "GENE_A"} <= groups
+
+
+def test_a_null_too_large_for_its_buffer_in_one_feature_leaves_the_next_features_exact(monkeypatch):
+    """A base null that overflows in one feature still gives its derived nulls their atoms in the next."""
+    from mantispy.tl import _bootstrap
+
+    rng = np.random.default_rng(26)
+    adata = _pseudo_screen(rng, n_cells=10, n_control=20, n_control_cells=10, n_features=2)
+    adata.X[:, 1] = rng.integers(0, 3, size=adata.n_obs)
+    mt.pp.pseudogenes(adata, size=2)
+    caps = _bootstrap._null_caps
+    monkeypatch.setattr(_bootstrap, "_null_caps", lambda *args: np.minimum(caps(*args), 400))
+    mt.tl.bootstrap_features(adata, pseudogenes="pseudogene")
+    both = adata.uns["mantispy"]["bootstrap"]
+    second = adata[:, [1]].copy()
+    mt.tl.bootstrap_features(second, pseudogenes="pseudogene")
+    feature = adata.var_names[1]
+    np.testing.assert_allclose(
+        both.loc[both["feature"] == feature, "pvalue"],
+        second.uns["mantispy"]["bootstrap"]["pvalue"],
+        rtol=1e-12,
+        atol=0,
+    )
+
+
+def test_the_summary_gives_the_rates_at_the_real_genes_cutoff():
+    rng = np.random.default_rng(27)
+    adata = _pseudo_screen(rng, n_cells=15, n_control=24, n_control_cells=20, n_features=8)
+    adata.X[(adata.obs["Metadata_Control_Type"] == "negcon").to_numpy(), 7] = np.nan  # no pseudo-gene measures it
+    mt.pp.pseudogenes(adata, size=2)
+    mt.tl.bootstrap_features(adata, pseudogenes="pseudogene")
+    store = adata.uns["mantispy"]
+    table, summary = store["bootstrap"], store["bootstrap_summary"]
+    real, pseudo = table[~table["is_pseudogene"]], table[table["is_pseudogene"]].dropna(subset=["pvalue"])
+    assert table.loc[table["is_pseudogene"], "pvalue"].isna().any()
+    cutoff = real.loc[real["qvalue"] < 0.05, "pvalue"].max()
+    called = pseudo["pvalue"] <= cutoff
+    per_gene = called.groupby(pseudo["group"]).any()
+    assert summary["cutoff"] == cutoff and summary["alpha"] == 0.05
+    rates = summary["rates"]
+    assert rates.loc["per_test", ["n", "n_called"]].tolist() == [len(called), int(called.sum())]
+    assert rates.loc["per_gene", ["n", "n_called"]].tolist() == [12, int(per_gene.sum())]
+    assert rates.loc["per_test", "rate"] == pytest.approx(called.mean())
+    assert rates.loc["per_test", "ci_low"] <= called.mean() <= rates.loc["per_test", "ci_high"]
+    cells = summary["cells_per_guide"]
+    guides = store["bootstrap_guides"].drop_duplicates(["group", "replicate"])
+    assert cells.loc["real", "median"] == guides.loc[~guides["is_pseudogene"], "n_cells"].median()
+    assert cells.loc["pseudogene", "n_guides"] == 24
+
+
+def test_the_pseudogene_test_survives_a_round_trip(tmp_path):
+    adata = _pseudo_screen(np.random.default_rng(28), n_cells=6, n_control=8, n_control_cells=8)
+    mt.pp.pseudogenes(adata, size=2)
+    path = tmp_path / "screen.h5ad"
+    adata.write_h5ad(path)
+    read = ad.read_h5ad(path)
+    mt.tl.bootstrap_features(adata, pseudogenes="pseudogene")
+    mt.tl.bootstrap_features(read, pseudogenes="pseudogene")
+    pd.testing.assert_frame_equal(read.uns["mantispy"]["bootstrap"], adata.uns["mantispy"]["bootstrap"])
+    read.write_h5ad(path)
+    again = ad.read_h5ad(path)
+    assert not [warning for warning in mt.io.validate(again).warnings if "registered" in warning]
+    summary = again.uns["mantispy"]["bootstrap_summary"]
+    pd.testing.assert_frame_equal(summary["rates"], read.uns["mantispy"]["bootstrap_summary"]["rates"])
+
+
+@pytest.mark.parametrize(
+    ("change", "match"),
+    [
+        (lambda adata: adata.uns["mantispy"].pop("pseudogenes"), "no record of mt.pp.pseudogenes"),
+        (lambda adata: adata.obs.insert(0, "gene", adata.obs.pop("Metadata_Gene")), "groupby must include"),
+        (lambda adata: adata.obs.__setitem__("Metadata_Control_Type", "treatment"), "outside reference="),
+    ],
+)
+def test_a_pseudogene_column_without_its_record_or_reference_is_refused(change, match):
+    adata = _pseudo_screen(np.random.default_rng(29), n_cells=6, n_control=8, n_control_cells=8)
+    mt.pp.pseudogenes(adata, size=2)
+    change(adata)
+    groupby = "gene" if "gene" in adata.obs else "Metadata_Gene"
+    with pytest.raises(ValueError, match=match):
+        mt.tl.bootstrap_features(adata, groupby=groupby, reference="negcon", pseudogenes="pseudogene")
+
+
+def test_within_perturbation_refuses_pseudogenes():
+    with pytest.raises(ValueError, match="no control guides to test pseudo-genes against"):
+        mt.tl.bootstrap_features(
+            _two_conditions(np.random.default_rng(30)),
+            groupby=["Metadata_Gene", "Metadata_Treatment"],
+            control_scope="within_perturbation",
+            condition="Metadata_Treatment",
+            reference_condition="a",
+            pseudogenes="pseudogene",
+        )
+
+
+def test_matched_pseudogenes_are_called_as_often_as_null_genes():
+    """A screen with no phenotype, whose control guides carry six times the cells of a real guide.
+
+    Matched in cells per guide, the pseudo-genes are called as often as the real genes; with every cell of a control
+    guide, their medians are more precise than the null assumes and they are called far less often.
+    """
+    rng = np.random.default_rng(200)
+    groups = [(f"G{g}", f"g{g}_{i}", 10, 0.0, "a") for g in range(40) for i in range(4)]
+    groups += [("nontargeting", f"nt{i}", 60, 0.0, "a") for i in range(80)]
+    adata = _cells(groups, rng, n_features=40, guide_sd=0.0)
+    rates = {}
+    for match in (True, False):
+        mt.pp.pseudogenes(adata, size=4, match_cells=match)
+        mt.tl.bootstrap_features(adata, pseudogenes="pseudogene")
+        table = adata.uns["mantispy"]["bootstrap"]
+        called = table["pvalue"] < 0.1
+        rates[match] = called[~table["is_pseudogene"]].mean(), called[table["is_pseudogene"]].mean()
+    real, matched = rates[True]
+    unmatched = rates[False][1]
+    assert abs(matched - real) < 0.025, rates
+    assert unmatched < real / 2, rates
+
+
+def test_empirical_fdr_takes_the_pseudogenes_as_its_null():
+    adata = _pseudo_screen(np.random.default_rng(32), n_cells=10, n_control=20, n_control_cells=12)
+    mt.pp.pseudogenes(adata, size=2)
+    mt.tl.bootstrap_features(adata, pseudogenes="pseudogene")
+    table = adata.uns["mantispy"]["bootstrap"]
+    score = -np.log10(table["pvalue"].clip(lower=1e-300)).groupby(table["group"]).sum()
+    genes = ad.AnnData(obs=pd.DataFrame({"gene": score.index, "score": score.to_numpy()}, index=score.index))
+    labels = list(adata.obs["pseudogene"].cat.categories)
+    mt.tl.empirical_fdr(genes, control_genes=labels, score="score", group="gene")
+    result = genes.uns["mantispy"]["empirical_fdr"].set_index("group")
+    assert result.loc[labels, "is_control"].all() and not result.loc[["GENE_A", "GENE_B"], "is_control"].any()
+    assert result.loc["GENE_A", "pvalue"] == 1 / (len(labels) + 1)

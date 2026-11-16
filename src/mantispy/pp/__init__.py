@@ -15,6 +15,7 @@ from mantispy.pp._impute import impute
 from mantispy.pp._names import standardize_feature_names
 from mantispy.pp._normalize import normalize
 from mantispy.pp._outliers import outliers
+from mantispy.pp._pseudogenes import pseudogenes
 from mantispy.pp._qc import calculate_qc_metrics, filter_cells, filter_features
 from mantispy.pp._sample import downsample
 from mantispy.pp._select import (
@@ -52,6 +53,7 @@ __all__ = [
     "impute",
     "normalize",
     "outliers",
+    "pseudogenes",
     "rank_int",
     "regress_out",
     "sphere",

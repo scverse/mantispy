@@ -90,7 +90,8 @@
         "grouped_by",
         "image_table",
         "params",
-        "perturbation"
+        "perturbation",
+        "pseudogenes"
     ],
     "uns_results": [
         "feature_select",
