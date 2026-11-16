@@ -74,6 +74,28 @@ def test_feature_metrics_alone_keep_an_earlier_qc_fail(adata):
     np.testing.assert_array_equal(adata.obs["qc_fail"].to_numpy(dtype=bool), failed)
 
 
+def test_recomputing_a_per_cell_metric_keeps_the_outlier_flags_in_qc_fail(adata):
+    mt.pp.calculate_qc_metrics(adata)
+    mt.pp.outliers(adata, method="mad", contamination=0.05)
+    outlying = adata.obs["qc_outlier"].to_numpy(dtype=bool)
+    assert outlying.any()
+
+    mt.pp.calculate_qc_metrics(adata, qc_metrics=("nan",))
+
+    failed = adata.obs["qc_fail"].to_numpy(dtype=bool)
+    assert failed[outlying].all()
+    expected = (
+        outlying | adata.obs["qc_high_nan"].to_numpy(dtype=bool) | adata.obs["qc_area_outlier"].to_numpy(dtype=bool)
+    )
+    np.testing.assert_array_equal(failed, expected | adata.obs["qc_is_border"].to_numpy(dtype=bool))
+
+
+def test_filter_cells_after_feature_metrics_alone_names_the_per_cell_metrics(adata):
+    mt.pp.calculate_qc_metrics(adata, qc_metrics=("variance",))
+    with pytest.raises(KeyError, match="per-cell metric"):
+        mt.pp.filter_cells(adata)
+
+
 def test_feature_metrics_match_a_direct_computation(adata):
     """Opt-in values equal computing them straight from the matrix."""
     X = adata.X.astype(np.float64)

@@ -318,3 +318,26 @@ def test_lof_fills_a_partly_missing_or_infinite_value_with_the_feature_mean():
     filled = np.where(np.isnan(finite), np.nanmean(finite, axis=0), finite)
     truth = -LocalOutlierFactor(n_neighbors=20).fit(filled).negative_outlier_factor_
     np.testing.assert_allclose(adata.obs["qc_outlier_score"].to_numpy(), truth, rtol=1e-12)
+
+
+def test_isolation_forest_fills_a_partly_missing_or_infinite_value_with_the_feature_mean():
+    """Filled with zero, a cell missing one raw-intensity channel looked as extreme as the brightest cells."""
+    from sklearn.ensemble import IsolationForest
+
+    rng = np.random.default_rng(0)
+    n, n_vars = 2000, 4
+    X = rng.normal(0.2, 0.02, size=(n, n_vars))
+    X[:10] += 0.12
+    gappy = np.arange(100, 140)
+    X[gappy, rng.integers(0, n_vars, gappy.size)] = np.nan
+    X[150, 0] = np.inf
+    adata = AnnData(X=X.copy(), obs=pd.DataFrame(index=[f"c{i}" for i in range(n)]))
+    mt.pp.outliers(adata, method="isolation_forest", contamination=0.01)
+
+    flagged = adata.obs["qc_outlier"].to_numpy()
+    assert flagged[:10].all()
+    assert not flagged[gappy].any() and not flagged[150]
+    finite = np.where(np.isfinite(X), X, np.nan)
+    filled = np.where(np.isnan(finite), np.nanmean(finite, axis=0), finite)
+    truth = -IsolationForest(random_state=0, n_estimators=200).fit(filled).score_samples(filled)
+    np.testing.assert_allclose(adata.obs["qc_outlier_score"].to_numpy(), truth, rtol=1e-12)
