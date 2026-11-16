@@ -8,6 +8,7 @@ import spatialdata as sd
 import mantispy as mt
 from mantispy._core.frames import as_frame
 from mantispy.ds._datasets import (
+    _BASE_URL,
     _DATASETS,
     TARGET2_DEFAULT,
     _assemble_cp_posh,
@@ -73,6 +74,25 @@ def test_jump_target2_default_names_one_pinned_plate_per_source() -> None:
     }
     assert set(TARGET2_DEFAULT) <= set(source_of)
     assert sorted(source_of[plate] for plate in TARGET2_DEFAULT) == sorted(set(source_of.values()))
+
+
+@pytest.mark.network
+def test_every_gallery_file_in_the_registry_is_still_served() -> None:
+    """The Cell Painting Gallery moves prefixes (cpg0016-jump-assembled went into cpg0016-jump), which 404s a pin."""
+    from concurrent.futures import ThreadPoolExecutor
+    from urllib.error import HTTPError
+    from urllib.request import Request, urlopen
+
+    def missing(key: str) -> bool:
+        try:
+            urlopen(Request(f"{_BASE_URL}/{key}", method="HEAD"), timeout=30)
+        except HTTPError:
+            return True
+        return False
+
+    keys = [file.s3_key for entry in _DATASETS.values() for file in entry.files if file.s3_key]
+    with ThreadPoolExecutor(32) as pool:
+        assert [key for key, gone in zip(keys, pool.map(missing, keys), strict=True) if gone] == []
 
 
 @pytest.mark.network
