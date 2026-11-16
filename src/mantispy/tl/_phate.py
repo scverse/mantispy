@@ -53,6 +53,8 @@ def phate(
     The affinity graph is written in the layout :func:`scanpy.pp.neighbors` uses, so
     :func:`mantispy.tl.cluster` with ``neighbors_key=key_added``, or :func:`scanpy.tl.leiden` with the same key,
     clusters on it, and :func:`scanpy.pl.embedding` with ``basis=key_added`` draws the embedding.
+    Leiden on this graph groups rows much as Leiden on a cosine nearest-neighbour graph with the same ``knn`` does, so
+    use PHATE for the embedding and for parity with Brieflow, not as a better route to clusters.
 
     mantispy implements the method itself rather than wrapping the ``phate`` package.
     The kernel parameters ``knn``, ``decay``, ``t`` and ``gamma`` mean what they do in ``phate.PHATE``, and the kernel
