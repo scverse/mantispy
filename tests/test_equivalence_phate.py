@@ -33,7 +33,8 @@ def test_the_exact_path_matches_phate_for_the_same_t(knn, decay, seed):
     mt.tl.phate(adata, knn=knn, decay=decay, n_landmark=None, t=int(operator.optimal_t))
 
     # phate rounds its distances to single precision, so the kernel agrees to that.
-    np.testing.assert_allclose(adata.obsp["phate_connectivities"].toarray(), operator.graph.K.toarray(), atol=1e-5)
+    ours = adata.obsp["phate_connectivities"].toarray() + np.eye(x.shape[0])
+    np.testing.assert_allclose(ours, operator.graph.K.toarray(), atol=1e-5)
     np.testing.assert_allclose(adata.obsm["X_phate_potential"], operator.diff_potential, atol=1e-3)
     # Both minimise the same stress, SMACOF here and SGD in phate, which stops short of the minimum.
     assert procrustes(adata.obsm["X_phate"], embedding)[2] < 5e-3

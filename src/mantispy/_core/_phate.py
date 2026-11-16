@@ -32,6 +32,10 @@ _BLOCK_ENTRIES = 1 << 24
 _DENSE_PRODUCT_SPEEDUP = 10
 #: Diffusion coordinates the landmarks are clustered on.
 _N_SVD = 100
+#: Screening precisions of the neighbour search, each with its machine epsilon.
+_PRECISIONS = ((np.float32, 2.0**-23), (np.float64, 2.0**-52))
+#: Longest row single precision screens; the inner products of longer ones could overflow it.
+_FLOAT32_NORM_MAX = 1e18
 
 
 @njit(parallel=True, cache=True, nogil=True)
@@ -83,10 +87,11 @@ def _select_neighbours(
 @njit(parallel=True, cache=True, nogil=True)
 def _refine(
     x: np.ndarray,
+    norms: np.ndarray,
     rows: np.ndarray,
     candidates: np.ndarray,
     screened: np.ndarray,
-    bound: np.ndarray,
+    unit: float,
     out_idx: np.ndarray,
     out_sq: np.ndarray,
     exact: np.ndarray,
@@ -94,7 +99,8 @@ def _refine(
     """Exact squared distances to each row's screened candidates, the ``k`` nearest kept, ties broken by row.
 
     A row is marked exact when no row outside its candidates can be nearer than its ``k``-th: everything left out
-    was screened at least as far as the last candidate, and the screening is wrong by at most ``bound``.
+    was screened at least as far as the last candidate, and a screened distance to a row within the ``k``-th distance
+    of ``x[own]`` is wrong by at most ``unit * (|x_own|^2 + (|x_own| + d_k)^2)``.
     """
     n_rows, width = candidates.shape
     k = out_idx.shape[1]
@@ -127,7 +133,43 @@ def _refine(
             for c in range(k):
                 out_idx[r, c] = best_i[c]
                 out_sq[r, c] = max(best_d[c], 0.0)
-            exact[r] = screened[r, width - 1] - bound[r] > out_sq[r, k - 1]
+            kth = out_sq[r, k - 1]
+            reach = norms[own] + math.sqrt(kth)
+            exact[r] = screened[r, width - 1] - unit * (norms[own] * norms[own] + reach * reach) > kth
+
+
+@njit(parallel=True, cache=True, nogil=True)
+def _exhaustive(x: np.ndarray, rows: np.ndarray, out_idx: np.ndarray, out_sq: np.ndarray) -> None:
+    """The ``k`` nearest rows of each of ``rows`` from the squared differences to every row, ties broken by row."""
+    n, d = x.shape
+    n_rows, k = out_idx.shape
+    n_chunks = min(N_CHUNKS, n_rows)
+    for chunk in prange(n_chunks):
+        for r in range(chunk * n_rows // n_chunks, (chunk + 1) * n_rows // n_chunks):
+            own = rows[r]
+            best_d, best_i = out_sq[r], out_idx[r]
+            best_d[:] = np.inf
+            best_i[:] = n
+            best_d[0] = -1.0  # the row itself always comes first
+            best_i[0] = own
+            for j in range(n):
+                if j == own:
+                    continue
+                dist = 0.0
+                for f in range(d):
+                    diff = x[own, f] - x[j, f]
+                    dist += diff * diff
+                # Rows arrive in order, so a tie with the k-th keeps the earlier row.
+                if dist >= best_d[k - 1]:
+                    continue
+                slot = k - 1
+                while best_d[slot - 1] > dist:
+                    best_d[slot] = best_d[slot - 1]
+                    best_i[slot] = best_i[slot - 1]
+                    slot -= 1
+                best_d[slot] = dist
+                best_i[slot] = j
+            best_d[0] = 0.0
 
 
 def _screen(x: np.ndarray, rows: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
@@ -146,96 +188,183 @@ def _screen(x: np.ndarray, rows: np.ndarray, k: int) -> tuple[np.ndarray, np.nda
     return idx, sq
 
 
+def _centred(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """``x`` less its column means, in double precision, and the norms of its rows."""
+    centred = np.ascontiguousarray(x - x.mean(axis=0), dtype=np.float64)
+    return centred, np.sqrt(np.einsum("ij,ij->i", centred, centred))
+
+
+def _nearest(centred: np.ndarray, norms: np.ndarray, k: int, rows: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Exact ``k`` nearest neighbours and squared distances of ``rows`` among the rows of ``centred``."""
+    n, d = centred.shape
+    idx = np.empty((rows.size, k), dtype=np.int64)
+    sq = np.empty((rows.size, k), dtype=np.float64)
+    pending = np.arange(rows.size)
+    width = min(n, 2 * k)
+    if width < n:
+        for dtype, precision in _PRECISIONS:
+            # Single precision would overflow on inner products of rows this long.
+            if not pending.size or (dtype is np.float32 and norms.max() > _FLOAT32_NORM_MAX):
+                continue
+            chosen = rows[pending]
+            candidates, screened = _screen(centred.astype(dtype, copy=False), chosen, width)
+            # Rounding the rows to the screening precision and the inner products in it bound the screening error.
+            unit = (2.0 * (d + 2) + 2.0) * precision
+            exact = np.empty(chosen.size, dtype=np.bool_)
+            if pending.size == rows.size:
+                _refine(centred, norms, chosen, candidates, screened, unit, idx, sq, exact)
+            else:
+                sub_idx = np.empty((chosen.size, k), dtype=np.int64)
+                sub_sq = np.empty((chosen.size, k), dtype=np.float64)
+                _refine(centred, norms, chosen, candidates, screened, unit, sub_idx, sub_sq, exact)
+                idx[pending[exact]], sq[pending[exact]] = sub_idx[exact], sub_sq[exact]
+            pending = pending[~exact]
+    if pending.size:
+        # Near-duplicates far from the mean defeat both screenings; their distances come from differences alone.
+        sub_idx = np.empty((pending.size, k), dtype=np.int64)
+        sub_sq = np.empty((pending.size, k), dtype=np.float64)
+        _exhaustive(centred, rows[pending], sub_idx, sub_sq)
+        idx[pending], sq[pending] = sub_idx, sub_sq
+    return idx, sq
+
+
 def nearest_neighbours(x: np.ndarray, k: int, rows: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
     """Exact ``k`` nearest neighbours of ``rows`` (all rows by default) among the rows of ``x``, self included first.
 
-    Returns ``(indices, distances)``, each ``(len(rows), k)``, distances Euclidean and ascending.
-    Candidates are screened in single precision, twice as many as asked for, and their distances recomputed exactly;
-    a row whose screening cannot rule out a nearer row outside its candidates is searched again in double precision.
+    Returns ``(indices, distances)``, each ``(len(rows), k)``, distances Euclidean and ascending, ties broken by row.
+    Candidates are screened by inner products, twice as many as asked for, and their distances recomputed from
+    differences.
+    A row whose screening cannot rule out a nearer row outside its candidates is screened again in double precision,
+    and a row that still cannot is compared with every row directly.
     """
-    n = x.shape[0]
-    rows = np.arange(n, dtype=np.int64) if rows is None else rows.astype(np.int64)
-    centred = np.ascontiguousarray(x - x.mean(axis=0), dtype=np.float64)
-    width = min(n, 2 * k)
-    idx = np.empty((rows.size, k), dtype=np.int64)
-    sq = np.empty((rows.size, k), dtype=np.float64)
-    exact = np.zeros(rows.size, dtype=np.bool_)
-    norms = np.einsum("ij,ij->i", centred, centred)
-    if width < n:
-        candidates, screened = _screen(centred.astype(np.float32), rows, width)
-        # Rounding the rows to single precision and the inner products in it bound the error of a screened distance.
-        unit = (2.0 * (centred.shape[1] + 2) + 2.0) * 2.0**-23
-        bound = unit * (norms[rows] + norms.max())
-        _refine(centred, rows, candidates, screened, bound, idx, sq, exact)
-    redo = np.flatnonzero(~exact)
-    if redo.size:
-        candidates, screened = _screen(centred, rows[redo], k)
-        sub_idx = np.empty((redo.size, k), dtype=np.int64)
-        sub_sq = np.empty((redo.size, k), dtype=np.float64)
-        # A double-precision search is exact; the refine only recomputes its distances from differences.
-        _refine(
-            centred,
-            rows[redo],
-            candidates,
-            np.full_like(screened, np.inf),
-            np.zeros(redo.size),
-            sub_idx,
-            sub_sq,
-            np.empty(redo.size, dtype=np.bool_),
-        )
-        idx[redo], sq[redo] = sub_idx, sub_sq
+    centred, norms = _centred(x)
+    rows = np.arange(x.shape[0], dtype=np.int64) if rows is None else rows.astype(np.int64)
+    idx, sq = _nearest(centred, norms, k, rows)
     return idx, np.sqrt(sq)
 
 
-def knn_with_tail(x: np.ndarray, knn: int, decay: float | None) -> tuple[np.ndarray, np.ndarray]:
-    """Enough neighbours per row that the alpha-decay kernel is exact, ragged rows padded with ``-1`` indices.
-
-    ``idx`` and ``dist`` hold the row itself first. A row's kernel reaches past its ``knn``-th neighbour, out to where the affinity falls below :data:`THRESHOLD`.
-    The search starts at a small multiple of ``knn`` and doubles the width for the rows whose last neighbour still
-    lies inside that radius, so no affinity above the threshold is cut off.
-    """
-    n = x.shape[0]
-    if decay is None:
-        return nearest_neighbours(x, knn + 1)
-    reach = (-math.log(THRESHOLD)) ** (1.0 / decay)
-    width = min(n, 4 * (knn + 1))
-    idx, dist = nearest_neighbours(x, width)
-    open_rows = np.flatnonzero(dist[:, -1] <= reach * dist[:, knn]) if width < n else np.empty(0, int)
-    while open_rows.size:
-        width = min(n, 2 * width)
-        wider_idx, wider_dist = nearest_neighbours(x, width, open_rows)
-        pad = width - idx.shape[1]
-        idx = np.pad(idx, ((0, 0), (0, pad)), constant_values=-1)
-        dist = np.pad(dist, ((0, 0), (0, pad)), constant_values=np.inf)
-        idx[open_rows], dist[open_rows] = wider_idx, wider_dist
-        if width == n:
-            break
-        still = wider_dist[:, -1] <= reach * wider_dist[:, knn]
-        open_rows = open_rows[still]
-    return idx, dist
+@njit(parallel=True, cache=True, nogil=True)
+def _count_within(
+    gram: np.ndarray, chosen: np.ndarray, half_norms: np.ndarray, limit: np.ndarray, counts: np.ndarray
+) -> None:
+    """How many rows each of ``chosen`` screens within its ``limit``, a squared distance."""
+    n_rows, n = gram.shape
+    n_chunks = min(N_CHUNKS, n_rows)
+    for chunk in prange(n_chunks):
+        for r in range(chunk * n_rows // n_chunks, (chunk + 1) * n_rows // n_chunks):
+            base = 2.0 * half_norms[chosen[r]]
+            c = 0
+            for j in range(n):
+                if base + 2.0 * (half_norms[j] - gram[r, j]) <= limit[r]:
+                    c += 1
+            counts[r] = c
 
 
 @njit(parallel=True, cache=True, nogil=True)
-def _kernel_rows(
-    idx: np.ndarray, dist: np.ndarray, knn: int, decay: float, use_decay: bool, counts: np.ndarray
+def _fill_within(
+    x: np.ndarray,
+    gram: np.ndarray,
+    chosen: np.ndarray,
+    half_norms: np.ndarray,
+    limit: np.ndarray,
+    indptr: np.ndarray,
+    indices: np.ndarray,
+    sq: np.ndarray,
 ) -> None:
-    """How many affinities of each row clear the threshold."""
-    n, width = idx.shape
-    n_chunks = min(N_CHUNKS, n)
+    """The rows :func:`_count_within` counted, with their squared distances recomputed from differences."""
+    n_rows, n = gram.shape
+    d = x.shape[1]
+    n_chunks = min(N_CHUNKS, n_rows)
     for chunk in prange(n_chunks):
-        for i in range(chunk * n // n_chunks, (chunk + 1) * n // n_chunks):
-            eps = dist[i, knn]
-            c = 0
-            for j in range(width):
-                if idx[i, j] < 0:
-                    break
-                if use_decay:
-                    a = _affinity(dist[i, j], eps, decay)
-                    if a >= THRESHOLD:
-                        c += 1
-                elif j <= knn:
-                    c += 1
-            counts[i] = c
+        for r in range(chunk * n_rows // n_chunks, (chunk + 1) * n_rows // n_chunks):
+            own = chosen[r]
+            base = 2.0 * half_norms[own]
+            pos = indptr[r]
+            for j in range(n):
+                if base + 2.0 * (half_norms[j] - gram[r, j]) <= limit[r]:
+                    dist = 0.0
+                    for f in range(d):
+                        diff = x[own, f] - x[j, f]
+                        dist += diff * diff
+                    indices[pos] = j
+                    sq[pos] = dist
+                    pos += 1
+
+
+def _within(
+    centred: np.ndarray, norms: np.ndarray, rows: np.ndarray, radius: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Every row within ``radius`` of each of ``rows``, and possibly a few just past it, as ragged CSR arrays.
+
+    Rows are screened by double-precision inner products with a margin that covers their rounding, so none within
+    the radius is missed, and the distances returned are recomputed from differences.
+    """
+    n, d = centred.shape
+    half_norms = np.einsum("ij,ij->i", centred, centred) / 2.0
+    reach = norms[rows] + radius
+    limit = radius * radius + (2.0 * (d + 2) + 2.0) * _PRECISIONS[1][1] * (norms[rows] ** 2 + reach * reach)
+    block = max(1, _BLOCK_ENTRIES // max(n, 1))
+    gram = np.empty((min(block, rows.size), n), dtype=np.float64)
+    counts = np.empty(rows.size, dtype=np.int64)
+    parts_i, parts_d = [], []
+    for start in range(0, rows.size, block):
+        chosen = rows[start : start + block]
+        out = gram[: chosen.size]
+        np.matmul(centred[chosen], centred.T, out=out)
+        part_counts = counts[start : start + chosen.size]
+        _count_within(out, chosen, half_norms, limit[start : start + block], part_counts)
+        part_indptr = np.zeros(chosen.size + 1, dtype=np.int64)
+        np.cumsum(part_counts, out=part_indptr[1:])
+        part_i = np.empty(int(part_indptr[-1]), dtype=np.int64)
+        part_d = np.empty(part_i.size, dtype=np.float64)
+        _fill_within(centred, out, chosen, half_norms, limit[start : start + block], part_indptr, part_i, part_d)
+        parts_i.append(part_i)
+        parts_d.append(part_d)
+    indptr = np.zeros(rows.size + 1, dtype=np.int64)
+    np.cumsum(counts, out=indptr[1:])
+    return indptr, np.concatenate(parts_i), np.sqrt(np.concatenate(parts_d))
+
+
+def knn_with_tail(
+    x: np.ndarray, knn: int, decay: float | None
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Each row's ``knn`` nearest neighbours, and every row within reach of its alpha-decay kernel.
+
+    Returns ``(idx, dist, indptr, indices, distances)``.
+    ``idx`` and ``dist`` are ``(n, knn + 1)``, the row itself first, so ``dist[:, knn]`` is each row's bandwidth.
+    ``indptr``, ``indices`` and ``distances`` list, row by row as in a CSR matrix, every row whose affinity can
+    clear :data:`THRESHOLD`: out to ``(-log THRESHOLD) ** (1 / decay)`` bandwidths.
+    A first search takes a small multiple of ``knn`` neighbours; only the rows whose last one is still inside that
+    reach are searched again, by radius, so each row keeps as many entries as its own kernel needs.
+    With ``decay=None`` the rows hold the ``knn + 1`` nearest only.
+    """
+    n = x.shape[0]
+    centred, norms = _centred(x)
+    width = knn + 1 if decay is None else min(n, 4 * (knn + 1))
+    idx, sq = _nearest(centred, norms, width, np.arange(n, dtype=np.int64))
+    dist = np.sqrt(sq)
+    del sq
+    if decay is None:
+        return idx, dist, np.arange(0, idx.size + 1, width, dtype=np.int64), idx.ravel(), dist.ravel()
+    # The margin keeps a row whose affinity rounds onto the threshold; the kernel drops what falls short of it.
+    radius = (-math.log(THRESHOLD)) ** (1.0 / decay) * dist[:, knn] * (1.0 + 1e-9)
+    counts = np.full(n, width, dtype=np.int64)
+    open_rows = np.flatnonzero(dist[:, -1] <= radius) if width < n else np.empty(0, dtype=np.int64)
+    if open_rows.size:
+        wide_indptr, wide_indices, wide_dist = _within(centred, norms, open_rows, radius[open_rows])
+        counts[open_rows] = np.diff(wide_indptr)
+    indptr = np.zeros(n + 1, dtype=np.int64)
+    np.cumsum(counts, out=indptr[1:])
+    indices = np.empty(int(indptr[-1]), dtype=np.int64)
+    distances = np.empty(indices.size, dtype=np.float64)
+    closed = np.ones(n, dtype=bool)
+    closed[open_rows] = False
+    slots = indptr[:-1][closed, None] + np.arange(width)
+    indices[slots], distances[slots] = idx[closed], dist[closed]
+    if open_rows.size:
+        slots = np.repeat(indptr[open_rows] - wide_indptr[:-1], counts[open_rows]) + np.arange(wide_indices.size)
+        indices[slots], distances[slots] = wide_indices, wide_dist
+    return idx[:, : knn + 1], dist[:, : knn + 1], indptr, indices, distances
 
 
 @njit(cache=True, nogil=True)
@@ -246,91 +375,93 @@ def _affinity(d: float, eps: float, decay: float) -> float:
     return math.exp(-((d / eps) ** decay))
 
 
+@njit(cache=True, nogil=True)
+def _kept(a: float) -> bool:
+    """Whether an affinity enters the kernel; the one test both kernel passes share, so their counts agree."""
+    return a >= THRESHOLD
+
+
 @njit(parallel=True, cache=True, nogil=True)
-def _kernel_fill(
-    idx: np.ndarray,
-    dist: np.ndarray,
-    knn: int,
-    decay: float,
-    use_decay: bool,
-    indptr: np.ndarray,
-    indices: np.ndarray,
-    values: np.ndarray,
-    distances: np.ndarray,
+def _kernel_counts(
+    indptr: np.ndarray, distances: np.ndarray, bandwidth: np.ndarray, decay: float, counts: np.ndarray
 ) -> None:
-    """Write each row's affinities above the threshold, and the distances they came from, into CSR arrays."""
-    n, width = idx.shape
+    """How many affinities of each row clear the threshold."""
+    n = bandwidth.size
     n_chunks = min(N_CHUNKS, n)
     for chunk in prange(n_chunks):
         for i in range(chunk * n // n_chunks, (chunk + 1) * n // n_chunks):
-            eps = dist[i, knn]
-            pos = indptr[i]
-            for j in range(width):
-                if idx[i, j] < 0:
-                    break
-                if use_decay:
-                    a = _affinity(dist[i, j], eps, decay)
-                    if a < THRESHOLD:
-                        continue
-                elif j <= knn:
-                    a = 1.0
-                else:
-                    continue
-                indices[pos] = idx[i, j]
-                values[pos] = a
-                distances[pos] = dist[i, j]
-                pos += 1
+            c = 0
+            for p in range(indptr[i], indptr[i + 1]):
+                if _kept(_affinity(distances[p], bandwidth[i], decay)):
+                    c += 1
+            counts[i] = c
 
 
-def affinity(idx: np.ndarray, dist: np.ndarray, knn: int, decay: float | None) -> tuple[sp.csr_matrix, sp.csr_matrix]:
-    """Symmetric alpha-decay affinity ``K`` and the neighbour distances it was built from, both sparse.
+@njit(parallel=True, cache=True, nogil=True)
+def _kernel_fill(
+    indptr: np.ndarray,
+    indices: np.ndarray,
+    distances: np.ndarray,
+    bandwidth: np.ndarray,
+    decay: float,
+    out_indptr: np.ndarray,
+    out_indices: np.ndarray,
+    out_values: np.ndarray,
+) -> None:
+    """Write each row's affinities above the threshold into CSR arrays."""
+    n = bandwidth.size
+    n_chunks = min(N_CHUNKS, n)
+    for chunk in prange(n_chunks):
+        for i in range(chunk * n // n_chunks, (chunk + 1) * n // n_chunks):
+            pos = out_indptr[i]
+            for p in range(indptr[i], indptr[i + 1]):
+                a = _affinity(distances[p], bandwidth[i], decay)
+                if _kept(a):
+                    out_indices[pos] = indices[p]
+                    out_values[pos] = a
+                    pos += 1
+
+
+def affinity(
+    indptr: np.ndarray, indices: np.ndarray, distances: np.ndarray, bandwidth: np.ndarray, decay: float | None
+) -> sp.csr_matrix:
+    """Symmetric alpha-decay affinity ``K`` over the neighbourhoods of :func:`knn_with_tail`, sparse.
 
     Row ``i`` has bandwidth ``eps_i``, its distance to its ``knn``-th nearest other row, and the directed affinity
     ``exp(-(d_ij / eps_i) ** decay)``; ``K`` is the mean of that and its transpose, so the diagonal is one.
-    With ``decay=None`` the directed affinity is one on the row and its ``knn`` neighbours and zero elsewhere.
+    With ``decay=None`` the directed affinity is one on every listed row, the row and its ``knn`` neighbours.
     """
-    n = idx.shape[0]
-    use_decay = decay is not None
-    alpha = 0.0 if decay is None else float(decay)
-    counts = np.empty(n, dtype=np.int64)
-    _kernel_rows(idx, dist, knn, alpha, use_decay, counts)
-    indptr = np.zeros(n + 1, dtype=np.int64)
-    np.cumsum(counts, out=indptr[1:])
-    nnz = int(indptr[-1])
-    indices = np.empty(nnz, dtype=np.int64)
-    values = np.empty(nnz, dtype=np.float64)
-    lengths = np.empty(nnz, dtype=np.float64)
-    _kernel_fill(idx, dist, knn, alpha, use_decay, indptr, indices, values, lengths)
-    directed = sp.csr_matrix((values, indices, indptr), shape=(n, n))
+    n = bandwidth.size
+    if decay is None:
+        directed = sp.csr_matrix((np.ones(indices.size), indices, indptr), shape=(n, n))
+    else:
+        counts = np.empty(n, dtype=np.int64)
+        _kernel_counts(indptr, distances, bandwidth, float(decay), counts)
+        out_indptr = np.zeros(n + 1, dtype=np.int64)
+        np.cumsum(counts, out=out_indptr[1:])
+        out_indices = np.empty(int(out_indptr[-1]), dtype=np.int64)
+        out_values = np.empty(out_indices.size, dtype=np.float64)
+        _kernel_fill(indptr, indices, distances, bandwidth, float(decay), out_indptr, out_indices, out_values)
+        directed = sp.csr_matrix((out_values, out_indices, out_indptr), shape=(n, n))
     kernel = ((directed + directed.T) * 0.5).tocsr()
     kernel.sort_indices()
-    distances = sp.csr_matrix((lengths, indices, indptr), shape=(n, n))
-    distances = distances.maximum(distances.T).tocsr()
-    distances.setdiag(0)
-    distances.eliminate_zeros()
-    return kernel, distances
+    return kernel
+
+
+def knn_distances(idx: np.ndarray, dist: np.ndarray) -> sp.csr_matrix:
+    """Each row's distances to its nearest other rows, nearest first, the layout :func:`scanpy.pp.neighbors` writes.
+
+    Every row holds the same number of entries, ``idx.shape[1] - 1``; a duplicate row's zero distance stays stored.
+    """
+    n, width = idx.shape
+    indptr = np.arange(0, n * (width - 1) + 1, width - 1, dtype=np.int64)
+    return sp.csr_matrix((dist[:, 1:].ravel(), idx[:, 1:].ravel(), indptr), shape=(n, n))
 
 
 @njit(parallel=True, cache=True, nogil=True)
 def _sparse_times_dense(
     indptr: np.ndarray, indices: np.ndarray, data: np.ndarray, q: np.ndarray, out: np.ndarray
 ) -> None:
-    """``out = A @ q`` for CSR ``A``, rows shared out over the chunks."""
-    n, m = out.shape
-    n_chunks = min(N_CHUNKS, n)
-    for chunk in prange(n_chunks):
-        for i in range(chunk * n // n_chunks, (chunk + 1) * n // n_chunks):
-            row = out[i]
-            row[:] = 0.0
-            for p in range(indptr[i], indptr[i + 1]):
-                w = data[p]
-                src = q[indices[p]]
-                for c in range(m):
-                    row[c] += w * src[c]
-
-
-@njit(parallel=True, cache=True, nogil=True)
-def _interpolate(indptr: np.ndarray, indices: np.ndarray, data: np.ndarray, q: np.ndarray, out: np.ndarray) -> None:
     """``out = A @ q`` for CSR ``A`` into ``out``'s own precision, each row summed in float64 first."""
     n, m = out.shape
     n_chunks = min(N_CHUNKS, n)
@@ -351,7 +482,7 @@ def _interpolate(indptr: np.ndarray, indices: np.ndarray, data: np.ndarray, q: n
 def interpolate(transitions: sp.csr_matrix, values: np.ndarray, dtype: type = np.float64) -> np.ndarray:
     """Each row's transition-weighted mean of the landmarks' ``values``, written straight into ``dtype``."""
     out: np.ndarray = np.empty((transitions.shape[0], values.shape[1]), dtype=dtype)
-    _interpolate(
+    _sparse_times_dense(
         transitions.indptr.astype(np.int64),
         transitions.indices.astype(np.int64),
         transitions.data.astype(np.float64),
@@ -406,15 +537,11 @@ def potential(transitions: np.ndarray, gamma: float) -> np.ndarray:
 
 def von_neumann_entropy(spectrum: np.ndarray, t_max: int) -> np.ndarray:
     """Entropy of the normalised ``|spectrum| ** t`` for ``t`` in ``1 .. t_max``."""
+    from scipy.stats import entropy
+
     magnitude = np.abs(np.asarray(spectrum, dtype=np.float64))
     magnitude = magnitude[magnitude > 0]
-    out = np.empty(t_max)
-    for t in range(1, t_max + 1):
-        p = magnitude**t
-        p = p / p.sum()
-        p = p[p > 0]
-        out[t - 1] = -np.sum(p * np.log(p))
-    return out
+    return np.array([entropy(magnitude**t) for t in range(1, t_max + 1)])
 
 
 def knee(y: np.ndarray) -> int:
@@ -462,24 +589,35 @@ def symmetric_spectrum(kernel: sp.csr_matrix, degree: np.ndarray) -> np.ndarray:
 
 
 def classic_mds(distances: np.ndarray, n_components: int) -> np.ndarray:
-    """Classical (Torgerson) MDS of a square distance matrix."""
+    """Classical (Torgerson) MDS of a square distance matrix.
+
+    Axes past the number of points, or past the last positive eigenvalue, come out zero.
+    """
     from scipy.linalg import eigh
     from scipy.sparse.linalg import eigsh
 
     m = distances.shape[0]
+    out = np.zeros((m, n_components))
     b = -0.5 * distances**2
     b -= b.mean(axis=0, keepdims=True)
     b -= b.mean(axis=1, keepdims=True)
-    if m > n_components + 1:
-        # Only the leading few eigenvectors are needed; a fixed start vector keeps Lanczos deterministic.
-        values, vectors = eigsh(b, k=n_components, which="LA", v0=np.ones(m))
+    if not b.any():
+        # Every point in one place: there is no axis to find.
+        return out
+    k = min(n_components, m)
+    if m > k + 1:
+        # Only the leading few eigenvectors are needed. A seeded start keeps Lanczos deterministic; a constant one
+        # would be orthogonal to every eigenvector of the double-centred matrix but the null one.
+        start = np.random.default_rng(0).uniform(-1.0, 1.0, size=(m,))
+        values, vectors = eigsh(b, k=k, which="LA", v0=start)
     else:
-        values, vectors = eigh(b, subset_by_index=(m - n_components, m - 1))
+        values, vectors = eigh(b, subset_by_index=(m - k, m - 1))
     order = np.argsort(values)[::-1]
     values, vectors = np.clip(values[order], 0.0, None), vectors[:, order]
     # Fix each axis' sign so the embedding does not flip between platforms.
-    signs = np.sign(vectors[np.argmax(np.abs(vectors), axis=0), np.arange(n_components)])
-    return vectors * signs * np.sqrt(values)
+    signs = np.sign(vectors[np.argmax(np.abs(vectors), axis=0), np.arange(k)])
+    out[:, :k] = vectors * signs * np.sqrt(values)
+    return out
 
 
 @njit(parallel=True, cache=True, nogil=True)
