@@ -195,13 +195,13 @@ def _profile_distances(
     generator: np.random.Generator,
     cell_counts: np.ndarray | None = None,
     n_matched: int | None = None,
-) -> tuple[np.ndarray, int]:
+) -> tuple[np.ndarray, int, int]:
     """Distance from the control centre of each draw's profile, its units' rows combined by ``func``.
 
     ``draws`` holds one row of positions in ``unit_rows`` per profile.
     The profile is taken in feature space with the kernel :func:`~mantispy.tl.aggregate` uses, and whitened after, since a median does not commute with the whitening.
     With ``cell_counts``, each drawn unit below position ``n_matched`` keeps a fresh random subset of its rows, of a size drawn from ``cell_counts``, or all of them when it has fewer.
-    Also returns how many drawn units had fewer rows than their draw.
+    Also returns how many drawn units were matched, and how many of them had fewer rows than their draw.
     """
     from mantispy._core._numba import MEAN, MEDIAN, _grouped, _kernel_input
 
@@ -209,7 +209,7 @@ def _profile_distances(
     stat = MEDIAN if func == "median" else MEAN
     n_matched = len(unit_rows) if n_matched is None else n_matched
     out = np.empty(draws.shape[0])
-    short = 0
+    short = matched = 0
     for start in range(0, draws.shape[0], _PSEUDOGENE_BLOCK):
         block = draws[start : start + _PSEUDOGENE_BLOCK]
         targets = (
@@ -223,6 +223,7 @@ def _profile_distances(
             for column, unit in enumerate(draw):
                 rows = unit_rows[unit]
                 if targets is not None and unit < n_matched:
+                    matched += 1
                     target = int(targets[position, column])
                     if rows.size > target:
                         order = shuffled.get(unit)
@@ -239,7 +240,7 @@ def _profile_distances(
         offsets = np.concatenate([[0], np.cumsum(lengths)]).astype(np.int64)
         profiles = _grouped(matrix, np.concatenate(pieces).astype(np.int64), offsets, block.shape[0], stat, 0.5, 1)
         out[start : start + block.shape[0]] = np.linalg.norm(np.nan_to_num(profiles - centre) @ whitening, axis=1)
-    return out, short
+    return out, short, matched
 
 
 def _n_draws(n: int, k: int, limit: int) -> int:
@@ -294,17 +295,17 @@ def _pseudogene_pvalue(
     generator: np.random.Generator,
     cell_counts: np.ndarray | None,
     match_own: bool,
-) -> tuple[float, float, int]:
+) -> tuple[float, float, int, int]:
     """Permutation p-value of a group against every way to draw its number of units from the pool and its own units.
 
     Draws holding none of the group's units come from ``shared``, computed once for every group; draws holding some are drawn here, as many as their share calls for, so each draw counts the same.
-    Returns the p-value, its floor and how many drawn units fell short of their cell count.
+    Returns the p-value, its floor, and how many drawn units were matched and fell short of their cell count.
     """
     size = len(own_rows)
     share = _own_share(len(pool_rows), size)
     n_own = int(np.ceil(shared.size * (1.0 - share) / share))
     draws = _draws_with_own(len(pool_rows), size, n_own, generator)
-    with_own, short = _profile_distances(
+    with_own, short, matched = _profile_distances(
         values,
         [*pool_rows, *own_rows],
         draws,
@@ -317,7 +318,7 @@ def _pseudogene_pvalue(
     )
     total = shared.size + n_own
     at_least = np.sum(shared >= observed) + np.sum(with_own >= observed)
-    return (at_least + 1.0) / (total + 1.0), 1.0 / (total + 1.0), short
+    return (at_least + 1.0) / (total + 1.0), 1.0 / (total + 1.0), matched, short
 
 
 def _pseudogene_null(
@@ -376,10 +377,10 @@ def _pseudogene_null(
     draws = {size: _draw_units(n_null, size, n_pseudogenes, generator) for size in wanted}
     shared, short, drawn = {}, 0, 0
     for size in wanted:
-        shared[size], missing = _profile_distances(
+        shared[size], missing, matched = _profile_distances(
             values, null_unit_rows, draws[size], centre, whitening, func, generator, target_counts
         )
-        short, drawn = short + missing, drawn + draws[size].size
+        short, drawn = short + missing, drawn + matched
 
     observed = np.full(n_groups, np.nan)
     pvalues = np.full(n_groups, np.nan)
@@ -393,7 +394,7 @@ def _pseudogene_null(
         observed[index] = float(np.linalg.norm(np.nan_to_num(profile - centre) @ whitening))
         unit_order = np.argsort(unit_codes[rows], kind="stable")
         own_rows = np.split(rows[unit_order], np.flatnonzero(np.diff(unit_codes[rows][unit_order])) + 1)
-        pvalues[index], floors[index], missing = _pseudogene_pvalue(
+        pvalues[index], floors[index], matched, missing = _pseudogene_pvalue(
             observed[index],
             shared[sizes[index]],
             values,
@@ -406,7 +407,7 @@ def _pseudogene_null(
             target_counts,
             match_own=False,
         )
-        short += missing
+        short, drawn = short + missing, drawn + matched
 
     # Calibration pseudo-genes: disjoint sets of held-out units, each tested against the other held-out units.
     n_calibration = n_null // calibration_size
@@ -423,7 +424,7 @@ def _pseudogene_null(
         if disjoint.any() and n_null > calibration_size:
             own = set(units.tolist())
             pool = [rows for unit, rows in enumerate(null_unit_rows) if unit not in own]
-            calibration_p[position], calibration_floor[position], _ = _pseudogene_pvalue(
+            calibration_p[position], calibration_floor[position], _, _ = _pseudogene_pvalue(
                 calibration_observed[position],
                 reference[disjoint],
                 values,
@@ -438,10 +439,9 @@ def _pseudogene_null(
             )
     if target_counts is not None and short:
         get_logger().warning(
-            "hit_calling: %d drawn control guides of %d or more have fewer cells than the tested guide count drawn "
-            "for them and keep every cell",
-            short,
-            drawn,
+            "hit_calling: %.0f%% of the control guides drawn into pseudo-genes have fewer cells than the tested "
+            "guide count drawn for them and keep every cell",
+            100.0 * short / max(drawn, 1),
             deep="a guide is never upsampled, so pseudo-genes of those guides carry fewer cells than the genes",
         )
     width = max(2, len(str(n_calibration)))
