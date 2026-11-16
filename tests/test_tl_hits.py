@@ -91,6 +91,14 @@ def test_an_identity_covariance_scores_plain_distance_from_the_controls(scored, 
     np.testing.assert_allclose(few.obs["hits_row_distance"].to_numpy(), expected)
 
 
+def test_an_identity_covariance_refuses_a_feature_no_control_measured(scored):
+    """A feature missing from every fitting control has no centre; it must not silently drop out of every distance."""
+    scored.X = np.asarray(scored.X, dtype=np.float64)
+    scored.X[scored.obs["Metadata_Control"].to_numpy(dtype=bool), 0] = np.nan
+    with pytest.raises(ValueError, match="no value"):
+        mt.tl.hit_calling(scored, covariance="identity", n_permutations=50)
+
+
 def test_an_identity_covariance_is_refused_where_a_scatter_is_refitted(scored):
     with pytest.raises(ValueError, match="identity"):
         mt.tl.hit_calling(scored, method="mp_value", covariance="identity")

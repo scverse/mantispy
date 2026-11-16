@@ -218,10 +218,10 @@ def hit_calling(
         covariance: Scatter the Mahalanobis distance is measured in.
             ``"empirical"`` uses every fitting control row.
             ``"robust"`` uses the minimum covariance determinant subset, so a few stray control wells stop widening the covariance in their own direction and masking real hits there; it needs more control rows than features, so pair it with ``use_rep``.
-            ``"identity"`` measures plain Euclidean distance from the controls' centre, for a representation whose axes are already on one scale and too many for the controls to fit a covariance, such as the diffusion potential :func:`~mantispy.tl.phate` writes; it applies to ``method="mahalanobis"`` and ``method="ks"`` only.
             Under ``method="hellinger"`` and ``method="mp_value"`` it is the location and scatter both sides are fitted with, refitted on every permutation; under ``method="mp_value"`` the group then needs more rows than features too.
+            ``"identity"`` measures plain Euclidean distance from the controls' median, for a representation whose axes are already on one scale and too many for the controls to fit a covariance, such as the diffusion potential :func:`~mantispy.tl.phate` writes; it applies to ``method="mahalanobis"`` and ``method="ks"`` only.
         use_rep: Score ``obsm[use_rep]`` instead of ``X``.
-            When the covariance-fitting half of the controls has no more rows than there are features, the covariance is singular and a warning suggests a PCA representation.
+            When the covariance-fitting half of the controls has no more rows than there are features, the covariance is singular and a warning suggests a PCA representation; ``covariance="identity"`` fits none and does not warn.
         replicate: ``obs`` column, or sequence of columns, whose groups are the design's exchangeable unit: the well in an arrayed screen, the guide (``"Metadata_sgRNA"``) in a pooled one.
             The permutation null then draws whole replicates rather than cells, since cells within a well are not independent replicates (see Notes).
             Left ``None``, it defaults to the physical well, the ``(Metadata_Plate, Metadata_Well)`` pair, on an object explicitly stamped cell resolution that has replicated wells; a same well name on two plates is then two replicates, not one.
@@ -243,13 +243,13 @@ def hit_calling(
         Which rows those are is written to ``obs[key_added + "_reference_held_out"]``, true for the controls that did not fit, so that a scale taken from the controls can be taken from the honest half.
 
     Raises:
-        ValueError: ``method`` is not one of ``METHODS``, ``covariance="identity"`` is combined with ``method="hellinger"`` or ``method="mp_value"``, ``reference`` selects fewer than four rows, or ``replicate`` is not given on a pooled design at cell resolution.
+        ValueError: ``method`` is not one of ``METHODS``, ``covariance="identity"`` is combined with ``method="hellinger"`` or ``method="mp_value"`` or leaves a feature with no value in the reference rows that fit the centre, ``reference`` selects fewer than four rows, or ``replicate`` is not given on a pooled design at cell resolution.
 
     Notes:
         The controls are split in half.
         One half estimates the centroid and the covariance, and the other supplies the null.
         A null drawn from the rows that defined the centroid would be in-sample while every tested group is out-of-sample, so it would come out too small and call pure noise as hits.
-        Because only half the controls fit the covariance, the singular-covariance warning fires when there are fewer than about twice as many controls as features.
+        Because only half the controls fit the covariance, the singular-covariance warning fires when there are fewer than about twice as many controls as features, unless ``covariance="identity"``.
 
         A row that fitted the centroid and the covariance sits closer to the centroid than any other group's row can, so it stays off the tested side of every group.
         The controls carry a perturbation label of their own, and that group is therefore left with the held-out half, which is split once more, at random, so that the rows tested and the rows they are tested against are different rows.
@@ -348,12 +348,22 @@ def hit_calling(
         eigenvalues, eigenvectors = np.linalg.eigh(scatter)
         whitening = eigenvectors @ np.diag(1.0 / np.sqrt(np.clip(eigenvalues, 1e-6, None))) @ eigenvectors.T
     elif covariance == "identity":
+        unmeasured = np.isnan(values[fit_rows]).all(axis=0)
+        if unmeasured.any():
+            raise ValueError(
+                f"{int(unmeasured.sum())} feature(s) have no value in any of the {fit_rows.size} reference rows that "
+                "fit the centre. Fill them first with mt.pp.impute(adata), or drop the incomplete features, e.g. "
+                "mt.pp.feature_select(adata, na_cutoff=0.0, subset=True)."
+            )
         centre, whitening = np.nanmedian(values[fit_rows], axis=0), None
     else:
         centre, whitening = mahalanobis_transform(values[fit_rows], robust=covariance == "robust", seed=seed)
     # Fill gaps before whitening, which mixes columns; one NaN would otherwise zero the row's distance.
-    offsets = np.nan_to_num(values - centre)
-    to_control = np.linalg.norm(offsets if whitening is None else offsets @ whitening, axis=1)
+    offsets = values - centre
+    np.nan_to_num(offsets, copy=False)
+    if whitening is not None:
+        offsets = offsets @ whitening
+    to_control = np.linalg.norm(offsets, axis=1)
     del offsets
     fitted = np.zeros(adata.n_obs, dtype=bool)
     if not refit:
