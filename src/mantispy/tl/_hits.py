@@ -185,49 +185,60 @@ def _hellinger_null(
     return float(out[0]), out[1:]
 
 
-def _profile_distance(
+def _profile_distances(
     values: np.ndarray,
     unit_rows: list[np.ndarray],
     draws: np.ndarray,
     centre: np.ndarray,
     whitening: np.ndarray,
     func: str,
+    generator: np.random.Generator,
     cell_counts: np.ndarray | None = None,
-    generator: np.random.Generator | None = None,
+    n_matched: int | None = None,
 ) -> tuple[np.ndarray, int]:
     """Distance from the control centre of each draw's profile, its units' rows combined by ``func``.
 
-    ``draws`` holds one row of unit positions per profile, all of one size.
-    The profile is taken in feature space and whitened after, since a median does not commute with the whitening.
-    With ``cell_counts``, each drawn unit keeps a random subset of its rows of a size drawn from ``cell_counts``, or all of them when it has fewer.
+    ``draws`` holds one row of positions in ``unit_rows`` per profile.
+    The profile is taken in feature space with the kernel :func:`~mantispy.tl.aggregate` uses, and whitened after, since a median does not commute with the whitening.
+    With ``cell_counts``, each drawn unit below position ``n_matched`` keeps a fresh random subset of its rows, of a size drawn from ``cell_counts``, or all of them when it has fewer.
     Also returns how many drawn units had fewer rows than their draw.
     """
-    combine = np.nanmedian if func == "median" else np.nanmean
+    from mantispy._core._numba import MEAN, MEDIAN, _grouped, _kernel_input
+
+    matrix = _kernel_input(values)
+    stat = MEDIAN if func == "median" else MEAN
+    n_matched = len(unit_rows) if n_matched is None else n_matched
     out = np.empty(draws.shape[0])
-    if all(rows.size == 1 for rows in unit_rows):
-        # One row per unit, as in guide profiles: combine the draws as one block per chunk.
-        row_of_unit = np.array([rows[0] for rows in unit_rows])
-        for start in range(0, draws.shape[0], _PSEUDOGENE_BLOCK):
-            block = values[row_of_unit[draws[start : start + _PSEUDOGENE_BLOCK]]]
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", RuntimeWarning)  # an all-NaN feature stays NaN and is filled below
-                profiles = combine(block, axis=1)
-            out[start : start + block.shape[0]] = np.linalg.norm(np.nan_to_num(profiles - centre) @ whitening, axis=1)
-        return out, 0
     short = 0
-    for index, draw in enumerate(draws):
-        rows = [unit_rows[unit] for unit in draw]
-        if cell_counts is not None and generator is not None:
-            targets = generator.choice(cell_counts, size=len(rows))
-            short += int(sum(part.size < target for part, target in zip(rows, targets, strict=True)))
-            rows = [
-                part if part.size <= target else generator.choice(part, int(target), replace=False)
-                for part, target in zip(rows, targets, strict=True)
-            ]
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            profile = combine(values[np.concatenate(rows)], axis=0)
-        out[index] = float(np.linalg.norm(np.nan_to_num(profile - centre) @ whitening))
+    for start in range(0, draws.shape[0], _PSEUDOGENE_BLOCK):
+        block = draws[start : start + _PSEUDOGENE_BLOCK]
+        targets = (
+            cell_counts[generator.integers(cell_counts.size, size=block.shape)] if cell_counts is not None else None
+        )
+        # Each unit's rows are shuffled once per block; a window at a random start of that order is a uniform subset.
+        shuffled: dict[int, np.ndarray] = {}
+        pieces = []
+        lengths = np.zeros(block.shape[0], dtype=np.int64)
+        for position, draw in enumerate(block):
+            for column, unit in enumerate(draw):
+                rows = unit_rows[unit]
+                if targets is not None and unit < n_matched:
+                    target = int(targets[position, column])
+                    if rows.size > target:
+                        order = shuffled.get(unit)
+                        if order is None:
+                            order = shuffled[unit] = generator.permutation(rows)
+                        first = int(generator.integers(rows.size))
+                        rows = order[first : first + target]
+                        if rows.size < target:
+                            rows = np.concatenate([rows, order[: target - rows.size]])
+                    elif rows.size < target:
+                        short += 1
+                pieces.append(rows)
+                lengths[position] += rows.size
+        offsets = np.concatenate([[0], np.cumsum(lengths)]).astype(np.int64)
+        profiles = _grouped(matrix, np.concatenate(pieces).astype(np.int64), offsets, block.shape[0], stat, 0.5, 1)
+        out[start : start + block.shape[0]] = np.linalg.norm(np.nan_to_num(profiles - centre) @ whitening, axis=1)
     return out, short
 
 
@@ -250,6 +261,65 @@ def _draw_units(n_units: int, size: int, n_draws: int, generator: np.random.Gene
     return np.sort([generator.choice(n_units, size, replace=False, shuffle=False) for _ in range(n_draws)], axis=1)
 
 
+def _own_share(n_pool: int, size: int) -> float:
+    """The share of the ``size``-unit subsets of a pool plus a group's own ``size`` units that hold none of the group's units."""
+    from math import comb
+
+    return comb(n_pool, size) / comb(n_pool + size, size)
+
+
+def _draws_with_own(n_pool: int, size: int, n_draws: int, generator: np.random.Generator) -> np.ndarray:
+    """``size``-unit subsets of a pool (positions below ``n_pool``) and a group's own units (the ``size`` positions after it), drawn uniformly among those that hold at least one own unit."""
+    from math import comb
+
+    weights = np.array([comb(size, own) * comb(n_pool, size - own) for own in range(1, size + 1)], dtype=float)
+    own = generator.choice(np.arange(1, size + 1), size=n_draws, p=weights / weights.sum())
+    own_order = np.argsort(generator.random((n_draws, size)), axis=1) + n_pool
+    pool_order = np.argpartition(generator.random((n_draws, n_pool)), size - 1, axis=1)[:, :size]
+    column = np.arange(size)
+    # The first ``own`` positions take own units and the rest pool units.
+    pool_column = np.clip(column[None, :] - own[:, None], 0, size - 1)
+    return np.where(column[None, :] < own[:, None], own_order, np.take_along_axis(pool_order, pool_column, axis=1))
+
+
+def _pseudogene_pvalue(
+    observed: float,
+    shared: np.ndarray,
+    values: np.ndarray,
+    pool_rows: list[np.ndarray],
+    own_rows: list[np.ndarray],
+    centre: np.ndarray,
+    whitening: np.ndarray,
+    func: str,
+    generator: np.random.Generator,
+    cell_counts: np.ndarray | None,
+    match_own: bool,
+) -> tuple[float, float, int]:
+    """Permutation p-value of a group against every way to draw its number of units from the pool and its own units.
+
+    Draws holding none of the group's units come from ``shared``, computed once for every group; draws holding some are drawn here, as many as their share calls for, so each draw counts the same.
+    Returns the p-value, its floor and how many drawn units fell short of their cell count.
+    """
+    size = len(own_rows)
+    share = _own_share(len(pool_rows), size)
+    n_own = int(np.ceil(shared.size * (1.0 - share) / share))
+    draws = _draws_with_own(len(pool_rows), size, n_own, generator)
+    with_own, short = _profile_distances(
+        values,
+        [*pool_rows, *own_rows],
+        draws,
+        centre,
+        whitening,
+        func,
+        generator,
+        cell_counts,
+        n_matched=len(pool_rows) + (size if match_own else 0),
+    )
+    total = shared.size + n_own
+    at_least = np.sum(shared >= observed) + np.sum(with_own >= observed)
+    return (at_least + 1.0) / (total + 1.0), 1.0 / (total + 1.0), short
+
+
 def _pseudogene_null(
     values: np.ndarray,
     unit_codes: np.ndarray,
@@ -267,8 +337,8 @@ def _pseudogene_null(
 ) -> tuple[pd.DataFrame, np.ndarray]:
     """Score every tested group against pseudo-genes drawn from the held-out control units, and score calibration pseudo-genes.
 
-    A tested group's units are its non-reference rows' units; a group of ``K`` units is ranked against ``n_pseudogenes`` profiles of ``K`` held-out control units each.
-    The held-out units are also cut into disjoint pseudo-genes of the median group size, each ranked against the draws that share none of its units.
+    A group of ``K`` units is ranked among the profiles of ``K`` units drawn from the held-out control units and its own units pooled, as the permutation null pools a group with the controls.
+    The held-out units are also cut into disjoint pseudo-genes of the median group size, each tested the same way against the other held-out units.
 
     Returns the table without q-values, real groups first, and each row's smallest reachable p-value.
     """
@@ -304,52 +374,76 @@ def _pseudogene_null(
         match_cells, null_unit_rows, tested_units, null_rows, np.concatenate(tested_rows), cell_count
     )
     draws = {size: _draw_units(n_null, size, n_pseudogenes, generator) for size in wanted}
-    null, short, drawn = {}, 0, 0
+    shared, short, drawn = {}, 0, 0
     for size in wanted:
-        null[size], missing = _profile_distance(
-            values, null_unit_rows, draws[size], centre, whitening, func, target_counts, generator
+        shared[size], missing = _profile_distances(
+            values, null_unit_rows, draws[size], centre, whitening, func, generator, target_counts
         )
         short, drawn = short + missing, drawn + draws[size].size
-    if target_counts is not None and short:
-        get_logger().warning(
-            "hit_calling: %d of %d drawn control guides have fewer cells than the tested guide count drawn for them "
-            "and keep every cell",
-            short,
-            drawn,
-            deep="a guide is never upsampled, so pseudo-genes of those guides carry fewer cells than the genes",
-        )
-    floor_of = {size: 1.0 / min(n_pseudogenes + 1, max(_n_draws(n_null, size, n_pseudogenes), 1)) for size in wanted}
 
     observed = np.full(n_groups, np.nan)
     pvalues = np.full(n_groups, np.nan)
     floors = np.full(n_groups, np.nan)
     combine = np.nanmedian if func == "median" else np.nanmean
     for index in np.flatnonzero(scored):
+        rows = tested_rows[index]
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
-            profile = combine(values[tested_rows[index]], axis=0)
+            profile = combine(values[rows], axis=0)
         observed[index] = float(np.linalg.norm(np.nan_to_num(profile - centre) @ whitening))
-        reference = null[sizes[index]]
-        pvalues[index] = (np.sum(reference >= observed[index]) + 1.0) / (reference.size + 1.0)
-        floors[index] = floor_of[sizes[index]]
+        unit_order = np.argsort(unit_codes[rows], kind="stable")
+        own_rows = np.split(rows[unit_order], np.flatnonzero(np.diff(unit_codes[rows][unit_order])) + 1)
+        pvalues[index], floors[index], missing = _pseudogene_pvalue(
+            observed[index],
+            shared[sizes[index]],
+            values,
+            null_unit_rows,
+            own_rows,
+            centre,
+            whitening,
+            func,
+            generator,
+            target_counts,
+            match_own=False,
+        )
+        short += missing
 
-    # Calibration pseudo-genes: disjoint sets of held-out units, each against the draws that share none of its units.
+    # Calibration pseudo-genes: disjoint sets of held-out units, each tested against the other held-out units.
     n_calibration = n_null // calibration_size
     cut = generator.permutation(n_null)[: n_calibration * calibration_size].reshape(n_calibration, calibration_size)
     cut = np.sort(cut, axis=1)
-    calibration_observed = _profile_distance(
-        values, null_unit_rows, cut, centre, whitening, func, target_counts, generator
+    calibration_observed = _profile_distances(
+        values, null_unit_rows, cut, centre, whitening, func, generator, target_counts
     )[0]
-    reference_draws, reference = draws[calibration_size], null[calibration_size]
     calibration_p = np.full(n_calibration, np.nan)
     calibration_floor = np.full(n_calibration, np.nan)
+    reference_draws, reference = draws[calibration_size], shared[calibration_size]
     for position, units in enumerate(cut):
         disjoint = ~np.isin(reference_draws, units).any(axis=1)
-        if disjoint.any():
-            calibration_p[position] = (np.sum(reference[disjoint] >= calibration_observed[position]) + 1.0) / (
-                disjoint.sum() + 1.0
+        if disjoint.any() and n_null > calibration_size:
+            own = set(units.tolist())
+            pool = [rows for unit, rows in enumerate(null_unit_rows) if unit not in own]
+            calibration_p[position], calibration_floor[position], _ = _pseudogene_pvalue(
+                calibration_observed[position],
+                reference[disjoint],
+                values,
+                pool,
+                [null_unit_rows[unit] for unit in units],
+                centre,
+                whitening,
+                func,
+                generator,
+                target_counts,
+                match_own=True,
             )
-            calibration_floor[position] = 1.0 / (disjoint.sum() + 1.0)
+    if target_counts is not None and short:
+        get_logger().warning(
+            "hit_calling: %d drawn control guides of %d or more have fewer cells than the tested guide count drawn "
+            "for them and keep every cell",
+            short,
+            drawn,
+            deep="a guide is never upsampled, so pseudo-genes of those guides carry fewer cells than the genes",
+        )
     width = max(2, len(str(n_calibration)))
     table = pd.DataFrame(
         {
