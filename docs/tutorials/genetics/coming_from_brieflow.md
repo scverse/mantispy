@@ -281,8 +281,11 @@ Brieflow runs Leiden on PHATE’s diffusion operator, a random walk whose rows a
 The affinity is symmetric to begin with, so it needs no averaging.
 Leiden also runs through {func}`scanpy.tl.leiden` with two iterations, where Brieflow iterates until the partition stops changing.
 
-Brieflow’s `calculate_potential_to_nontargeting` measures each gene’s distance to the controls in PHATE’s diffusion potential.
-The closest counterpart, also in #340, is {func}`~mantispy.tl.hit_calling` with `use_rep="X_phate_potential"` and `covariance="identity"`.
+Brieflow’s `calculate_potential_to_nontargeting` measures each gene’s distance to the controls in PHATE’s diffusion potential, and mantispy deliberately has no counterpart.
+The diffusion averages each row over its neighbours in the graph, so a row’s potential depends on every other row, and the distance of a gene and the distance of a control aren’t comparable draws.
+On Aconcagua’s published gene profiles, a permutation test of distance to the controls in the potential called 14% to 17% of pseudo-genes made only of control guides at p < 0.05, where a calibrated test calls about 5%, and the same test on the principal components called at most about 2%.
+To test genes against the controls, run {func}`~mantispy.tl.bootstrap_features` with pseudo-genes, as above, on the features rather than the potential.
+A pseudo-gene null for {func}`~mantispy.tl.hit_calling` is also planned.
 
 ## Benchmark against CORUM
 
