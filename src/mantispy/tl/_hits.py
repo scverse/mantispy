@@ -274,10 +274,13 @@ def _pseudogene_null(
     """
     generator = np.random.default_rng([seed, 1])
     null_units, null_inverse = np.unique(unit_codes[null_rows], return_inverse=True)
-    null_unit_rows = [null_rows[null_inverse == position] for position in range(null_units.size)]
+    by_unit = np.argsort(null_inverse, kind="stable")
+    null_unit_rows = np.split(null_rows[by_unit], np.flatnonzero(np.diff(null_inverse[by_unit])) + 1)
     n_null = null_units.size
 
-    tested_rows = [np.flatnonzero((codes == index) & ~is_control) for index in range(n_groups)]
+    order, offsets = group_offsets(codes, n_groups)
+    tested_rows = [order[offsets[index] : offsets[index + 1]] for index in range(n_groups)]
+    tested_rows = [rows[~is_control[rows]] for rows in tested_rows]
     sizes = np.array([np.unique(unit_codes[rows]).size for rows in tested_rows])
     scored = sizes > 0
     if scored.any() and (sizes[scored] == 1).all():
