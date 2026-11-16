@@ -4,6 +4,7 @@ A grouped operation on a backed object reads one group's rows at a time and give
 Functions that write X in place refuse backed objects with an error.
 """
 
+import os
 from types import SimpleNamespace
 
 import anndata as ad
@@ -680,6 +681,53 @@ def test_writing_a_lazy_object_over_its_own_file_is_refused(tmp_path, cells, suf
     np.testing.assert_array_equal(mt.io.read(tmp_path / f"normalized{suffix}").X, expected)
 
 
+def test_writing_a_lazy_object_over_another_name_of_its_file_is_refused(tmp_path, cells):
+    """A hard link, like a case variant on a case-insensitive filesystem, spells the same file another way."""
+    path = tmp_path / "cells.h5ad"
+    mt.io.write(cells, path)
+    alias = tmp_path / "alias.h5ad"
+    os.link(path, alias)
+    lazy = mt.io.read(path, lazy=True)
+    lazy.X = lazy.X * 2.0
+
+    with pytest.raises(ValueError, match="another path"):
+        mt.io.write(lazy, alias)
+
+    np.testing.assert_array_equal(mt.io.read(path).X, cells.X)
+
+
+def test_writing_a_view_to_a_file_no_lazy_object_reads_lists_no_matrix(tmp_path, cells, monkeypatch):
+    """Listing a view's matrices copies them, which the overwrite guard needs only for a file a lazy read came from."""
+    from mantispy.io import _profiles
+
+    path = tmp_path / "cells.h5ad"
+    mt.io.write(cells, path)
+    monkeypatch.setattr(_profiles, "held_matrices", lambda adata: pytest.fail("listed the matrices"))
+
+    mt.io.write(cells[:10], path)
+    mt.io.write(cells[:10], tmp_path / "new.h5ad")
+
+
+def test_a_lazy_read_of_a_wider_raw_chunks_it_by_its_own_width(tmp_path, cells, monkeypatch):
+    import dask
+
+    n_obs, raw_vars = 4096, 256
+    obs = pd.concat([cells.obs] * -(-n_obs // cells.n_obs)).iloc[:n_obs]
+    obs.index = [f"c{i}" for i in range(n_obs)]
+    obs["Metadata_ObjectNumber"] = np.arange(n_obs)
+    adata = ad.AnnData(np.zeros((n_obs, 2)), obs=obs, var=cells.var.iloc[:2])
+    adata.uns = cells.uns
+    adata.raw = ad.AnnData(np.zeros((n_obs, raw_vars)), obs=obs)
+    mt.io.write(adata, tmp_path / "raw.h5ad")
+    monkeypatch.setattr(mt.settings, "stream_bytes", 1024 * raw_vars * 8)
+
+    with dask.config.set(num_workers=1):
+        lazy = mt.io.read(tmp_path / "raw.h5ad", lazy=True)
+
+    assert lazy.X.chunks[0] == (n_obs,)
+    assert max(lazy.raw.X.chunks[0]) == 1024
+
+
 def test_a_lazy_read_keeps_raw(tmp_path, cells):
     adata = cells.copy()
     adata.raw = adata.copy()
@@ -701,3 +749,14 @@ def test_a_lazy_read_of_a_sparse_matrix_names_the_way_out(tmp_path, cells, fmt):
 
     with pytest.raises(ValueError, match="stored sparse.*backed='r'"):
         mt.io.read(tmp_path / "sparse.h5ad", lazy=True)
+
+
+def test_a_lazy_read_of_a_sparse_zarr_layer_does_not_point_to_backed(tmp_path, cells):
+    """backed='r' reads only h5ad, so for a zarr store it is no way out."""
+    adata = cells.copy()
+    adata.layers["counts"] = sparse.csr_matrix(adata.X)
+    mt.io.write(adata, tmp_path / "sparse.zarr")
+
+    with pytest.raises(ValueError, match="stored sparse") as error:
+        mt.io.read(tmp_path / "sparse.zarr", lazy=True)
+    assert "backed" not in str(error.value)
