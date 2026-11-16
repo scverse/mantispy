@@ -221,6 +221,16 @@ def test_identical_rows_embed_at_one_point():
     np.testing.assert_array_equal(adata.obsm["X_phate"], 0.0)
 
 
+def test_potential_rows_apart_by_rounding_alone_are_one_point():
+    """BLAS sums the walk's powers in a platform-dependent order, so identical rows can differ in the last bit."""
+    row = np.random.default_rng(0).uniform(1, 16, 300)
+    potential = np.repeat(row[None], 20, axis=0)
+    potential[::2] = np.nextafter(potential[::2], np.inf)
+    np.testing.assert_array_equal(_phate.potential_distances(potential), 0.0)
+    apart = np.random.default_rng(1).normal(size=(50, 300))
+    np.testing.assert_allclose(_phate.potential_distances(apart), cdist(apart, apart), rtol=1e-10, atol=1e-12)
+
+
 def test_classical_mds_pads_axes_past_the_points():
     d = cdist(*(2 * [np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 2.0]])]))
     coordinates = _phate.classic_mds(d, 5)

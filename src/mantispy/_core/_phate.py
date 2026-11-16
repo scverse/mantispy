@@ -529,6 +529,34 @@ def diffusion_power(operator: sp.csr_matrix, t: int) -> np.ndarray:
     return current
 
 
+@njit(parallel=True, cache=True, nogil=True)
+def _root_above_rounding(sq: np.ndarray, norms: np.ndarray, unit: float) -> None:
+    """Square roots of squared distances in place, zero where one is within its rounding error of zero."""
+    m = sq.shape[0]
+    n_chunks = min(N_CHUNKS, m)
+    for chunk in prange(n_chunks):
+        for i in range(chunk * m // n_chunks, (chunk + 1) * m // n_chunks):
+            for j in range(m):
+                value = sq[i, j]
+                sq[i, j] = 0.0 if i == j or value <= unit * (norms[i] + norms[j]) else math.sqrt(value)
+
+
+def potential_distances(potential: np.ndarray) -> np.ndarray:
+    """Euclidean distances between the rows of ``potential``, exactly zero between rows no more apart than rounding.
+
+    The distances come from inner products, wrong by up to ``unit * (|a|^2 + |b|^2)``; within that, rows count as
+    one point.
+    Identical inputs give potential rows that differ only by the summation order of the products that powered the
+    walk, which varies with the platform's BLAS, so without the floor they would be spread apart by rounding alone.
+    """
+    from mantispy._core._distance import pairwise_sqeuclidean
+
+    sq = pairwise_sqeuclidean(potential, potential)
+    norms = np.einsum("ij,ij->i", potential, potential, dtype=np.float64)
+    _root_above_rounding(sq, norms, (2.0 * (potential.shape[1] + 2) + 2.0) * _PRECISIONS[1][1])
+    return sq
+
+
 def potential(transitions: np.ndarray, gamma: float) -> np.ndarray:
     """The diffusion potential of ``transitions``, in place."""
     _potential_inplace(transitions, float(gamma))

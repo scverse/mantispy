@@ -11,7 +11,6 @@ from anndata import AnnData
 from scipy.sparse.csgraph import connected_components
 
 from mantispy._core import _phate
-from mantispy._core._distance import pairwise_sqeuclidean
 from mantispy._core._reduce import representation
 from mantispy._core.logging import get_logger
 from mantispy._core.mutation import inplace_or_copy
@@ -178,8 +177,7 @@ def phate(
     t = int(t)
 
     landmark_potential = _phate.potential(_phate.diffusion_power(operator, t), gamma)
-    potential_distances = np.sqrt(pairwise_sqeuclidean(landmark_potential, landmark_potential))
-    np.fill_diagonal(potential_distances, 0.0)
+    potential_distances = _phate.potential_distances(landmark_potential)
     coordinates = _phate.classic_mds(potential_distances, n_components)
     if mds == "metric":
         coordinates = _phate.smacof(potential_distances, coordinates)
