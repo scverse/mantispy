@@ -571,14 +571,14 @@ def test_a_reduction_of_a_group_larger_than_the_budget_matches_in_memory(lazy_pa
     np.testing.assert_array_equal(streamed_counts, counts)
 
 
-def test_tvn_under_a_process_cluster_keeps_the_lazy_representation(lazy_pair):
+def test_tvn_under_a_process_cluster_keeps_the_lazy_representation(lazy_pair, caplog):
     """The representation was stored into a local array from inside the workers, so under process workers it came back uninitialised."""
     import logging
 
     import dask.array as da
 
     distributed = pytest.importorskip("distributed")
-    logging.getLogger("distributed").setLevel(logging.ERROR)
+    caplog.set_level(logging.ERROR, logger="distributed")  # restored after the test
     _, in_memory = lazy_pair(np.float64)
     in_memory.obsm["X_pca"] = np.random.default_rng(0).normal(size=(in_memory.n_obs, 5))
     lazy = in_memory.copy()
