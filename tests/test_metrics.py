@@ -374,8 +374,10 @@ def test_scib_get_results_keeps_the_public_seam_we_read():
     assert (aggregate == "Aggregate score").all()
 
 
-def test_evaluate_integration_baseline_survives_a_large_float32_mean(monkeypatch):
-    """The covariance path of the baseline PCA is centred first, so a float32 matrix far from zero keeps its components."""
+@pytest.mark.parametrize("svd_solver", [None, "auto"])
+def test_evaluate_integration_baseline_survives_a_large_float32_mean(monkeypatch, svd_solver):
+    """The baseline is centred before its PCA, so a float32 matrix far from zero keeps its components, also when
+    scikit-learn's "auto" resolves to the covariance path itself."""
     pytest.importorskip("scib_metrics")
     import scib_metrics.benchmark
 
@@ -399,7 +401,12 @@ def test_evaluate_integration_baseline_survives_a_large_float32_mean(monkeypatch
     expected = adata.X - adata.X.mean(axis=0)
     adata.X = (adata.X + 1e4).astype(np.float32)
     _evaluate._benchmark(
-        adata, reps=("X_pca",), label_key="Metadata_Perturbation", batch_key="Metadata_Batch", min_max_scale=False
+        adata,
+        reps=("X_pca",),
+        label_key="Metadata_Perturbation",
+        batch_key="Metadata_Batch",
+        min_max_scale=False,
+        svd_solver=svd_solver,
     )
 
     # The PCs of the exact centred matrix, compared through the variance each captures since a sign is free.
