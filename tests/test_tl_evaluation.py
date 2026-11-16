@@ -420,6 +420,45 @@ def test_map_refuses_profiles_it_cannot_rank(profiles, value):
         mt.tl.map(profiles, mode="activity", null_size=100)
 
 
+def test_map_names_the_groups_of_the_profiles_it_cannot_rank(profiles):
+    values = profiles.X.copy()
+    values[0] = 0.0
+    profiles.X = values
+    label = profiles.obs["Metadata_Perturbation"].iloc[0]
+    with pytest.raises(ValueError, match=rf"by group: {label} \(1\)"):
+        mt.tl.map(profiles, mode="activity", null_size=100)
+
+
+def test_map_checks_only_the_profiles_it_scores(profiles):
+    """Replicability leaves the controls out, so an unrankable control profile does not stop it."""
+    values = profiles.X.copy()
+    values[np.flatnonzero(profiles.obs["Metadata_Perturbation"] == "DMSO")[0]] = np.inf
+    profiles.X = values
+    mt.tl.map(profiles, mode="replicability", null_size=100)
+    assert profiles.uns["mantispy"]["map"]["score"].notna().all()
+
+
+def test_map_refuses_a_constant_profile_under_correlation(profiles):
+    values = profiles.X.copy()
+    values[0] = 1.0
+    profiles.X = values
+    with pytest.raises(ValueError, match=r"cannot rank 1 profile"):
+        mt.tl.map(profiles, mode="activity", null_size=100, distance="correlation")
+
+
+def test_evaluate_integration_refuses_a_representation_it_cannot_rank():
+    rng = np.random.default_rng(0)
+    labels = np.array([f"p{i % 3}" for i in range(120)])
+    batches = np.array([f"b{i % 2}" for i in range(120)])
+    obs = pd.DataFrame({"Metadata_Perturbation": labels, "Metadata_Batch": batches}, index=[str(i) for i in range(120)])
+    noise = rng.normal(size=(120, 6))
+    zeroed = noise.copy()
+    zeroed[labels == "p0"] = 0.0
+    adata = ad.AnnData(noise.astype(np.float32), obs=obs, obsm={"X_noise": noise, "X_zeroed": zeroed})
+    with pytest.raises(ValueError, match=r"obsm\['X_zeroed'\].*cannot rank 40 profile"):
+        mt.metrics.evaluate_integration(adata, reps=("X_noise", "X_zeroed"), metrics=["map"])
+
+
 @pytest.mark.parametrize("infinity", [np.inf, -np.inf])
 def test_an_infinite_value_is_compared_as_missing(infinity):
     """Regression test for #65: filled as the largest float, one infinity made its profile orthogonal to every other."""

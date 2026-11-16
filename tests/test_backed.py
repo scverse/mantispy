@@ -4,6 +4,7 @@ A grouped operation on a backed object reads one group's rows at a time and give
 Functions that write X in place refuse backed objects with an error.
 """
 
+import os
 from types import SimpleNamespace
 
 import anndata as ad
@@ -568,3 +569,194 @@ def test_a_reduction_of_a_group_larger_than_the_budget_matches_in_memory(lazy_pa
 
     np.testing.assert_array_equal(streamed, expected)
     np.testing.assert_array_equal(streamed_counts, counts)
+
+
+def test_tvn_under_a_process_cluster_keeps_the_lazy_representation(lazy_pair, caplog):
+    """The representation was stored into a local array from inside the workers, so under process workers it came back uninitialised."""
+    import logging
+
+    import dask.array as da
+
+    distributed = pytest.importorskip("distributed")
+    caplog.set_level(logging.ERROR, logger="distributed")  # restored after the test
+    _, in_memory = lazy_pair(np.float64)
+    in_memory.obsm["X_pca"] = np.random.default_rng(0).normal(size=(in_memory.n_obs, 5))
+    lazy = in_memory.copy()
+    lazy.obsm["X_pca"] = da.from_array(in_memory.obsm["X_pca"], chunks=(100, -1))
+    mt.pp.tvn(in_memory, batch_key="Metadata_Plate")
+
+    with (
+        distributed.LocalCluster(n_workers=1, threads_per_worker=1, processes=True, dashboard_address=None) as cluster,
+        distributed.Client(cluster),
+    ):
+        mt.pp.tvn(lazy, batch_key="Metadata_Plate")
+
+    np.testing.assert_array_equal(lazy.obsm["X_pca"], in_memory.obsm["X_pca"])
+    np.testing.assert_allclose(lazy.obsm["X_tvn"], in_memory.obsm["X_tvn"], rtol=1e-10, atol=1e-10)
+
+
+def test_reading_a_lazy_matrix_reads_each_chunk_once(monkeypatch):
+    """Computed batch by batch, a lazy matrix ran the tasks its chunks share, such as a column mean, once per batch."""
+    import threading
+
+    import dask.array as da
+
+    from mantispy._core._reduce import materialize
+
+    lock = threading.Lock()
+    reads = []
+
+    def counted(block):
+        if block.size:  # not dask's probe of the block function on an empty block
+            with lock:
+                reads.append(block.shape)
+        return block
+
+    values = np.random.default_rng(0).normal(size=(64, 3))
+    source = da.from_array(values, chunks=(4, -1)).map_blocks(counted, dtype=values.dtype)
+    monkeypatch.setattr(mt.settings, "stream_bytes", 4 * 3 * 8)
+
+    out = materialize(source - source.mean(axis=0))
+
+    np.testing.assert_allclose(out, values - values.mean(axis=0))
+    assert len(reads) == 16
+
+
+def test_reading_a_lazy_matrix_holds_it_once(monkeypatch):
+    """np.asarray on a dask array holds every chunk and their concatenation at once, twice the matrix."""
+    import tracemalloc
+
+    import dask.array as da
+
+    monkeypatch.setattr(mt.settings, "stream_bytes", 2 * 250 * 50 * 8)
+    values = np.random.default_rng(0).normal(size=(4000, 50))
+    lazy = ad.AnnData(X=da.from_array(values, chunks=(250, -1)))
+    lazy.X = lazy.X * 1.0
+    # The scheduler's first computation allocates its thread pool, which is not the read.
+    lazy.X[:1].compute()
+
+    tracemalloc.start()
+    try:
+        out = get_matrix(lazy, rows=np.arange(values.shape[0]))
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+    np.testing.assert_array_equal(out, values)
+    assert peak < 1.75 * values.nbytes, f"peak {peak} for a {values.nbytes}-byte matrix"
+
+
+def test_a_ranking_on_a_lazy_object_warns_that_it_holds_the_result_whole(lazy_pair, monkeypatch, caplog):
+    import logging
+
+    lazy, _ = lazy_pair()
+    monkeypatch.setattr(mt.settings, "stream_bytes", 1000)
+
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
+        mt.pp.rank_int(lazy, by="Metadata_Plate")
+
+    assert "rank_int reads the whole" in caplog.text
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_the_read_budget_must_be_positive(value):
+    with pytest.raises(ValueError, match="greater than 0"):
+        mt.settings.stream_bytes = value
+
+
+@pytest.mark.parametrize("suffix", [".h5ad", ".zarr"])
+def test_writing_a_lazy_object_over_its_own_file_is_refused(tmp_path, cells, suffix):
+    """Its chunks are read from the file by path, so after the overwrite it would apply its steps to their own output."""
+    path = tmp_path / f"cells{suffix}"
+    mt.io.write(cells, path)
+    lazy = mt.io.read(path, lazy=True)
+    mt.pp.normalize(lazy, by="Metadata_Plate", reference=None)
+    expected = np.asarray(lazy.X)
+
+    with pytest.raises(ValueError, match="another path"):
+        mt.io.write(lazy, path)
+
+    np.testing.assert_array_equal(mt.io.read(path).X, cells.X)
+    mt.io.write(lazy, tmp_path / f"normalized{suffix}")
+    np.testing.assert_array_equal(mt.io.read(tmp_path / f"normalized{suffix}").X, expected)
+
+
+def test_writing_a_lazy_object_over_another_name_of_its_file_is_refused(tmp_path, cells):
+    """A hard link, like a case variant on a case-insensitive filesystem, spells the same file another way."""
+    path = tmp_path / "cells.h5ad"
+    mt.io.write(cells, path)
+    alias = tmp_path / "alias.h5ad"
+    os.link(path, alias)
+    lazy = mt.io.read(path, lazy=True)
+    lazy.X = lazy.X * 2.0
+
+    with pytest.raises(ValueError, match="another path"):
+        mt.io.write(lazy, alias)
+
+    np.testing.assert_array_equal(mt.io.read(path).X, cells.X)
+
+
+def test_writing_a_view_to_a_file_no_lazy_object_reads_lists_no_matrix(tmp_path, cells, monkeypatch):
+    """Listing a view's matrices copies them, which the overwrite guard needs only for a file a lazy read came from."""
+    from mantispy.io import _profiles
+
+    path = tmp_path / "cells.h5ad"
+    mt.io.write(cells, path)
+    monkeypatch.setattr(_profiles, "held_matrices", lambda adata: pytest.fail("listed the matrices"))
+
+    mt.io.write(cells[:10], path)
+    mt.io.write(cells[:10], tmp_path / "new.h5ad")
+
+
+def test_a_lazy_read_of_a_wider_raw_chunks_it_by_its_own_width(tmp_path, cells, monkeypatch):
+    import dask
+
+    n_obs, raw_vars = 4096, 256
+    obs = pd.concat([cells.obs] * -(-n_obs // cells.n_obs)).iloc[:n_obs]
+    obs.index = [f"c{i}" for i in range(n_obs)]
+    obs["Metadata_ObjectNumber"] = np.arange(n_obs)
+    adata = ad.AnnData(np.zeros((n_obs, 2)), obs=obs, var=cells.var.iloc[:2])
+    adata.uns = cells.uns
+    adata.raw = ad.AnnData(np.zeros((n_obs, raw_vars)), obs=obs)
+    mt.io.write(adata, tmp_path / "raw.h5ad")
+    monkeypatch.setattr(mt.settings, "stream_bytes", 1024 * raw_vars * 8)
+
+    with dask.config.set(num_workers=1):
+        lazy = mt.io.read(tmp_path / "raw.h5ad", lazy=True)
+
+    assert lazy.X.chunks[0] == (n_obs,)
+    assert max(lazy.raw.X.chunks[0]) == 1024
+
+
+def test_a_lazy_read_keeps_raw(tmp_path, cells):
+    adata = cells.copy()
+    adata.raw = adata.copy()
+    mt.io.write(adata, tmp_path / "raw.h5ad")
+
+    lazy = mt.io.read(tmp_path / "raw.h5ad", lazy=True)
+
+    assert lazy.raw is not None
+    assert _is_dask(lazy.raw.X)
+    np.testing.assert_array_equal(np.asarray(lazy.raw.X), adata.raw.X)
+    pd.testing.assert_index_equal(lazy.raw.var_names, adata.raw.var_names)
+
+
+@pytest.mark.parametrize("fmt", ["csr", "csc"])
+def test_a_lazy_read_of_a_sparse_matrix_names_the_way_out(tmp_path, cells, fmt):
+    adata = cells.copy()
+    adata.X = sparse.csr_matrix(adata.X) if fmt == "csr" else sparse.csc_matrix(adata.X)
+    mt.io.write(adata, tmp_path / "sparse.h5ad")
+
+    with pytest.raises(ValueError, match="stored sparse.*backed='r'"):
+        mt.io.read(tmp_path / "sparse.h5ad", lazy=True)
+
+
+def test_a_lazy_read_of_a_sparse_zarr_layer_does_not_point_to_backed(tmp_path, cells):
+    """backed='r' reads only h5ad, so for a zarr store it is no way out."""
+    adata = cells.copy()
+    adata.layers["counts"] = sparse.csr_matrix(adata.X)
+    mt.io.write(adata, tmp_path / "sparse.zarr")
+
+    with pytest.raises(ValueError, match="stored sparse") as error:
+        mt.io.read(tmp_path / "sparse.zarr", lazy=True)
+    assert "backed" not in str(error.value)

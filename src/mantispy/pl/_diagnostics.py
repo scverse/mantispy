@@ -118,6 +118,7 @@ def control_drift(
     adata: AnnData,
     groupby: str = "Metadata_Plate",
     n_components: int = 2,
+    *,
     svd_solver: str | None = None,
     ax: Axes | None = None,
 ) -> Axes | None:
@@ -151,6 +152,8 @@ def control_drift(
         raise ValueError(f"need more than {n_components} control rows, found {int(is_control.sum())}")
 
     controls = np.nan_to_num(get_matrix(adata)[is_control], nan=0.0, posinf=0.0, neginf=0.0)
+    # Centred before the fit, since the covariance path in float32 loses the variance under a large mean.
+    controls = controls - controls.mean(axis=0, dtype=np.float64).astype(np.result_type(controls.dtype, np.float32))
     solver = pca_solver(controls.shape[0], controls.shape[1], svd_solver, fallback="auto")
     embedding = PCA(n_components=n_components, svd_solver=solver).fit_transform(controls)
     labels = adata.obs[groupby].astype(str).to_numpy()[is_control]

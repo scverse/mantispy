@@ -16,7 +16,7 @@ import pandas as pd
 
 from mantispy._settings import settings
 
-from ._numba import MAD, MEAN, MEDIAN, QUANTILE, STD, group_counts, group_offsets, grouped_stat
+from ._numba import MAD, MEAN, MEDIAN, QUANTILE, STD, _masked_offsets, group_counts, group_offsets, grouped_stat
 from .features import annotation
 from .frames import as_frame
 from .logging import get_logger
@@ -102,6 +102,12 @@ def _source(adata: AnnData, layer: str | None, use_rep: str | None) -> Any:
     return matrix
 
 
+def held_matrices(adata: AnnData) -> list[Any]:
+    """Every matrix the object holds, unread: ``X``, each layer, each ``obsm`` entry and ``raw.X``, skipping absent ones."""
+    raw = None if adata.raw is None else adata.raw.X
+    return [matrix for matrix in (adata.X, *adata.layers.values(), *adata.obsm.values(), raw) if matrix is not None]
+
+
 def out_of_core(adata: AnnData, layer: str | None = None, *, use_rep: str | None = None) -> bool:
     """Whether the matrix :func:`get_matrix` reads is on disk or lazy, so that a grouped operation has to stream it."""
     return _reads_from_disk(_source(adata, layer, use_rep))
@@ -171,6 +177,9 @@ def get_matrix(
         # anndata's CSRDataset and CSCDataset have no ``__array__``, so np.asarray below would raise on them.
         matrix = matrix[:]
 
+    if is_lazy(matrix):
+        # Computed into the result chunk by chunk, where np.asarray would also hold the chunks it concatenates.
+        return materialize(matrix)
     if hasattr(matrix, "toarray"):
         matrix = matrix.toarray()
     return np.asarray(matrix, dtype=float_dtype(matrix.dtype))
@@ -206,12 +215,26 @@ def is_lazy(matrix: Any) -> bool:
 def materialize(matrix: Any) -> np.ndarray:
     """Compute a lazy matrix into one array, in the dtype :func:`float_dtype` gives it.
 
-    Each chunk is stored into the result as it is computed, where computing the whole would also hold the chunks to concatenate.
+    Under a scheduler that runs in this process, the chunks are stored into the result as one computation, so a task they share runs once.
+    Under one whose workers are separate processes, such as a ``dask.distributed`` cluster, a store would fill the workers' copies, so row chunks are computed a few at a time, as many as fit :attr:`~mantispy.settings.stream_bytes`, and each block is returned to this process and copied into the result.
     """
     import dask.array as da
+    from dask import local, threaded
+    from dask.base import get_scheduler
 
     out = np.empty(matrix.shape, dtype=float_dtype(matrix.dtype))
-    da.store(matrix, out, lock=False)
+    if get_scheduler(collections=[matrix]) in (threaded.get, local.get_sync):
+        da.store(matrix, out, lock=False)
+        return out
+    bounds = np.cumsum((0, *matrix.chunks[0]))
+    row_bytes = max(matrix.shape[1], 1) * out.itemsize
+    start = 0
+    while start < len(bounds) - 1:
+        stop = start + 1
+        while stop < len(bounds) - 1 and (bounds[stop + 1] - bounds[start]) * row_bytes <= settings.stream_bytes:
+            stop += 1
+        out[bounds[start] : bounds[stop]] = matrix[bounds[start] : bounds[stop]].compute()
+        start = stop
     return out
 
 
@@ -280,37 +303,43 @@ def group_codes(adata: AnnData, by: str | Sequence[str] | None) -> tuple[np.ndar
 def _multi_group_codes(frame: pd.DataFrame, columns: list[str]) -> tuple[np.ndarray, pd.Index]:
     """``group_codes`` for several columns, without the object-tuple array ``MultiIndex.factorize`` builds.
 
-    Each column is factorized on its own (a hash over the values, dtype kept), and the per-column codes are
-    folded into one mixed-radix integer. Because every column's codes are sorted, that integer is monotone in
-    lexicographic order, so factorizing it reproduces ``MultiIndex.factorize(sort=True)``'s codes and key order.
+    Groups come in the order ``MultiIndex.factorize(sort=True)`` gives them: sorted by value, column by column.
+    A categorical column is sorted by its values too, not by the order of its categories.
+    Each column is factorized on its own, with its dtype kept, and the per-column codes are combined into one integer per row that sorts in that same order.
     Materializing the tuples instead costs an object array per row, which dominates grouping at screen scale.
     """
-    # By position, so a column named twice in ``columns`` is read as a Series rather than a two-column frame.
-    per_column = [pd.factorize(frame.iloc[:, position], sort=True) for position in range(len(columns))]
-    sizes = [len(uniques) for _, uniques in per_column]
-    product = 1
-    for size in sizes:
-        product *= max(size, 1)
-        if product > (1 << 62):
-            # The mixed-radix fold would overflow int64; the object-tuple path is correct whatever the sizes.
-            codes, uniques = pd.MultiIndex.from_frame(frame).factorize(sort=True)
-            return codes.astype(np.int32), uniques if isinstance(uniques, pd.Index) else pd.Index(uniques)
-    composite = per_column[0][0].astype(np.int64)
-    for (column_codes, _), size in zip(per_column[1:], sizes[1:], strict=True):
-        composite = composite * size + column_codes
+    per_column: list[tuple[np.ndarray, Any]] = []
+    for position in range(len(columns)):
+        # By position, so a column named twice in ``columns`` is read as a Series rather than a two-column frame.
+        column = frame.iloc[:, position]
+        if isinstance(column.dtype, pd.CategoricalDtype):
+            per_column.append(_sorted_categorical_codes(column))
+        else:
+            per_column.append(pd.factorize(column, sort=True))
+    sizes = tuple(max(len(uniques), 1) for _, uniques in per_column)
+    if np.prod(sizes, dtype=np.float64) > np.iinfo(np.intp).max:
+        # Too many combinations for one integer; the object-tuple path is correct whatever the sizes.
+        codes, uniques = pd.MultiIndex.from_frame(frame).factorize(sort=True)
+        return codes.astype(np.int32), uniques if isinstance(uniques, pd.Index) else pd.Index(uniques)
+    composite = np.ravel_multi_index([column_codes for column_codes, _ in per_column], sizes)
     codes, present = pd.factorize(composite, sort=True)
-    # Decode each present combination back to its per-column position, then name the groups with the
-    # original values, so keys is the same MultiIndex as the object-tuple path would have produced.
-    remainder = np.asarray(present, dtype=np.int64)
-    decoded = []
-    for size in reversed(sizes[1:]):
-        decoded.append(remainder % size)
-        remainder = remainder // size
-    decoded.append(remainder)
-    decoded.reverse()
-    levels = [uniques.take(position) for (_, uniques), position in zip(per_column, decoded, strict=True)]
-    keys = pd.MultiIndex.from_arrays(levels, names=columns)
-    return codes.astype(np.int32), keys
+    positions = np.unravel_index(np.asarray(present), sizes)
+    levels = [uniques.take(taken) for (_, uniques), taken in zip(per_column, positions, strict=True)]
+    return codes.astype(np.int32), pd.MultiIndex.from_arrays(levels, names=columns)
+
+
+def _sorted_categorical_codes(column: pd.Series) -> tuple[np.ndarray, pd.Categorical]:
+    """``pd.factorize(column, sort=True)`` for a categorical column, sorted by its values rather than its categories.
+
+    The categories are ranked by ``factorize(sort=True)``, which also orders a mix of numbers and strings, and the
+    uniques keep the column's own dtype, so an ordered categorical comes back with its order.
+    """
+    categories = column.cat.categories
+    position = categories.get_indexer(pd.Index(categories.factorize(sort=True)[1]))  # the category at each sorted rank
+    rank = np.empty(position.size, dtype=np.intp)
+    rank[position] = np.arange(position.size)
+    codes, present = pd.factorize(rank[column.cat.codes.to_numpy()], sort=True)
+    return codes, pd.Categorical.from_codes(position[present], categories=categories, ordered=column.cat.ordered)
 
 
 def iter_waves(
@@ -333,11 +362,7 @@ def iter_waves(
     codes, keys = grouping
     source = _source(adata, layer, use_rep)
     _warn_if_not_streamable(source)
-    order, offsets = group_offsets(codes, len(keys))
-    if mask is not None:
-        # Selecting from the stable ordering keeps every group's rows in increasing order.
-        order = order[mask[order]]
-        offsets = np.concatenate([[0], np.cumsum(np.bincount(codes[mask], minlength=len(keys)))])
+    order, offsets = _masked_offsets(codes, len(keys), mask)
     sizes = np.diff(offsets)
     row_bytes = max(source.shape[1], 1) * float_dtype(source.dtype).itemsize
     limit = max(settings.stream_bytes // row_bytes, 1)
@@ -492,11 +517,14 @@ def transform_grouped(
     width = source.shape[1] if n_cols is None else n_cols
     if rowwise and is_lazy(source):
         return _transform_lazy(source, codes, keys, func, dtype, width)
+    if is_lazy(source):
+        # The result is held in memory whole, however the groups are read.
+        _warn_if_whole_read(source)
     # Shaped from the source, not read off it: get_matrix with no rows reads all of it.
     out = np.empty((source.shape[0], width), dtype=dtype)
     if rowwise and not _reads_from_disk(source):
         # A row-wise func is fed a group a slice at a time, read straight from the matrix, so neither the group's copy nor the temporaries func makes outgrow the read budget.
-        step = max(settings.stream_bytes // (max(width, source.shape[1]) * 8), 1)
+        step = max(settings.stream_bytes // (max(width, source.shape[1], 1) * 8), 1)
         order, offsets = group_offsets(codes, len(keys))
         for group, key in enumerate(keys):
             rows = order[offsets[group] : offsets[group + 1]]

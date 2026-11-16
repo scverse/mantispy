@@ -84,6 +84,11 @@ def mixed_adata():
             "Metadata_Well": rng.choice(["A01", "B12", "A2", "H09"], n),
             # A numeric key so 0.4 and 0.40 stay one group and the dtype is not stringified.
             "Metadata_Dose": rng.choice([0.4, 10.0, 2.0], n),
+            # Categories out of value order, with one unused, as a platemap join can leave them.
+            "Metadata_Batch": pd.Categorical(rng.choice(["b1", "b3", "b2"], n), categories=["b3", "b1", "b2", "b0"]),
+            "Metadata_Level": pd.Categorical(
+                rng.choice(["lo", "hi", "mid"], n), categories=["lo", "mid", "hi"], ordered=True
+            ),
         }
     )
     return ad.AnnData(X=rng.standard_normal((n, 5)).astype(np.float32), obs=obs)
@@ -97,6 +102,9 @@ def mixed_adata():
         ["Metadata_Plate", "Metadata_Well", "Metadata_Dose"],
         # A column named twice, as when a caller joins its own keys to a by= that already holds one of them.
         ["Metadata_Plate", "Metadata_Well", "Metadata_Plate"],
+        # Categorical columns group by value, as the tuple keys always did, not by category order.
+        ["Metadata_Batch", "Metadata_Plate"],
+        ["Metadata_Plate", "Metadata_Level"],
     ],
 )
 def test_group_codes_matches_the_multiindex_path(mixed_adata, by):
@@ -105,6 +113,28 @@ def test_group_codes_matches_the_multiindex_path(mixed_adata, by):
     ref_codes, ref_uniques = pd.MultiIndex.from_frame(mixed_adata.obs[by]).factorize(sort=True)
     assert np.array_equal(codes, ref_codes)
     assert keys.equals(ref_uniques)
+
+
+def test_group_codes_keeps_a_categorical_columns_dtype(mixed_adata):
+    """A categorical key comes back in its own dtype, so an ordered one keeps its order and ``max`` reads it."""
+    _, keys = group_codes(mixed_adata, ["Metadata_Plate", "Metadata_Level"])
+    level = keys.get_level_values("Metadata_Level")
+    assert level.dtype == mixed_adata.obs["Metadata_Level"].dtype
+    assert level.max() == "hi"
+
+
+def test_group_codes_sorts_categories_of_mixed_types(mixed_adata):
+    """Plate barcodes that mix numbers and strings, as JUMP's do, group by value without comparing an int to a str."""
+    obs = mixed_adata.obs
+    source = {0.4: "BR00117010", 2.0: 1001, 10.0: 1002}
+    obs["Metadata_Source"] = pd.Categorical(np.array([source[dose] for dose in obs["Metadata_Dose"]], dtype=object))
+    codes, keys = group_codes(mixed_adata, ["Metadata_Source", "Metadata_Plate"])
+    assert keys.get_level_values("Metadata_Source").unique().tolist() == [1001, 1002, "BR00117010"]
+    labels = keys[codes]
+    assert all(
+        label == (source, plate)
+        for label, source, plate in zip(labels, obs["Metadata_Source"], obs["Metadata_Plate"], strict=True)
+    )
 
 
 def test_reduce_grouped_reuses_a_precomputed_grouping(mixed_adata):

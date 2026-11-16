@@ -265,10 +265,39 @@ def test_auto_with_no_treated_wells_raises():
         mt.pp.sphere(adata, method="ZCA", epsilon="auto")
 
 
+def test_auto_leaves_out_a_profile_at_the_reference_centre(caplog):
+    """Such a profile, as KNN imputation makes of an empty well, whitens to zero for every candidate and mAP cannot rank it."""
+    adata = _plantable()
+    values = adata.X.astype(np.float64)
+    control = adata.obs["Metadata_Control"].to_numpy(dtype=bool)
+    target = np.flatnonzero(~control)[0]
+    values[target] = values[control].mean(axis=0)
+    adata.X = values
+    without = adata[np.arange(adata.n_obs) != target].copy()
+
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
+        mt.pp.sphere(adata, method="ZCA", epsilon="auto")
+    mt.pp.sphere(without, method="ZCA", epsilon="auto")
+
+    assert "equal the reference centre" in caplog.text
+    chosen = adata.uns["mantispy"]["sphere_epsilon"]
+    assert chosen["epsilon"] == without.uns["mantispy"]["sphere_epsilon"]["epsilon"]
+    np.testing.assert_allclose(chosen["scores"], without.uns["mantispy"]["sphere_epsilon"]["scores"], rtol=1e-12)
+
+
 def test_a_string_epsilon_other_than_auto_is_rejected():
     adata = _plantable()
     with pytest.raises(ValueError, match="epsilon must be a float or 'auto'"):
         mt.pp.sphere(adata, method="ZCA", epsilon="small")
+
+
+def test_sphere_rejects_an_unknown_svd_solver_and_a_positional_copy():
+    """A misspelled solver used to run the full SVD silently, and a positional True after batch used to overwrite X."""
+    adata = _plantable()
+    with pytest.raises(ValueError, match="svd_solver must be"):
+        mt.pp.sphere(adata, method="ZCA", svd_solver="covariance-eigh")
+    with pytest.raises(TypeError, match="positional"):
+        mt.pp.sphere(adata, "ZCA", "negcon", 1e-2, None, None, "Metadata_Perturbation", "Metadata_Plate", True)
 
 
 def test_a_float_epsilon_is_unchanged_and_records_no_sweep():
@@ -381,6 +410,16 @@ def test_sphere_auto_eigendecomposes_a_tall_reference_matching_full_zca_exactly(
         _tall_reference(), method="ZCA", reference="negcon", key_added="s", svd_solver="full", copy=True
     )
     np.testing.assert_allclose(np.asarray(auto.layers["s"]), np.asarray(full.layers["s"]), rtol=1e-6, atol=1e-6)
+
+
+def test_sphere_forced_covariance_eigh_pads_a_wide_reference_as_the_full_svd_does():
+    """Fewer reference rows than features leave null directions, which both solvers pad with the smallest non-zero singular value."""
+    reference = _tall_reference(n=40, n_features=20)
+    # Fifteen controls for twenty features; the treated rows reach into the directions the controls do not span.
+    reference.obs["Metadata_Control_Type"] = np.where(np.arange(40) < 15, "negcon", "trt")
+    full = mt.pp.sphere(reference.copy(), method="ZCA", reference="negcon", svd_solver="full", copy=True)
+    eigh = mt.pp.sphere(reference.copy(), method="ZCA", reference="negcon", svd_solver="covariance_eigh", copy=True)
+    np.testing.assert_allclose(np.asarray(eigh.X), np.asarray(full.X), rtol=1e-6, atol=1e-6)
 
 
 def test_sphere_auto_matches_full_pca_up_to_the_sign_of_each_component():

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
@@ -14,7 +15,6 @@ from mantispy._core._reduce import (
     iter_waves,
     matrix_dtype,
     out_of_core,
-    reduce_grouped,
     transform_grouped,
 )
 from mantispy._core._stats import MAD_TO_SIGMA
@@ -34,50 +34,51 @@ _TREATMENT_COLUMN = re.compile(
 )
 
 
-def _median_and_spread(
-    adata: AnnData, spread: int, codes: np.ndarray, keys: pd.Index, layer: str | None, mask: np.ndarray
-) -> tuple[np.ndarray, np.ndarray]:
-    """Per-group median and robust spread."""
-    if out_of_core(adata, layer):
-        # A few groups at a time, as reduce_grouped streams them, so a screen that does not fit in memory still normalizes.
-        centre = np.full((len(keys), adata.n_vars), np.nan)
-        scale = np.full((len(keys), adata.n_vars), np.nan)
-        for groups, _, wave_codes, columns, block in iter_waves(
-            adata, (codes, keys), layer, mask=mask, by_columns=True
-        ):
-            centre[groups, columns], scale[groups, columns] = grouped_median_spread(
-                block, wave_codes, groups.size, spread
-            )
-        return centre, scale
+#: A reference spread at most this counts as none: dividing by it, or by it plus the default ``epsilon``, scales the
+#: other rows of the group up by ~1e18. Kept apart from ``epsilon``, which is only added to the MAD, so raising it
+#: to damp small spreads does not flag them.
+_NO_SPREAD = 1e-18
 
-    # The kernel skips the rows outside the reference, so they are never copied out of the matrix.
-    return grouped_median_spread(get_matrix(adata, layer), codes, len(keys), spread, mask=None if mask.all() else mask)
+
+#: A per-group centre and spread, as ``pair(block, codes, n_groups, mask)``.
+_Pair = Callable[[np.ndarray, np.ndarray, int, np.ndarray | None], tuple[np.ndarray, np.ndarray]]
+
+
+def _fit(
+    adata: AnnData,
+    codes: np.ndarray,
+    keys: pd.Index,
+    layer: str | None,
+    mask: np.ndarray,
+    pair: _Pair,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-group centre and spread from ``pair(block, codes, n_groups, mask)``, over the reference rows ``mask`` keeps."""
+    if not out_of_core(adata, layer):
+        # The kernels skip the rows outside the reference, so they are never copied out of the matrix.
+        return pair(get_matrix(adata, layer), codes, len(keys), None if mask.all() else mask)
+    # A few groups at a time, as reduce_grouped streams them, so a screen that does not fit in memory still normalizes.
+    centre = np.full((len(keys), adata.n_vars), np.nan)
+    scale = np.full((len(keys), adata.n_vars), np.nan)
+    for groups, _, wave_codes, columns, block in iter_waves(adata, (codes, keys), layer, mask=mask, by_columns=True):
+        centre[groups, columns], scale[groups, columns] = pair(block, wave_codes, groups.size, None)
+    return centre, scale
+
+
+def _median_and(spread: int) -> _Pair:
+    """The :func:`_fit` pair of the median and the robust ``spread``."""
+    return lambda block, codes, n, mask: grouped_median_spread(block, codes, n, spread, mask=mask)
 
 
 def _mean_and_std(
-    adata: AnnData, by: str | list[str] | None, codes: np.ndarray, keys: pd.Index, layer: str | None, mask: np.ndarray
+    block: np.ndarray, codes: np.ndarray, n: int, mask: np.ndarray | None
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Per-group mean and population standard deviation, from one pass over a matrix that is not in memory."""
-    if out_of_core(adata, layer):
-        centre = np.full((len(keys), adata.n_vars), np.nan)
-        scale = np.full((len(keys), adata.n_vars), np.nan)
-        for groups, _, wave_codes, columns, block in iter_waves(
-            adata, (codes, keys), layer, mask=mask, by_columns=True
-        ):
-            centre[groups, columns] = grouped_stat(block, wave_codes, groups.size, MEAN)
-            scale[groups, columns] = grouped_stat(block, wave_codes, groups.size, STD, ddof=0)
-        return centre, scale
-    grouping = (codes, keys)
-    centre, _, _ = reduce_grouped(adata, by, MEAN, layer=layer, mask=mask, grouping=grouping)
-    # ddof=0 matches pycytominer, which uses sklearn's StandardScaler (population SD).
-    scale, _, _ = reduce_grouped(adata, by, STD, layer=layer, mask=mask, ddof=0, grouping=grouping)
-    return centre, scale
+    """The :func:`_fit` pair of the mean and the population standard deviation, as pycytominer's StandardScaler takes it."""
+    return grouped_stat(block, codes, n, MEAN, mask=mask), grouped_stat(block, codes, n, STD, ddof=0, mask=mask)
 
 
 def _center_and_scale(
     adata: AnnData,
     method: str,
-    by: str | list[str] | None,
     codes: np.ndarray,
     keys: pd.Index,
     layer: str | None,
@@ -91,19 +92,23 @@ def _center_and_scale(
     The two overlap: a feature can be constant in one group and unmeasured in another, and both facts have to reach the caller.
     """
     if method == "standardize":
-        centre, scale = _mean_and_std(adata, by, codes, keys, layer, mask)
+        centre, spread = _fit(adata, codes, keys, layer, mask, _mean_and_std)
+        scale = spread
     elif method == "mad_robustize":
-        centre, mad = _median_and_spread(adata, MAD_STAT, codes, keys, layer, mask)
-        scale = MAD_TO_SIGMA * mad + epsilon
+        centre, mad = _fit(adata, codes, keys, layer, mask, _median_and(MAD_STAT))
+        spread = MAD_TO_SIGMA * mad
+        scale = spread + epsilon
     elif method == "center":
-        centre, _ = _median_and_spread(adata, MAD_STAT, codes, keys, layer, mask)
+        centre, _ = _fit(adata, codes, keys, layer, mask, _median_and(MAD_STAT))
         # Centring only: a feature with no spread is still centred correctly, so nothing is degenerate on scale.
         return _centre_only(centre, matrix_dtype(adata, layer))
     else:  # robustize: median and interquartile range, as sklearn's RobustScaler
-        centre, scale = _median_and_spread(adata, IQR, codes, keys, layer, mask)
+        centre, spread = _fit(adata, codes, keys, layer, mask, _median_and(IQR))
+        scale = spread
 
-    # A NaN or infinite scale fails this comparison, so it is left to `uncentred`.
-    no_spread = scale <= epsilon
+    # Compared before epsilon is added, so a spread far below any measurement is caught as well as one of exactly zero.
+    # A NaN or infinite spread fails this comparison, so it is left to `uncentred`.
+    no_spread = spread <= _NO_SPREAD
     # Repairing only the scale would subtract a NaN centre from every row of the group, wiping the non-reference values.
     uncentred = ~(np.isfinite(centre) & np.isfinite(scale))
     centre = np.where(np.isfinite(centre), centre, 0.0)
@@ -205,7 +210,7 @@ def normalize(
             by,
             deep="normalize by a coarser grouping to compare them",
         )
-    centre, scale, spreadless, unmeasured = _center_and_scale(adata, method, by, codes, keys, layer, mask, epsilon)
+    centre, scale, spreadless, unmeasured = _center_and_scale(adata, method, codes, keys, layer, mask, epsilon)
     no_spread, uncentred = spreadless.any(axis=0), unmeasured.any(axis=0)
     if adata.n_vars and no_spread.all():
         raise ValueError(

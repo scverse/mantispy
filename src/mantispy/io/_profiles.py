@@ -9,6 +9,7 @@ import importlib.util
 import os
 import shutil
 from collections.abc import Collection, Mapping, Sequence
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Literal
 
@@ -16,6 +17,7 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
+from mantispy._core._reduce import held_matrices
 from mantispy._core.features import (
     _BARE_NON_FEATURES,
     _KNOWN_GROUPS,
@@ -529,8 +531,9 @@ def read(
             h5ad only; zarr stores are read whole.
         migrate_schema: Bring an older but known schema up to the current one on read.
             Set it to ``False`` to see the version the file carries.
-        lazy: Hold ``X`` and every layer as a dask array read in row chunks, for a screen that does not fit in memory.
+        lazy: Hold ``X``, every layer and ``raw.X`` as dask arrays read in row chunks, for a screen that does not fit in memory.
             ``obs``, ``var``, ``obsm`` and ``uns`` are read into memory.
+            The matrices must be stored dense, and the object keeps reading from the file, so :func:`write` refuses to overwrite it.
             :func:`~mantispy.pp.normalize`, :func:`~mantispy.pp.tvn` and :func:`~mantispy.tl.aggregate` stream it and give the same numbers as in memory, as does :func:`scanpy.pp.pca` with ``svd_solver="covariance_eigh"``; a function that needs the whole matrix warns before it reads it.
             Needs dask, from ``mantispy[lazy]``, and cannot be combined with `backed`.
 
@@ -540,7 +543,7 @@ def read(
 
     Raises:
         ImportError: `lazy` was given and dask is not installed.
-        ValueError: `backed` was given for a zarr store or together with `lazy`, or the file carries a schema version this build cannot migrate from or was told not to migrate.
+        ValueError: `backed` was given for a zarr store or together with `lazy`, `lazy` was given for a sparse matrix, or the file carries a schema version this build cannot migrate from or was told not to migrate.
     """
     path = Path(path)
     if backed is not None and path.suffix == ".zarr":
@@ -582,13 +585,20 @@ def _lazy_chunk_rows(n_vars: int) -> int:
     return max(settings.stream_bytes // (workers * max(n_vars, 1) * 8), 1024)
 
 
-def _read_chunked(elem: Any, rows: int) -> Any:
-    """``elem`` as a dask array of about ``rows`` rows per chunk, reading each chunk of the file once.
+def _read_chunked(elem: Any, h5ad: bool) -> Any:
+    """``elem`` as a dask array of about :func:`_lazy_chunk_rows` rows per chunk, reading each chunk of the file once.
 
     A dask chunk that cuts through a stored chunk decompresses all of it, so a file stored in chunks larger than ``rows`` is read a stored chunk at a time and then split, and one stored in smaller chunks is read several stored chunks at a time.
     """
     from anndata.experimental import read_elem_lazy
 
+    if elem.attrs.get("encoding-type") in ("csr_matrix", "csc_matrix"):
+        backed = "with mt.io.read(path, backed='r') or " if h5ad else ""
+        raise ValueError(
+            f"{elem.name} is stored sparse, and lazy=True reads only dense matrices; read it {backed}into memory with "
+            "mt.io.read(path)"
+        )
+    rows = _lazy_chunk_rows(elem.shape[1])
     stored = getattr(elem, "chunks", None)
     if not stored:
         return read_elem_lazy(elem, chunks=(rows, -1))
@@ -616,15 +626,52 @@ def _read_lazy(path: Path) -> ad.AnnData:
     else:
         import h5py
 
-        # Left open: the dask arrays read their chunks through it.
+        # The dask arrays reopen the file by its path for every chunk they read, so this handle is only for the metadata.
         store = h5py.File(path, "r")
-    elems: dict[str, Any] = {
-        key: read_elem(store[key]) for key in ("obs", "var", "obsm", "varm", "obsp", "varp", "uns") if key in store
-    }
-    rows = _lazy_chunk_rows(len(elems["var"]))
-    X = _read_chunked(store["X"], rows) if "X" in store else None
-    layers = {key: _read_chunked(store["layers"][key], rows) for key in store.get("layers", {})}
+    with store if path.suffix != ".zarr" else nullcontext(store):
+        elems: dict[str, Any] = {
+            key: read_elem(store[key]) for key in ("obs", "var", "obsm", "varm", "obsp", "varp", "uns") if key in store
+        }
+        h5ad = path.suffix != ".zarr"
+        X = _read_chunked(store["X"], h5ad) if "X" in store else None
+        layers = {key: _read_chunked(store["layers"][key], h5ad) for key in store.get("layers", {})}
+        # An object without raw may still store a null element under that key.
+        if "raw" in store and store["raw"].attrs.get("encoding-type") == "raw":
+            raw = store["raw"]
+            elems["raw"] = {
+                "X": _read_chunked(raw["X"], h5ad),
+                **{key: read_elem(raw[key]) for key in ("var", "varm") if key in raw},
+            }
+    source = _file_identity(path)
+    for matrix in (X, *layers.values(), elems.get("raw", {}).get("X")):
+        if matrix is not None:
+            _LAZY_SOURCES[matrix.name] = source
     return ad.AnnData(X=X, layers=layers, **elems)
+
+
+#: The file each matrix :func:`read` returned lazily reads its chunks from, by the name of its dask graph layer.
+#: A matrix computed from it carries that layer, so :func:`write` can tell an object that still reads from a path.
+#: Files are told apart by device and inode, so another spelling of the path, or one differing only in case on a
+#: case-insensitive filesystem, names the same file.
+_LAZY_SOURCES: dict[str, tuple[int, int]] = {}
+
+
+def _file_identity(path: Path) -> tuple[int, int]:
+    """The device and inode of the file or directory at ``path``."""
+    stat = path.stat()
+    return stat.st_dev, stat.st_ino
+
+
+def _lazy_reads_from(adata: ad.AnnData, path: Path) -> bool:
+    """Whether a lazy matrix of ``adata`` still reads its chunks from the file at ``path``."""
+    # Checked before the matrices are listed, as those of a view are copies.
+    if not path.exists() or (target := _file_identity(path)) not in _LAZY_SOURCES.values():
+        return False
+    for matrix in held_matrices(adata):
+        layers = getattr(getattr(matrix, "dask", None), "layers", None)
+        if layers is not None and any(_LAZY_SOURCES.get(name) == target for name in layers):
+            return True
+    return False
 
 
 def write(
@@ -644,13 +691,18 @@ def write(
         compression_opts: The compression level passed alongside `compression` (h5ad only).
 
     Raises:
-        ValueError: The object does not satisfy the schema, with every failure :func:`~mantispy.io.validate` found in the message.
+        ValueError: The object does not satisfy the schema, with every failure :func:`~mantispy.io.validate` found in the message, or it was read lazily from `path` and still reads from it.
 
     Notes:
         An object from an earlier mantispy is migrated first, so it is never relabelled as current without its
         content being brought up to date. A write that fails validation leaves ``uns["mantispy"]`` as it was.
     """
     path = Path(path)
+    if _lazy_reads_from(adata, path):
+        raise ValueError(
+            f"adata was read lazily from {path} and still reads its chunks from it, so overwriting the file would change "
+            "its values; write it to another path, or load it with adata.to_memory() first"
+        )
     store = adata.uns.get("mantispy")
     stored = store.get("schema_version") if isinstance(store, dict) else None
     if stored is not None and stored != SCHEMA_VERSION and stored in SUPPORTED_VERSIONS:

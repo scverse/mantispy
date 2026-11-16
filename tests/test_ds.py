@@ -94,6 +94,9 @@ def test_the_downloads_read_back_at_the_shape_the_registry_claims(name: str) -> 
     if name == "aconcagua":
         # The guide column is the schema's Metadata_sgRNA, not the non-schema Metadata_Guide.
         assert "Metadata_sgRNA" in adata.obs and "Metadata_Guide" not in adata.obs
+        # The tiers the loader's docstring lists.
+        tiers = {"control", "positive_control", "strong", "weak", "random"}
+        assert set(adata.obs["Metadata_Tier"].astype(str)) == tiers
     if name == "bbbc021":
         assert adata.obs["Metadata_MOA"].notna().all()
         assert adata.obs["Metadata_Control"].sum() == 330

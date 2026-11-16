@@ -2,7 +2,7 @@
 
 The reference is copied from Brieflow v1.5.1, ``workflow/lib/aggregate/bootstrap.py``: ``run_gene_bootstrap`` and the
 helpers it calls, with only the imports and the degenerate-block check left out.
-Both draw from numba's random state seeded with the gene's CRC32, so on the same seed the p-values agree exactly.
+Brieflow simulates the null and mantispy computes it exactly, so the two agree within Brieflow's Monte-Carlo error.
 """
 
 import zlib

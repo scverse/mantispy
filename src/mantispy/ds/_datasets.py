@@ -150,7 +150,7 @@ def aconcagua(cache_dir: str | Path | None = None) -> AnnData:
             Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Returns:
-        Guide-by-well profiles read with :func:`mantispy.io.read`, carrying ``Metadata_Plate``, ``Metadata_Well`` (and its ``Metadata_Row`` and ``Metadata_Col``), ``Metadata_sgRNA``, ``Metadata_Gene``, ``Metadata_Perturbation`` (the gene, or ``"nontargeting"``), ``Metadata_Perturbation_Type`` (``"crispr"``), ``Metadata_Control`` and ``Metadata_Control_Type`` (``negcon``/``poscon``/``treatment``), ``Metadata_Tier`` (``control``/``strong``/``weak``/``random``), ``Metadata_CellCount``, ``Metadata_SiteCount`` and ``Metadata_MitoticFraction``.
+        Guide-by-well profiles read with :func:`mantispy.io.read`, carrying ``Metadata_Plate``, ``Metadata_Well`` (and its ``Metadata_Row`` and ``Metadata_Col``), ``Metadata_sgRNA``, ``Metadata_Gene``, ``Metadata_Perturbation`` (the gene, or ``"nontargeting"``), ``Metadata_Perturbation_Type`` (``"crispr"``), ``Metadata_Control`` and ``Metadata_Control_Type`` (``negcon``/``poscon``/``treatment``), ``Metadata_Tier`` (``control``/``positive_control``/``strong``/``weak``/``random``), ``Metadata_CellCount``, ``Metadata_SiteCount`` and ``Metadata_MitoticFraction``.
 
     References:
         :cite:t:`Di_Bernardo_2026`, the Brieflow reanalysis; :cite:p:`Funk_2022`, the screen it reanalyses.

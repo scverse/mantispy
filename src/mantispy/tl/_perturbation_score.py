@@ -14,7 +14,7 @@ from numba import njit
 
 from mantispy._core._liblinear import fit_l2_logistic
 from mantispy._core._numba import _kernel_input
-from mantispy._core._reduce import _reads_from_disk, _source, get_matrix, group_codes
+from mantispy._core._reduce import get_matrix, group_codes, group_rows, out_of_core
 from mantispy._core._stats import _is_object_resolution
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
@@ -231,7 +231,7 @@ def _group_folds(y: np.ndarray, group: np.ndarray, perm: np.ndarray, n_splits: i
         mean = (counts[k, 0] + counts[k, 1]) / 2
         spread[k] = np.sqrt(((counts[k, 0] - mean) ** 2 + (counts[k, 1] - mean) ** 2) / 2)
     in_fold = np.zeros((n_splits, 2))
-    assigned = np.empty(n_groups, dtype=np.int8)
+    assigned = np.empty(n_groups, dtype=np.int64)
     for position in np.argsort(-spread, kind="mergesort"):
         k = int(position)
         best, best_eval, best_size = 0, np.inf, np.inf
@@ -255,7 +255,7 @@ def _group_folds(y: np.ndarray, group: np.ndarray, perm: np.ndarray, n_splits: i
                 best, best_eval, best_size = f, evaluation, size
         in_fold[best] += counts[k]
         assigned[k] = best
-    fold = np.empty(y.size, dtype=np.int8)
+    fold = np.empty(y.size, dtype=np.int64)
     for i in range(y.size):
         fold[i] = assigned[inverse[group[i]]]
     return fold
@@ -274,13 +274,13 @@ def _folds(y: np.ndarray, replicates: np.ndarray | None, n_folds: int, seed: int
     else:
         folds = min(n_folds, *(np.unique(replicates[y == side]).size for side in (0, 1)))
     if folds < 2:
-        return np.empty(y.size, dtype=np.int8), 0
+        return np.empty(y.size, dtype=np.int64), 0
     if replicates is not None:
         group = np.unique(replicates, return_inverse=True)[1]
         perm = np.arange(group.max() + 1)
         np.random.RandomState(seed).shuffle(perm)  # StratifiedGroupKFold's check_random_state(seed), then rng.shuffle
         return _group_folds(y, group, perm, folds), folds
-    fold = np.empty(y.size, dtype=np.int8)
+    fold = np.empty(y.size, dtype=np.int64)
     cv = StratifiedKFold(n_splits=folds, shuffle=True, random_state=seed)
     for number, (_, test) in enumerate(cv.split(np.empty((y.size, 1)), y)):
         fold[test] = number
@@ -343,7 +343,7 @@ def perturbation_score(
         Writes ``uns["mantispy"][key_added]``, one row per group with ``group``, ``n_cells``, ``n_reference`` (the size of its reference sample), ``n_folds`` and ``auc``, which is missing for an unscored group; with `by`, one row per group and level and a column named for `by` holding the level.
 
     Raises:
-        ValueError: `reference` selects no cells, or a scored cell or a reference cell has a missing feature value.
+        ValueError: `n_features` is not a positive integer, `n_folds` is not an integer of at least two, `reference` selects no cells, or a scored cell or a reference cell has a missing feature value.
         KeyError: `groupby`, `replicate` or `by` names a column that ``obs`` lacks.
 
     Notes:
@@ -358,6 +358,9 @@ def perturbation_score(
         The fit is a port of the liblinear solver ``LogisticRegression(solver="liblinear")`` runs, so the scores match scikit-learn's as closely as liblinear matches itself when its input moves by rounding.
         A backed object is read a batch of groups at a time, each group's rows and its reference sample, so it is never loaded whole.
     """
+    for name, value, least in (("n_features", n_features, 1), ("n_folds", n_folds, 2)):
+        if not isinstance(value, int | np.integer) or isinstance(value, bool) or value < least:
+            raise ValueError(f"{name} must be an integer of at least {least}, got {value!r}")
     is_reference = reference_mask(adata, reference)
     if not is_reference.any():
         raise ValueError(f"reference={reference!r} selects no cells")
@@ -378,36 +381,16 @@ def perturbation_score(
         )
     codes, keys = group_codes(adata, groupby)
     replicate_codes = _replicate_codes(as_frame(adata.obs), replicate) if replicate is not None else None
-    # One level per distinct value of `by`, scored on its own cells and its own reference sample; without
-    # `by` the whole object is one level, with the seed and reference set it had before `by` existed.
-    level_codes, level_keys = group_codes(adata, by) if by is not None else (None, None)
-
-    def group_rows(pool: np.ndarray) -> dict[int, np.ndarray]:
-        """Map each group's code to its non-reference rows within ``pool``, in increasing row order."""
-        scored = pool[~is_reference[pool]]
-        scored = scored[np.argsort(codes[scored], kind="stable")]
-        if scored.size == 0:
-            return {}
-        scored_codes = codes[scored]
-        starts = np.r_[0, np.flatnonzero(np.diff(scored_codes)) + 1]
-        return {
-            int(scored_codes[start]): rows for start, rows in zip(starts, np.split(scored, starts[1:]), strict=True)
-        }
-
-    # (level key, group code, the group's rows, the level's reference rows); without `by`, one level over all rows.
-    Task = tuple[Any, int, np.ndarray, np.ndarray]
-    tasks: list[Task] = []
-    if by is None:
-        rows_for = group_rows(np.arange(adata.n_obs))
-        reference_rows = np.flatnonzero(is_reference)
-        tasks = [(None, code, rows, reference_rows) for code, rows in rows_for.items()]
-    else:
-        assert level_codes is not None and level_keys is not None
-        for level, level_key in enumerate(level_keys):
-            in_level = level_codes == level
-            rows_for = group_rows(np.flatnonzero(in_level))
-            reference_rows = np.flatnonzero(is_reference & in_level)
-            tasks += [(level_key, code, rows, reference_rows) for code, rows in rows_for.items()]
+    # (level key, group code, the group's rows, the level's reference rows): each level of `by` is scored on its own
+    # cells and its own reference sample, and without `by` the whole object is one level.
+    level_codes, level_keys = group_codes(adata, by)
+    tasks: list[tuple[Any, int, np.ndarray, np.ndarray]] = []
+    for level, level_key in enumerate(level_keys):
+        in_level = level_codes == level
+        scored = np.flatnonzero(in_level & ~is_reference)
+        reference_rows = np.flatnonzero(in_level & is_reference)
+        members = group_rows(codes[scored], len(keys))
+        tasks += [(level_key, code, scored[rows], reference_rows) for code, rows in enumerate(members) if rows.size]
 
     # Python draws each group's reference sample and its folds; the fits run in one numba kernel over every
     # (group, fold), reading the matrix in place in its own float dtype, as liblinear casts each fold up to float64.
@@ -416,7 +399,7 @@ def perturbation_score(
     n_reference = np.empty(len(tasks), dtype=np.int64)
     for t, (level_key, code, rows, reference_rows) in enumerate(tasks):
         # Seed on the group's name, and on the level's when `by` splits, so a score depends on neither which
-        # other groups nor which other levels are present; without `by` the entropy is what it was before.
+        # other groups nor which other levels are present.
         entropy = [seed, zlib.crc32(str(keys[code]).encode())]
         if by is not None:
             entropy.insert(1, zlib.crc32(str(level_key).encode()))
@@ -434,8 +417,7 @@ def perturbation_score(
 
     score = np.full(adata.n_obs, np.nan)
     auc = np.full(len(tasks), np.nan)
-    source = _source(adata, layer, use_rep)
-    backed = _reads_from_disk(source)
+    backed = out_of_core(adata, layer, use_rep=use_rep)
     # In memory the whole matrix is one batch, read in place; a backed one is read a batch of groups at a time.
     batches, batch, size = [], [], 0
     for t, (both, *_) in prepared.items():

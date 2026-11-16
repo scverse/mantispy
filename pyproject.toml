@@ -60,7 +60,7 @@ dependencies = [
   "scanpy>=1.13.0b1",
   "scikit-learn>=1.4",
   "scipy>=1.11",
-  "scverse-misc[datasets,rich]>=0.1.8",
+  "scverse-misc[datasets,logging,rich,settings]>=0.1.8",
   # for debug logging (referenced from the issue template)
   "session-info2",
 ]
@@ -69,7 +69,8 @@ dependencies = [
 optional-dependencies.integration = [ "scib-metrics>=0.5.1" ]
 optional-dependencies.interactive = [ "plotly>=5" ]
 # mt.io.read(path, lazy=True) holds X as a dask array, for screens that do not fit in memory.
-optional-dependencies.lazy = [ "dask>=2024.4" ]
+# anndata's own extra, so the dask versions it excludes are excluded here too.
+optional-dependencies.lazy = [ "anndata[dask]>=0.13" ]
 optional-dependencies.spatial = [
   "dask>=2024.4",
   "geopandas>=1",
@@ -232,7 +233,6 @@ overrides = [
     "plotly.*",
     "plottable.*",
     "pooch.*",
-    "pyarrow.*",
     "pycytominer.*",
     "pyod.*",
     "scanpy.*",

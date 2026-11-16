@@ -1,7 +1,7 @@
 """NaN-skipping grouped reduction kernels.
 
 The row permutation is passed as an index array and applied inside the kernel, never materialized as ``X[order]``.
-Scratch buffers are allocated once per group, because allocating inside a ``prange`` body serializes the loop on numba's allocator lock.
+Scratch buffers are allocated once per work chunk and reused across its slices, because allocating inside a ``prange`` body serializes the loop on numba's allocator lock.
 Medians and quantiles are read with an in-place quickselect rather than a full sort; it lands the same order statistics, so the result is bit-identical.
 Input stays ``float32`` or ``float64`` as given, and any other dtype is read as ``float64``; accumulation is in ``float64`` scalars.
 """
@@ -85,38 +85,6 @@ def _longest_group(offsets: np.ndarray) -> int:
 
 
 @njit(cache=True, nogil=True)
-def _median_sorted(values: np.ndarray) -> float:
-    """Median of ``values``, already sorted ascending."""
-    n = values.size
-    if n == 0:
-        return np.nan
-    middle = n // 2
-    if n % 2 == 1:
-        return values[middle]
-    return 0.5 * (values[middle - 1] + values[middle])
-
-
-@njit(cache=True, nogil=True)
-def _quantile_sorted(values: np.ndarray, q: float) -> float:
-    """Linearly interpolated quantile of ``values``, already sorted ascending."""
-    n = values.size
-    if n == 0:
-        return np.nan
-    position = q * (n - 1)
-    low = int(np.floor(position))
-    high = int(np.ceil(position))
-    if low == high:
-        return values[low]
-    return values[low] + (position - low) * (values[high] - values[low])
-
-
-@njit(cache=True, nogil=True)
-def _median_of(buffer: np.ndarray, n: int) -> float:
-    """Median of the ``n`` gathered values in ``buffer``, which this sorts."""
-    return _median_sorted(np.sort(buffer[:n]))
-
-
-@njit(cache=True, nogil=True)
 def _select_kth(a: np.ndarray, n: int, k: int) -> float:
     """The ``k``-th smallest of ``a[:n]``, partitioning ``a`` in place so ``a[k]`` holds it.
 
@@ -163,7 +131,7 @@ def _median_select(buffer: np.ndarray, n: int) -> float:
     """Median of the ``n`` gathered values in ``buffer`` by selection, which this partitions.
 
     For an even count the upper middle is selected, then the lower middle is the largest value left
-    of it; ``0.5 * (lower + upper)`` is taken in ``float64``, matching :func:`_median_sorted`.
+    of it; ``0.5 * (lower + upper)`` is taken in ``float64``, as a median read off a sort would be.
     """
     if n == 0:
         return np.nan
@@ -182,8 +150,7 @@ def _median_select(buffer: np.ndarray, n: int) -> float:
 def _quantile_select(buffer: np.ndarray, n: int, q: float) -> float:
     """Linearly interpolated quantile of the ``n`` gathered values by selection, which this partitions.
 
-    The two order statistics the interpolation needs are selected rather than taken from a full sort,
-    matching :func:`_quantile_sorted`.
+    The two order statistics the interpolation needs are selected rather than taken from a full sort.
     """
     if n == 0:
         return np.nan
@@ -332,26 +299,24 @@ def _grouped_median_spread(
                 centre[group, j] = np.nan
                 scale[group, j] = np.nan
                 continue
-            values = np.sort(buffer[:n])
-            middle = _median_sorted(values)
+            # Each selection only reorders the buffer, so the next one still sees the same values.
+            middle = _median_select(buffer, n)
             centre[group, j] = middle
             if spread == MAD:
-                # Deviations taken in sorted order rather than in gather order are a permutation of the same numbers, so their median is the same.
                 for k in range(n):
-                    buffer[k] = abs(values[k] - middle)
-                scale[group, j] = _median_of(buffer, n)
+                    buffer[k] = abs(buffer[k] - middle)
+                scale[group, j] = _median_select(buffer, n)
             else:
-                scale[group, j] = _quantile_sorted(values, 0.75) - _quantile_sorted(values, 0.25)
+                scale[group, j] = _quantile_select(buffer, n, 0.75) - _quantile_select(buffer, n, 0.25)
     return centre, scale
 
 
 def grouped_median_spread(
     X: np.ndarray, codes: np.ndarray, n_groups: int, spread: int, mask: np.ndarray | None = None
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Per-group median and robust spread, both read off one sort per (group, feature) slice.
+    """Per-group median and robust spread, both read off one gather of each (group, feature) slice.
 
-    The same pair out of :func:`grouped_stat` costs three sorts of every slice: for the MAD because the spread pass re-finds the median it measures deviations from, and for the IQR because each of the three quantiles is its own pass.
-    Sorting is nearly the whole cost of a robust normalization at screen scale, so this nearly halves ``mad_robustize`` and cuts ``robustize`` to a third.
+    The same pair out of :func:`grouped_stat` gathers every slice once per statistic, and for the MAD finds the median twice.
 
     Args:
         X: ``(n_obs, n_vars)`` matrix, read in its own dtype if that is ``float32`` or ``float64`` and as ``float64`` otherwise.
@@ -567,7 +532,7 @@ def _polish_planes(planes: np.ndarray, max_iter: int, tol: float) -> tuple[np.nd
                     if not np.isnan(value):
                         buffer[n] = value
                         n += 1
-                middle = _median_of(buffer, n)
+                middle = _median_select(buffer, n)
                 if np.isnan(middle):  # a row of the plate with nothing measured
                     middle = 0.0
                 for c in range(n_columns):
@@ -575,7 +540,7 @@ def _polish_planes(planes: np.ndarray, max_iter: int, tol: float) -> tuple[np.nd
                 rows[r] += middle
             for r in range(n_rows):
                 buffer[r] = rows[r]
-            level = _median_of(buffer, n_rows)
+            level = _median_select(buffer, n_rows)
             for r in range(n_rows):
                 rows[r] -= level
 
@@ -586,7 +551,7 @@ def _polish_planes(planes: np.ndarray, max_iter: int, tol: float) -> tuple[np.nd
                     if not np.isnan(value):
                         buffer[n] = value
                         n += 1
-                middle = _median_of(buffer, n)
+                middle = _median_select(buffer, n)
                 if np.isnan(middle):
                     middle = 0.0
                 for r in range(n_rows):
@@ -594,7 +559,7 @@ def _polish_planes(planes: np.ndarray, max_iter: int, tol: float) -> tuple[np.nd
                 columns[c] += middle
             for c in range(n_columns):
                 buffer[c] = columns[c]
-            level = _median_of(buffer, n_columns)
+            level = _median_select(buffer, n_columns)
             for c in range(n_columns):
                 columns[c] -= level
 

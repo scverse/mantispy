@@ -207,11 +207,6 @@ def test_lof_does_not_depend_on_the_thread_count():
     np.testing.assert_array_equal(one.obs["qc_outlier_score"].to_numpy(), many.obs["qc_outlier_score"].to_numpy())
 
 
-def test_outliers_has_no_n_jobs(adata):
-    with pytest.raises(TypeError, match="n_jobs"):
-        mt.pp.outliers(adata, method="lof", n_jobs=-1)
-
-
 def test_lof_sampled_fit_is_reproducible_and_agrees_with_the_full_fit():
     """Fitting LOF on a seeded sample bounds its cost; it reflags the same clear outliers as a full fit,
     and the same seed reflags the same cells."""
@@ -243,10 +238,26 @@ def test_lof_sampled_fit_is_reproducible_and_agrees_with_the_full_fit():
     assert jaccard > 0.7
 
 
+def test_lof_sampled_rows_are_scored_without_counting_themselves():
+    """A row in the n_fit sample takes its plain LOF within the sample, not a novelty score that finds itself at distance zero."""
+    from sklearn.neighbors import LocalOutlierFactor
+
+    n, n_fit = 600, 150
+    X = np.random.default_rng(0).normal(size=(n, 5))
+    adata = AnnData(X=X.copy(), obs=pd.DataFrame(index=[f"c{i}" for i in range(n)]))
+    mt.pp.outliers(adata, method="lof", n_fit=n_fit, seed=0)
+    # One group, so the sample is the first draw from the seeded generator.
+    sample = np.sort(np.random.default_rng(0).choice(n, size=n_fit, replace=False))
+    truth = -LocalOutlierFactor(n_neighbors=20).fit(X[sample]).negative_outlier_factor_
+    np.testing.assert_allclose(adata.obs["qc_outlier_score"].to_numpy()[sample], truth, rtol=1e-12)
+
+
 def test_lof_rejects_a_bad_n_fit():
     adata = synthetic_plate(n_wells=4, n_cells=10, n_features=5, seed=0)
     with pytest.raises(ValueError, match="n_fit"):
         mt.pp.outliers(adata, method="lof", n_fit=1)
+    with pytest.raises(TypeError, match="positional"):
+        mt.pp.outliers(adata, "lof", 0.01, None, "selected", None, 0, "pyod", 100)
 
 
 def test_lof_scores_a_group_of_one_or_two_rows():
@@ -261,7 +272,7 @@ def test_lof_scores_a_group_of_one_or_two_rows():
 
 
 def test_lof_excludes_all_missing_rows_and_still_flags_real_outliers(caplog):
-    """#2: filling all-missing rows with zero collapses them onto the origin, inflating nearby cells' LOF so the
+    """Filling all-missing rows with zero collapses them onto the origin, inflating nearby cells' LOF so the
     real outliers go unflagged. They must be excluded from the fit, left unscored, and the true outliers flagged."""
     rng = np.random.default_rng(0)
     n_core, n_missing, n_outliers, n_vars = 200, 30, 6, 6
@@ -284,3 +295,49 @@ def test_lof_excludes_all_missing_rows_and_still_flags_real_outliers(caplog):
     assert np.isnan(scores[missing_rows]).all()  # and are left unscored
     assert np.isfinite(scores[: n_core + n_outliers]).all()
     assert f"{n_missing} cell" in caplog.text
+
+
+def test_lof_fills_a_partly_missing_or_infinite_value_with_the_feature_mean():
+    """A cell missing one channel is scored on the others, with the gap at the feature's mean as ECOD fills it, not at zero."""
+    from sklearn.neighbors import LocalOutlierFactor
+
+    rng = np.random.default_rng(0)
+    n, n_vars = 2000, 4
+    X = rng.normal(0.2, 0.02, size=(n, n_vars))  # raw intensities, far from zero
+    X[:10] += 0.12  # ten genuinely bright cells
+    gappy = np.arange(100, 140)
+    X[gappy, rng.integers(0, n_vars, gappy.size)] = np.nan
+    X[150, 0] = np.inf
+    adata = AnnData(X=X.copy(), obs=pd.DataFrame(index=[f"c{i}" for i in range(n)]))
+    mt.pp.outliers(adata, method="lof", contamination=0.01)
+
+    flagged = adata.obs["qc_outlier"].to_numpy()
+    assert flagged[:10].all()
+    assert not flagged[gappy].any() and not flagged[150]
+    finite = np.where(np.isfinite(X), X, np.nan)
+    filled = np.where(np.isnan(finite), np.nanmean(finite, axis=0), finite)
+    truth = -LocalOutlierFactor(n_neighbors=20).fit(filled).negative_outlier_factor_
+    np.testing.assert_allclose(adata.obs["qc_outlier_score"].to_numpy(), truth, rtol=1e-12)
+
+
+def test_isolation_forest_fills_a_partly_missing_or_infinite_value_with_the_feature_mean():
+    """Filled with zero, a cell missing one raw-intensity channel looked as extreme as the brightest cells."""
+    from sklearn.ensemble import IsolationForest
+
+    rng = np.random.default_rng(0)
+    n, n_vars = 2000, 4
+    X = rng.normal(0.2, 0.02, size=(n, n_vars))
+    X[:10] += 0.12
+    gappy = np.arange(100, 140)
+    X[gappy, rng.integers(0, n_vars, gappy.size)] = np.nan
+    X[150, 0] = np.inf
+    adata = AnnData(X=X.copy(), obs=pd.DataFrame(index=[f"c{i}" for i in range(n)]))
+    mt.pp.outliers(adata, method="isolation_forest", contamination=0.01)
+
+    flagged = adata.obs["qc_outlier"].to_numpy()
+    assert flagged[:10].all()
+    assert not flagged[gappy].any() and not flagged[150]
+    finite = np.where(np.isfinite(X), X, np.nan)
+    filled = np.where(np.isnan(finite), np.nanmean(finite, axis=0), finite)
+    truth = -IsolationForest(random_state=0, n_estimators=200).fit(filled).score_samples(filled)
+    np.testing.assert_allclose(adata.obs["qc_outlier_score"].to_numpy(), truth, rtol=1e-12)

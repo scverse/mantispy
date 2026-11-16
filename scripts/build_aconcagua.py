@@ -2,41 +2,19 @@
 
     python scripts/build_aconcagua.py --out build/ --work build/aconcagua-work --workers 8
 
-Streams the OPS Explorer per-cell table from ``s3://ops-explorer-public`` (anonymous, ``us-west-2``), keeps
-the pinned 500-gene subset at the pinned per-(unit, well, class) keep probabilities in
-``scripts/data/aconcagua/``, then converts the brieflow ``cp_emulator`` feature names to mantispy's
-CellProfiler-style grammar and, per plate, thins mitotic cells back to their natural share, normalizes and
-aggregates to guide-by-well profiles. It writes the two files the registry rehosts:
+Streams the OPS Explorer per-cell table from ``s3://ops-explorer-public`` and keeps the cells the pinned inputs in
+``scripts/data/aconcagua/`` select: ``genes.csv`` names the genes of the subset and their tiers, and
+``keep_prob.parquet`` gives the probability that a cell is kept per unit (the guide for a non-targeting control, the
+gene otherwise), plate, well and class. The extraction is resumable, one part per row group, and its per-cell draw is
+deterministic, so a rerun keeps the same cells. It writes the two files the registry rehosts:
 
-* ``aconcagua_guide_well.h5ad`` -- 84,125 guide x well profiles over 1,483 features (``mt.ds.aconcagua``);
-* ``aconcagua_cells.h5ad`` -- the raw single cells of eight genes and the non-targeting controls (``mt.ds.aconcagua_cells``).
+* ``aconcagua_guide_well.h5ad`` (``mt.ds.aconcagua``): per plate, the mitotic cells thinned to their natural share
+  and the control cells halved, then normalized and aggregated to guide-by-well profiles;
+* ``aconcagua_cells.h5ad`` (``mt.ds.aconcagua_cells``): the raw cells of ``CELLS_GENES`` and a sample of the
+  non-targeting controls, with every mitotic cell kept for the cell-cycle analysis.
 
-The cells file keeps every extracted cell of the eight interpretation genes (RRM1, DTL, SKA2, HAUS6, ITGAV,
-TLN1, PSMB7, SF3B3) and, drawn independently in each part with the generator reseeded per part, a tenth of the
-non-targeting controls. The mitotic cells are left uncapped (not thinned to their natural share as the pooled
-profiles are), because the cell-cycle analysis the file feeds needs the mitotic cells; the per-part draw keeps
-the natural mitotic fraction. This reproduces how the file was first built, so its rows match the hosted file.
-
-Prints each file's size and sha256 (to pin in the registry) and a content fingerprint; a rebuild is checked
-against the fingerprint, not the sha256, because anndata or h5py releases can write the same object as
-different bytes. Extraction streams every row group of the per-cell table and takes about 1.5 h on four cores;
-it is resumable (one part per row group) and the per-cell draw is deterministic, so a rerun keeps the same cells.
-
-The two inputs in ``scripts/data/aconcagua/`` were planned once from the screen-wide metadata (brieflow's
-published gene tables plus a screen-wide mitotic index) and are pinned as small files rather than recomputed, so
-the exploratory planning code is not part of this script:
-
-* ``genes.csv`` names the 500 genes of the subset and the tier of each: the four positive controls, the strong and
-  the weak known hits from brieflow's gene tables, and random library genes. All 250 non-targeting guides are kept
-  besides, and their cells take the tier ``control``.
-* ``keep_prob.parquet`` gives the probability that a cell is kept, per unit (the guide for a non-targeting control,
-  the gene otherwise), plate, well and class. It caps the interphase cells at about 20 per control guide and about 40
-  per gene (about 10 per guide) in each well, and keeps the mitotic cells uncapped.
-
-The build, not the inputs, makes the remaining choices: the pooled profiles thin the mitotic cells to their unit's
-interphase keep probability and halve the control cells, so a profile carries its natural mitotic share and a
-control guide about as many cells as a targeting guide, and the cells file draws its tenth of the controls as
-described above.
+Prints each file's size, sha256 and content fingerprint. Check a rebuild against the fingerprint, since anndata or
+h5py releases can write the same object as different bytes.
 """
 
 from __future__ import annotations
@@ -70,10 +48,9 @@ REGION = "us-west-2"
 CHANNELS = ("DAPI", "TUBULIN", "GH2AX", "PHALLOIDIN")
 POSITIVE_CONTROLS = ("H2AX", "ECT2", "TUBB", "CFL1")
 PLATES = range(1, 9)
-# The eight genes the single-cell file keeps, beside a sample of the non-targeting controls.
+# The single-cell file keeps every cell of these genes and this fraction of the non-targeting controls, drawn in
+# each part with the generator reseeded per part, as the hosted file was first built.
 CELLS_GENES = ("RRM1", "DTL", "SKA2", "HAUS6", "ITGAV", "TLN1", "PSMB7", "SF3B3")
-# The single-cell file keeps every cell of the eight genes and, independently in each part (the generator
-# reseeded per part), this fraction of the non-targeting controls, matching how the file was first built.
 CELLS_CONTROL_FRACTION = 0.10
 CELLS_SEED = 0
 
@@ -232,7 +209,9 @@ def _convert(frame: pd.DataFrame, tiers: pd.Series) -> AnnData:
             obs[name] = frame[source].to_numpy()
     table = pd.concat([obs, frame[list(features)].rename(columns=features).astype(np.float32)], axis=1)
     # Through mantispy's own reader, so the result carries the schema stamp and the parsed var annotation.
-    adata = mt.io.from_dataframe(table, channels=list(CHANNELS), resolution="object")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FutureWarning)
+        adata = mt.io.from_dataframe(table, channels=list(CHANNELS), resolution="object")
     # The PFTAS and foci measurements belong to no CellProfiler group, so the reader keeps them as unannotated
     # embedding features. They are per-channel measurements of an object like the rest, so parse every name.
     adata.var = parse_feature_names(adata.var_names, channels=list(CHANNELS))
@@ -334,9 +313,7 @@ def process_plate(parts: Path, keep_prob: pd.DataFrame, tiers: pd.Series, plate:
     # targeting guide looks active merely for being noisier than the controls.
     frame = frame[~frame.is_control.to_numpy() | (rng.random(len(frame)) < 0.5)].reset_index(drop=True)
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", FutureWarning)
-        cells = _convert(frame, tiers)
+    cells = _convert(frame, tiers)
     del frame
     cells.obs["Metadata_Mitotic"] = (cells.obs["Metadata_Class"] == "Mitotic").astype(np.float32)
 
@@ -364,13 +341,7 @@ def _report(path: Path, adata: AnnData) -> None:
 
 
 def build_cells(parts: Path, tiers: pd.Series) -> AnnData:
-    """Raw single cells of the eight genes and a per-part 10% sample of the non-targeting controls.
-
-    Reproduces the originally hand-built cells file: every extracted cell of the eight genes and, independently in
-    each part (the generator reseeded per part), a tenth of the non-targeting controls. The mitotic cells are left
-    uncapped -- no mitotic thinning and no normalization is applied here, unlike the pooled profiles -- because the
-    cell-cycle analysis the file feeds needs the mitotic cells.
-    """
+    """Raw single cells of ``CELLS_GENES`` and a sample of the non-targeting controls, neither thinned nor normalized."""
     kept = []
     for path in sorted(parts.glob("rg*.parquet")):
         table = pq.read_table(path).to_pandas()
@@ -378,10 +349,7 @@ def build_cells(parts: Path, tiers: pd.Series) -> AnnData:
         keep_ctrl = table["is_control"].to_numpy() & (draw < CELLS_CONTROL_FRACTION)
         keep = table["perturbation_id"].astype(str).isin(CELLS_GENES).to_numpy() | keep_ctrl
         kept.append(table[keep])
-    frame = pd.concat(kept, ignore_index=True)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", FutureWarning)
-        return _convert(frame, tiers)
+    return _convert(pd.concat(kept, ignore_index=True), tiers)
 
 
 def main() -> None:
@@ -417,12 +385,10 @@ def main() -> None:
     cells = build_cells(work / "parts", tiers)
     cells.obs_names = [str(i) for i in range(cells.n_obs)]
 
-    guide_well_path = args.out / "aconcagua_guide_well.h5ad"
-    cells_path = args.out / "aconcagua_cells.h5ad"
-    mt.io.write(guide_well, guide_well_path)
-    mt.io.write(cells, cells_path)
-    _report(guide_well_path, guide_well)
-    _report(cells_path, cells)
+    for name, adata in (("aconcagua_guide_well", guide_well), ("aconcagua_cells", cells)):
+        path = args.out / f"{name}.h5ad"
+        mt.io.write(adata, path)
+        _report(path, adata)
 
 
 if __name__ == "__main__":

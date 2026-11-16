@@ -342,7 +342,7 @@ def test_cell_cycle_clock_warns_that_many_rings_are_hard_to_read(placed):
 
 
 def test_cell_cycle_clock_density_honours_groups_when_color_is_none(placed):
-    # With color=None the single density is drawn over the groups' cells, not every placed cell (finding 2).
+    # With color=None the single density is drawn over the groups' cells, not every placed cell.
     def curve(groups):
         _, ax = plt.subplots()
         mt.pl.cell_cycle_clock(placed, kind="ridge", groups=groups, ax=ax)
@@ -352,22 +352,53 @@ def test_cell_cycle_clock_density_honours_groups_when_color_is_none(placed):
 
 
 def test_cell_cycle_clock_reference_does_not_reorder_colour_panels(placed):
-    # A colour reference is a ring, not a panel, so a groupby key named like it must not be promoted first (finding 3).
+    # A colour reference is a ring, not a panel, so a groupby key named like it must not be promoted first.
     cells = placed.copy()
     cells.obs["batch"] = np.where((np.arange(cells.n_obs) // 3) % 2 == 0, "AAA", "NTC")
     mt.pl.cell_cycle_clock(cells, kind="rings", color="Metadata_Perturbation", groupby="batch", reference="NTC")
     assert [axis.get_title() for axis in plt.gcf().axes if axis.get_title()] == ["AAA", "NTC"]
 
 
-def test_cell_cycle_clock_rejects_a_nonpositive_bandwidth(placed):
+@pytest.mark.parametrize("bandwidth", [0, np.nan])
+def test_cell_cycle_clock_rejects_a_nonpositive_bandwidth(placed, bandwidth):
     with pytest.raises(ValueError, match="bandwidth must be > 0"):
-        mt.pl.cell_cycle_clock(placed, kind="rings", color="Metadata_Perturbation", bandwidth=0)
+        mt.pl.cell_cycle_clock(placed, kind="rings", color="Metadata_Perturbation", bandwidth=bandwidth)
 
 
 def test_palette_counts_falsy_entries_so_a_finite_scheme_is_not_overrun():
-    # A category present in the palette with a falsy value still consumes a default colour (finding 4).
+    # A category present in the palette with a falsy value still consumes a default colour.
     from mantispy.pl._heterogeneity import _palette
 
     shown = [f"c{index:02d}" for index in range(21)]
     result = _palette(shown, {"c00": None})
     assert len(result) == 21 and all(result.values())
+
+
+@pytest.mark.parametrize("n_categories", [7, 20, 30])
+def test_palette_keeps_the_phase_colours_for_the_phases(n_categories):
+    from mantispy.pl._heterogeneity import PHASE_COLOURS, _palette
+
+    shown = ["G1", "G2M", *(f"c{index:02d}" for index in range(n_categories))]
+    colours = [to_rgba(colour) for colour in _palette(shown, None).values()]
+    assert colours[:2] == [to_rgba(PHASE_COLOURS["G1"]), to_rgba(PHASE_COLOURS["G2M"])]
+    assert not set(colours[2:]) & {to_rgba(colour) for colour in PHASE_COLOURS.values()}
+
+
+def test_cell_cycle_clock_leaves_a_sparse_category_out_of_the_shared_scale(placed, caplog):
+    def heights(cells):
+        _, ax = plt.subplots()
+        mt.pl.cell_cycle_clock(cells, kind="ridge", color="Metadata_Perturbation", ax=ax)
+        rows = [label.get_text() for label in ax.get_yticklabels()]
+        solid = [line for line in ax.get_lines() if line.get_linestyle() == "-"]
+        return rows, [np.ptp(line.get_ydata()) for line in solid]
+
+    rows, expected = heights(placed)
+    cells = placed.copy()
+    labels = cells.obs["Metadata_Perturbation"].astype(str).to_numpy()
+    labels[0] = "rare"
+    cells.obs["Metadata_Perturbation"] = labels
+    with caplog.at_level("WARNING", logger="scverse.mantispy"):
+        sparse_rows, observed = heights(cells)
+    assert sorted(sparse_rows) == sorted(rows)  # the one-cell category gets no row
+    np.testing.assert_allclose(observed, expected, rtol=0.1)
+    assert "rare" in caplog.text
