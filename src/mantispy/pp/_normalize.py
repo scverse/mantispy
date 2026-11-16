@@ -34,6 +34,12 @@ _TREATMENT_COLUMN = re.compile(
 )
 
 
+#: A reference spread at most this counts as none: dividing by it, or by it plus the default ``epsilon``, scales the
+#: other rows of the group up by ~1e18. Kept apart from ``epsilon``, which is only added to the MAD, so raising it
+#: to damp small spreads does not flag them.
+_NO_SPREAD = 1e-18
+
+
 #: A per-group centre and spread, as ``pair(block, codes, n_groups, mask)``.
 _Pair = Callable[[np.ndarray, np.ndarray, int, np.ndarray | None], tuple[np.ndarray, np.ndarray]]
 
@@ -100,9 +106,9 @@ def _center_and_scale(
         centre, spread = _fit(adata, codes, keys, layer, mask, _median_and(IQR))
         scale = spread
 
-    # Compared before epsilon is added, so a spread that epsilon dwarfs is caught as well as one of exactly zero.
+    # Compared before epsilon is added, so a spread far below any measurement is caught as well as one of exactly zero.
     # A NaN or infinite spread fails this comparison, so it is left to `uncentred`.
-    no_spread = spread <= epsilon
+    no_spread = spread <= _NO_SPREAD
     # Repairing only the scale would subtract a NaN centre from every row of the group, wiping the non-reference values.
     uncentred = ~(np.isfinite(centre) & np.isfinite(scale))
     centre = np.where(np.isfinite(centre), centre, 0.0)

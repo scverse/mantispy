@@ -48,6 +48,27 @@ def test_a_mad_that_epsilon_dwarfs_counts_as_no_spread(adata, caplog):
     assert adata.var["degenerate_scale"].tolist() == [True] + [False] * (adata.n_vars - 1)
 
 
+def test_a_raised_epsilon_only_adds_to_the_mad(adata):
+    """pycytominer's mad_robustize_epsilon damps a small MAD; it does not make the feature count as having no spread."""
+    plate = adata.obs["Metadata_Plate"].astype(str).to_numpy()
+    control = adata.obs["Metadata_Control"].to_numpy(dtype=bool)
+    values = adata.X.astype(np.float64)
+    values[:, 0] = 5 + np.random.default_rng(0).normal(scale=0.01, size=adata.n_obs)
+    adata.X = values
+    expected = values.copy()
+    for name in set(plate):
+        rows = plate == name
+        reference = values[rows & control]
+        median = np.median(reference, axis=0)
+        mad = np.median(np.abs(reference - median), axis=0)
+        expected[rows] = (values[rows] - median) / (1.4826 * mad + 0.05)
+
+    mt.pp.normalize(adata, by="Metadata_Plate", epsilon=0.05)
+
+    assert not adata.var["degenerate_scale"].any()
+    np.testing.assert_allclose(adata.X, expected, rtol=1e-5, atol=1e-6)
+
+
 @pytest.mark.parametrize("method", ["mad_robustize", "standardize", "robustize", "center"])
 def test_an_object_without_features_normalizes_to_an_empty_matrix(adata, method):
     empty = adata[:, []].copy()
