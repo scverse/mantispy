@@ -28,7 +28,19 @@ METHODS = ("mahalanobis", "ks", "hellinger", "mp_value")
 
 COVARIANCES = ("empirical", "robust")
 
+NULLS = ("permutation", "pseudogenes")
+
+PSEUDOGENE_FUNCS = ("median", "mean")
+
 _REPLICATE_MIN = 16
+
+#: The floor warning fires only when Benjamini-Hochberg cannot call a set smaller than this many groups ...
+_FLOOR_MIN_CALLS = 10
+#: ... and than this share of them.
+_FLOOR_SHARE = 0.01
+
+#: Pseudo-genes profiled per block, which bounds the memory of the draws.
+_PSEUDOGENE_BLOCK = 1024
 
 
 def ks_statistic(samples: np.ndarray, reference: np.ndarray, *, reference_sorted: bool = False) -> np.ndarray:
@@ -168,6 +180,180 @@ def _hellinger_null(
     return float(out[0]), out[1:]
 
 
+def _profile_distance(
+    values: np.ndarray,
+    unit_rows: list[np.ndarray],
+    draws: np.ndarray,
+    centre: np.ndarray,
+    whitening: np.ndarray,
+    func: str,
+) -> np.ndarray:
+    """Distance from the control centre of each draw's profile, its units' rows combined by ``func``.
+
+    ``draws`` holds one row of unit positions per profile, all of one size.
+    The profile is taken in feature space and whitened after, since a median does not commute with the whitening.
+    """
+    combine = np.nanmedian if func == "median" else np.nanmean
+    out = np.empty(draws.shape[0])
+    if all(rows.size == 1 for rows in unit_rows):
+        # One row per unit, as in guide profiles: combine the draws as one block per chunk.
+        row_of_unit = np.array([rows[0] for rows in unit_rows])
+        for start in range(0, draws.shape[0], _PSEUDOGENE_BLOCK):
+            block = values[row_of_unit[draws[start : start + _PSEUDOGENE_BLOCK]]]
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)  # an all-NaN feature stays NaN and is filled below
+                profiles = combine(block, axis=1)
+            out[start : start + block.shape[0]] = np.linalg.norm(np.nan_to_num(profiles - centre) @ whitening, axis=1)
+        return out
+    for index, draw in enumerate(draws):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            profile = combine(values[np.concatenate([unit_rows[unit] for unit in draw])], axis=0)
+        out[index] = float(np.linalg.norm(np.nan_to_num(profile - centre) @ whitening))
+    return out
+
+
+def _n_draws(n: int, k: int, limit: int) -> int:
+    """The number of ways to choose ``k`` of ``n``, or ``limit + 1`` once it exceeds ``limit``."""
+    if k < 0 or k > n:
+        return 0
+    k = min(k, n - k)
+    count = 1
+    for step in range(k):
+        count = count * (n - step) // (step + 1)
+        if count > limit:
+            return limit + 1
+    return count
+
+
+def _draw_units(n_units: int, size: int, n_draws: int, generator: np.random.Generator) -> np.ndarray:
+    """``n_draws`` sets of ``size`` distinct units, drawn independently, so a unit recurs across sets but never within one."""
+    # One draw at a time, so the memory does not grow with the number of units.
+    return np.sort([generator.choice(n_units, size, replace=False, shuffle=False) for _ in range(n_draws)], axis=1)
+
+
+def _pseudogene_null(
+    values: np.ndarray,
+    unit_codes: np.ndarray,
+    is_control: np.ndarray,
+    null_rows: np.ndarray,
+    codes: np.ndarray,
+    n_groups: int,
+    centre: np.ndarray,
+    whitening: np.ndarray,
+    func: str,
+    n_pseudogenes: int,
+    seed: int,
+) -> tuple[pd.DataFrame, np.ndarray]:
+    """Score every tested group against pseudo-genes drawn from the held-out control units, and score calibration pseudo-genes.
+
+    A tested group's units are its non-reference rows' units; a group of ``K`` units is ranked against ``n_pseudogenes`` profiles of ``K`` held-out control units each.
+    The held-out units are also cut into disjoint pseudo-genes of the median group size, each ranked against the draws that share none of its units.
+
+    Returns the table without q-values, real groups first, and each row's smallest reachable p-value.
+    """
+    generator = np.random.default_rng([seed, 1])
+    null_units, null_inverse = np.unique(unit_codes[null_rows], return_inverse=True)
+    null_unit_rows = [null_rows[null_inverse == position] for position in range(null_units.size)]
+    n_null = null_units.size
+
+    tested_rows = [np.flatnonzero((codes == index) & ~is_control) for index in range(n_groups)]
+    sizes = np.array([np.unique(unit_codes[rows]).size for rows in tested_rows])
+    scored = sizes > 0
+    if scored.any() and (sizes[scored] == 1).all():
+        raise ValueError(
+            "null='pseudogenes' builds each pseudo-gene from the guides a gene pools, but every tested group here is "
+            "a single guide or a single row. A gene-level object cannot say how its rows were aggregated, so score "
+            "guide profiles instead: aggregate the cells with mt.tl.aggregate(by=[gene, guide]) and pass the gene "
+            "column as groupby."
+        )
+    calibration_size = int(np.floor(np.median(sizes[scored]) + 0.5)) if scored.any() else 1
+    wanted = sorted(set(sizes[scored].tolist()) | {calibration_size})
+    too_large = [size for size in wanted if size > n_null]
+    if too_large:
+        raise ValueError(
+            f"a group pools {max(too_large)} guides, more than the {n_null} held-out reference guides a pseudo-gene "
+            "draws from"
+        )
+
+    draws = {size: _draw_units(n_null, size, n_pseudogenes, generator) for size in wanted}
+    null = {size: _profile_distance(values, null_unit_rows, draws[size], centre, whitening, func) for size in wanted}
+    floor_of = {size: 1.0 / min(n_pseudogenes + 1, max(_n_draws(n_null, size, n_pseudogenes), 1)) for size in wanted}
+
+    observed = np.full(n_groups, np.nan)
+    pvalues = np.full(n_groups, np.nan)
+    floors = np.full(n_groups, np.nan)
+    combine = np.nanmedian if func == "median" else np.nanmean
+    for index in np.flatnonzero(scored):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            profile = combine(values[tested_rows[index]], axis=0)
+        observed[index] = float(np.linalg.norm(np.nan_to_num(profile - centre) @ whitening))
+        reference = null[sizes[index]]
+        pvalues[index] = (np.sum(reference >= observed[index]) + 1.0) / (reference.size + 1.0)
+        floors[index] = floor_of[sizes[index]]
+
+    # Calibration pseudo-genes: disjoint sets of held-out units, each against the draws that share none of its units.
+    n_calibration = n_null // calibration_size
+    cut = generator.permutation(n_null)[: n_calibration * calibration_size].reshape(n_calibration, calibration_size)
+    cut = np.sort(cut, axis=1)
+    calibration_observed = _profile_distance(values, null_unit_rows, cut, centre, whitening, func)
+    reference_draws, reference = draws[calibration_size], null[calibration_size]
+    calibration_p = np.full(n_calibration, np.nan)
+    calibration_floor = np.full(n_calibration, np.nan)
+    for position, units in enumerate(cut):
+        disjoint = ~np.isin(reference_draws, units).any(axis=1)
+        if disjoint.any():
+            calibration_p[position] = (np.sum(reference[disjoint] >= calibration_observed[position]) + 1.0) / (
+                disjoint.sum() + 1.0
+            )
+            calibration_floor[position] = 1.0 / (disjoint.sum() + 1.0)
+    width = max(2, len(str(n_calibration)))
+    table = pd.DataFrame(
+        {
+            "n_obs": np.concatenate(
+                [
+                    [rows.size for rows in tested_rows],
+                    [sum(null_unit_rows[unit].size for unit in units) for units in cut],
+                ]
+            ).astype(int),
+            "distance": np.concatenate([observed, calibration_observed]),
+            "pvalue": np.concatenate([pvalues, calibration_p]),
+            "is_pseudogene": np.r_[np.zeros(n_groups, dtype=bool), np.ones(n_calibration, dtype=bool)],
+        }
+    )
+    table.insert(
+        0,
+        "group",
+        [None] * n_groups + [f"pseudogene_{position + 1:0{width}d}" for position in range(n_calibration)],
+    )
+    return table, np.concatenate([floors, calibration_floor])
+
+
+def _warn_on_floor(floors: np.ndarray, threshold: float, limited_by_draws: bool) -> None:
+    """Warn when the smallest p-value the null can reach leaves Benjamini-Hochberg no small call set."""
+    from math import ceil
+
+    finite = floors[np.isfinite(floors)]
+    if finite.size == 0:
+        return
+    floor = float(finite.min())
+    smallest = ceil(floor * finite.size / threshold - 1e-9)
+    if smallest > max(_FLOOR_MIN_CALLS, _FLOOR_SHARE * finite.size):
+        get_logger().warning(
+            "hit_calling: the p-value floor is %.2g, so Benjamini-Hochberg over %d groups can call no set smaller than %d",
+            floor,
+            finite.size,
+            smallest,
+            deep=(
+                "the null has few distinct draws: groups of one row against single reference rows; score guide "
+                "profiles with null='pseudogenes'"
+                if limited_by_draws
+                else "raise n_permutations"
+            ),
+        )
+
+
 @inplace_or_copy()
 def hit_calling(
     adata: AnnData,
@@ -177,6 +363,8 @@ def hit_calling(
     covariance: str = "empirical",
     use_rep: str | None = None,
     replicate: str | Sequence[str] | None = None,
+    null: str = "permutation",
+    pseudogene_func: str = "median",
     n_permutations: int = 1000,
     threshold: float = 0.05,
     seed: int = 0,
@@ -226,8 +414,15 @@ def hit_calling(
             Left ``None``, it defaults to the physical well, the ``(Metadata_Plate, Metadata_Well)`` pair, on an object explicitly stamped cell resolution that has replicated wells; a same well name on two plates is then two replicates, not one.
             On such an object where some well holds both reference and tested cells, a pooled design, there is no default and it raises instead.
             It stays off when the object is not stamped cell resolution and when it has no complete well column, in which case the cell path warns; under ``method="ks"`` without a replicate the p-value then falls back to ``scipy.stats.ks_2samp``.
-        n_permutations: Size of the permutation null.
+            Under ``null="pseudogenes"`` it names the guide, the unit a pseudo-gene is built from.
+        null: What each group is ranked against.
+            ``"permutation"`` draws same-size sets of rows, or of replicates, from the group and the held-out controls pooled (see Notes).
+            ``"pseudogenes"`` ranks each group against pseudo-genes, each built from as many held-out control guides as the group has guides and combined the same way, for a pooled screen whose genes pool several guides (see Notes).
+            It needs ``method="mahalanobis"``, and groups made of several guides: one row per guide, or cells with ``replicate`` naming the guide.
+        pseudogene_func: How the rows of a group, and of a pseudo-gene, are combined into the profile whose distance is scored under ``null="pseudogenes"``: ``"median"`` or ``"mean"``, as in :func:`~mantispy.tl.aggregate`.
+        n_permutations: Size of the permutation null, or under ``null="pseudogenes"`` the number of pseudo-genes drawn for each group size.
             Applies to ``method="mahalanobis"``, ``method="hellinger"`` and ``method="mp_value"``, and to ``method="ks"`` when a replicate is in use.
+            The smallest p-value a group can reach is one over this number plus one, so it sets how small a set of groups Benjamini-Hochberg can call (see Notes).
         threshold: q-value below which a group is called a hit in ``is_hit``.
         seed: Seed for the control split and the permutation null.
         key_added: Name for the outputs.
@@ -240,9 +435,11 @@ def hit_calling(
         That is the column a dose-response fit wants: the group statistic is one number repeated over the group's rows, so the controls show no spread and nothing downstream can read a scale off them.
         Rows that fitted the centroid sit a little closer to it than the held-out controls do, by the same split the Notes describe.
         Which rows those are is written to ``obs[key_added + "_reference_held_out"]``, true for the controls that did not fit, so that a scale taken from the controls can be taken from the honest half.
+        Under ``null="pseudogenes"`` the table has no row for a group of reference rows only, and adds the calibration pseudo-genes as rows marked by an ``is_pseudogene`` column (see Notes).
 
     Raises:
-        ValueError: ``method`` is not one of ``METHODS``, ``reference`` selects fewer than four rows, or ``replicate`` is not given on a pooled design at cell resolution.
+        ValueError: ``method`` is not one of ``METHODS``, ``null`` is not one of ``NULLS``, ``reference`` selects fewer than four rows, or ``replicate`` is not given on a pooled design at cell resolution.
+            Under ``null="pseudogenes"``: ``method`` is not ``"mahalanobis"``, every tested group is a single guide, or a group has more guides than the held-out controls.
 
     Notes:
         The controls are split in half.
@@ -274,6 +471,26 @@ def hit_calling(
 
         To check the rate on your own screen, :func:`~mantispy.metrics.diagnose_testing` relabels control wells as pseudo-treatments of your group sizes and reports the fraction called.
 
+        The permutation null can be no finer than its distinct draws.
+        A group of one row against single reference rows has only as many draws as there are held-out rows, so its p-value cannot fall below one over that count, however large ``n_permutations`` is.
+        Benjamini-Hochberg over many groups then calls either a large set or nothing, and a warning says how small a set it could call.
+
+        ``null="pseudogenes"`` is for a pooled screen whose genes each pool several guides while every control guide stands alone.
+        A gene's profile pools the noise of several guides and sits closer to the control centre than a single control guide does, so ranking it against single guides calls almost nothing.
+        A pseudo-gene removes that mismatch, because it draws as many held-out control guides as the gene has guides and combines their rows with ``pseudogene_func``, as the gene's own rows are combined, and its profile's distance from the control centre is the null draw.
+        The control guides are split as above, half placing the centre and covariance and half supplying the pseudo-genes.
+        A pseudo-gene never holds one guide twice, but the draws are independent, so the same guide recurs across pseudo-genes and their number is not capped by the number of control guides.
+        Each group is ranked against the pseudo-genes of its own size, and its p-value cannot fall below one over their number plus one, or below one over the number of distinct guide sets when that is smaller.
+        The rows of a group are combined into one profile, so a gene-level object, one row per gene, cannot be tested this way. Aggregate the cells to one row per guide with :func:`~mantispy.tl.aggregate` and pass the gene column as ``groupby``.
+        From guide profiles, a gene and a pseudo-gene are built alike; a gene aggregated from pooled cells is not, since a median over cells is a different statistic from a median over guide medians.
+        The match is in guides and not in cells, since a pseudo-gene guide keeps its own cells, so control guides with many more cells than gene guides give pseudo-genes less noise than the genes have.
+        With few held-out control guides the pseudo-genes share most of their guides, their spread is a little narrower than a new gene's, and the rate runs a little above nominal.
+
+        The held-out control guides are also cut into disjoint pseudo-genes of the typical group size, and each is ranked against the drawn pseudo-genes that share none of its guides.
+        These are the ``is_pseudogene`` rows of the table.
+        Their q-values are corrected among themselves, so the real groups' q-values are the ones they get without them.
+        The share of them below a p-value cutoff is a check on the false positive rate, though it cannot see a bias the pseudo-genes and their null share, such as the cells per guide above.
+
         ``method="hellinger"`` follows the robust morphological perturbation value of BioProfiling.jl (Vulliard et al., Bioinformatics, 2022).
         It does not split the controls, because both Gaussians are refitted on every draw and no row is spent on a fixed centroid: a group is tested against every control row it does not hold, and its null draws whole replicates, or rows without a replicate, from the two pooled.
         Rows with a missing value are left out of both fits.
@@ -291,6 +508,14 @@ def hit_calling(
         raise ValueError(f"method must be one of {METHODS}, got {method!r}")
     if covariance not in COVARIANCES:
         raise ValueError(f"covariance must be one of {COVARIANCES}, got {covariance!r}")
+    if null not in NULLS:
+        raise ValueError(f"null must be one of {NULLS}, got {null!r}")
+    if pseudogene_func not in PSEUDOGENE_FUNCS:
+        raise ValueError(f"pseudogene_func must be one of {PSEUDOGENE_FUNCS}, got {pseudogene_func!r}")
+    if null == "pseudogenes" and method != "mahalanobis":
+        raise ValueError(
+            f"null='pseudogenes' scores a profile's distance, so it needs method='mahalanobis', got {method!r}"
+        )
 
     is_control = reference_mask(adata, reference)
     replicate_codes = _default_replicate(adata, replicate=replicate, reference=is_control)
@@ -374,7 +599,7 @@ def hit_calling(
         cutoff = float(chi2.ppf(0.975, n_features))
         settings = (method == "mp_value", robust, *tables, cutoff, N_SAMP, seed, min_rows)
 
-    if replicate_codes is not None:
+    if replicate_codes is not None and null == "permutation":
         # Only the null half enters the permutation pool, so it alone sets how finely the null calibrates.
         null_replicates = np.unique(replicate_codes[null_rows]).size
         if null_replicates < _REPLICATE_MIN:
@@ -388,10 +613,42 @@ def hit_calling(
 
     codes, keys = group_codes(adata, groupby)
 
+    if null == "pseudogenes":
+        table, floors = _pseudogene_null(
+            values,
+            replicate_codes if replicate_codes is not None else np.arange(adata.n_obs),
+            is_control,
+            null_rows,
+            codes,
+            len(keys),
+            centre,
+            whitening,
+            pseudogene_func,
+            n_pseudogenes=n_permutations,
+            seed=seed,
+        )
+        is_pseudo = table["is_pseudogene"].to_numpy()
+        table.loc[~is_pseudo, "group"] = [str(key) for key in keys]
+        # A group of reference rows only is part of the null, not a test.
+        keep = is_pseudo | (table["n_obs"].to_numpy() > 0)
+        table, floors, is_pseudo = table[keep].reset_index(drop=True), floors[keep], is_pseudo[keep]
+        _warn_on_floor(floors[~is_pseudo], threshold, limited_by_draws=False)
+        qvalues = np.empty(len(table))
+        for family in (~is_pseudo, is_pseudo):
+            qvalues[family] = benjamini_hochberg(table["pvalue"].to_numpy()[family])
+        table = table.assign(qvalue=qvalues, is_hit=qvalues < threshold)[
+            ["group", "n_obs", "distance", "pvalue", "qvalue", "is_hit", "is_pseudogene"]
+        ]
+        _write_results(adata, table, groupby, key_added, to_control, held_out, method)
+        return None
+
     observed = np.empty(len(keys))
     sizes = np.empty(len(keys), dtype=int)
     pvalues = np.empty(len(keys))
-    null = np.empty((len(keys), n_permutations))
+    null_draws = np.empty((len(keys), n_permutations))
+    # The smallest p-value each group's null can reach, and whether the null's distinct draws rather than n_permutations set it.
+    floors = np.full(len(keys), 1.0 / (n_permutations + 1))
+    draw_limited = np.zeros(len(keys), dtype=bool)
     order, offsets = group_offsets(codes, len(keys))
     for index in range(len(keys)):
         rows = order[offsets[index] : offsets[index + 1]]
@@ -412,29 +669,38 @@ def hit_calling(
         if refit:
             tested, against_rows = tested[complete[tested]], against_rows[complete[against_rows]]
             sizes[index] = tested.size
-            observed[index], null[index] = _hellinger_null(
+            observed[index], null_draws[index] = _hellinger_null(
                 x, tested, against_rows, replicate_codes, settings, min_against, n_permutations, seed, index
             )
             continue
         observed[index] = _statistic(to_control[tested], against, method)[0]
         # The pool must include the tested rows; bootstrapping the controls alone is anti-conservative.
         pool = np.concatenate([tested, against_rows])
+        if replicate_codes is not None:
+            distinct = _n_draws(
+                np.unique(replicate_codes[pool]).size, np.unique(replicate_codes[tested]).size, n_permutations
+            )
+        else:
+            distinct = _n_draws(pool.size, max(tested.size, 1), n_permutations)
+        if distinct <= n_permutations:
+            floors[index], draw_limited[index] = 1.0 / max(distinct, 1), True
         if method == "ks":
             if replicate_codes is not None:
-                null[index] = _ks_replicate_null(
+                null_draws[index] = _ks_replicate_null(
                     to_control, replicate_codes, pool, tested, against, n_permutations, seed, index
                 )
-                pvalues[index] = float(permutation_pvalue(observed[[index]], null[[index]])[0])
+                pvalues[index] = float(permutation_pvalue(observed[[index]], null_draws[[index]])[0])
             else:
                 # A permutation null from the reference rows is too small here, since each draw is a subset of its own reference.
                 pvalues[index] = float(ks_2samp(to_control[tested], against).pvalue)
+                floors[index] = np.nan
             continue
         if replicate_codes is not None:
-            null[index] = _replicate_null(to_control, replicate_codes, pool, tested, n_permutations, seed, index)
+            null_draws[index] = _replicate_null(to_control, replicate_codes, pool, tested, n_permutations, seed, index)
             continue
         spread = np.random.default_rng([seed, index]).random((n_permutations, pool.size))
         draws = pool[np.argsort(spread, axis=1)[:, : max(tested.size, 1)]]
-        null[index] = _statistic(to_control[draws], against, method)
+        null_draws[index] = _statistic(to_control[draws], against, method)
 
     if refit and np.isnan(observed).any():
         unscored = [str(key) for key, value in zip(keys, observed, strict=True) if np.isnan(value)]
@@ -462,7 +728,12 @@ def hit_calling(
         )
 
     if method != "ks":
-        pvalues = permutation_pvalue(observed, null)
+        pvalues = permutation_pvalue(observed, null_draws)
+    floors[np.isnan(pvalues)] = np.nan
+    finite = np.isfinite(floors)
+    _warn_on_floor(
+        floors, threshold, limited_by_draws=bool(finite.any() and draw_limited[finite][np.argmin(floors[finite])])
+    )
     qvalues = benjamini_hochberg(pvalues)
     table = pd.DataFrame(
         {
@@ -474,13 +745,26 @@ def hit_calling(
             "is_hit": qvalues < threshold,
         }
     )
+    _write_results(adata, table, groupby, key_added, to_control, held_out, method)
+    return None
 
+
+def _write_results(
+    adata: AnnData,
+    table: pd.DataFrame,
+    groupby: str,
+    key_added: str,
+    to_control: np.ndarray,
+    held_out: np.ndarray,
+    method: str,
+) -> None:
+    """Store the table and join each row's group distance and q-value, and its own distance, onto ``obs``."""
     adata.uns.setdefault("mantispy", {})[key_added] = table
-    lookup = table.set_index("group")
+    real = table[~table["is_pseudogene"]] if "is_pseudogene" in table else table
+    lookup = real.set_index("group")
     labels = as_frame(adata.obs)[groupby].astype(str)
     adata.obs[f"{key_added}_distance"] = lookup["distance"].reindex(labels).to_numpy()
     adata.obs[f"{key_added}_qvalue"] = lookup["qvalue"].reindex(labels).to_numpy()
     adata.obs[f"{key_added}_row_distance"] = to_control
     adata.obs[f"{key_added}_reference_held_out"] = held_out
     get_logger().info("hit_calling(%s) called %d of %d groups", method, int(table["is_hit"].sum()), len(table))
-    return None

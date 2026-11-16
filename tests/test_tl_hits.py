@@ -939,3 +939,134 @@ def test_the_mp_value_leaves_a_one_row_group_unscored(pure_noise_screen, caplog)
     table = adata.uns["mantispy"]["hits"].set_index("group")
     assert np.isnan(table.loc["solo", "distance"])
     assert np.isfinite(table.drop(index="solo")["distance"]).all()
+
+
+def _guide_screen(n_genes=200, guides_per_gene=4, n_control_guides=120, n_features=5, effect=0.0, n_moved=0, seed=0):
+    """Guide profiles of a pooled screen: each gene holds ``guides_per_gene`` guide rows, each control guide one row.
+
+    Every guide carries its own offset, so a gene's profile pools several guides where a control row is one guide.
+    The first ``n_moved`` genes have every guide shifted by ``effect`` along the first feature.
+    """
+    rng = np.random.default_rng(seed)
+    n_rows = n_genes * guides_per_gene + n_control_guides
+    values = rng.normal(size=(n_rows, n_features))
+    genes = [f"g{index:03d}" for index in range(n_genes) for _ in range(guides_per_gene)]
+    genes += [f"nontargeting_{index:03d}" for index in range(n_control_guides)]
+    moved = np.zeros(n_rows, dtype=bool)
+    moved[: n_moved * guides_per_gene] = True
+    values[moved, 0] += effect
+    control = np.arange(n_rows) >= n_genes * guides_per_gene
+    obs = pd.DataFrame(
+        {
+            "Metadata_Gene": genes,
+            "Metadata_sgRNA": [f"sg{index:04d}" for index in range(n_rows)],
+            "Metadata_Control_Type": np.where(control, "negcon", "treatment"),
+        },
+        index=[f"r{index}" for index in range(n_rows)],
+    )
+    return ad.AnnData(X=values.astype(np.float64), obs=obs)
+
+
+def _real(table):
+    return table[~table["is_pseudogene"]]
+
+
+@pytest.mark.parametrize("func", ["median", "mean"])
+def test_the_pseudogene_null_is_calibrated_at_matched_aggregation(func):
+    """A gene pools four guides and a control row is one, so the held-out control rows sit further out than any gene.
+
+    Pseudo-genes pool four control guides the way the genes pool theirs, so on pure noise a gene is called at the nominal rate.
+    """
+    pvalues = []
+    for seed in range(8):
+        adata = _guide_screen(seed=seed)
+        mt.tl.hit_calling(
+            adata, groupby="Metadata_Gene", null="pseudogenes", pseudogene_func=func, n_permutations=2000, seed=seed
+        )
+        pvalues += list(_real(adata.uns["mantispy"]["hits"])["pvalue"])
+    rate = float(np.mean(np.asarray(pvalues) < 0.05))
+    assert 0.03 <= rate <= 0.075, f"called {rate:.1%} of pure noise at a nominal 5%"
+
+
+def test_the_permutation_null_cannot_call_a_gene_against_single_guides():
+    """The failure the pseudo-gene null exists for: on the same screen the permutation null almost never reaches p < 0.05."""
+    adata = _guide_screen(n_moved=20, effect=3.0)
+    collapsed = mt.tl.aggregate(stamp_profiles(adata), by=["Metadata_Gene"], func="median", min_cells=1)
+    mt.tl.hit_calling(collapsed, groupby="Metadata_Gene", n_permutations=2000)
+    assert int(collapsed.uns["mantispy"]["hits"]["is_hit"].sum()) == 0
+
+
+def stamp_profiles(adata):
+    stamp(adata, "aggregate", grouped_by=["Metadata_Gene", "Metadata_sgRNA"])
+    return adata
+
+
+def test_the_pseudogene_null_calls_planted_genes():
+    adata = _guide_screen(n_moved=20, effect=3.0)
+    mt.tl.hit_calling(adata, groupby="Metadata_Gene", null="pseudogenes", n_permutations=5000, seed=0)
+    table = _real(adata.uns["mantispy"]["hits"]).set_index("group")
+    planted = [f"g{index:03d}" for index in range(20)]
+    assert table.loc[planted, "is_hit"].mean() >= 0.8
+    assert table.drop(index=planted)["is_hit"].sum() <= 5
+
+
+def test_pseudogenes_are_kept_out_of_the_real_genes_correction():
+    from mantispy._core._stats import benjamini_hochberg
+
+    adata = _guide_screen(n_moved=20, effect=1.5)
+    mt.tl.hit_calling(adata, groupby="Metadata_Gene", null="pseudogenes", n_permutations=2000, seed=0)
+    table = adata.uns["mantispy"]["hits"]
+    pseudo = table[table["is_pseudogene"]]
+    real = _real(table)
+    # The null half's control guides, cut into pseudo-genes of the genes' four guides.
+    assert len(pseudo) == 60 // 4
+    assert not real["group"].str.startswith("nontargeting").any()
+    np.testing.assert_allclose(real["qvalue"], benjamini_hochberg(real["pvalue"].to_numpy()))
+    np.testing.assert_allclose(pseudo["qvalue"], benjamini_hochberg(pseudo["pvalue"].to_numpy()))
+    assert not pseudo["is_hit"].any()
+
+
+def test_the_pseudogene_null_needs_groups_that_pool_guides():
+    adata = _guide_screen()
+    collapsed = mt.tl.aggregate(stamp_profiles(adata), by=["Metadata_Gene"], func="median", min_cells=1)
+    with pytest.raises(ValueError, match="tl.aggregate"):
+        mt.tl.hit_calling(collapsed, groupby="Metadata_Gene", null="pseudogenes")
+
+
+def test_the_pseudogene_null_is_only_for_the_median_distance():
+    with pytest.raises(ValueError, match="mahalanobis"):
+        mt.tl.hit_calling(_guide_screen(), groupby="Metadata_Gene", null="pseudogenes", method="ks")
+
+
+def test_a_p_value_floor_that_forces_a_large_call_set_warns(caplog):
+    """One row per gene against a few dozen held-out guides: BH cannot call any set smaller than a large share of the genes."""
+    collapsed = mt.tl.aggregate(stamp_profiles(_guide_screen()), by=["Metadata_Gene"], func="median", min_cells=1)
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
+        mt.tl.hit_calling(collapsed, groupby="Metadata_Gene", n_permutations=2000)
+    assert "p-value floor" in caplog.text
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
+        mt.tl.hit_calling(_guide_screen(), groupby="Metadata_Gene", null="pseudogenes", n_permutations=100)
+    assert "p-value floor" in caplog.text
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
+        mt.tl.hit_calling(_guide_screen(), groupby="Metadata_Gene", null="pseudogenes", n_permutations=5000)
+    assert "p-value floor" not in caplog.text
+
+
+def test_the_pseudogene_null_pools_cells_by_guide():
+    """At cell resolution ``replicate`` names the guide, and a pseudo-gene pools the cells of its guides."""
+    guides = _guide_screen(n_genes=40, n_control_guides=60, n_moved=5, effect=3.0)
+    cells = guides[np.repeat(np.arange(guides.n_obs), 5)].copy()
+    cells.obs_names_make_unique()
+    cells.X = cells.X + np.random.default_rng(1).normal(scale=0.5, size=cells.shape)
+    mt.tl.hit_calling(
+        cells, groupby="Metadata_Gene", replicate="Metadata_sgRNA", null="pseudogenes", n_permutations=1000, seed=0
+    )
+    table = cells.uns["mantispy"]["hits"]
+    real = _real(table).set_index("group")
+    assert real.loc["g000", "n_obs"] == 4 * 5
+    assert real.loc[[f"g{index:03d}" for index in range(5)], "is_hit"].all()
+    assert table["is_pseudogene"].sum() == 30 // 4
