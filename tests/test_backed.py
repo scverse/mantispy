@@ -594,6 +594,33 @@ def test_tvn_under_a_process_cluster_keeps_the_lazy_representation(lazy_pair):
     np.testing.assert_allclose(lazy.obsm["X_tvn"], in_memory.obsm["X_tvn"], rtol=1e-10, atol=1e-10)
 
 
+def test_reading_a_lazy_matrix_reads_each_chunk_once(monkeypatch):
+    """Computed batch by batch, a lazy matrix ran the tasks its chunks share, such as a column mean, once per batch."""
+    import threading
+
+    import dask.array as da
+
+    from mantispy._core._reduce import materialize
+
+    lock = threading.Lock()
+    reads = []
+
+    def counted(block):
+        if block.size:  # not dask's probe of the block function on an empty block
+            with lock:
+                reads.append(block.shape)
+        return block
+
+    values = np.random.default_rng(0).normal(size=(64, 3))
+    source = da.from_array(values, chunks=(4, -1)).map_blocks(counted, dtype=values.dtype)
+    monkeypatch.setattr(mt.settings, "stream_bytes", 4 * 3 * 8)
+
+    out = materialize(source - source.mean(axis=0))
+
+    np.testing.assert_allclose(out, values - values.mean(axis=0))
+    assert len(reads) == 16
+
+
 def test_reading_a_lazy_matrix_holds_it_once(monkeypatch):
     """np.asarray on a dask array holds every chunk and their concatenation at once, twice the matrix."""
     import tracemalloc

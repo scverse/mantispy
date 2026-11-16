@@ -215,10 +215,17 @@ def is_lazy(matrix: Any) -> bool:
 def materialize(matrix: Any) -> np.ndarray:
     """Compute a lazy matrix into one array, in the dtype :func:`float_dtype` gives it.
 
-    Row chunks are computed a few at a time, as many as fit :attr:`~mantispy.settings.stream_bytes`, and copied into the result, where computing the whole would also hold the chunks to concatenate.
-    Each computation returns its block to this process, so the result is filled under any dask scheduler, including a ``dask.distributed`` cluster whose workers are separate processes.
+    Under a scheduler that runs in this process, the chunks are stored into the result as one computation, so a task they share runs once.
+    Under one whose workers are separate processes, such as a ``dask.distributed`` cluster, a store would fill the workers' copies, so row chunks are computed a few at a time, as many as fit :attr:`~mantispy.settings.stream_bytes`, and each block is returned to this process and copied into the result.
     """
+    import dask.array as da
+    from dask import local, threaded
+    from dask.base import get_scheduler
+
     out = np.empty(matrix.shape, dtype=float_dtype(matrix.dtype))
+    if get_scheduler(collections=[matrix]) in (threaded.get, local.get_sync):
+        da.store(matrix, out, lock=False)
+        return out
     bounds = np.cumsum((0, *matrix.chunks[0]))
     row_bytes = max(matrix.shape[1], 1) * out.itemsize
     start = 0
