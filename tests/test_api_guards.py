@@ -11,6 +11,8 @@ SRC = pathlib.Path(mt.__file__).parent
 #: scib_metrics is absent because metrics.evaluate_integration imports it as an optional runtime dependency, behind mantispy[integration].
 REFERENCE_LIBRARIES = {
     "copairs",
+    "graphtools",
+    "phate",
     "pycytominer",
     "pyod",
     "scib",
