@@ -14,7 +14,7 @@ import pandas as pd
 from anndata import AnnData
 from numba import njit
 
-from mantispy._core._numba import MEDIAN, _counting_order, _kernel_input, grouped_stat
+from mantispy._core._numba import MEDIAN, N_CHUNKS, _counting_order, _kernel_input, _masked_offsets, grouped_stat
 from mantispy._core._reduce import get_matrix, group_codes
 from mantispy._core._stats import benjamini_hochberg
 from mantispy._core.frames import as_frame
@@ -30,11 +30,14 @@ else:
 #: Where each guide's null is drawn from; see :func:`bootstrap_features`.
 CONTROL_SCOPES = ("pooled", "within_group", "reference_group", "within_perturbation")
 
-#: Atoms of a guide null whose probability is below this are dropped when the gene null needs
-#: them. The dropped mass is a far order-statistic tail of comparable size, well under the
-#: Monte-Carlo error of any feasible simulation; small problems keep every atom, so the result
-#: still matches a brute-force enumeration. :func:`_null_caps` sizes its buffer to the same band.
+#: The atoms the gene null needs leave out each far tail of a control guide's resampled median up to this
+#: mass, and each row of even-count midpoints past this share of its lower value's mass, a few times this in
+#: all, well under the Monte-Carlo error of any feasible simulation; small problems keep every atom, so the
+#: result still matches a brute-force enumeration. :func:`_null_caps` sizes its buffer to the same band.
 _ATOM_EPS = 1e-8
+#: A gene whose even-count boundary reads a guide null that lacks more than this of its mass, which only a
+#: null whose atoms overflow their buffer does, is left ``NaN`` rather than given a p-value off by that much.
+_MAX_LOST = 1e-6
 
 
 @njit(cache=True, nogil=True)
@@ -198,47 +201,21 @@ def _median_lt(v: np.ndarray, lo: int, n: int, m: int, x: float) -> float:
     return out + pk * contrib
 
 
-@njit(cache=True, nogil=True)
-def _sub_tail(v: np.ndarray, lo: int, nn: int, width: int, m: int, x: float):
-    """Tail probabilities of one control guide's resampled median at threshold ``x``.
-
-    Returns ``(P(median > x), P(median < x), P(median is nan))`` for the median of m draws from the
-    guide's ``width`` cells, skipping the nan ones; ``v[lo:lo+nn]`` are its sorted non-nan values.
-    """
-    if nn == 0:
-        return 0.0, 0.0, 1.0
-    if nn == width:
-        return _median_gt(v, lo, nn, m, x), _median_lt(v, lo, nn, m, x), 0.0
-    p_nn = nn / width
-    nan_prob = (1.0 - p_nn) ** m
-    # number of non-nan draws r ~ Binomial(m, p_nn); median is over the r non-nan draws
-    gt = 0.0
-    lt = 0.0
-    for r in range(1, m + 1):
-        term = _binom_pmf(r, m, p_nn)  # P(r non-nan draws)
-        if term > 0.0:
-            gt += term * _median_gt(v, lo, nn, r, x)
-            lt += term * _median_lt(v, lo, nn, r, x)
-    return gt, lt, nan_prob
-
-
 @njit(parallel=True, cache=True, nogil=True)
 def _guide_pvalues(
     pool_sorted: np.ndarray,
     sub_nn: np.ndarray,
     sub_start: np.ndarray,
-    sub_stop: np.ndarray,
     pool_sub_start: np.ndarray,
     pool_sub_stop: np.ndarray,
-    pool_width: np.ndarray,
     construct_pool: np.ndarray,
     construct_nn: np.ndarray,
     construct_observed: np.ndarray,
 ) -> np.ndarray:
     """Two-sided p-value of every guide against its control pool, exactly.
 
-    A guide's null draws as many cells as the guide has measured in the feature, and is conditioned on a
-    measured null median; with no measured control cell the p-value is ``NaN``.
+    A guide's null draws as many cells as the guide has measured in the feature, from the control cells
+    that measure it; with no such control cell the p-value is ``NaN``.
     """
     n_constructs, n_features = construct_observed.shape
     out = np.empty((n_constructs, n_features), dtype=np.float64)
@@ -246,39 +223,42 @@ def _guide_pvalues(
         p = construct_pool[c]
         s0 = pool_sub_start[p]
         s1 = pool_sub_stop[p]
-        width_total = pool_width[p]
         for j in range(n_features):
             obs = construct_observed[c, j]
             if np.isnan(obs):
                 out[c, j] = np.nan
                 continue
-            row = pool_sorted[j]
-            m = construct_nn[c, j]
-            gt, lt, _, _, _, measured = _pool_tails(row, sub_nn[j], sub_start, sub_stop, s0, s1, width_total, m, obs)
+            gt, lt, _, _, measured = _pool_tails(pool_sorted[j], sub_nn[j], sub_start, s0, s1, construct_nn[c, j], obs)
             out[c, j] = _two_sided(gt, lt, measured)
     return out
 
 
 @njit(cache=True, nogil=True)
-def _pool_tails(row, sub_nn_row, sub_start, sub_stop, s0, s1, width_total, m, x):
-    """A guide null's exact tails at ``x``: the cell-count-weighted mixture of its control guides' :func:`_sub_tail`.
+def _pool_tails(row, sub_nn_row, sub_start, s0, s1, m, x):
+    """A guide null's exact tails at ``x``: the mixture of its control guides' resampled medians.
 
-    Returns ``P(> x)``, ``P(< x)``, ``P(<= x)``, ``P(>= x)``, ``P(nan)`` and ``P(measured)``, each summed
-    directly so that a small one keeps its digits.
+    Each control guide is weighted by the cells it measures in the feature, and its median is of ``m``
+    draws from those. Returns ``P(> x)``, ``P(< x)``, ``P(<= x)``, ``P(>= x)``, each summed directly so
+    that a small one keeps its digits, and ``P(measured)``: one, or zero when no control cell measures it.
     """
-    gt = lt = le = ge = na = meas = 0.0
+    total = 0
     for sub in range(s0, s1):
-        a = sub_start[sub]
-        width = sub_stop[sub] - a
-        w = width / width_total
-        g, l_, n_ = _sub_tail(row, a, sub_nn_row[sub], width, m, x)
+        total += sub_nn_row[sub]
+    if total == 0:
+        return 0.0, 0.0, 0.0, 0.0, 0.0
+    gt = lt = le = ge = 0.0
+    for sub in range(s0, s1):
+        nn = sub_nn_row[sub]
+        if nn == 0:
+            continue
+        w = nn / total
+        g = _median_gt(row, sub_start[sub], nn, m, x)
+        l_ = _median_lt(row, sub_start[sub], nn, m, x)
         gt += w * g
         lt += w * l_
-        le += w * (1.0 - g - n_)
-        ge += w * (1.0 - l_ - n_)
-        na += w * n_
-        meas += w * (1.0 - n_)
-    return gt, lt, le, ge, na, meas
+        le += w * (1.0 - g)
+        ge += w * (1.0 - l_)
+    return gt, lt, le, ge, 1.0
 
 
 @njit(cache=True, nogil=True)
@@ -298,9 +278,11 @@ def _two_sided(gt: float, lt: float, measured: float) -> float:
 def _add_sub_atoms(v, lo, n, r, scale, eps, out_val, out_prob, cnt, sval, sfl, sgt):
     """Append the atoms of the median of r draws from ``v[lo:lo+n]`` (sorted, no nan).
 
-    Each atom is ``(value, scale*prob)``. Prunes atoms below ``eps`` and stops each unimodal run
-    once its probability drops back below it. For even r the distinct values and their tail powers
-    are precomputed into the scratch arrays ``sval``/``sfl``/``sgt`` so the off-diagonal inner loop
+    Each atom is ``(value, scale*prob)``. Only the two far tails of the median's distribution are left out,
+    each of mass at most ``eps``, and for even r the far end of each row of midpoints, at most ``eps`` of the
+    row's lower value's mass; the atoms between are all kept, however small, as many of them can carry much
+    mass between them, and ties make their sizes rise and fall. For even r the distinct values and their tail
+    powers are precomputed into the scratch arrays ``sval``/``sfl``/``sgt`` so the off-diagonal inner loop
     is a plain product, O(distinct) powers rather than O(distinct^2). Returns ``-1`` if ``out_val`` fills up.
     """
     if n == 0:
@@ -309,22 +291,21 @@ def _add_sub_atoms(v, lo, n, r, scale, eps, out_val, out_prob, cnt, sval, sfl, s
     if r % 2 == 1:
         i = lo
         end = lo + n
-        seen = False
-        while i < end:
+        above = 1.0  # P(median >= v[i])
+        while i < end and above > eps:
             a = v[i]
             j = i
             while j < end and v[j] == a:
                 j += 1
-            pr = _binom_cdf(t, r, (i - lo) / n) - _binom_cdf(t, r, (j - lo) / n)
-            if pr > eps:
+            beyond = _binom_cdf(t, r, (j - lo) / n)  # P(median > a)
+            pr = above - beyond
+            if 1.0 - beyond > eps and pr > 0.0:  # not in the far lower tail
                 if cnt >= out_val.shape[0]:
                     return -1
                 out_val[cnt] = a
                 out_prob[cnt] = scale * pr
                 cnt += 1
-                seen = True
-            elif seen:
-                break
+            above = beyond
             i = j
         return cnt
     # even r = 2t: pass 1 records each distinct value, its CDF, and (1-F)^(r-t). Over the band of
@@ -356,52 +337,58 @@ def _add_sub_atoms(v, lo, n, r, scale, eps, out_val, out_prob, cnt, sval, sfl, s
         for lb in range(nd - 1, 1, -1):
             sgt[lb] = exp(sgt[lb] - sgt[lb - 1])
     # pass 2: diagonal and off-diagonal atoms from the precomputed tables
-    outer_seen = False
+    above = 1.0  # P(t-th order stat >= sval[ka])
     for ka in range(nd):
+        if above <= eps:  # the far upper tail
+            break
         f_prev = sfl[ka - 1] if ka > 0 else 0.0
-        marg = _binom_cdf(t - 1, r, f_prev) - _binom_cdf(t - 1, r, sfl[ka])  # P(t-th order stat == a)
-        if marg > eps:
-            outer_seen = True
-            # coef = C(r,t) * (F^t - F_prev^t); the diagonal takes off coef * (1-F)^(r-t), and the row's
-            # off-diagonal atoms are coef * rb[lb]
-            pr = 0.0
-            coef = 0.0
-            if direct:
-                la = sfl[ka] ** t - f_prev**t
-                coef = exp(log_c + log(la)) if la > 0.0 else 0.0
-                diag = marg - coef * sgt[ka]
-                if ka + 1 < nd:
-                    pr = coef * (sgt[ka] - sgt[ka + 1])
-            else:
-                log_coef = log_c + t * log(sfl[ka])
-                if f_prev > 0.0:
-                    log_coef += log(-expm1(t * log(f_prev / sfl[ka])))
-                log_g = (r - t) * log1p(-sfl[ka]) if sfl[ka] < 1.0 else -np.inf
-                diag = marg - exp(log_coef + log_g)
-                if ka + 1 < nd:
-                    log_g_next = (r - t) * log1p(-sfl[ka + 1]) if sfl[ka + 1] < 1.0 else -np.inf
-                    pr = exp(log_coef + log_g + log(-expm1(log_g_next - log_g)))
-            if diag > eps:
+        beyond = _binom_cdf(t - 1, r, sfl[ka])  # P(t-th order stat > a)
+        marg = above - beyond  # P(t-th order stat == a)
+        above = beyond
+        if 1.0 - beyond <= eps or marg <= 0.0:  # the far lower tail
+            continue
+        # coef = C(r,t) * (F^t - F_prev^t); the diagonal takes off coef * (1-F)^(r-t), and the row's
+        # off-diagonal atoms are coef * rb[lb]
+        pr = 0.0
+        coef = 0.0
+        log_coef = 0.0
+        if direct:
+            la = sfl[ka] ** t - f_prev**t
+            coef = exp(log_c + log(la)) if la > 0.0 else 0.0
+            diag = marg - coef * sgt[ka]
+            if ka + 1 < nd:
+                pr = coef * (sgt[ka] - sgt[ka + 1])
+        else:
+            log_coef = log_c + t * log(sfl[ka])
+            if f_prev > 0.0:
+                log_coef += log(-expm1(t * log(f_prev / sfl[ka])))
+            log_g = (r - t) * log1p(-sfl[ka]) if sfl[ka] < 1.0 else -np.inf
+            diag = marg - exp(log_coef + log_g)
+            if ka + 1 < nd:
+                log_g_next = (r - t) * log1p(-sfl[ka + 1]) if sfl[ka + 1] < 1.0 else -np.inf
+                pr = exp(log_coef + log_g + log(-expm1(log_g_next - log_g)))
+        if diag > 0.0:
+            if cnt >= out_val.shape[0]:
+                return -1
+            out_val[cnt] = sval[ka]
+            out_prob[cnt] = scale * diag
+            cnt += 1
+        for lb in range(ka + 1, nd):
+            if lb > ka + 1:
+                pr = coef * (sgt[lb - 1] - sgt[lb]) if direct else pr * sgt[lb]
+            if pr > 0.0:
                 if cnt >= out_val.shape[0]:
                     return -1
-                out_val[cnt] = sval[ka]
-                out_prob[cnt] = scale * diag
+                out_val[cnt] = (sval[ka] + sval[lb]) / 2.0
+                out_prob[cnt] = scale * pr
                 cnt += 1
-            inner_seen = False
-            for lb in range(ka + 1, nd):
-                if lb > ka + 1:
-                    pr = coef * (sgt[lb - 1] - sgt[lb]) if direct else pr * sgt[lb]
-                if pr > eps:
-                    if cnt >= out_val.shape[0]:
-                        return -1
-                    out_val[cnt] = (sval[ka] + sval[lb]) / 2.0
-                    out_prob[cnt] = scale * pr
-                    cnt += 1
-                    inner_seen = True
-                elif inner_seen:
-                    break
-        elif outer_seen:
-            break
+            # the mass of the row's midpoints past this one, coef * (1 - F_lb)^(r-t)
+            if direct:
+                rest = coef * sgt[lb]
+            else:
+                rest = exp(log_coef + (r - t) * log1p(-sfl[lb])) if sfl[lb] < 1.0 else 0.0
+            if rest <= eps * marg:
+                break
     return cnt
 
 
@@ -487,52 +474,23 @@ def _collapse(val_buf, prob_buf, lo, hi, stack):
 
 
 @njit(cache=True, nogil=True)
-def _build_construct(
-    pool_sorted_row,
-    sub_nn_row,
-    sub_start,
-    sub_stop,
-    s0,
-    s1,
-    width_total,
-    m,
-    eps,
-    val_buf,
-    prob_buf,
-    stack,
-    sval,
-    sfl,
-    sgt,
-):
+def _build_construct(pool_sorted_row, sub_nn_row, sub_start, s0, s1, m, eps, val_buf, prob_buf, stack, sval, sfl, sgt):
     """Build one guide null as merged, sorted atoms in ``val_buf``/``prob_buf``; returns their count.
 
-    Mixes every control guide's exact median-atom distribution, then sorts and merges equal values. A
-    control guide with missing cells adds one band per number of measured draws, skipping the bands
-    whose probability is below ``eps``. Returns ``-1`` if the atoms do not fit the buffer.
+    Mixes every control guide's exact median-atom distribution, weighted as in :func:`_pool_tails`, then
+    sorts and merges equal values. Returns ``-1`` if the atoms do not fit the buffer.
     """
+    total = 0
+    for sub in range(s0, s1):
+        total += sub_nn_row[sub]
     cnt = 0
     for sub in range(s0, s1):
-        a = sub_start[sub]
-        width = sub_stop[sub] - a
         nn = sub_nn_row[sub]
         if nn == 0:
             continue
-        w = width / width_total
-        if nn == width:
-            cnt = _add_sub_atoms(pool_sorted_row, a, nn, m, w, eps, val_buf, prob_buf, cnt, sval, sfl, sgt)
-        else:
-            # the number of measured draws is Binomial(m, nn / width); walk out from its mode while the
-            # band is worth keeping, as the pmf is unimodal
-            p_nn = nn / width
-            mode = min(m, max(1, int((m + 1) * p_nn)))
-            for step in (-1, 1):
-                r = mode if step == -1 else mode + 1
-                while 1 <= r <= m and cnt >= 0:
-                    term = w * _binom_pmf(r, m, p_nn)
-                    if term <= eps:
-                        break
-                    cnt = _add_sub_atoms(pool_sorted_row, a, nn, r, term, eps, val_buf, prob_buf, cnt, sval, sfl, sgt)
-                    r += step
+        cnt = _add_sub_atoms(
+            pool_sorted_row, sub_start[sub], nn, m, nn / total, eps, val_buf, prob_buf, cnt, sval, sfl, sgt
+        )
         if cnt < 0:
             return -1
     if cnt == 0:
@@ -792,19 +750,24 @@ def _boundary(k, lo_c, hi_c, vals, cum, obs, plow, phigh, pnan, fs, ints, dp):
 
 @njit(cache=True, nogil=True)
 def _build_into(
-    row, nn_row, sub_start, sub_stop, pool_sub_start, pool_sub_stop, pool_width, p, m, eps,
+    row, nn_row, sub_start, pool_sub_start, pool_sub_stop, p, m, eps,
     val_buf, prob_buf, stack, sval, sfl, sgt, vals, cum, rvals, rcum, lo, room,
 ):  # fmt: skip
     """Build the null of pool ``p`` at ``m`` draws and, if its merged atoms fit ``room``, write them at ``lo``.
 
     The store keeps the atom values, their running mass from the bottom (``cum``) and, negated and reversed,
-    from the top (``rvals``/``rcum``). Returns the merged count, or ``-1`` if the atoms overflow the buffer.
+    from the top (``rvals``/``rcum``). Returns the merged count, or ``-1`` if the atoms overflow the buffer,
+    and the mass the pruning dropped (all of it on an overflow).
     """
     end = _build_construct(
-        row, nn_row, sub_start, sub_stop, pool_sub_start[p], pool_sub_stop[p], pool_width[p], m, eps,
-        val_buf, prob_buf, stack, sval, sfl, sgt,
-    )  # fmt: skip
-    if 0 <= end <= room:
+        row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], m, eps, val_buf, prob_buf, stack, sval, sfl, sgt
+    )
+    if end < 0:
+        return end, 1.0
+    kept = 0.0
+    for z in range(end):
+        kept += prob_buf[z]
+    if end <= room:
         running = 0.0
         for z in range(end):
             vals[lo + z] = val_buf[z]
@@ -815,7 +778,7 @@ def _build_into(
             rvals[lo + z] = -val_buf[end - 1 - z]
             running += prob_buf[end - 1 - z]
             rcum[lo + z] = running
-    return end
+    return end, max(0.0, 1.0 - kept)
 
 
 @njit(cache=True, nogil=True)
@@ -843,15 +806,17 @@ def _gene_pvalues(
     sub_stop,
     pool_sub_start,
     pool_sub_stop,
-    pool_width,
+    construct_pool,
     construct_nn,
-    construct_null,
+    null_base,
+    null_index,
     null_pool,
     null_size,
     null_caps,
     gene_offsets,
     gene_observed,
     eps,
+    max_lost,
     n_slots,
     n_gene_slots,
 ):
@@ -859,19 +824,23 @@ def _gene_pvalues(
 
     A guide's null depends only on its pool and measured cell count, so per feature each distinct
     ``(null_pool, null_size)`` null is built once into a shared atom store, and the genes then only
-    read it; ``construct_null[j, c]`` names guide ``c``'s null in feature ``j``, ``-1`` where the guide
-    measures nothing and so leaves the gene. The nulls are dealt to ``n_slots`` slots and the genes to
+    read it. Guide ``c``'s null in feature ``j`` is ``null_index[null_base[pool] + construct_nn[c, j]]``,
+    ``-1`` where the guide measures nothing and so leaves the gene. The nulls are dealt to ``n_slots`` slots and the genes to
     ``n_gene_slots`` (see :func:`_deal`), each with its own scratch; more gene slots than threads let a
-    thread that finishes early take another. Also returns which nulls had more atoms than their buffer holds; those
-    keep no atoms, so the even-count boundary they enter counts as a tie.
+    thread that finishes early take another.
+
+    A gene whose even-count boundary needs the shape of a guide null that lost more than ``max_lost`` of its
+    mass, to pruning or to an atom buffer it overflowed, is left ``NaN``; the second array returned marks those.
     """
     n_genes = gene_offsets.size - 1
     n_features = gene_observed.shape[1]
-    n_constructs = construct_null.shape[1]
+    n_constructs = construct_nn.shape[0]
     n_nulls = null_pool.size
     out = np.empty((n_genes, n_features), dtype=np.float64)
-    overflow = np.zeros(n_nulls, dtype=np.bool_)
-    max_cap = max(1, null_caps.max())
+    unresolved = np.zeros((n_genes, n_features), dtype=np.bool_)
+    max_cap = 1
+    for u in range(n_nulls):
+        max_cap = max(max_cap, null_caps[u])
     max_k = max(1, np.diff(gene_offsets).max())
     max_width = max(1, (sub_stop - sub_start).max())
     val_t = np.empty((n_slots, max_cap), dtype=np.float64)
@@ -890,6 +859,7 @@ def _gene_pvalues(
     dp_t = np.empty((n_gene_slots, 4, 2 * max_k + 5 + 8), dtype=np.float64)
     used = np.empty(n_nulls, dtype=np.bool_)
     counts = np.empty(n_nulls, dtype=np.int64)
+    lost = np.empty(n_nulls, dtype=np.float64)  # the mass each null's atoms lack
     offs = np.zeros(n_nulls + 1, dtype=np.int64)
     reserve = np.zeros(n_nulls, dtype=np.int64)  # the merged length each null's stretch of the store holds
     grow = np.empty(n_nulls, dtype=np.int64)
@@ -904,8 +874,9 @@ def _gene_pvalues(
         nn_row = sub_nn[j]
         used[:] = False
         for c in range(n_constructs):
-            if construct_null[j, c] >= 0:
-                used[construct_null[j, c]] = True
+            u = null_index[null_base[construct_pool[c]] + construct_nn[c, j]]
+            if u >= 0:
+                used[u] = True
         # build each used null once into its reserved stretch of the store; a null longer than its reserve
         # (every null, at the first feature) is built again once the store has grown to hold it
         for u in range(n_nulls):
@@ -919,16 +890,16 @@ def _gene_pvalues(
             for ui in range(null_start[t], null_start[t + 1]):
                 u = null_order[ui]
                 counts[u] = 0
+                lost[u] = 0.0
                 if used[u]:
-                    counts[u] = _build_into(
-                        row, nn_row, sub_start, sub_stop, pool_sub_start, pool_sub_stop, pool_width, null_pool[u],
-                        null_size[u], eps, val_t[t], prob_t[t], stack_t[t], sval_t[t], sfl_t[t], sgt_t[t],
+                    counts[u], lost[u] = _build_into(
+                        row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool[u], null_size[u], eps,
+                        val_t[t], prob_t[t], stack_t[t], sval_t[t], sfl_t[t], sgt_t[t],
                         vals, cum, rvals, rcum, offs[u], reserve[u],
                     )  # fmt: skip
         n_grow = 0
         for u in range(n_nulls):
-            if counts[u] < 0:  # more atoms than the null's buffer holds
-                overflow[u] = True
+            if counts[u] < 0:  # more atoms than the null's buffer holds: it keeps none
                 counts[u] = 0
             elif counts[u] > reserve[u]:
                 grow[n_grow] = u
@@ -956,8 +927,8 @@ def _gene_pvalues(
                 for i in range(t, n_grow, n_slots):
                     u = grow[i]
                     _build_into(
-                        row, nn_row, sub_start, sub_stop, pool_sub_start, pool_sub_stop, pool_width, null_pool[u],
-                        null_size[u], eps, val_t[t], prob_t[t], stack_t[t], sval_t[t], sfl_t[t], sgt_t[t],
+                        row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool[u], null_size[u], eps,
+                        val_t[t], prob_t[t], stack_t[t], sval_t[t], sfl_t[t], sgt_t[t],
                         vals, cum, rvals, rcum, offs[u], reserve[u],
                     )  # fmt: skip
         # a gene costs about its guides' atom count, more when an even count sends it through the boundary sweep
@@ -965,8 +936,9 @@ def _gene_pvalues(
             tot = 0
             k = 0
             for c in range(gene_offsets[g], gene_offsets[g + 1]):
-                if construct_null[j, c] >= 0:
-                    tot += counts[construct_null[j, c]]
+                u = null_index[null_base[construct_pool[c]] + construct_nn[c, j]]
+                if u >= 0:
+                    tot += counts[u]
                     k += 1
             gene_cost[g] = tot * (1.0 + (k % 2 == 0) * k) + 1.0
         gene_order, gene_start = _deal(gene_cost, n_gene_slots)
@@ -989,26 +961,22 @@ def _gene_pvalues(
                     out[g, j] = np.nan
                     continue
                 k = 0
+                worst = 0.0  # the most mass any measured guide null of the gene lacks atoms for
                 for c in range(gene_offsets[g], gene_offsets[g + 1]):
-                    u = construct_null[j, c]
+                    u = null_index[null_base[construct_pool[c]] + construct_nn[c, j]]
                     if u < 0:  # its observed median is nan, so it is not in the gene's median either
                         continue
                     lo_c[k] = offs[u]
                     hi_c[k] = offs[u] + counts[u]
-                    # exact tails from the sub-tail mixture, so the gene count that decides
-                    # significance never depends on the atom coarsening
+                    # exact tails from the control guides' order statistics, so the gene count that decides
+                    # significance never depends on the atom pruning
                     p = null_pool[u]
-                    gt_arr[k], lt_arr[k], le_arr[k], ge_arr[k], nan_arr[k], meas_arr[k] = _pool_tails(
-                        row,
-                        nn_row,
-                        sub_start,
-                        sub_stop,
-                        pool_sub_start[p],
-                        pool_sub_stop[p],
-                        pool_width[p],
-                        construct_nn[c, j],
-                        obs,
+                    gt_arr[k], lt_arr[k], le_arr[k], ge_arr[k], meas_arr[k] = _pool_tails(
+                        row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], construct_nn[c, j], obs
                     )
+                    nan_arr[k] = 1.0 - meas_arr[k]
+                    if meas_arr[k] > 0.0:
+                        worst = max(worst, lost[u])
                     k += 1
                 # more high than low guides puts the median above obs; as many of each leaves the
                 # midpoint of the two central guides to decide, possible for an even measured count
@@ -1020,10 +988,65 @@ def _gene_pvalues(
                     all_nan *= nan_arr[ci]
                     any_measured |= meas_arr[ci] > 0.0
                 if k >= 2 and (k % 2 == 0 or _any_positive(nan_arr, k)):
+                    if worst > max_lost:  # the boundary needs the shape of a null that kept too little of it
+                        out[g, j] = np.nan
+                        unresolved[g, j] = True
+                        continue
                     above += _boundary(k, lo_c, hi_c, vals, cum, obs, le_arr, gt_arr, nan_arr, fs, ints, dp)
                     below += _boundary(k, lo_c, hi_c, rvals, rcum, -obs, ge_arr, lt_arr, nan_arr, fs, ints, dp)
                 out[g, j] = _two_sided(above, below, 1.0 - all_nan if any_measured else 0.0)
-    return out, overflow
+    return out, unresolved
+
+
+@njit(parallel=True, cache=True, nogil=True)
+def _missing_and_infinite(values):
+    """Whether ``values`` holds a ``NaN``, and whether it holds an infinity, in one pass and no copy."""
+    n_rows = values.shape[0]
+    n_chunks = min(N_CHUNKS, max(n_rows, 1))
+    flags = np.zeros((n_chunks, 2), dtype=np.bool_)
+    for chunk in prange(n_chunks):
+        for i in range(chunk, n_rows, n_chunks):
+            for j in range(values.shape[1]):
+                x = values[i, j]
+                if np.isnan(x):
+                    flags[chunk, 0] = True
+                elif np.isinf(x):
+                    flags[chunk, 1] = True
+    return flags[:, 0].any(), flags[:, 1].any()
+
+
+@njit(parallel=True, cache=True, nogil=True)
+def _measured_counts(values, order, offsets):
+    """Per group and feature, how many of the group's rows ``order[offsets[g]:offsets[g + 1]]`` are not ``NaN``."""
+    n_groups = offsets.size - 1
+    out = np.zeros((n_groups, values.shape[1]), dtype=np.int64)
+    for g in prange(n_groups):
+        for i in range(offsets[g], offsets[g + 1]):
+            row = order[i]
+            for j in range(values.shape[1]):
+                out[g, j] += not np.isnan(values[row, j])
+    return out
+
+
+@njit(cache=True, nogil=True)
+def _null_index(construct_pool, construct_nn, null_base, n_keys):
+    """Number the distinct ``(pool, measured count)`` nulls the guides use, over every feature.
+
+    Key ``null_base[pool] + count`` maps to its null, numbered by pool and then count, or to ``-1``
+    where no guide uses it; a count of zero is never used, as a guide measuring nothing has no null.
+    """
+    index = np.full(n_keys, -1, dtype=np.int64)
+    for c in range(construct_nn.shape[0]):
+        base = null_base[construct_pool[c]]
+        for j in range(construct_nn.shape[1]):
+            if construct_nn[c, j] > 0:
+                index[base + construct_nn[c, j]] = 0
+    n = 0
+    for key in range(n_keys):
+        if index[key] == 0:
+            index[key] = n
+            n += 1
+    return index
 
 
 #: Hard limit on a guide null's per-thread atom buffer, so a huge screen cannot ask for unbounded memory;
@@ -1034,7 +1057,7 @@ _ATOM_CAP_MAX = 40_000_000
 def _sub_atom_bound(nn: np.ndarray, r: np.ndarray) -> np.ndarray:
     """Upper bound on the median atoms of ``r`` draws from ``nn`` distinct-or-not values, before merging.
 
-    The central order statistic's empirical CDF carries atoms above :data:`_ATOM_EPS` only within the band
+    Past its far tails of :data:`_ATOM_EPS`, the central order statistic lies within the band
     ``|F - 1/2| < ~3/sqrt(r)``; that band holds at most ``nw = min(nn, 7*nn/sqrt(r))`` distinct values, so
     at most ``nw^2 + nw`` even-median atoms, never more than the ``nn(nn+1)/2 + nn`` pairs.
     """
@@ -1042,31 +1065,19 @@ def _sub_atom_bound(nn: np.ndarray, r: np.ndarray) -> np.ndarray:
     return np.minimum(nn * (nn + 1) // 2 + nn, nw * nw + nw)
 
 
-def _null_caps(sub_nn, sub_start, sub_stop, pool_sub_start, pool_sub_stop, null_pool, null_size, eps):
+def _null_caps(sub_start, sub_stop, pool_sub_start, pool_sub_stop, null_pool, null_size):
     """Per-null atom-buffer size: an upper bound on the atoms a guide null generates before merging.
 
-    A control guide measured in every cell adds one band, for the null's draw count ``m``. One with
-    missing cells adds a band per number ``r`` of measured draws whose probability tops ``eps``; by
-    Hoeffding's bound those lie within ``sqrt(m log(1/eps) / 2)`` of ``m`` times its measured share.
+    A null of ``m`` draws adds :func:`_sub_atom_bound` atoms for each control guide of its pool, at most
+    those of the guide's full cell count, as it measures no more cells than it has in any feature.
     """
     widths = (sub_stop - sub_start).astype(np.int64)
-    # the measured counts short of the full guide, for the control guides with any missing cell
-    partial = {
-        sub: np.unique(sub_nn[(sub_nn[:, sub] > 0) & (sub_nn[:, sub] < widths[sub]), sub])
-        for sub in np.flatnonzero(((sub_nn > 0) & (sub_nn < widths)).any(axis=0))
-    }
     caps = np.empty(null_pool.size, dtype=np.int64)
-    for u, (p, m) in enumerate(zip(null_pool, null_size, strict=True)):
-        lo, hi = pool_sub_start[p], pool_sub_stop[p]
-        bound = _sub_atom_bound(widths[lo:hi], np.int64(m))
-        for sub in (sub for sub in partial if lo <= sub < hi):
-            nn = partial[sub]
-            spread = np.sqrt(m * np.log(1.0 / eps) / 2.0)
-            r_lo = np.maximum(1, np.floor(m * nn / widths[sub] - spread)).astype(np.int64)
-            r_hi = np.minimum(m, np.ceil(m * nn / widths[sub] + spread)).astype(np.int64)
-            bands = np.maximum(r_hi - r_lo + 1, 0) * _sub_atom_bound(nn, r_lo)
-            bound[sub - lo] = max(bound[sub - lo], int(bands.max()))
-        caps[u] = min(int(bound.sum()) + 16, _ATOM_CAP_MAX)
+    for p in np.unique(null_pool):
+        nulls = np.flatnonzero(null_pool == p)
+        w = widths[pool_sub_start[p] : pool_sub_stop[p]]
+        bound = _sub_atom_bound(w[None, :], null_size[nulls].astype(np.int64)[:, None]).sum(axis=1)
+        caps[nulls] = np.minimum(bound + 16, _ATOM_CAP_MAX)
     return caps
 
 
@@ -1123,14 +1134,15 @@ def bootstrap_features(
         Also writes ``uns["mantispy"][key_added + "_guides"]``, the same per guide, with ``replicate`` and ``n_cells`` columns and its own q-values.
 
     Raises:
-        ValueError: ``control_scope`` is unknown, a scope that needs ``condition`` or ``reference_condition`` lacks it, ``"within_perturbation"`` is used without ``condition`` in ``groupby``, the controls in ``reference_condition`` are empty, or no guide has a null to draw from.
+        ValueError: ``control_scope`` is unknown, a scope that needs ``condition`` or ``reference_condition`` lacks it, ``"within_perturbation"`` is used without ``condition`` in ``groupby``, the controls in ``reference_condition`` are empty, no guide has a null to draw from, or the matrix holds an infinite value.
 
     Notes:
         The p-value is two-sided, ``2 * min(p, 1 - p)`` with ``p`` the probability that a null median exceeds the observed one.
         It is exact rather than simulated, so it has no lower floor and can be zero when the observed median lies beyond every attainable null median.
         A null median equal to the observed one counts half, so a feature where most cells share one value, such as a count that is mostly zero, is not called because its median cannot move; Brieflow counts such ties as below.
-        Medians skip missing values. A guide's null draws as many cells as the guide measures in the feature, a guide that measures none leaves its gene's median and null, and a null median that comes out missing counts neither way.
+        Medians skip missing values, and each feature is tested on the cells that measure it: a guide's null picks a control guide in proportion to the cells it measures in the feature and draws as many of those as the tested guide measures, and a guide that measures none leaves its gene's median and null.
         A feature whose observed median is missing, or that no control cell measures, is left ``NaN``.
+        So is a gene whose median can fall between two of its guides when a guide null has more distinct medians than can be held, with a warning; this takes thousands of cells in every control guide against guides of a few.
 
         The null resamples a control guide's own cells, so it carries that sample's error on top of the spread between control guides, while a tested guide carries only its own.
         The test therefore runs conservative when guides barely differ from one another, and near the nominal rate when they differ by more than the error of a guide's median.
@@ -1152,6 +1164,12 @@ def bootstrap_features(
     obs = as_frame(adata.obs)
     logger = get_logger()
     values = _kernel_input(get_matrix(adata, layer))
+    has_nan, has_inf = _missing_and_infinite(values)
+    if has_inf:
+        raise ValueError(
+            "bootstrap_features: the matrix holds infinite values, whose medians are undefined; drop or fill them "
+            "first, for example with mt.pp.feature_select"
+        )
     unit_codes, unit_keys = group_codes(adata, by)
     # a guide is its group and its label, so control guides of two control genes that share a label stay apart
     sub_by = [*by, replicate, *([condition] if condition is not None and condition not in by else [])]
@@ -1200,8 +1218,7 @@ def bootstrap_features(
     n_subs = len(sub_keys)
     pool_rows = np.flatnonzero(pool_of_row >= 0)
     pool_rows = pool_rows[np.lexsort((pool_rows, sub_codes[pool_rows], pool_of_row[pool_rows]))]
-    pool_keys, pool_starts = np.unique(pool_of_row[pool_rows], return_index=True)
-    pool_stops = np.append(pool_starts[1:], pool_rows.size)
+    pool_keys = np.unique(pool_of_row[pool_rows])
     pair = pool_of_row[pool_rows].astype(np.int64) * n_subs + sub_codes[pool_rows]
     sub_breaks = np.flatnonzero(np.diff(pair)) + 1
     sub_start = np.concatenate([[0], sub_breaks]).astype(np.int64)
@@ -1231,14 +1248,8 @@ def bootstrap_features(
     construct_observed = grouped_stat(values, construct_of_row, constructs.size, MEDIAN, mask=tested)
     construct_size = np.bincount(row_construct, minlength=constructs.size).astype(np.int64)
     # the cells each guide measures per feature: its null draws that many, as its median is over them
-    has_nan = bool(np.isnan(values).any())
     if has_nan:
-        by_construct = np.argsort(row_construct, kind="stable")
-        construct_nn = np.add.reduceat(
-            ~np.isnan(values[rows_kept[by_construct]]),
-            np.searchsorted(row_construct[by_construct], np.arange(constructs.size)),
-            axis=0,
-        ).astype(np.int64)
+        construct_nn = _measured_counts(values, *_masked_offsets(construct_of_row, constructs.size, tested))
     else:
         construct_nn = np.repeat(construct_size[:, None], values.shape[1], axis=1)
     in_pool = pool_of_row >= 0
@@ -1258,7 +1269,6 @@ def bootstrap_features(
     sub_pool_idx = np.searchsorted(pool_keys, pool_of_row[pool_rows[sub_start]])
     pool_sub_start = np.searchsorted(sub_pool_idx, np.arange(pool_keys.size), side="left").astype(np.int64)
     pool_sub_stop = np.searchsorted(sub_pool_idx, np.arange(pool_keys.size), side="right").astype(np.int64)
-    pool_width = (pool_stops - pool_starts).astype(np.int64)
 
     genes, gene_starts = np.unique(construct_unit, return_index=True)
     gene_offsets = np.append(gene_starts, construct_unit.size).astype(np.int64)
@@ -1270,53 +1280,50 @@ def bootstrap_features(
         pool_sorted,
         sub_nn,
         sub_start,
-        sub_stop,
         pool_sub_start,
         pool_sub_stop,
-        pool_width,
         construct_pool,
         construct_nn,
         construct_observed,
     )
-    # a guide's null depends only on its pool and measured cell count, so guides sharing both share it
-    stride = construct_nn.max() + 1
-    if has_nan:
-        null_of = (construct_pool[:, None] * stride + construct_nn).T
-        measured = null_of % stride > 0
-        null_keys, inverse = np.unique(null_of[measured], return_inverse=True)
-        construct_null = np.full(null_of.shape, -1, dtype=np.int64)
-        construct_null[measured] = inverse
-    else:  # every guide measures every feature, so its null is the same in each
-        null_keys, inverse = np.unique(construct_pool * stride + construct_size, return_inverse=True)
-        construct_null = np.tile(inverse.astype(np.int64), (n_features, 1))
-    null_pool, null_size = np.divmod(null_keys, stride)
+    # a guide's null depends only on its pool and measured cell count, so guides sharing both share it; a pool's
+    # keys run over the counts up to its largest guide
+    pool_largest = np.zeros(pool_keys.size, dtype=np.int64)
+    np.maximum.at(pool_largest, construct_pool, construct_size)
+    null_base = np.concatenate([[0], np.cumsum(pool_largest + 1)]).astype(np.int64)
+    null_index = _null_index(construct_pool, construct_nn, null_base, int(null_base[-1]))
+    keys = np.flatnonzero(null_index >= 0)
+    null_pool = (np.searchsorted(null_base, keys, side="right") - 1).astype(np.int64)
+    null_size = (keys - null_base[null_pool]).astype(np.int64)
     n_threads = numba.get_num_threads()
     # threads take gene slots one at a time as they free up, so one costly gene does not hold up the rest
     with numba.parallel_chunksize(1):
-        gene_p, overflow = _gene_pvalues(
+        gene_p, unresolved = _gene_pvalues(
             pool_sorted,
             sub_nn,
             sub_start,
             sub_stop,
             pool_sub_start,
             pool_sub_stop,
-            pool_width,
+            construct_pool,
             construct_nn,
-            construct_null,
-            null_pool.astype(np.int64),
-            null_size.astype(np.int64),
-            _null_caps(sub_nn, sub_start, sub_stop, pool_sub_start, pool_sub_stop, null_pool, null_size, _ATOM_EPS),
+            null_base,
+            null_index,
+            null_pool,
+            null_size,
+            _null_caps(sub_start, sub_stop, pool_sub_start, pool_sub_stop, null_pool, null_size),
             gene_offsets,
             gene_observed,
             _ATOM_EPS,
+            _MAX_LOST,
             n_threads,
             8 * n_threads,
         )
-    if overflow.any():
+    if unresolved.any():
         logger.warning(
-            "bootstrap_features: %d guide null(s) have too many distinct medians to hold, so a gene whose "
-            "null median would fall between two of their guides counts that case as a tie",
-            int(overflow.sum()),
+            "bootstrap_features: %d gene-feature p-value(s) are left NaN: a gene whose median can fall between two "
+            "of its guides needs their nulls' distinct medians, and a guide null had too many to hold",
+            int(unresolved.sum()),
         )
 
     features = adata.var_names.to_numpy()

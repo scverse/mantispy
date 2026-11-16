@@ -18,10 +18,10 @@ matplotlib.use("Agg")
 def _brute_pvalues(adata):
     """Exact p-values by full enumeration of every resample; only for tiny screens.
 
-    The guide null draws one control guide (probability proportional to its cell count), then draws
-    as many of its cells as the guide has measured, with replacement, and takes the median of the
-    measured draws; the gene null is the median over its measured guides of independent such draws.
-    Two-sided, a tie counts half, conditioned on a measured null median, no floor.
+    Per feature, only the cells that measure it count: the guide null draws one control guide
+    (probability proportional to its measured cells), then draws as many of those as the guide has
+    measured, with replacement, and takes their median; the gene null is the median over its measured
+    guides of independent such draws. Two-sided, a tie counts half, no floor.
     """
     x = np.asarray(adata.X, dtype=float)
     obs = adata.obs
@@ -29,25 +29,21 @@ def _brute_pvalues(adata):
     sgrna = obs["Metadata_sgRNA"].to_numpy()
     gene = obs["Metadata_Gene"].to_numpy()
     ctrl_guides = [x[(sgrna == c) & is_ctrl] for c in sorted(set(sgrna[is_ctrl]))]
-    sizes = np.array([c.shape[0] for c in ctrl_guides], dtype=float)
-    weights = sizes / sizes.sum()
     n_feat = x.shape[1]
 
     def construct_pmf(m, feat):
         """{value: prob} of the null of a guide measuring m cells, for one feature, and P(nan)."""
-        pmf, nan = {}, 0.0
-        for w, pool in zip(weights, ctrl_guides, strict=True):
-            col = pool[:, feat]
+        cols = [pool[~np.isnan(pool[:, feat]), feat] for pool in ctrl_guides]
+        total = sum(col.size for col in cols)
+        if total == 0:
+            return {}, 1.0
+        pmf = {}
+        for col in cols:
             n = col.size
             for idx in itertools.product(range(n), repeat=m):
-                draw = col[list(idx)]
-                good = draw[~np.isnan(draw)]
-                p = w / n**m
-                if good.size == 0:
-                    nan += p
-                else:
-                    pmf[float(np.median(good))] = pmf.get(float(np.median(good)), 0.0) + p
-        return pmf, nan
+                median = float(np.median(col[list(idx)]))
+                pmf[median] = pmf.get(median, 0.0) + n / total / n**m
+        return pmf, 0.0
 
     def two_sided(pmf, nan, o):
         if nan >= 1.0 - 1e-12:
@@ -173,6 +169,43 @@ def test_nontargeting_pseudogenes_are_called_at_the_nominal_rate():
         assert 0.025 < (pvalues < 0.05).mean() < 0.085
 
 
+def test_missing_cells_are_called_at_the_nominal_rate():
+    """A pure-null screen with half of every cell's features missing, controls included, keeps the nominal rate.
+
+    Drawing a guide's measured count from all of a control guide's cells, missing ones included, would count
+    the missing values twice and run conservative.
+    """
+    rng = np.random.default_rng(0)
+    groups = [("nontargeting", f"nt{i}", 150, 0.0, "a") for i in range(8)]
+    groups += [(f"pseudo{i // 3}", f"ps{i}", int(rng.integers(30, 71)), 0.0, "a") for i in range(120)]
+    adata = _cells(groups, rng, n_features=20, guide_sd=0.3)
+    adata.X[rng.random(adata.X.shape) < 0.5] = np.nan
+    mt.tl.bootstrap_features(adata)
+    for key in ("bootstrap", "bootstrap_guides"):
+        pvalues = adata.uns["mantispy"][key]["pvalue"].to_numpy()
+        assert 0.035 < (pvalues < 0.05).mean() < 0.1
+
+
+def test_a_feature_is_tested_on_the_cells_that_measure_it():
+    """Missing cells, in control and tested guides alike, give the p-values of the same test without those cells."""
+    rng = np.random.default_rng(15)
+    groups = [("nontargeting", f"nt{i}", int(rng.integers(20, 40)), 0.0, "a") for i in range(5)]
+    groups += [(f"G{g}", f"g{g}_{s}", int(rng.integers(5, 15)), 0.0, "a") for g in range(3) for s in range(2 + g % 2)]
+    adata = _cells(groups, rng, n_features=3)
+    adata.X[rng.random(adata.X.shape) < 0.3] = np.nan
+    mt.tl.bootstrap_features(adata)
+    for key in ("bootstrap", "bootstrap_guides"):
+        table = adata.uns["mantispy"][key]
+        for j, feature in enumerate(adata.var_names):
+            measured = adata[~np.isnan(adata.X[:, j]), [feature]].copy()
+            mt.tl.bootstrap_features(measured)
+            np.testing.assert_allclose(
+                table.loc[table["feature"] == feature, "pvalue"].to_numpy(),
+                measured.uns["mantispy"][key]["pvalue"].to_numpy(),
+                atol=1e-12,
+            )
+
+
 def test_a_guide_missing_a_feature_leaves_its_gene_for_that_feature():
     """Pseudo-genes of two guides, one of which measures nothing in any feature: still called at the nominal rate."""
     rng = np.random.default_rng(0)
@@ -190,12 +223,12 @@ def test_a_guide_missing_a_feature_leaves_its_gene_for_that_feature():
 
 
 def _simulated_gene_pvalue(adata, gene, feature, n_sims, rng):
-    """Two-sided p of one gene and feature from a simulation of the documented null, skipping nan draws."""
+    """Two-sided p of one gene and feature from a simulation of the documented null, on the cells that measure it."""
     x = np.asarray(adata.X[:, feature], dtype=float)
     obs = adata.obs
     sgrna = obs["Metadata_sgRNA"].to_numpy()
     is_ctrl = (obs["Metadata_Control_Type"] == "negcon").to_numpy()
-    controls = [x[(sgrna == c) & is_ctrl] for c in sorted(set(sgrna[is_ctrl]))]
+    controls = [x[(sgrna == c) & is_ctrl & ~np.isnan(x)] for c in sorted(set(sgrna[is_ctrl]))]
     sizes = np.array([c.size for c in controls], dtype=float)
     guides = [x[sgrna == c] for c in sorted(set(sgrna[(obs["Metadata_Gene"] == gene).to_numpy()]))]
     padded = np.full((len(controls), int(sizes.max())), np.nan)
@@ -207,7 +240,7 @@ def _simulated_gene_pvalue(adata, gene, feature, n_sims, rng):
         pick = rng.choice(len(controls), size=n_sims, p=sizes / sizes.sum())
         draws = padded[pick[:, None], rng.integers(0, sizes[pick].astype(int)[:, None], size=(n_sims, m))]
         with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)  # a draw of only missing cells
+            warnings.simplefilter("ignore", RuntimeWarning)  # a guide measuring nothing
             nulls.append(np.nanmedian(draws, axis=1))
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
@@ -235,6 +268,19 @@ def test_sporadic_missing_control_cells_match_a_simulation():
     assert gene.loc["TWO", "Cells_Intensity_F0"] == pytest.approx(simulated, abs=0.03)
 
 
+def test_finely_tied_control_values_match_a_simulation():
+    """Ties make the sizes of a median's atoms rise and fall, so stopping at the first small one dropped central mass."""
+    rng = np.random.default_rng(17)
+    groups = [("nontargeting", f"nt{i}", 1000, 0.0, "a") for i in range(2)]
+    groups += [("G", "g0", 50, 0.1, "a"), ("G", "g1", 50, 0.1, "a")]
+    adata = _cells(groups, rng, n_features=4, guide_sd=0.0)
+    adata.X = np.round(adata.X, 3)
+    mt.tl.bootstrap_features(adata)
+    exact = _table(adata).loc["G", adata.var_names].to_numpy()
+    simulated = [_simulated_gene_pvalue(adata, "G", f, 100_000, rng) for f in range(4)]
+    np.testing.assert_allclose(exact, simulated, atol=0.01)
+
+
 @pytest.mark.parametrize("n_guides", [64, 65])
 def test_a_gene_of_many_guides_matches_a_simulation(n_guides):
     """The gene null sums over its guides by a dynamic program, so a gene of many guides costs no more than a few."""
@@ -258,6 +304,41 @@ def test_a_one_guide_gene_against_large_control_guides_has_its_guide_pvalue():
     gene = adata.uns["mantispy"]["bootstrap"]["pvalue"].to_numpy()
     guide = adata.uns["mantispy"]["bootstrap_guides"]["pvalue"].to_numpy()
     assert 0.0 < gene[0] == pytest.approx(guide[0], abs=1e-12)
+
+
+def test_a_gene_whose_guide_nulls_are_too_fine_to_hold_is_left_nan(caplog):
+    """Two-cell guides against control guides of 15,000 cells: their nulls have more distinct medians than fit.
+
+    The boundary of an even guide count needs those medians, so the gene is left missing with a warning rather
+    than given the p-value of a tie; its guides keep their exact p-values.
+    """
+    import logging
+
+    rng = np.random.default_rng(3)
+    groups = [("nontargeting", f"nt{i}", 15_000, 0.0, "a") for i in range(2)]
+    groups += [("G", "g0", 2, 0.5, "a"), ("G", "g1", 2, 0.5, "a")]
+    adata = _cells(groups, rng, n_features=1)
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
+        mt.tl.bootstrap_features(adata)
+    assert "1 gene-feature p-value(s) are left NaN" in caplog.text
+    assert np.isnan(adata.uns["mantispy"]["bootstrap"]["pvalue"]).all()
+    assert np.isfinite(adata.uns["mantispy"]["bootstrap_guides"]["pvalue"]).all()
+
+
+def test_no_measured_guide_and_no_feature_leave_empty_results():
+    """No tested cell measuring any feature leaves every p-value missing; no feature at all leaves empty tables."""
+    rng = np.random.default_rng(16)
+    groups = [("nontargeting", f"nt{i}", 20, 0.0, "a") for i in range(3)] + [("G", "g0", 10, 0.0, "a")]
+    adata = _cells(groups, rng, n_features=2)
+    adata.X[(adata.obs["Metadata_Gene"] == "G").to_numpy()] = np.nan
+    mt.tl.bootstrap_features(adata)
+    for key in ("bootstrap", "bootstrap_guides"):
+        assert len(adata.uns["mantispy"][key]) == 2
+        assert np.isnan(adata.uns["mantispy"][key]["pvalue"]).all()
+    empty = adata[:, []].copy()
+    mt.tl.bootstrap_features(empty)
+    for key in ("bootstrap", "bootstrap_guides"):
+        assert empty.uns["mantispy"][key].empty
 
 
 def test_a_shifted_gene_is_called_with_the_sign_of_its_shift():
@@ -479,3 +560,12 @@ def test_bad_calls_raise(kwargs, match):
     adata = _two_conditions(np.random.default_rng(7))
     with pytest.raises(ValueError, match=match):
         mt.tl.bootstrap_features(adata, **kwargs)
+
+
+@pytest.mark.parametrize("value", [np.inf, -np.inf])
+def test_an_infinite_value_raises(value):
+    """A median over both infinities is undefined, so an infinite value is refused rather than left to hang the sweep."""
+    adata = _two_conditions(np.random.default_rng(7))
+    adata.X[0, 0] = value
+    with pytest.raises(ValueError, match="infinite values"):
+        mt.tl.bootstrap_features(adata)
