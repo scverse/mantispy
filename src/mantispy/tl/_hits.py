@@ -42,6 +42,11 @@ _FLOOR_SHARE = 0.01
 #: Pseudo-genes profiled per block, which bounds the memory of the draws.
 _PSEUDOGENE_BLOCK = 1024
 
+#: The cell-count column of guide profiles, as mt.tl.aggregate writes it.
+_CELL_COUNT = "Metadata_CellCount"
+#: Guide profiles whose control guides carry more than this many times the tested guides' median cell count raise.
+_CELL_RATIO_MAX = 1.25
+
 
 def ks_statistic(samples: np.ndarray, reference: np.ndarray, *, reference_sorted: bool = False) -> np.ndarray:
     """Two-sample KS statistic of each row of ``samples`` against ``reference``.
@@ -187,11 +192,15 @@ def _profile_distance(
     centre: np.ndarray,
     whitening: np.ndarray,
     func: str,
-) -> np.ndarray:
+    cell_counts: np.ndarray | None = None,
+    generator: np.random.Generator | None = None,
+) -> tuple[np.ndarray, int]:
     """Distance from the control centre of each draw's profile, its units' rows combined by ``func``.
 
     ``draws`` holds one row of unit positions per profile, all of one size.
     The profile is taken in feature space and whitened after, since a median does not commute with the whitening.
+    With ``cell_counts``, each drawn unit keeps a random subset of its rows of a size drawn from ``cell_counts``, or all of them when it has fewer.
+    Also returns how many drawn units had fewer rows than their draw.
     """
     combine = np.nanmedian if func == "median" else np.nanmean
     out = np.empty(draws.shape[0])
@@ -204,13 +213,22 @@ def _profile_distance(
                 warnings.simplefilter("ignore", RuntimeWarning)  # an all-NaN feature stays NaN and is filled below
                 profiles = combine(block, axis=1)
             out[start : start + block.shape[0]] = np.linalg.norm(np.nan_to_num(profiles - centre) @ whitening, axis=1)
-        return out
+        return out, 0
+    short = 0
     for index, draw in enumerate(draws):
+        rows = [unit_rows[unit] for unit in draw]
+        if cell_counts is not None and generator is not None:
+            targets = generator.choice(cell_counts, size=len(rows))
+            short += int(sum(part.size < target for part, target in zip(rows, targets, strict=True)))
+            rows = [
+                part if part.size <= target else generator.choice(part, int(target), replace=False)
+                for part, target in zip(rows, targets, strict=True)
+            ]
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
-            profile = combine(values[np.concatenate([unit_rows[unit] for unit in draw])], axis=0)
+            profile = combine(values[np.concatenate(rows)], axis=0)
         out[index] = float(np.linalg.norm(np.nan_to_num(profile - centre) @ whitening))
-    return out
+    return out, short
 
 
 def _n_draws(n: int, k: int, limit: int) -> int:
@@ -244,6 +262,8 @@ def _pseudogene_null(
     func: str,
     n_pseudogenes: int,
     seed: int,
+    match_cells: bool,
+    cell_count: np.ndarray | None,
 ) -> tuple[pd.DataFrame, np.ndarray]:
     """Score every tested group against pseudo-genes drawn from the held-out control units, and score calibration pseudo-genes.
 
@@ -276,8 +296,25 @@ def _pseudogene_null(
             "draws from"
         )
 
+    tested_units = np.concatenate([unit_codes[rows] for rows in tested_rows])
+    target_counts = _match_cells(
+        match_cells, null_unit_rows, tested_units, null_rows, np.concatenate(tested_rows), cell_count
+    )
     draws = {size: _draw_units(n_null, size, n_pseudogenes, generator) for size in wanted}
-    null = {size: _profile_distance(values, null_unit_rows, draws[size], centre, whitening, func) for size in wanted}
+    null, short, drawn = {}, 0, 0
+    for size in wanted:
+        null[size], missing = _profile_distance(
+            values, null_unit_rows, draws[size], centre, whitening, func, target_counts, generator
+        )
+        short, drawn = short + missing, drawn + draws[size].size
+    if target_counts is not None and short:
+        get_logger().warning(
+            "hit_calling: %d of %d drawn control guides have fewer cells than the tested guide count drawn for them "
+            "and keep every cell",
+            short,
+            drawn,
+            deep="a guide is never upsampled, so pseudo-genes of those guides carry fewer cells than the genes",
+        )
     floor_of = {size: 1.0 / min(n_pseudogenes + 1, max(_n_draws(n_null, size, n_pseudogenes), 1)) for size in wanted}
 
     observed = np.full(n_groups, np.nan)
@@ -297,7 +334,9 @@ def _pseudogene_null(
     n_calibration = n_null // calibration_size
     cut = generator.permutation(n_null)[: n_calibration * calibration_size].reshape(n_calibration, calibration_size)
     cut = np.sort(cut, axis=1)
-    calibration_observed = _profile_distance(values, null_unit_rows, cut, centre, whitening, func)
+    calibration_observed = _profile_distance(
+        values, null_unit_rows, cut, centre, whitening, func, target_counts, generator
+    )[0]
     reference_draws, reference = draws[calibration_size], null[calibration_size]
     calibration_p = np.full(n_calibration, np.nan)
     calibration_floor = np.full(n_calibration, np.nan)
@@ -328,6 +367,40 @@ def _pseudogene_null(
         [None] * n_groups + [f"pseudogene_{position + 1:0{width}d}" for position in range(n_calibration)],
     )
     return table, np.concatenate([floors, calibration_floor])
+
+
+def _match_cells(
+    match_cells: bool,
+    null_unit_rows: list[np.ndarray],
+    tested_units: np.ndarray,
+    null_rows: np.ndarray,
+    tested_rows: np.ndarray,
+    cell_count: np.ndarray | None,
+) -> np.ndarray | None:
+    """The cell counts a drawn control guide is subsampled to, or ``None`` when no subsampling is needed or wanted.
+
+    On cells, the tested guides' cell counts.
+    On guide profiles the cells are gone, so the control guides must carry about as many cells as the tested guides, read from ``cell_count``.
+    """
+    if not match_cells:
+        return None
+    if all(rows.size == 1 for rows in null_unit_rows) and np.unique(tested_units).size == tested_units.size:
+        if cell_count is None:
+            raise ValueError(
+                f"match_cells=True needs obs[{_CELL_COUNT!r}] on guide profiles, to check that the control guides "
+                "carry about as many cells as the tested guides; mt.tl.aggregate writes it. Pass match_cells=False to "
+                "skip the check."
+            )
+        control, tested = np.nanmedian(cell_count[null_rows]), np.nanmedian(cell_count[tested_rows])
+        if control > _CELL_RATIO_MAX * tested:
+            raise ValueError(
+                f"the control guides carry a median of {control:g} cells and the tested guides {tested:g}, so a "
+                "pseudo-gene has less noise than a gene and the test calls too much. Score the cells instead, with "
+                "replicate= naming the guide, so that each pseudo-gene guide is subsampled to the tested guides' cell "
+                "counts. Pass match_cells=False to skip the check."
+            )
+        return None
+    return np.bincount(np.unique(tested_units, return_inverse=True)[1])
 
 
 def _warn_on_floor(floors: np.ndarray, threshold: float, limited_by_draws: bool) -> None:
@@ -365,6 +438,7 @@ def hit_calling(
     replicate: str | Sequence[str] | None = None,
     null: str = "permutation",
     pseudogene_func: str = "median",
+    match_cells: bool = True,
     n_permutations: int = 1000,
     threshold: float = 0.05,
     seed: int = 0,
@@ -626,6 +700,12 @@ def hit_calling(
             pseudogene_func,
             n_pseudogenes=n_permutations,
             seed=seed,
+            match_cells=match_cells,
+            cell_count=(
+                pd.to_numeric(as_frame(adata.obs)[_CELL_COUNT], errors="coerce").to_numpy(dtype=float)
+                if _CELL_COUNT in adata.obs
+                else None
+            ),
         )
         is_pseudo = table["is_pseudogene"].to_numpy()
         table.loc[~is_pseudo, "group"] = [str(key) for key in keys]

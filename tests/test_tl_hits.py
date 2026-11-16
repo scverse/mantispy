@@ -961,6 +961,7 @@ def _guide_screen(n_genes=200, guides_per_gene=4, n_control_guides=120, n_featur
             "Metadata_Gene": genes,
             "Metadata_sgRNA": [f"sg{index:04d}" for index in range(n_rows)],
             "Metadata_Control_Type": np.where(control, "negcon", "treatment"),
+            "Metadata_CellCount": 100,
         },
         index=[f"r{index}" for index in range(n_rows)],
     )
@@ -1070,3 +1071,64 @@ def test_the_pseudogene_null_pools_cells_by_guide():
     assert real.loc["g000", "n_obs"] == 4 * 5
     assert real.loc[[f"g{index:03d}" for index in range(5)], "is_hit"].all()
     assert table["is_pseudogene"].sum() == 30 // 4
+
+
+def _guide_cells(cells_per_gene_guide=10, cells_per_control_guide=40, n_genes=150, n_control_guides=120, seed=0):
+    """Cells of a pooled screen of pure noise, where each guide adds a small offset and its cells add more noise.
+
+    Control guides carry more cells than gene guides, so a pseudo-gene of whole control guides has less noise than a gene.
+    """
+    rng = np.random.default_rng(seed)
+    guide_counts = [cells_per_gene_guide] * (n_genes * 4) + [cells_per_control_guide] * n_control_guides
+    genes = [f"g{index:03d}" for index in range(n_genes) for _ in range(4)]
+    genes += [f"nontargeting_{index:03d}" for index in range(n_control_guides)]
+    guide = np.repeat(np.arange(len(guide_counts)), guide_counts)
+    values = rng.normal(scale=0.3, size=(len(guide_counts), 5))[guide] + rng.normal(size=(guide.size, 5))
+    gene = np.asarray(genes)[guide]
+    obs = pd.DataFrame(
+        {
+            "Metadata_Gene": gene,
+            "Metadata_sgRNA": [f"sg{index:04d}" for index in guide],
+            "Metadata_Control_Type": np.where(np.char.startswith(gene.astype(str), "nontargeting"), "negcon", "treatment"),
+        },
+        index=[f"c{index}" for index in range(guide.size)],
+    )
+    return ad.AnnData(X=values, obs=obs)
+
+
+@pytest.mark.parametrize("match_cells", [True, False])
+def test_the_pseudogene_null_matches_control_guides_to_the_genes_cell_counts(match_cells):
+    """Control guides with four times the cells make pseudo-genes too quiet, and subsampling their cells restores the rate."""
+    pvalues = []
+    for seed in range(4):
+        cells = _guide_cells(seed=seed)
+        mt.tl.hit_calling(
+            cells,
+            groupby="Metadata_Gene",
+            replicate="Metadata_sgRNA",
+            null="pseudogenes",
+            match_cells=match_cells,
+            n_permutations=1000,
+            seed=seed,
+        )
+        pvalues += list(_real(cells.uns["mantispy"]["hits"])["pvalue"])
+    rate = float(np.mean(np.asarray(pvalues) < 0.05))
+    if match_cells:
+        assert 0.025 <= rate <= 0.08, f"called {rate:.1%} of pure noise at a nominal 5%"
+    else:
+        assert rate > 0.15, f"unmatched pseudo-genes called only {rate:.1%}"
+
+
+def test_guide_profiles_need_a_cell_count_to_match():
+    adata = _guide_screen()
+    del adata.obs["Metadata_CellCount"]
+    with pytest.raises(ValueError, match="Metadata_CellCount"):
+        mt.tl.hit_calling(adata, groupby="Metadata_Gene", null="pseudogenes")
+    mt.tl.hit_calling(adata, groupby="Metadata_Gene", null="pseudogenes", match_cells=False, n_permutations=100)
+
+
+def test_guide_profiles_with_fuller_control_guides_point_to_the_cells():
+    adata = _guide_screen()
+    adata.obs.loc[adata.obs["Metadata_Control_Type"] == "negcon", "Metadata_CellCount"] = 400
+    with pytest.raises(ValueError, match="replicate="):
+        mt.tl.hit_calling(adata, groupby="Metadata_Gene", null="pseudogenes")
