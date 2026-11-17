@@ -136,6 +136,23 @@ def test_missing_cells_match_brute_force_enumeration(dtype, missing):
     _assert_matches_brute_force(adata)
 
 
+def test_nulls_of_a_growing_store_match_brute_force_enumeration():
+    """Each feature's guide nulls are counted and then built in place, in a store that grows with them.
+
+    Integer values in the first feature put null atoms at the observed medians, so the lower side of the
+    boundary is swept on its own; the continuous second feature has more atoms and grows the store; guides of
+    one size share a null.
+    """
+    rng = np.random.default_rng(19)
+    groups = [("G0", "g0_0", 2, 0.0, "a"), ("G0", "g0_1", 2, 0.0, "a"), ("G1", "g1_0", 3, 0.0, "a")]
+    groups += [("G1", "g1_1", 2, 0.0, "a"), ("G2", "g2_0", 1, 0.0, "a"), ("G2", "g2_1", 4, 0.0, "a")]
+    groups += [("nontargeting", f"nt{s}", 4, 0.0, "a") for s in range(3)]
+    adata = _cells(groups, rng, n_features=2)
+    adata.X[:, 0] = rng.integers(0, 3, size=adata.n_obs)
+    mt.tl.bootstrap_features(adata)
+    _assert_matches_brute_force(adata)
+
+
 def _cells(groups, rng, n_features=4, guide_sd=0.1):
     """Cells from ``(gene, guide, n_cells, shift, condition)`` tuples, each guide with its own small offset."""
     blocks, rows = [], []
