@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import argparse
 
-_CNT = 2  # increment this when you want to rebuild the CI cache
+_CNT = 3  # increment this when you want to rebuild the CI cache
 
 # The plates docs/tutorials/multisite/cross_laboratory.ipynb loads by name for its cross-source hierarchy.
 _TARGET2_HIERARCHY = [
@@ -21,6 +21,8 @@ _TARGET2_HIERARCHY = [
 
 def main(args: argparse.Namespace) -> None:
     """Call each loader once, so its files and anything it assembles from them land in the cache."""
+    import pooch
+
     import mantispy as mt
 
     def jump_lite_all() -> None:
@@ -38,6 +40,14 @@ def main(args: argparse.Namespace) -> None:
         "rohban_gene_selected": lambda: mt.ds.rohban(aggregated=True, feature_selected=True),
         "pki": mt.ds.pki,
         "aconcagua_cells": mt.ds.aconcagua_cells,
+        # Brieflow's published interphase gene table, which docs/tutorials/genetics/coming_from_brieflow.ipynb compares
+        # against; mirrored from s3://ops-explorer-public/aconcagua/aconcagua/visualizations/interphase/aggregated_data.h5ad.
+        "aconcagua_brieflow_interphase": lambda: pooch.retrieve(
+            "https://exampledata.scverse.org/mantispy/aconcagua/aconcagua_brieflow_interphase.h5ad",
+            known_hash="sha256:f55756939edc8ddf108092d88c4efe248765b4db4ec39322d4b4a988e04af929",
+            fname="aconcagua_brieflow_interphase.h5ad",
+            path=mt.settings.cache_dir,
+        ),
         # These two come to ~1.2 GB; all 141 plates would be 9.4 GB, over GitHub's 10 GB cache.
         "jump_target2": mt.ds.jump_target2,
         "jump_target2_hierarchy": lambda: mt.ds.jump_target2(plates=_TARGET2_HIERARCHY),
