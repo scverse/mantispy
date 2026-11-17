@@ -157,6 +157,7 @@ def from_dataframe(
     ``X`` keeps the dtype of the feature columns: ``float32`` columns give a ``float32`` matrix and ``float64`` columns a ``float64`` one.
     Columns of different dtypes are combined in their common dtype, and integer columns holding a missing value are read as ``float64``.
     Numeric columns that follow no CellProfiler naming (a learned embedding, a proprietary feature table) are kept as features with ``feature_kind="embedding"``.
+    A column named for one of `objects` is a measurement on that object even when its feature group is not one of CellProfiler's.
     Numeric columns that parse as non-features (object numbers, parent links, centroids) are dropped and logged by default, because published profile tables often carry dozens of them and they mean nothing at well level.
 
     Args:
@@ -219,9 +220,12 @@ def from_dataframe(
     if convention == "cp_measure":
         # The names carry no object, so the compartment filter would drop every one of them.
         objects = None
-    # Columns in no known group are opaque features whatever objects= says. A bare cp_measure name such as
-    # "Area" has no group by design and is a feature.
+    # Columns in no known group are opaque features, unless they name one of the declared objects: those are
+    # measurements on that object whatever module wrote them (SCALLOPS's Cells_Spots_Count_ESR1). A bare cp_measure
+    # name such as "Area" has no group by design and is a feature.
     opaque_mask = (~parsed["feature_group"].isin(_KNOWN_GROUPS) & ~parsed.index.isin(_BARE_NON_FEATURES)).to_numpy()
+    if objects is not None:
+        opaque_mask = opaque_mask & ~parsed["object"].isin(list(objects)).to_numpy()
     if convention == "cp_measure":
         opaque_mask = opaque_mask & parsed["feature_group"].notna().to_numpy()
     opaque = parsed.index[opaque_mask].tolist()
@@ -398,6 +402,7 @@ def read_profiles(
     Numeric columns that parse as CellProfiler features become ``X``.
     Text and ``Metadata_`` columns become ``obs``, with every metadata prefix normalized to ``Metadata_``.
     Numeric columns that follow no CellProfiler naming (a learned embedding, a proprietary feature table) are kept as features with ``feature_kind="embedding"``.
+    A column named for one of `objects` is a measurement on that object even when its feature group is not one of CellProfiler's.
     Numeric columns that parse as non-features (object numbers, parent links, centroids) are dropped and logged, because published profile tables often carry dozens of them and they mean nothing at well level.
 
     Args:
