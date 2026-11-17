@@ -184,6 +184,7 @@ Brieflow’s `create_pseudogene_groups` groups control guides into pseudo-genes 
 mantispy has no counterpart, because the check can’t see the problems it’s meant to find.
 The bootstrap null is drawn from the same control guides, so plate offsets, differences between control guides and clustering of control cells widen the null as much as they move the pseudo-genes, and the bootstrap calls fewer genes rather than more pseudo-genes.
 With Aconcagua’s 250 control guides, the check could only detect a false-positive rate four to six times too high.
+{func}`~mantispy.tl.hit_calling` uses pseudo-genes differently, as the null that each gene is ranked against, with `null="pseudogenes"`.
 
 ## Feature bootstrap
 
@@ -271,7 +272,7 @@ Brieflow’s `calculate_potential_to_nontargeting` measures each gene’s distan
 The diffusion averages each row over its neighbours in the graph, so a row’s potential depends on every other row, and the distance of a gene and the distance of a control aren’t comparable draws.
 On Aconcagua’s published gene profiles, a permutation test of distance to the controls in the potential called 14% to 17% of pseudo-genes made only of control guides at p < 0.05, where a calibrated test calls about 5%, and the same test on the principal components called at most about 2%.
 To test genes against the controls, run {func}`~mantispy.tl.bootstrap_features` on the features rather than on the potential.
-A pseudo-gene null for {func}`~mantispy.tl.hit_calling` is planned.
+To test whole gene profiles against the controls, run {func}`~mantispy.tl.hit_calling` with `null="pseudogenes"`, which ranks each gene among pseudo-genes made of control guides.
 
 ## Benchmark against CORUM
 
