@@ -46,9 +46,9 @@ def test_rohban_loads_with_genes_controls_and_counts(rohban):
 @pytest.mark.network
 def test_rohban_feature_selected_variant_is_the_well_level_selected_block():
     adata = mt.ds.rohban(feature_selected=True)
-    # 574 features: feature selection on the unnormalized base, as the staged builder runs it (normalization
+    # 598 features: feature selection on the unnormalized base, as the staged builder runs it (normalization
     # is a notebook step, not baked in). The old 751 predates a rebuild; the hosted block matches the builder.
-    assert adata.shape == (1918, 574)
+    assert adata.shape == (1918, 598)
     assert mt.io.validate(adata).ok, mt.io.validate(adata).errors
 
 
@@ -58,7 +58,7 @@ def test_rohban_aggregated_variants_are_gene_level():
     assert gene.shape == (190, 3616)
     assert "Metadata_Gene" in gene.obs
     gene_selected = mt.ds.rohban(aggregated=True, feature_selected=True)
-    assert gene_selected.shape == (190, 574)
+    assert gene_selected.shape == (190, 598)
 
 
 def test_rohban_variants_reject_plate_subsetting():
@@ -78,7 +78,7 @@ def test_bbbc021_base_and_selected_are_well_level():
     assert "Metadata_Perturbation" in base.obs
     assert mt.io.validate(base).ok, mt.io.validate(base).errors
     selected = mt.ds.bbbc021(feature_selected=True)
-    assert selected.shape == (632, 166)
+    assert selected.shape == (632, 165)
     assert "Metadata_Perturbation" in selected.obs
     assert mt.io.validate(selected).ok, mt.io.validate(selected).errors
 
@@ -94,7 +94,7 @@ def test_bbbc021_aggregated_variants_are_perturbation_level():
     assert int(agg.obs["Metadata_Control"].sum()) == 1
     assert "DMSO@0.0" in set(agg.obs["Metadata_Perturbation"].astype(str))
     agg_selected = mt.ds.bbbc021(aggregated=True, feature_selected=True)
-    assert agg_selected.shape == (104, 166)
+    assert agg_selected.shape == (104, 165)
     assert "Metadata_Perturbation" in agg_selected.obs
 
 

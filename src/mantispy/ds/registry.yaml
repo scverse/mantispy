@@ -1935,13 +1935,13 @@ datasets:
               sha256: 7424f184313c12f64b96ca9b6a6319a0e39ee1117f0e471d4b5aa1394e25a1b8
             - name: bbbc021_selected.h5ad
               url: https://exampledata.scverse.org/mantispy/bbbc021/bbbc021_selected.h5ad
-              sha256: f0f8d33a2c1f6a6c065c19436babb48e4d62a225979326e528e940ea0013d5c2
+              sha256: 788846959b64d52bc7b5b45e5379067c07208d33bcb35e87881567d7e1319424
             - name: bbbc021_agg.h5ad
               url: https://exampledata.scverse.org/mantispy/bbbc021/bbbc021_agg.h5ad
               sha256: 5a0a41f2bd6112fb4a08c837d1e2e4245c4f10cfad4ea04090fb954aefca4bb6
             - name: bbbc021_agg_selected.h5ad
               url: https://exampledata.scverse.org/mantispy/bbbc021/bbbc021_agg_selected.h5ad
-              sha256: fd2e5358c7a03f91c21487cf7e40a2190739ad23b28f227de98d0f3f189d4c27
+              sha256: 6412731b1d877324c9d6f20936585c09a3ac2c51610f5f429b8c4b73d0f716fe
 
     pooled_rare:
         type: mantispy
@@ -1962,7 +1962,7 @@ datasets:
               sha256: 97df765498e370ed3d52de2adc0143ea086e2dfb824984d1248e9138be8566a0
             - name: pooled_rare_selected.h5ad
               url: https://exampledata.scverse.org/mantispy/pooled_rare/pooled_rare_selected.h5ad
-              sha256: acf4082b65a9010f72f7a38d35f5fbbf8bbd88993f43be6eb1a75057fb61ac1d
+              sha256: 5b268c6f917ccb8aafb48515923f0b46a8490ec5d8850ea49997a5284f074529
 
     rohban:
         type: mantispy
@@ -1992,13 +1992,13 @@ datasets:
               sha256: e635bddc250382a3a4e1ea6d3c48ac16f6d3812841a5a6190e6eed7f5dd038d3
             - name: rohban_selected.h5ad
               url: https://exampledata.scverse.org/mantispy/rohban/rohban_selected.h5ad
-              sha256: 7f035ff6782e5cec46068c4acd7a19d2dee1fe329dddca141558f955ffdd8c2b
+              sha256: b02c842d06f32ad294dcecf238ad24052e2954d2a77c9a949e0edb185f659569
             - name: rohban_gene.h5ad
               url: https://exampledata.scverse.org/mantispy/rohban/rohban_gene.h5ad
               sha256: 3ccf4bc451b07ce2f95329c397666fdd4a72c72c2a3a13788f0723f666490ad1
             - name: rohban_gene_selected.h5ad
               url: https://exampledata.scverse.org/mantispy/rohban/rohban_gene_selected.h5ad
-              sha256: 1210a773ff99c4c1588e78e8abb7a7b5c2dcad9a8fd89e6d6b2097c3eadcfc4e
+              sha256: e0ffab22f3b5a2fe5b94e2895fdd610fe0eb2a347a87fc5ad064cbf54a27d164
 
     neuropainting:
         type: mantispy
@@ -2201,13 +2201,13 @@ datasets:
               sha256: 2e0b642002cd8f8e6278367d4c03b20fb3f36710bdd4ce735469897de92617d4
             - name: pki_selected.h5ad
               url: https://exampledata.scverse.org/mantispy/pki/pki_selected.h5ad
-              sha256: 780be21259839ee13cdbff2623c20ef769f9e769c23914c5c25ae63b0ce3d5c9
+              sha256: cce1f504395ba525a19e6156ce02efb35793d984c197b6300bb2a4e0ebeb4c4b
             - name: pki_agg.h5ad
               url: https://exampledata.scverse.org/mantispy/pki/pki_agg.h5ad
               sha256: 031b52691a58cc3db4088f125e59671014e3dd7bc7b1d0bf58685231a0a06f50
             - name: pki_agg_selected.h5ad
               url: https://exampledata.scverse.org/mantispy/pki/pki_agg_selected.h5ad
-              sha256: a856f096289e132590ec98cb07b8bbed5ccf23511cd9c0b0301466672adae7db
+              sha256: 0662930bed63ca5abae3d817d44a52bcc2f662fe409f915313fda7deee31883f
 
     jump_crispr:
         type: mantispy
@@ -4598,13 +4598,13 @@ datasets:
             # tables above stay on cellpainting-gallery). Regenerate with scripts/build_staged_datasets.py.
             - name: jump_cells.h5ad
               url: https://exampledata.scverse.org/mantispy/jump_cells/jump_cells.h5ad
-              sha256: da7a9d224c5cb2222f3684c58569f3b8f5182782be3e4d40f99fab96b7b1cb1d
+              sha256: d8e0e329cee4de5b78ade9f67120854c8ab3d7b30340857c4fe594f23aef1ea9
             - name: jump_cells_selected.h5ad
               url: https://exampledata.scverse.org/mantispy/jump_cells/jump_cells_selected.h5ad
-              sha256: 00ce0184692fe08bf8b58283ccfbc9f7a7d0644dab14280ca63909e0c506542b
+              sha256: 74fbf7f8b657d7589de254c469971c5dfa1d8a04e3e749590728c76e88d62412
             - name: jump_cells_agg.h5ad
               url: https://exampledata.scverse.org/mantispy/jump_cells/jump_cells_agg.h5ad
-              sha256: 8e859eb0b61107c6a2c3a46237c02e100bb6753af9c96e6d7c35c4c12a132a52
+              sha256: 06ac79f68cab2b498490da1672ebb0f700d44ef71fb606d5526cb27b2cc105fb
 
     jump_plate:
         type: mantispy
@@ -4758,7 +4758,7 @@ datasets:
               sha256: 965a40efcd8325a132e5f60982de44a53c2f3cb50f466b7b646572994cbe480b
             - name: scallops_arv471_agg.h5ad
               url: https://exampledata.scverse.org/mantispy/scallops_arv471/scallops_arv471_agg.h5ad
-              sha256: 6349d05934fe694ecacc7da7307a21df8fc2b48d614616c843d3aa329e40434e
+              sha256: c6556588f5328e26e46d33ba9607694161fe8f39469df3338ef8fc959ec5b908
 
     cp_posh:
         type: mantispy
@@ -4778,7 +4778,7 @@ datasets:
               sha256: 8fa86cddfdda555ed96481bca1c5674bd6f83805d8435e85751db103a85256a4
             - name: cp_posh_agg.h5ad
               url: https://exampledata.scverse.org/mantispy/cp_posh/cp_posh_agg.h5ad
-              sha256: cd3ba210bf20b09ab6ab7a56ec38ff936f533c0dce5caec0541a6392c5697140
+              sha256: e9eb6bf3bd0fdf2f7c067e7f99b81ef4948f79b38704eae7da0de3ea41ec776c
             - name: cp_posh_agg_selected.h5ad
               url: https://exampledata.scverse.org/mantispy/cp_posh/cp_posh_agg_selected.h5ad
-              sha256: 2f7d16f1ea1e3be8dc4efa6ad45eed413827c4522b679b2d06d230c15c051f3b
+              sha256: 63b40a2ddfdd0941dbe697cdab72d659cb85679bbd4ffded6351ec94dd5afb33
