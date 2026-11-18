@@ -184,6 +184,24 @@ def test_gene_pvalues_stay_within_rtol_of_the_exact_ones():
     assert adata.uns["mantispy"]["params"]["bootstrap_features"]["rtol"] == 1e-5
 
 
+def test_a_gene_whose_pvalue_rests_on_the_far_tails_of_its_guide_nulls_stays_within_rtol():
+    """Two guides of 30 cells at the top of a control guide of ten values: their nulls' far tails decide the p-value.
+
+    Thirty draws put a median at 9 with a probability under the pruned tail mass, so the guide nulls are built again
+    with every tail that matters. The exact p-values are from a rational-arithmetic enumeration of the gene null.
+    """
+    rng = np.random.default_rng(0)
+    groups = [("nontargeting", "nt0", 10, 0.0, "a"), ("G", "g0", 30, 0.0, "a"), ("G", "g1", 30, 0.0, "a")]
+    adata = _cells(groups, rng, n_features=2)
+    adata.X[:10] = np.arange(10.0)[:, None]
+    adata.X[10:] = 9.0
+    adata.X[40:, 1] = 8.0  # the gene's median is 8.5, between the two guides
+    mt.tl.bootstrap_features(adata)
+    pvalue = adata.uns["mantispy"]["bootstrap"]["pvalue"].to_numpy()
+    exact = np.array([1.3377093339925794e-17, 3.841393581090315e-13])
+    assert np.all(np.abs(pvalue - exact) <= 1e-5 * exact + 1e-15)
+
+
 def _cells(groups, rng, n_features=4, guide_sd=0.1):
     """Cells from ``(gene, guide, n_cells, shift, condition)`` tuples, each guide with its own small offset."""
     blocks, rows = [], []

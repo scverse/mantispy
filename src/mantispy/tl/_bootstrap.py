@@ -31,13 +31,13 @@ else:
 CONTROL_SCOPES = ("pooled", "within_group", "reference_group", "within_perturbation")
 
 #: The atoms the gene null needs leave out each far tail of a control guide's resampled median up to this
-#: mass, and each row of even-count midpoints past this share of its lower value's mass, a few times this in
-#: all, well under the Monte-Carlo error of any feasible simulation; small problems keep every atom, so the
-#: result still matches a brute-force enumeration. :func:`_null_caps` bounds a null's atoms by the same band.
+#: mass, and each row of even-count midpoints past this share of its lower value's mass, at most three times
+#: this in all. A gene whose p-value they could move past its tolerance has its guide nulls built again with
+#: smaller tails (:func:`_gene_pvalues`). :func:`_null_caps` bounds a null's atoms by the same band.
 _ATOM_EPS = 1e-8
-#: A gene whose even-count boundary reads a guide null that lacks more than this of its mass, which only a
-#: null of more atoms than :func:`_null_caps` allows does, is left ``NaN`` rather than given a p-value off by that much.
-_MAX_LOST = 1e-6
+#: Besides ``rtol`` of itself, a gene's p-value may move this much for the tails its guide nulls leave out, under
+#: the rounding of its own arithmetic, so that ``rtol = 0`` need not build every atom of them.
+_ATOL = 1e-16
 #: A gene's boundary below its observed median, read as its split's mass less the part above, is swept directly
 #: when it comes out under this share of the split, so the subtraction cannot cost a small p-value its digits.
 _SWEEP_BOTH = 1e-6
@@ -640,7 +640,14 @@ def _sides(k, lo_c, hi_c, vals, cum, obs, inclusive, plow, phigh, sp, inv_low, i
 
     ``sp`` is the first high atom; ``inv_low``/``inv_high`` normalise the running mass of each side, and ``wl``/``wh``
     are the exact probabilities of being low or high, zero for a side with no atom, whose shape the atoms cannot give.
+
+    Returns how far the atoms left out can move any part of the split into as many low as high guides, and that bound
+    per unit of mass left out. Renormalising a side that lacks mass ``d`` moves the probability of any event on it by
+    at most ``d``, which counts where the other guides balance it: half less one of them on the same side.
     """
+    poly = np.empty(k + 1)
+    half = k // 2
+    lost = per_mass = 0.0
     for a in range(k):
         lo = lo_c[a]
         hi = hi_c[a]
@@ -651,6 +658,11 @@ def _sides(k, lo_c, hi_c, vals, cum, obs, inclusive, plow, phigh, sp, inv_low, i
         inv_high[a] = 1.0 / (top[a] - at) if top[a] > at else 0.0
         wl[a] = plow[a] if inv_low[a] > 0.0 else 0.0
         wh[a] = phigh[a] if inv_high[a] > 0.0 else 0.0
+        balanced_low = _coef(k, a, phigh, plow, poly, half - 1)
+        balanced_high = _coef(k, a, phigh, plow, poly, half)
+        lost += max(0.0, plow[a] - at) * balanced_low + max(0.0, phigh[a] - (top[a] - at)) * balanced_high
+        per_mass += max(balanced_low, balanced_high)
+    return lost, per_mass
 
 
 @njit(cache=True, nogil=True, inline="always")
@@ -964,12 +976,15 @@ def _sweep_pvalue(k, lo_c, hi_c, vals, cum, obs, gt, lt, le, ge, above, below, r
     difference would lose its digits, :func:`_sweep_down` sums it directly. Each sweep leaves out a far tail of at
     most ``rtol / 2 * min(above, below)`` from each part it sums, and ``2 * min(above, below)`` is at most the p-value,
     so the p-value moves by at most half ``rtol`` of itself; ``rtol = 0`` leaves out only tails that cannot occur.
+
+    Returns the p-value, how far the atoms the guide nulls left out can move it, and that per unit of each null's
+    mass left out (:func:`_sides`).
     """
     sp_u, sp_l = ints[0], ints[1]
     inv_low_u, inv_high_u, top_u, wl_u, wh_u = fl[0], fl[1], fl[2], fl[3], fl[4]
     inv_low_l, inv_high_l, top_l, wl_l, wh_l = fl[5], fl[6], fl[7], fl[8], fl[9]
-    _sides(k, lo_c, hi_c, vals, cum, obs, True, le, gt, sp_u, inv_low_u, inv_high_u, top_u, wl_u, wh_u)
-    _sides(k, lo_c, hi_c, vals, cum, obs, False, lt, ge, sp_l, inv_low_l, inv_high_l, top_l, wl_l, wh_l)
+    lost_u, per_u = _sides(k, lo_c, hi_c, vals, cum, obs, True, le, gt, sp_u, inv_low_u, inv_high_u, top_u, wl_u, wh_u)
+    lost_l, per_l = _sides(k, lo_c, hi_c, vals, cum, obs, False, lt, ge, sp_l, inv_low_l, inv_high_l, top_l, wl_l, wh_l)
     sc = np.empty((4, k))
     for a in range(k):
         sc[0, a], sc[1, a] = wl_u[a] * inv_low_u[a], wh_u[a] * inv_high_u[a]
@@ -980,7 +995,7 @@ def _sweep_pvalue(k, lo_c, hi_c, vals, cum, obs, gt, lt, le, ge, above, below, r
     under = split - at_least
     if under < _SWEEP_BOTH * split:
         under = _sweep_down(k, lo_c, hi_c, sp_l, vals, cum, obs, wl_l, wh_l, inv_low_l, inv_high_l, top_l, budget)
-    return _two_sided(above + over, below + under, 1.0)
+    return _two_sided(above + over, below + under, 1.0), lost_u + lost_l, per_u + per_l
 
 
 @njit(cache=True, nogil=True)
@@ -988,21 +1003,54 @@ def _build_into(row, nn_row, sub_start, s0, s1, m, eps, ints, sval, sfl, sgt, va
     """Build a guide null of ``m`` draws in place, in the stretch ``[lo, hi)`` of the store that holds its atoms.
 
     The store keeps the atom values and their running mass from the bottom, ``cum``, which holds the masses until
-    they are summed. Returns the merged count and the mass the pruning dropped.
+    they are summed. Returns the merged count.
     """
     n = hi - lo
     end = _build_construct(
         row, nn_row, sub_start, s0, s1, m, eps, vals[lo:hi], cum[lo:hi],
         np.empty(n, dtype=np.float64), np.empty(n, dtype=np.float64), ints, sval, sfl, sgt,
     )  # fmt: skip
-    kept = 0.0
-    for z in range(end):
-        kept += cum[lo + z]
     running = 0.0
     for z in range(end):
         running += cum[lo + z]
         cum[lo + z] = running
-    return end, max(0.0, 1.0 - kept)
+    return end
+
+
+@njit(cache=True, nogil=True)
+def _build_finer(
+    k, nulls, lo_c, hi_c, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, eps, limit, width
+):
+    """Build the guide nulls ``nulls[:k]`` of one gene again, with far tails of at most ``eps``, into a store of their own.
+
+    Points ``lo_c``/``hi_c`` at each guide's atoms there. Returns the store's values and running mass, and whether every
+    null fit in ``limit`` atoms.
+    """
+    sval, sfl, sgt = np.empty(width), np.empty(width), np.empty(width)
+    ints = np.empty(_SORT_SCRATCH, dtype=np.int64)
+    no_atoms = np.empty(0, dtype=np.float64)
+    total = 0
+    for a in range(k):  # count first, so the store fits them exactly
+        u = nulls[a]
+        p = null_pool[u]
+        raw = _construct_atoms(
+            row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], null_size[u], eps,
+            no_atoms, no_atoms, limit, sval, sfl, sgt,
+        )  # fmt: skip
+        if raw < 0:
+            return no_atoms, no_atoms, False
+        lo_c[a], hi_c[a] = total, total + raw
+        total += raw
+    vals, cum = np.empty(total), np.empty(total)
+    for a in range(k):
+        u = nulls[a]
+        p = null_pool[u]
+        end = _build_into(
+            row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], null_size[u], eps,
+            ints, sval, sfl, sgt, vals, cum, lo_c[a], hi_c[a],
+        )  # fmt: skip
+        hi_c[a] = lo_c[a] + end
+    return vals, cum, True
 
 
 @njit(cache=True, nogil=True)
@@ -1020,6 +1068,59 @@ def _deal(cost, n_slots):
         slot[i] = s
         load[s] += cost[i]
     return _counting_order(slot, n_slots)
+
+
+@njit(cache=True, nogil=True, inline="always")
+def _gene_guides(
+    g, j, obs, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, construct_pool, construct_nn,
+    null_base, null_index, null_pool, gene_offsets, offs, counts, lo_c, hi_c, nul_c, tails, dp,
+):  # fmt: skip
+    """Gather gene ``g``'s measured guides in feature ``j``: their atoms in the store, nulls and exact tails at ``obs``.
+
+    ``tails`` holds each guide's chance to be above, below, at most and at least ``obs``, then nan and measured.
+    Returns how many guides the boundary sweep needs, ``-1`` for a gene that cannot split evenly, and the gene's
+    chance to be above and below ``obs`` and to be measured at all.
+    """
+    gt_arr, lt_arr, le_arr, ge_arr, nan_arr, meas_arr = tails[0], tails[1], tails[2], tails[3], tails[4], tails[5]
+    k = 0
+    for c in range(gene_offsets[g], gene_offsets[g + 1]):
+        u = null_index[null_base[construct_pool[c]] + construct_nn[c, j]]
+        if u < 0:  # its observed median is nan, so it is not in the gene's median either
+            continue
+        lo_c[k] = offs[u]
+        hi_c[k] = offs[u] + counts[u]
+        nul_c[k] = u
+        # exact tails from the control guides' order statistics, so the gene count that decides
+        # significance never depends on the atom pruning
+        p = null_pool[u]
+        gt_arr[k], lt_arr[k], le_arr[k], ge_arr[k], meas_arr[k] = _pool_tails(
+            row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], construct_nn[c, j], obs
+        )
+        nan_arr[k] = 1.0 - meas_arr[k]
+        k += 1
+    # more high than low guides puts the median above obs; as many of each leaves the
+    # midpoint of the two central guides to decide, possible for an even measured count
+    above = _count_above(k, gt_arr, le_arr, nan_arr, dp)
+    below = _count_above(k, lt_arr, ge_arr, nan_arr, dp)
+    all_nan = 1.0
+    any_measured = False
+    for ci in range(k):
+        all_nan *= nan_arr[ci]
+        any_measured |= meas_arr[ci] > 0.0
+    measured = 1.0 - all_nan if any_measured else 0.0
+    if k < 2 or (k % 2 == 1 and not _any_positive(nan_arr, k)):
+        return -1, above, below, measured
+    # a guide no control cell measures is nan for certain: drop it, so the rest are never nan
+    km = 0
+    for ci in range(k):
+        if meas_arr[ci] > 0.0:
+            lo_c[km], hi_c[km], nul_c[km] = lo_c[ci], hi_c[ci], nul_c[ci]
+            gt_arr[km], lt_arr[km], le_arr[km], ge_arr[km] = gt_arr[ci], lt_arr[ci], le_arr[ci], ge_arr[ci]
+            nan_arr[km], meas_arr[km] = 0.0, 1.0
+            km += 1
+    if km % 2 == 1 or km == 0:  # an odd count never splits evenly
+        return -1, above, below, measured
+    return km, above, below, measured
 
 
 @njit(parallel=True, cache=True, nogil=True)
@@ -1040,7 +1141,6 @@ def _gene_pvalues(
     gene_offsets,
     gene_observed,
     eps,
-    max_lost,
     n_slots,
     n_gene_slots,
     rtol,
@@ -1054,9 +1154,12 @@ def _gene_pvalues(
     ``n_gene_slots`` (see :func:`_deal`), each with its own scratch; more gene slots than threads let a
     thread that finishes early take another.
 
-    A gene whose even-count boundary needs the shape of a guide null that lost more than ``max_lost`` of its
-    mass, to pruning or to more atoms than the largest of ``null_caps``, is left ``NaN``; the second array
-    returned marks those. An even count's boundary is swept by :func:`_sweep_pvalue`.
+    An even count's boundary is swept by :func:`_sweep_pvalue` over atoms that leave out far tails of ``eps``, and
+    every atom of a null of more than the largest of ``null_caps``. Where what they leave out could move the p-value
+    by more than ``rtol`` times ``min(above, below)``, which with the sweep's own tails keeps it within ``rtol`` of
+    itself, the gene's guide nulls are built again with tails small enough that it cannot, after the last feature.
+    A gene whose nulls then still have more atoms than that cap is left ``NaN``, and the second array returned marks
+    those.
     """
     n_genes = gene_offsets.size - 1
     n_features = gene_observed.shape[1]
@@ -1076,7 +1179,7 @@ def _gene_pvalues(
     # per gene: lo_c, hi_c, its guides' tails, and the sweep's scratch, padded by a cache line so that slots on
     # different cores share none
     row_k = max_k + 8
-    lohi_t = np.empty((n_gene_slots, 2, row_k), dtype=np.int64)
+    lohi_t = np.empty((n_gene_slots, 3, row_k), dtype=np.int64)  # with each guide's null
     tails_t = np.empty((n_gene_slots, 6, row_k), dtype=np.float64)
     dp_t = np.empty((n_gene_slots, 4, 2 * max_k + 5 + 8), dtype=np.float64)
     sf_t = np.empty((n_gene_slots, 10, row_k), dtype=np.float64)
@@ -1084,10 +1187,10 @@ def _gene_pvalues(
     used = np.empty(n_nulls, dtype=np.bool_)
     raw = np.empty(n_nulls, dtype=np.int64)  # each null's atoms before merging, -1 past max_cap
     counts = np.empty(n_nulls, dtype=np.int64)
-    lost = np.empty(n_nulls, dtype=np.float64)  # the mass each null's atoms lack
     offs = np.zeros(n_nulls + 1, dtype=np.int64)
     cost = null_caps.astype(np.float64)  # a null's build cost, its atom count once known
     gene_cost = np.empty(n_genes, dtype=np.float64)
+    fine_eps = np.zeros((n_genes, n_features), dtype=np.float64)  # the tails a gene's nulls need, 0 for the store's
     no_atoms = np.empty(0, dtype=np.float64)
     vals = no_atoms  # the atom values of every used null, back to back
     cum = no_atoms  # running mass from each list's start
@@ -1123,12 +1226,9 @@ def _gene_pvalues(
             for ui in range(null_start[t], null_start[t + 1]):
                 u = null_order[ui]
                 counts[u] = 0
-                lost[u] = 0.0
-                if used[u] and raw[u] < 0:  # more atoms than max_cap: it keeps none
-                    lost[u] = 1.0
-                elif used[u]:
+                if used[u] and raw[u] >= 0:  # one of more atoms than max_cap keeps none
                     p = null_pool[u]
-                    counts[u], lost[u] = _build_into(
+                    counts[u] = _build_into(
                         row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], null_size[u], eps,
                         sort_t[t], sval_t[t], sfl_t[t], sgt_t[t], vals, cum, offs[u], offs[u + 1],
                     )  # fmt: skip
@@ -1145,76 +1245,55 @@ def _gene_pvalues(
         gene_order, gene_start = _deal(gene_cost, n_gene_slots)
         for t in prange(n_gene_slots):
             # the slot's scratch views, taken once: each view touches the shared reference count
-            lo_c, hi_c = lohi_t[t, 0], lohi_t[t, 1]
-            gt_arr, lt_arr, le_arr, ge_arr, nan_arr, meas_arr = (
-                tails_t[t, 0],
-                tails_t[t, 1],
-                tails_t[t, 2],
-                tails_t[t, 3],
-                tails_t[t, 4],
-                tails_t[t, 5],
-            )
-            dp, sf, si = dp_t[t], sf_t[t], si_t[t]
+            lo_c, hi_c, nul_c = lohi_t[t, 0], lohi_t[t, 1], lohi_t[t, 2]
+            tails, dp, sf, si = tails_t[t], dp_t[t], sf_t[t], si_t[t]
             for gi in range(gene_start[t], gene_start[t + 1]):
                 g = gene_order[gi]
                 obs = gene_observed[g, j]
                 if np.isnan(obs):
                     out[g, j] = np.nan
                     continue
-                k = 0
-                worst = 0.0  # the most mass any measured guide null of the gene lacks atoms for
-                for c in range(gene_offsets[g], gene_offsets[g + 1]):
-                    u = null_index[null_base[construct_pool[c]] + construct_nn[c, j]]
-                    if u < 0:  # its observed median is nan, so it is not in the gene's median either
-                        continue
-                    lo_c[k] = offs[u]
-                    hi_c[k] = offs[u] + counts[u]
-                    # exact tails from the control guides' order statistics, so the gene count that decides
-                    # significance never depends on the atom pruning
-                    p = null_pool[u]
-                    gt_arr[k], lt_arr[k], le_arr[k], ge_arr[k], meas_arr[k] = _pool_tails(
-                        row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], construct_nn[c, j], obs
-                    )
-                    nan_arr[k] = 1.0 - meas_arr[k]
-                    if meas_arr[k] > 0.0:
-                        worst = max(worst, lost[u])
-                    k += 1
-                # more high than low guides puts the median above obs; as many of each leaves the
-                # midpoint of the two central guides to decide, possible for an even measured count
-                above = _count_above(k, gt_arr, le_arr, nan_arr, dp)
-                below = _count_above(k, lt_arr, ge_arr, nan_arr, dp)
-                all_nan = 1.0
-                any_measured = False
-                for ci in range(k):
-                    all_nan *= nan_arr[ci]
-                    any_measured |= meas_arr[ci] > 0.0
-                if k >= 2 and (k % 2 == 0 or _any_positive(nan_arr, k)):
-                    if worst > max_lost:  # the boundary needs the shape of a null that kept too little of it
-                        out[g, j] = np.nan
-                        unresolved[g, j] = True
-                        continue
-                    # a guide no control cell measures is nan for certain: drop it, so the rest are never nan
-                    km = 0
-                    for ci in range(k):
-                        if meas_arr[ci] > 0.0:
-                            lo_c[km], hi_c[km] = lo_c[ci], hi_c[ci]
-                            gt_arr[km], lt_arr[km], le_arr[km], ge_arr[km] = (
-                                gt_arr[ci],
-                                lt_arr[ci],
-                                le_arr[ci],
-                                ge_arr[ci],
-                            )
-                            nan_arr[km], meas_arr[km] = 0.0, 1.0
-                            km += 1
-                    k = km
-                    if k % 2 == 1 or k == 0:  # an odd count never splits evenly
-                        out[g, j] = _two_sided(above, below, 1.0 - all_nan if any_measured else 0.0)
-                        continue
-                    out[g, j] = _sweep_pvalue(
-                        k, lo_c, hi_c, vals, cum, obs, gt_arr, lt_arr, le_arr, ge_arr, above, below, rtol, sf, si
-                    )
+                k, above, below, measured = _gene_guides(
+                    g, j, obs, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, construct_pool, construct_nn,
+                    null_base, null_index, null_pool, gene_offsets, offs, counts, lo_c, hi_c, nul_c, tails, dp,
+                )  # fmt: skip
+                if k < 0:
+                    out[g, j] = _two_sided(above, below, measured)
                     continue
-                out[g, j] = _two_sided(above, below, 1.0 - all_nan if any_measured else 0.0)
+                p_val, lost, per_mass = _sweep_pvalue(
+                    k, lo_c, hi_c, vals, cum, obs, tails[0], tails[1], tails[2], tails[3], above, below, rtol, sf, si
+                )
+                allowed = rtol * min(above, below) + _ATOL
+                if lost > allowed:  # the tails left out could move it too far: rebuilt below with tails that cannot
+                    fine_eps[g, j] = allowed / (3.0 * per_mass)
+                    continue
+                out[g, j] = p_val
+    # the genes whose guide nulls need smaller tails, built once the shared store is freed, so that the two
+    # never take memory at once
+    vals = cum = no_atoms
+    todo = np.flatnonzero(fine_eps.ravel() > 0.0)
+    for t in prange(n_gene_slots):
+        lo_c, hi_c, nul_c = lohi_t[t, 0], lohi_t[t, 1], lohi_t[t, 2]
+        tails, dp, sf, si = tails_t[t], dp_t[t], sf_t[t], si_t[t]
+        for i in range(t, todo.size, n_gene_slots):
+            g, j = todo[i] // n_features, todo[i] % n_features
+            row, nn_row, obs = pool_sorted[j], sub_nn[j], gene_observed[g, j]
+            k, above, below, _ = _gene_guides(
+                g, j, obs, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, construct_pool, construct_nn,
+                null_base, null_index, null_pool, gene_offsets, offs, counts, lo_c, hi_c, nul_c, tails, dp,
+            )  # fmt: skip
+            fine_vals, fine_cum, held = _build_finer(
+                k, nul_c, lo_c, hi_c, row, nn_row, sub_start, pool_sub_start, pool_sub_stop,
+                null_pool, null_size, fine_eps[g, j], max_cap, max_width,
+            )  # fmt: skip
+            if not held:
+                out[g, j] = np.nan
+                unresolved[g, j] = True
+                continue
+            out[g, j] = _sweep_pvalue(
+                k, lo_c, hi_c, fine_vals, fine_cum, obs, tails[0], tails[1], tails[2], tails[3], above, below,
+                rtol, sf, si,
+            )[0]  # fmt: skip
     return out, unresolved
 
 
@@ -1349,9 +1428,9 @@ def bootstrap_features(
         layer: Read this layer instead of ``X``.
         key_added: Name for the output tables.
         copy: Return a modified copy instead of mutating in place.
-        rtol: How close each gene's p-value stays to the exact one, relative to it: within ``rtol`` times the p-value.
-            The gene null's far tails that cannot move the p-value by more than that are not summed.
-            ``0`` sums every tail, so the p-values are exact.
+        rtol: How close each gene's p-value stays to the exact one, relative to it: within ``rtol`` times the p-value, and ``1e-15`` for rounding.
+            The far tails of the gene null and of its guides' nulls that cannot move the p-value by more than that are not summed.
+            ``0`` sums every tail, so the p-values are exact up to rounding.
             Guides' p-values are always exact.
 
     Returns:
@@ -1543,7 +1622,6 @@ def bootstrap_features(
             gene_offsets,
             gene_observed,
             _ATOM_EPS,
-            _MAX_LOST,
             n_threads,
             8 * n_threads,
             float(rtol),
