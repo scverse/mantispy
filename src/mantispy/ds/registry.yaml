@@ -4755,10 +4755,10 @@ datasets:
             # Staged variants rehosted on scverse-exampledata. Regenerate with scripts/build_staged_datasets.py.
             - name: scallops_arv471.h5ad
               url: https://exampledata.scverse.org/mantispy/scallops_arv471/scallops_arv471.h5ad
-              sha256: 965a40efcd8325a132e5f60982de44a53c2f3cb50f466b7b646572994cbe480b
+              sha256: bf1db3c7e5b70f17f13b0e94f08989c433f74f049412e827c3404d90b43a9392
             - name: scallops_arv471_agg.h5ad
               url: https://exampledata.scverse.org/mantispy/scallops_arv471/scallops_arv471_agg.h5ad
-              sha256: c6556588f5328e26e46d33ba9607694161fe8f39469df3338ef8fc959ec5b908
+              sha256: 414b99551c72a042da2021e93b0be2059958b7c3408f40ce8914ec67e9443454
 
     cp_posh:
         type: mantispy
