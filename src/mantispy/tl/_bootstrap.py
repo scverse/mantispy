@@ -1017,40 +1017,60 @@ def _build_into(row, nn_row, sub_start, s0, s1, m, eps, ints, sval, sfl, sgt, va
     return end
 
 
-@njit(cache=True, nogil=True)
-def _build_finer(
-    k, nulls, lo_c, hi_c, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, eps, limit, width
-):
-    """Build the guide nulls ``nulls[:k]`` of one gene again, with far tails of at most ``eps``, into a store of their own.
+@njit(parallel=True, cache=True, nogil=True)
+def _fill_store(
+    row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps, max_cap, used,
+    raw, counts, offs, cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t,
+):  # fmt: skip
+    """Build every ``used`` guide null of one feature into the store ``vals``/``cum``, null ``u`` leaving out tails of ``null_eps[u]``.
 
-    Points ``lo_c``/``hi_c`` at each guide's atoms there. Returns the store's values and running mass, and whether every
-    null fit in ``limit`` atoms.
+    Each null's atoms are counted first, so that the store fits them exactly and each is built in place at
+    ``offs[u]``; ``raw`` is the count before merging, ``-1`` past ``max_cap`` for a null that then keeps none, and
+    ``counts`` the merged one. The store grows when it must and is returned. ``cost`` orders the nulls over the
+    threads (:func:`_deal`) and becomes their atom counts.
     """
-    sval, sfl, sgt = np.empty(width), np.empty(width), np.empty(width)
-    ints = np.empty(_SORT_SCRATCH, dtype=np.int64)
+    n_nulls = null_pool.size
+    n_slots = sort_t.shape[0]
     no_atoms = np.empty(0, dtype=np.float64)
-    total = 0
-    for a in range(k):  # count first, so the store fits them exactly
-        u = nulls[a]
-        p = null_pool[u]
-        raw = _construct_atoms(
-            row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], null_size[u], eps,
-            no_atoms, no_atoms, limit, sval, sfl, sgt,
-        )  # fmt: skip
-        if raw < 0:
-            return no_atoms, no_atoms, False
-        lo_c[a], hi_c[a] = total, total + raw
-        total += raw
-    vals, cum = np.empty(total), np.empty(total)
+    null_order, null_start = _deal(cost, n_slots)
+    for t in prange(n_slots):
+        for ui in range(null_start[t], null_start[t + 1]):
+            u = null_order[ui]
+            raw[u] = 0
+            if used[u]:
+                p = null_pool[u]
+                raw[u] = _construct_atoms(
+                    row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], null_size[u], null_eps[u],
+                    no_atoms, no_atoms, max_cap, sval_t[t], sfl_t[t], sgt_t[t],
+                )  # fmt: skip
+    for u in range(n_nulls):
+        offs[u + 1] = offs[u] + max(raw[u], 0)
+        cost[u] = raw[u]
+    if offs[n_nulls] > vals.size:  # the store is kept across features, so its pages are touched once
+        vals = cum = no_atoms  # the old one is freed before the new one is taken
+        vals = np.empty(offs[n_nulls], dtype=np.float64)
+        cum = np.empty(offs[n_nulls], dtype=np.float64)
+    null_order, null_start = _deal(cost, n_slots)
+    for t in prange(n_slots):
+        for ui in range(null_start[t], null_start[t + 1]):
+            u = null_order[ui]
+            counts[u] = 0
+            if used[u] and raw[u] >= 0:  # one of more atoms than max_cap keeps none
+                p = null_pool[u]
+                counts[u] = _build_into(
+                    row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], null_size[u], null_eps[u],
+                    sort_t[t], sval_t[t], sfl_t[t], sgt_t[t], vals, cum, offs[u], offs[u + 1],
+                )  # fmt: skip
+    return vals, cum
+
+
+@njit(cache=True, nogil=True)
+def _over_cap(k, nulls, raw):
+    """Whether any of the guide nulls ``nulls[:k]`` had more atoms than the store holds, and so has none in it."""
     for a in range(k):
-        u = nulls[a]
-        p = null_pool[u]
-        end = _build_into(
-            row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], null_size[u], eps,
-            ints, sval, sfl, sgt, vals, cum, lo_c[a], hi_c[a],
-        )  # fmt: skip
-        hi_c[a] = lo_c[a] + end
-    return vals, cum, True
+        if raw[nulls[a]] < 0:
+            return True
+    return False
 
 
 @njit(cache=True, nogil=True)
@@ -1154,12 +1174,12 @@ def _gene_pvalues(
     ``n_gene_slots`` (see :func:`_deal`), each with its own scratch; more gene slots than threads let a
     thread that finishes early take another.
 
-    An even count's boundary is swept by :func:`_sweep_pvalue` over atoms that leave out far tails of ``eps``, and
-    every atom of a null of more than the largest of ``null_caps``. Where what they leave out could move the p-value
-    by more than ``rtol`` times ``min(above, below)``, which with the sweep's own tails keeps it within ``rtol`` of
-    itself, the gene's guide nulls are built again with tails small enough that it cannot, after the last feature.
-    A gene whose nulls then still have more atoms than that cap is left ``NaN``, and the second array returned marks
-    those.
+    An even count's boundary is swept by :func:`_sweep_pvalue` over atoms that leave out far tails of ``eps`` (of
+    :data:`_ATOL` over three per guide when ``rtol`` is ``0``), and every atom of a null of more than the largest of
+    ``null_caps``. Where what they leave out, with the sweep's own tails, could move the p-value by more than ``rtol``
+    of the least it can be, the gene's guide nulls are built again after the last feature, with tails small enough
+    that it cannot, each null once per feature for every gene that needs it. A gene whose nulls then still have more
+    atoms than that cap is left ``NaN``, and the second array returned marks those.
     """
     n_genes = gene_offsets.size - 1
     n_features = gene_observed.shape[1]
@@ -1191,6 +1211,9 @@ def _gene_pvalues(
     cost = null_caps.astype(np.float64)  # a null's build cost, its atom count once known
     gene_cost = np.empty(n_genes, dtype=np.float64)
     fine_eps = np.zeros((n_genes, n_features), dtype=np.float64)  # the tails a gene's nulls need, 0 for the store's
+    null_eps = np.empty(n_nulls, dtype=np.float64)  # the tails each null leaves out
+    if rtol == 0.0:  # tails small enough that the atoms they leave out never move a p-value past rounding
+        eps = min(eps, _ATOL / (3.0 * max_k))
     no_atoms = np.empty(0, dtype=np.float64)
     vals = no_atoms  # the atom values of every used null, back to back
     cum = no_atoms  # running mass from each list's start
@@ -1202,36 +1225,11 @@ def _gene_pvalues(
             u = null_index[null_base[construct_pool[c]] + construct_nn[c, j]]
             if u >= 0:
                 used[u] = True
-        # count each used null's atoms first, so that the store fits them exactly and each is built in place
-        null_order, null_start = _deal(cost, n_slots)
-        for t in prange(n_slots):
-            for ui in range(null_start[t], null_start[t + 1]):
-                u = null_order[ui]
-                raw[u] = 0
-                if used[u]:
-                    p = null_pool[u]
-                    raw[u] = _construct_atoms(
-                        row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], null_size[u], eps,
-                        no_atoms, no_atoms, max_cap, sval_t[t], sfl_t[t], sgt_t[t],
-                    )  # fmt: skip
-        for u in range(n_nulls):
-            offs[u + 1] = offs[u] + max(raw[u], 0)
-            cost[u] = raw[u]
-        if offs[n_nulls] > vals.size:  # the store is kept across features, so its pages are touched once
-            vals = cum = no_atoms  # the old one is freed before the new one is taken
-            vals = np.empty(offs[n_nulls], dtype=np.float64)
-            cum = np.empty(offs[n_nulls], dtype=np.float64)
-        null_order, null_start = _deal(cost, n_slots)
-        for t in prange(n_slots):
-            for ui in range(null_start[t], null_start[t + 1]):
-                u = null_order[ui]
-                counts[u] = 0
-                if used[u] and raw[u] >= 0:  # one of more atoms than max_cap keeps none
-                    p = null_pool[u]
-                    counts[u] = _build_into(
-                        row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], null_size[u], eps,
-                        sort_t[t], sval_t[t], sfl_t[t], sgt_t[t], vals, cum, offs[u], offs[u + 1],
-                    )  # fmt: skip
+        null_eps[:] = eps
+        vals, cum = _fill_store(
+            row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps, max_cap, used,
+            raw, counts, offs, cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t,
+        )  # fmt: skip
         # a gene costs about its guides' atom count, more when an even count sends it through the boundary sweep
         for g in range(n_genes):
             tot = 0
@@ -1263,37 +1261,59 @@ def _gene_pvalues(
                 p_val, lost, per_mass = _sweep_pvalue(
                     k, lo_c, hi_c, vals, cum, obs, tails[0], tails[1], tails[2], tails[3], above, below, rtol, sf, si
                 )
-                allowed = rtol * min(above, below) + _ATOL
-                if lost > allowed:  # the tails left out could move it too far: rebuilt below with tails that cannot
-                    fine_eps[g, j] = allowed / (3.0 * per_mass)
+                if not _over_cap(k, nul_c, raw):  # no null in the store leaves out more than three times eps
+                    lost = min(lost, 3.0 * eps * per_mass)
+                # the exact p-value is at least p_val less the sweep's tails and what the atoms leave out, and never
+                # under 2 * min(above, below): if those could move it past rtol of that, rebuild with tails that cannot
+                swept = rtol * min(above, below)
+                if lost > max(rtol * p_val / (1.0 + rtol) - swept, swept) + _ATOL:
+                    least = max(p_val - swept - lost, 2.0 * min(above, below))
+                    fine_eps[g, j] = (max(rtol * least - swept, swept) + _ATOL) / (3.0 * per_mass)
                     continue
                 out[g, j] = p_val
-    # the genes whose guide nulls need smaller tails, built once the shared store is freed, so that the two
-    # never take memory at once
+    # the genes whose guide nulls need smaller tails, built once the shared store is freed, so that the two never
+    # take memory at once; per feature, each null they read is built once, with the smallest tails any of them needs
     vals = cum = no_atoms
-    todo = np.flatnonzero(fine_eps.ravel() > 0.0)
-    for t in prange(n_gene_slots):
-        lo_c, hi_c, nul_c = lohi_t[t, 0], lohi_t[t, 1], lohi_t[t, 2]
-        tails, dp, sf, si = tails_t[t], dp_t[t], sf_t[t], si_t[t]
-        for i in range(t, todo.size, n_gene_slots):
-            g, j = todo[i] // n_features, todo[i] % n_features
-            row, nn_row, obs = pool_sorted[j], sub_nn[j], gene_observed[g, j]
-            k, above, below, _ = _gene_guides(
-                g, j, obs, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, construct_pool, construct_nn,
-                null_base, null_index, null_pool, gene_offsets, offs, counts, lo_c, hi_c, nul_c, tails, dp,
-            )  # fmt: skip
-            fine_vals, fine_cum, held = _build_finer(
-                k, nul_c, lo_c, hi_c, row, nn_row, sub_start, pool_sub_start, pool_sub_stop,
-                null_pool, null_size, fine_eps[g, j], max_cap, max_width,
-            )  # fmt: skip
-            if not held:
-                out[g, j] = np.nan
-                unresolved[g, j] = True
-                continue
-            out[g, j] = _sweep_pvalue(
-                k, lo_c, hi_c, fine_vals, fine_cum, obs, tails[0], tails[1], tails[2], tails[3], above, below,
-                rtol, sf, si,
-            )[0]  # fmt: skip
+    fine = np.empty(n_genes, dtype=np.int64)
+    for j in range(n_features):
+        n_fine = 0
+        for g in range(n_genes):
+            if fine_eps[g, j] > 0.0:
+                fine[n_fine] = g
+                n_fine += 1
+        if n_fine == 0:
+            continue
+        row = pool_sorted[j]
+        nn_row = sub_nn[j]
+        used[:] = False
+        for gi in range(n_fine):
+            g = fine[gi]
+            for c in range(gene_offsets[g], gene_offsets[g + 1]):
+                u = null_index[null_base[construct_pool[c]] + construct_nn[c, j]]
+                if u >= 0:
+                    null_eps[u] = min(null_eps[u], fine_eps[g, j]) if used[u] else fine_eps[g, j]
+                    used[u] = True
+        vals, cum = _fill_store(
+            row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps, max_cap, used,
+            raw, counts, offs, cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t,
+        )  # fmt: skip
+        for t in prange(n_gene_slots):
+            lo_c, hi_c, nul_c = lohi_t[t, 0], lohi_t[t, 1], lohi_t[t, 2]
+            tails, dp, sf, si = tails_t[t], dp_t[t], sf_t[t], si_t[t]
+            for gi in range(t, n_fine, n_gene_slots):
+                g = fine[gi]
+                obs = gene_observed[g, j]
+                k, above, below, _ = _gene_guides(
+                    g, j, obs, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, construct_pool, construct_nn,
+                    null_base, null_index, null_pool, gene_offsets, offs, counts, lo_c, hi_c, nul_c, tails, dp,
+                )  # fmt: skip
+                if _over_cap(k, nul_c, raw):
+                    out[g, j] = np.nan
+                    unresolved[g, j] = True
+                    continue
+                out[g, j] = _sweep_pvalue(
+                    k, lo_c, hi_c, vals, cum, obs, tails[0], tails[1], tails[2], tails[3], above, below, rtol, sf, si
+                )[0]
     return out, unresolved
 
 
