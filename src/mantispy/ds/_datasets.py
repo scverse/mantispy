@@ -898,7 +898,8 @@ def _assemble_scallops_arv471(cache_dir: str | Path | None = None) -> AnnData:
     # The raw well is a rowless integer; prefix a synthetic row letter so from_dataframe's normalize_well can pad it.
     frame["Metadata_Well"] = ("W" + df["well"].astype(int).astype(str)).to_numpy()
 
-    adata = from_dataframe(frame, resolution="object")
+    # DAPI is imaged in both the IF and the FISH round; naming the channels keeps the two apart.
+    adata = from_dataframe(frame, resolution="object", channels=["ER", "DAPI_IF", "DAPI_FISH"])
     return _finish_guide_screen(adata, "scallops_arv471")
 
 

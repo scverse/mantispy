@@ -740,6 +740,33 @@ def test_opaque_column_is_an_embedding_with_every_object_kept():
     assert adata.var.loc["Cells_AreaShape_Area", "feature_kind"] == "measurement"
 
 
+def test_column_on_a_declared_object_is_a_measurement_whatever_its_group():
+    df = pd.DataFrame(
+        {
+            "Metadata_Site": ["s1", "s2"],
+            "Cells_Spots_Count_ESR1": [3.0, 4.0],
+            "Nuclei_Spots_Count_ESR1": [1.0, 2.0],
+            "my_latent_0": [0.5, 0.6],
+        }
+    )
+    var = from_dataframe(df, resolution="object").var
+    spots = var.loc[["Cells_Spots_Count_ESR1", "Nuclei_Spots_Count_ESR1"]]
+    assert (spots["feature_kind"] == "measurement").all()
+    assert list(spots["object"]) == ["Cells", "Nuclei"]
+    assert (spots["feature_group"] == "Spots").all()
+    assert (spots["feature"] == "Count_ESR1").all()
+    assert var.loc["my_latent_0", "feature_kind"] == "embedding"
+
+
+def test_custom_object_is_a_measurement_only_when_declared():
+    df = pd.DataFrame({"Metadata_Site": ["s1", "s2"], "Organoid_Spots_Count_ESR1": [3.0, 4.0]})
+    declared = from_dataframe(df, resolution="object", objects=["Organoid"]).var.loc["Organoid_Spots_Count_ESR1"]
+    assert declared["feature_kind"] == "measurement"
+    assert declared["object"] == "Organoid"
+    undeclared = from_dataframe(df, resolution="object").var.loc["Organoid_Spots_Count_ESR1"]
+    assert undeclared["feature_kind"] == "embedding"
+
+
 @pytest.mark.parametrize("name", ["Image_ImageNumber", "Image_TableNumber", "Cells_ImageNumber"])
 def test_prefixed_image_and_table_numbers_are_excluded(name):
     df = pd.DataFrame({"Metadata_Site": ["s1", "s2"], name: [1.0, 2.0], "Cells_AreaShape_Area": [3.0, 4.0]})
@@ -841,8 +868,8 @@ def test_from_dataframe_reads_object_skeleton_as_a_measurement():
     assert adata.var.loc["Cells_ObjectSkeleton_NumberBranchEnds", "feature_kind"] == "measurement"
 
 
-def test_from_dataframe_reads_an_unknown_cellprofiler_group_as_an_embedding():
-    """A recognised object with a group outside the known set is kept, but as an opaque embedding feature."""
+def test_from_dataframe_reads_an_unknown_group_on_a_declared_object_as_a_measurement():
+    """A declared object with a group outside the known set (CalculateMath's Math) is a measurement on it."""
     df = pd.DataFrame(
         {
             "Metadata_Plate": ["P", "P"],
@@ -853,7 +880,8 @@ def test_from_dataframe_reads_an_unknown_cellprofiler_group_as_an_embedding():
     )
     adata = from_dataframe(df)
     assert adata.var.loc["Cells_AreaShape_Area", "feature_kind"] == "measurement"
-    assert adata.var.loc["Cells_Math_Value", "feature_kind"] == "embedding"
+    assert adata.var.loc["Cells_Math_Value", "feature_kind"] == "measurement"
+    assert adata.var.loc["Cells_Math_Value", "object"] == "Cells"
 
 
 def test_cp_measure_table_leaves_the_cellprofiler_default_alone():
