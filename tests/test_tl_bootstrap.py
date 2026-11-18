@@ -87,19 +87,22 @@ def _brute_pvalues(adata):
     return gene_p, guide_p
 
 
-def _assert_matches_brute_force(adata):
+def _assert_matches_brute_force(adata, rtol):
     gene_p, guide_p = _brute_pvalues(adata)
     features = list(adata.var_names)
     table = adata.uns["mantispy"]["bootstrap"]
     for row in table.itertuples():
-        np.testing.assert_allclose(row.pvalue, gene_p[(row.group, features.index(row.feature))], atol=1e-9)
+        # a gene's p-value is within rtol of itself, up to rounding; its guides' are exact
+        expected = gene_p[(row.group, features.index(row.feature))]
+        np.testing.assert_allclose(row.pvalue, expected, rtol=rtol, atol=1e-9)
     guides = adata.uns["mantispy"]["bootstrap_guides"]
     for row in guides.itertuples():
         expected = guide_p[(row.group, row.replicate, features.index(row.feature))]
         np.testing.assert_allclose(row.pvalue, expected, atol=1e-9)
 
 
-def test_exact_pvalues_match_brute_force_enumeration():
+@pytest.mark.parametrize("rtol", [0.0, 1e-5])
+def test_exact_pvalues_match_brute_force_enumeration(rtol):
     """On a tiny screen the analytic p-values equal a full enumeration of every resample."""
     rng = np.random.default_rng(0)
     # integer values so even-count medians land on exact ties, exercising the half-count rule
@@ -111,12 +114,13 @@ def test_exact_pvalues_match_brute_force_enumeration():
         groups.append(("nontargeting", f"nt{s}", int(rng.integers(3, 5)), 0.0, "a"))
     adata = _cells(groups, rng, n_features=3)
     adata.X = rng.integers(0, 4, size=adata.X.shape).astype(float)
-    mt.tl.bootstrap_features(adata)
-    _assert_matches_brute_force(adata)
+    mt.tl.bootstrap_features(adata, rtol=rtol)
+    _assert_matches_brute_force(adata, rtol)
 
 
+@pytest.mark.parametrize("rtol", [0.0, 1e-5])
 @pytest.mark.parametrize(("dtype", "missing"), [(np.float32, 0.0), (np.float32, 0.2), (np.float64, 0.2)])
-def test_missing_cells_match_brute_force_enumeration(dtype, missing):
+def test_missing_cells_match_brute_force_enumeration(dtype, missing, rtol):
     """Missing cells in control and tested guides: the null draws the measured count and skips nan draws.
 
     A guide measuring nothing leaves its gene, and a null median that is missing counts neither way.
@@ -132,11 +136,12 @@ def test_missing_cells_match_brute_force_enumeration(dtype, missing):
         x[rng.random(x.shape) < missing] = np.nan
         x[(adata.obs["Metadata_sgRNA"] == "g1_2").to_numpy(), 1] = np.nan
     adata.X = x.astype(dtype)
-    mt.tl.bootstrap_features(adata)
-    _assert_matches_brute_force(adata)
+    mt.tl.bootstrap_features(adata, rtol=rtol)
+    _assert_matches_brute_force(adata, rtol)
 
 
-def test_nulls_of_a_growing_store_match_brute_force_enumeration():
+@pytest.mark.parametrize("rtol", [0.0, 1e-5])
+def test_nulls_of_a_growing_store_match_brute_force_enumeration(rtol):
     """Each feature's guide nulls are counted and then built in place, in a store that grows with them.
 
     Integer values in the first feature put null atoms at the observed medians, so the lower side of the
@@ -149,8 +154,34 @@ def test_nulls_of_a_growing_store_match_brute_force_enumeration():
     groups += [("nontargeting", f"nt{s}", 4, 0.0, "a") for s in range(3)]
     adata = _cells(groups, rng, n_features=2)
     adata.X[:, 0] = rng.integers(0, 3, size=adata.n_obs)
+    mt.tl.bootstrap_features(adata, rtol=rtol)
+    _assert_matches_brute_force(adata, rtol)
+
+
+def test_gene_pvalues_stay_within_rtol_of_the_exact_ones():
+    """The far tails a gene's p-value leaves out move it by at most rtol of itself, from the exact rtol=0 one.
+
+    Control guides of tens of cells give guide nulls of thousands of atoms, so the tails left out hold many of them;
+    shifted genes put p-values deep in the tails, where the bound is relative; the features hold ties at the observed
+    median (rounded and integer values) and missing cells.
+    """
+    rng = np.random.default_rng(23)
+    groups = [("nontargeting", f"nt{i}", int(rng.integers(30, 60)), 0.0, "a") for i in range(6)]
+    for g in range(16):
+        shift = [0.0, 0.0, 0.5, 1.5][g % 4]
+        groups += [(f"G{g}", f"g{g}_{s}", int(rng.integers(3, 30)), shift, "a") for s in range(2 + 2 * (g % 2))]
+    adata = _cells(groups, rng, n_features=3)
+    adata.X[:, 1] = np.round(adata.X[:, 1], 1)
+    adata.X[:, 2] = np.round(3 * adata.X[:, 2])
+    adata.X[rng.random(adata.X.shape) < 0.1] = np.nan
+    exact = mt.tl.bootstrap_features(adata, rtol=0.0, copy=True).uns["mantispy"]["bootstrap"]["pvalue"].to_numpy()
     mt.tl.bootstrap_features(adata)
-    _assert_matches_brute_force(adata)
+    bounded = adata.uns["mantispy"]["bootstrap"]["pvalue"].to_numpy()
+    np.testing.assert_array_equal(np.isnan(exact), np.isnan(bounded))
+    assert np.nanmin(exact) < 1e-8
+    assert (bounded != exact).any()  # tails were left out
+    assert np.nanmax(np.abs(bounded - exact) - 1e-5 * exact) <= 1e-15
+    assert adata.uns["mantispy"]["params"]["bootstrap_features"]["rtol"] == 1e-5
 
 
 def _cells(groups, rng, n_features=4, guide_sd=0.1):
@@ -586,6 +617,9 @@ def test_a_group_without_a_reference_arm_is_left_out(caplog):
     ("kwargs", "match"),
     [
         ({"control_scope": "nearby"}, "control_scope must be one of"),
+        ({"rtol": -1e-3}, "rtol must be"),
+        ({"rtol": np.nan}, "rtol must be"),
+        ({"rtol": np.inf}, "rtol must be"),
         ({"control_scope": "within_group"}, "needs condition="),
         ({"control_scope": "reference_group", "condition": "Metadata_Treatment"}, "needs reference_condition="),
         (
