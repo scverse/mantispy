@@ -27,6 +27,11 @@ def _default_map_table_bytes() -> int:
     return _machine_memory() // 2 or 2**33
 
 
+def _default_bootstrap_null_bytes() -> int:
+    """An eighth of the machine's memory, at most 16 GiB, or 4 GiB when the system does not say."""
+    return min(_machine_memory() // 8, 2**34) or 2**32
+
+
 class MantispySettings(Settings):
     """Settings of mantispy, overridable through ``MANTISPY_`` environment variables.
 
@@ -51,6 +56,14 @@ class MantispySettings(Settings):
     The default is half of the machine's memory.
     The null refuses a screen whose sorted similarities would exceed it.
     When a table of each similarity's rank fits beside them, the draws read the ranks, which is faster; otherwise they search the sorted similarities and give the same p-values.
+    """
+
+    bootstrap_null_bytes: Annotated[int, Field(gt=0)] = _default_bootstrap_null_bytes()
+    """How many bytes of guide nulls :func:`mantispy.tl.bootstrap_features` builds at once, with their sort's scratch.
+
+    The default is an eighth of the machine's memory, at most 16 GiB.
+    A feature's genes are tested in windows whose guide nulls fit this, so a smaller value lowers the peak memory, and the nulls that windows share are built once for each.
+    It must be positive.
     """
 
 

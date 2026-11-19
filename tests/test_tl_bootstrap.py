@@ -480,6 +480,27 @@ def test_a_gene_keeps_its_pvalues_when_other_genes_are_dropped():
     pd.testing.assert_series_equal(_table(adata).loc["G2"], _table(subset).loc["G2"])
 
 
+def test_genes_tested_in_windows_keep_their_pvalues(monkeypatch):
+    """A budget too small for any two genes' guide nulls tests each gene in its own window, with the same p-values.
+
+    Guides of a few sizes share their nulls across genes, so windows rebuild nulls an earlier window freed; integer
+    values and missing cells put ties and nan guides in the boundary.
+    """
+    rng = np.random.default_rng(29)
+    groups = [("nontargeting", f"nt{i}", int(rng.integers(20, 40)), 0.0, "a") for i in range(5)]
+    for g in range(10):
+        groups += [(f"G{g}", f"g{g}_{s}", int(rng.choice([3, 4, 8, 9])), 0.3 * (g % 3), "a") for s in range(2 + g % 3)]
+    adata = _cells(groups, rng, n_features=3)
+    adata.X[:, 1] = np.round(2 * adata.X[:, 1])
+    adata.X[rng.random(adata.X.shape) < 0.05] = np.nan
+    whole = mt.tl.bootstrap_features(adata, copy=True).uns["mantispy"]
+    monkeypatch.setattr(mt.settings, "bootstrap_null_bytes", 1)
+    windowed = mt.tl.bootstrap_features(adata, copy=True).uns["mantispy"]
+    np.testing.assert_array_equal(windowed["bootstrap"]["pvalue"], whole["bootstrap"]["pvalue"])
+    np.testing.assert_array_equal(windowed["bootstrap_guides"]["pvalue"], whole["bootstrap_guides"]["pvalue"])
+    assert np.isfinite(whole["bootstrap"]["pvalue"]).sum() > 20
+
+
 @pytest.mark.parametrize(("n", "p"), [(40, 0.3), (1500, 0.5), (20000, 0.37), (5000, 0.999)])
 def test_binomial_cdf_matches_scipy(n, p):
     from scipy.stats import binom

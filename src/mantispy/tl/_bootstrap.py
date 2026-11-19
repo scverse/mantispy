@@ -21,6 +21,7 @@ from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy._core.masks import reference_mask
 from mantispy._core.mutation import inplace_or_copy
+from mantispy._settings import settings
 
 if TYPE_CHECKING:
     from builtins import range as prange
@@ -1061,19 +1062,16 @@ def _build_into(row, nn_row, sub_start, s0, s1, m, eps, ints, sval, sfl, sgt, va
 
 
 @njit(parallel=True, cache=True, nogil=True)
-def _fill_store(
-    row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps, max_cap, used,
-    raw, counts, offs, cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t,
+def _count_nulls(
+    row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps, max_cap, used, raw, cost,
+    sval_t, sfl_t, sgt_t,
 ):  # fmt: skip
-    """Build every ``used`` guide null of one feature into the store ``vals``/``cum``, null ``u`` leaving out tails of ``null_eps[u]``.
+    """Count the atoms of every ``used`` guide null of one feature, null ``u`` leaving out tails of ``null_eps[u]``.
 
-    Each null's atoms are counted first, so that the store fits them exactly and each is built in place at
-    ``offs[u]``; ``raw`` is the count before merging, ``-1`` past ``max_cap`` for a null that then keeps none, and
-    ``counts`` the merged one. The store grows when it must and is returned. ``cost`` orders the nulls over the
-    threads (:func:`_deal`) and becomes their atom counts.
+    ``raw`` is the count before merging, ``-1`` past ``max_cap`` for a null that then keeps none, and ``0`` for a
+    null not used. ``cost`` orders the nulls over the threads (:func:`_deal`) and becomes their atom counts.
     """
-    n_nulls = null_pool.size
-    n_slots = sort_t.shape[0]
+    n_slots = sval_t.shape[0]
     no_atoms = np.empty(0, dtype=np.float64)
     null_order, null_start = _deal(cost, n_slots)
     for t in prange(n_slots):
@@ -1086,25 +1084,96 @@ def _fill_store(
                     row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], null_size[u], null_eps[u],
                     no_atoms, no_atoms, max_cap, sval_t[t], sfl_t[t], sgt_t[t],
                 )  # fmt: skip
-    for u in range(n_nulls):
-        offs[u + 1] = offs[u] + max(raw[u], 0)
+    for u in range(null_pool.size):
         cost[u] = raw[u]
-    if offs[n_nulls] > vals.size:  # the store is kept across features, so its pages are touched once
-        vals = cum = no_atoms  # the old one is freed before the new one is taken
-        vals = np.empty(offs[n_nulls], dtype=np.float64)
-        cum = np.empty(offs[n_nulls], dtype=np.float64)
-    null_order, null_start = _deal(cost, n_slots)
+
+
+@njit(parallel=True, cache=True, nogil=True)
+def _fill_store(
+    row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps, nulls, raw, counts, offs,
+    cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t,
+):  # fmt: skip
+    """Build the guide nulls ``nulls``, counted by :func:`_count_nulls`, into the store ``vals``/``cum``, back to back.
+
+    Null ``u`` is built in place at ``offs[u]``, so that the store fits them exactly, and ``counts[u]`` is its merged
+    count. The store grows when it must and is returned.
+    """
+    n_slots = sort_t.shape[0]
+    total = 0
+    win_cost = np.empty(nulls.size, dtype=np.float64)
+    for i in range(nulls.size):
+        u = nulls[i]
+        offs[u] = total
+        total += max(raw[u], 0)
+        win_cost[i] = cost[u]
+    if total > vals.size:  # the store is kept across windows and features, so its pages are touched once
+        vals = cum = np.empty(0, dtype=np.float64)  # the old one is freed before the new one is taken
+        vals = np.empty(total, dtype=np.float64)
+        cum = np.empty(total, dtype=np.float64)
+    null_order, null_start = _deal(win_cost, n_slots)
     for t in prange(n_slots):
         for ui in range(null_start[t], null_start[t + 1]):
-            u = null_order[ui]
+            u = nulls[null_order[ui]]
             counts[u] = 0
-            if used[u] and raw[u] >= 0:  # one of more atoms than max_cap keeps none
+            if raw[u] >= 0:  # one of more atoms than max_cap keeps none
                 p = null_pool[u]
                 counts[u] = _build_into(
                     row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], null_size[u], null_eps[u],
-                    sort_t[t], sval_t[t], sfl_t[t], sgt_t[t], vals, cum, offs[u], offs[u + 1],
+                    sort_t[t], sval_t[t], sfl_t[t], sgt_t[t], vals, cum, offs[u], offs[u] + max(raw[u], 0),
                 )  # fmt: skip
     return vals, cum
+
+
+@njit(cache=True, nogil=True)
+def _window(pos, seq, n_seq, j, construct_pool, construct_nn, null_base, null_index, gene_offsets, raw, budget,
+            in_win, win_nulls):  # fmt: skip
+    """The genes ``seq[pos:stop]`` of the next window, and the ``n`` guide nulls ``win_nulls[:n]`` they read.
+
+    A window takes genes while the atoms of their distinct nulls fit ``budget``, and at least one. A gene with fewer
+    than two measured guides reads no null, as its median cannot fall between two of them. Returns ``(stop, n)``.
+    """
+    n_win = 0
+    atoms = 0
+    stop = pos
+    while stop < n_seq:
+        g = seq[stop]
+        added = n_win
+        grow = 0
+        k = 0
+        for c in range(gene_offsets[g], gene_offsets[g + 1]):
+            k += null_index[null_base[construct_pool[c]] + construct_nn[c, j]] >= 0
+        if k >= 2:
+            for c in range(gene_offsets[g], gene_offsets[g + 1]):
+                u = null_index[null_base[construct_pool[c]] + construct_nn[c, j]]
+                if u >= 0 and not in_win[u]:
+                    in_win[u] = True
+                    win_nulls[n_win] = u
+                    n_win += 1
+                    grow += max(raw[u], 0)
+        if stop > pos and atoms + grow > budget:
+            for i in range(added, n_win):
+                in_win[win_nulls[i]] = False
+            n_win = added
+            break
+        atoms += grow
+        stop += 1
+    for i in range(n_win):
+        in_win[win_nulls[i]] = False
+    return stop, n_win
+
+
+@njit(cache=True, nogil=True)
+def _gene_order(genes, n, j, construct_pool, construct_nn, null_base, null_index, gene_offsets, n_nulls, key):
+    """``genes[:n]`` in the order of their guides' smallest null, so that the genes of a window share their nulls."""
+    for gi in range(n):
+        g = genes[gi]
+        first = n_nulls
+        for c in range(gene_offsets[g], gene_offsets[g + 1]):
+            u = null_index[null_base[construct_pool[c]] + construct_nn[c, j]]
+            if u >= 0:
+                first = min(first, u)
+        key[gi] = first
+    return genes[:n][np.argsort(key[:n], kind="mergesort")]
 
 
 @njit(cache=True, nogil=True)
@@ -1207,13 +1276,16 @@ def _gene_pvalues(
     n_slots,
     n_gene_slots,
     rtol,
+    budget,
 ):
     """Two-sided p-value of every gene against its guides' control pools, within ``rtol`` of the exact one.
 
-    A guide's null depends only on its pool and measured cell count, so per feature each distinct
-    ``(null_pool, null_size)`` null is built once into a shared atom store, and the genes then only
-    read it. Guide ``c``'s null in feature ``j`` is ``null_index[null_base[pool] + construct_nn[c, j]]``,
-    ``-1`` where the guide measures nothing and so leaves the gene. The nulls are dealt to ``n_slots`` slots and the genes to
+    A guide's null depends only on its pool and measured cell count, so the genes that share a null read it from
+    one atom store. Per feature the genes are taken in windows, in the order of their guides' smallest null, each as
+    many genes as the atoms of their distinct ``(null_pool, null_size)`` nulls fit ``budget`` (:func:`_window`): a
+    window's nulls are built into the store, its genes read them, and the next window builds its own. Guide ``c``'s
+    null in feature ``j`` is ``null_index[null_base[pool] + construct_nn[c, j]]``, ``-1`` where the guide measures
+    nothing and so leaves the gene. The nulls are dealt to ``n_slots`` slots and the genes to
     ``n_gene_slots`` (see :func:`_deal`), each with its own scratch; more gene slots than threads let a
     thread that finishes early take another.
 
@@ -1250,15 +1322,19 @@ def _gene_pvalues(
     used = np.empty(n_nulls, dtype=np.bool_)
     raw = np.empty(n_nulls, dtype=np.int64)  # each null's atoms before merging, -1 past max_cap
     counts = np.empty(n_nulls, dtype=np.int64)
-    offs = np.zeros(n_nulls + 1, dtype=np.int64)
+    offs = np.zeros(n_nulls, dtype=np.int64)  # where each null of the window starts in the store
     cost = null_caps.astype(np.float64)  # a null's build cost, its atom count once known
     gene_cost = np.empty(n_genes, dtype=np.float64)
+    all_genes = np.arange(n_genes)
+    key = np.empty(n_genes, dtype=np.int64)
+    in_win = np.zeros(n_nulls, dtype=np.bool_)
+    win_nulls = np.empty(n_nulls, dtype=np.int64)
     fine_eps = np.zeros((n_genes, n_features), dtype=np.float64)  # the tails a gene's nulls need, 0 for the store's
     null_eps = np.empty(n_nulls, dtype=np.float64)  # the tails each null leaves out
     if rtol == 0.0:  # tails small enough that the atoms they leave out never move a p-value past rounding
         eps = min(eps, _ATOL / (3.0 * max_k))
     no_atoms = np.empty(0, dtype=np.float64)
-    vals = no_atoms  # the atom values of every used null, back to back
+    vals = no_atoms  # the atom values of a window's nulls, back to back
     cum = no_atoms  # running mass from each list's start
     for j in range(n_features):
         row = pool_sorted[j]
@@ -1269,53 +1345,73 @@ def _gene_pvalues(
             if u >= 0:
                 used[u] = True
         null_eps[:] = eps
-        vals, cum = _fill_store(
+        _count_nulls(
             row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps, max_cap, used,
-            raw, counts, offs, cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t,
+            raw, cost, sval_t, sfl_t, sgt_t,
         )  # fmt: skip
-        # a gene costs about its guides' atom count, more when an even count sends it through the boundary sweep
-        for g in range(n_genes):
-            tot = 0
-            k = 0
-            for c in range(gene_offsets[g], gene_offsets[g + 1]):
-                u = null_index[null_base[construct_pool[c]] + construct_nn[c, j]]
-                if u >= 0:
-                    tot += counts[u]
-                    k += 1
-            gene_cost[g] = tot * (1.0 + (k % 2 == 0) * k) + 1.0
-        gene_order, gene_start = _deal(gene_cost, n_gene_slots)
-        for t in prange(n_gene_slots):
-            # the slot's scratch views, taken once: each view touches the shared reference count
-            lo_c, hi_c, nul_c = lohi_t[t, 0], lohi_t[t, 1], lohi_t[t, 2]
-            tails, dp, sf, si = tails_t[t], dp_t[t], sf_t[t], si_t[t]
-            for gi in range(gene_start[t], gene_start[t + 1]):
-                g = gene_order[gi]
-                obs = gene_observed[g, j]
-                if np.isnan(obs):
-                    out[g, j] = np.nan
-                    continue
-                k, above, below, measured = _gene_guides(
-                    g, j, obs, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, construct_pool, construct_nn,
-                    null_base, null_index, null_pool, gene_offsets, offs, counts, lo_c, hi_c, nul_c, tails, dp,
-                )  # fmt: skip
-                if k < 0:
-                    out[g, j] = _two_sided(above, below, measured)
-                    continue
-                p_val, lost, per_mass = _sweep_pvalue(
-                    k, lo_c, hi_c, vals, cum, obs, tails[0], tails[1], tails[2], tails[3], above, below, rtol, sf, si
-                )
-                if not _over_cap(k, nul_c, raw):  # no null in the store leaves out more than three times eps
-                    lost = min(lost, 3.0 * eps * per_mass)
-                # the exact p-value is at least p_val less the sweep's tails and what the atoms leave out, and never
-                # under 2 * min(above, below): if those could move it past rtol of that, rebuild with tails that cannot
-                swept = rtol * min(above, below)
-                if lost > max(rtol * p_val / (1.0 + rtol) - swept, swept) + _ATOL:
-                    least = max(p_val - swept - lost, 2.0 * min(above, below))
-                    fine_eps[g, j] = (max(rtol * least - swept, swept) + _ATOL) / (3.0 * per_mass)
-                    continue
-                out[g, j] = p_val
+        seq = _gene_order(
+            all_genes, n_genes, j, construct_pool, construct_nn, null_base, null_index, gene_offsets, n_nulls, key
+        )
+        pos = 0
+        while pos < n_genes:
+            stop, n_win = _window(
+                pos, seq, n_genes, j, construct_pool, construct_nn, null_base, null_index, gene_offsets, raw, budget,
+                in_win, win_nulls,
+            )  # fmt: skip
+            vals, cum = _fill_store(
+                row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps,
+                win_nulls[:n_win], raw, counts, offs, cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t,
+            )  # fmt: skip
+            win = seq[pos:stop]
+            # a gene costs about its guides' atom count, more when an even count sends it through the boundary sweep
+            for gi in range(win.size):
+                g = win[gi]
+                tot = 0
+                k = 0
+                for c in range(gene_offsets[g], gene_offsets[g + 1]):
+                    u = null_index[null_base[construct_pool[c]] + construct_nn[c, j]]
+                    if u >= 0:
+                        tot += counts[u]
+                        k += 1
+                gene_cost[gi] = tot * (1.0 + (k % 2 == 0) * k) + 1.0 if k >= 2 else 1.0
+            gene_order, gene_start = _deal(gene_cost[: win.size], n_gene_slots)
+            for t in prange(n_gene_slots):
+                # the slot's scratch views, taken once: each view touches the shared reference count
+                lo_c, hi_c, nul_c = lohi_t[t, 0], lohi_t[t, 1], lohi_t[t, 2]
+                tails, dp, sf, si = tails_t[t], dp_t[t], sf_t[t], si_t[t]
+                for gi in range(gene_start[t], gene_start[t + 1]):
+                    g = win[gene_order[gi]]
+                    obs = gene_observed[g, j]
+                    if np.isnan(obs):
+                        out[g, j] = np.nan
+                        continue
+                    k, above, below, measured = _gene_guides(
+                        g, j, obs, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, construct_pool,
+                        construct_nn, null_base, null_index, null_pool, gene_offsets, offs, counts, lo_c, hi_c, nul_c,
+                        tails, dp,
+                    )  # fmt: skip
+                    if k < 0:
+                        out[g, j] = _two_sided(above, below, measured)
+                        continue
+                    p_val, lost, per_mass = _sweep_pvalue(
+                        k, lo_c, hi_c, vals, cum, obs, tails[0], tails[1], tails[2], tails[3], above, below, rtol, sf,
+                        si,
+                    )  # fmt: skip
+                    if not _over_cap(k, nul_c, raw):  # no null in the store leaves out more than three times eps
+                        lost = min(lost, 3.0 * eps * per_mass)
+                    # the exact p-value is at least p_val less the sweep's tails and what the atoms leave out, and
+                    # never under 2 * min(above, below): if those could move it past rtol of that, rebuild with tails
+                    # that cannot
+                    swept = rtol * min(above, below)
+                    if lost > max(rtol * p_val / (1.0 + rtol) - swept, swept) + _ATOL:
+                        least = max(p_val - swept - lost, 2.0 * min(above, below))
+                        fine_eps[g, j] = (max(rtol * least - swept, swept) + _ATOL) / (3.0 * per_mass)
+                        continue
+                    out[g, j] = p_val
+            pos = stop
     # the genes whose guide nulls need smaller tails, built once the shared store is freed, so that the two never
-    # take memory at once; per feature, each null they read is built once, with the smallest tails any of them needs
+    # take memory at once; per feature, each null they read is built with the smallest tails any of them needs, in
+    # windows under the same budget
     vals = cum = no_atoms
     fine = np.empty(n_genes, dtype=np.int64)
     for j in range(n_features):
@@ -1336,27 +1432,44 @@ def _gene_pvalues(
                 if u >= 0:
                     null_eps[u] = min(null_eps[u], fine_eps[g, j]) if used[u] else fine_eps[g, j]
                     used[u] = True
-        vals, cum = _fill_store(
+        _count_nulls(
             row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps, max_cap, used,
-            raw, counts, offs, cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t,
+            raw, cost, sval_t, sfl_t, sgt_t,
         )  # fmt: skip
-        for t in prange(n_gene_slots):
-            lo_c, hi_c, nul_c = lohi_t[t, 0], lohi_t[t, 1], lohi_t[t, 2]
-            tails, dp, sf, si = tails_t[t], dp_t[t], sf_t[t], si_t[t]
-            for gi in range(t, n_fine, n_gene_slots):
-                g = fine[gi]
-                obs = gene_observed[g, j]
-                k, above, below, _ = _gene_guides(
-                    g, j, obs, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, construct_pool, construct_nn,
-                    null_base, null_index, null_pool, gene_offsets, offs, counts, lo_c, hi_c, nul_c, tails, dp,
-                )  # fmt: skip
-                if _over_cap(k, nul_c, raw):
-                    out[g, j] = np.nan
-                    unresolved[g, j] = True
-                    continue
-                out[g, j] = _sweep_pvalue(
-                    k, lo_c, hi_c, vals, cum, obs, tails[0], tails[1], tails[2], tails[3], above, below, rtol, sf, si
-                )[0]
+        seq = _gene_order(
+            fine, n_fine, j, construct_pool, construct_nn, null_base, null_index, gene_offsets, n_nulls, key
+        )
+        pos = 0
+        while pos < n_fine:
+            stop, n_win = _window(
+                pos, seq, n_fine, j, construct_pool, construct_nn, null_base, null_index, gene_offsets, raw, budget,
+                in_win, win_nulls,
+            )  # fmt: skip
+            vals, cum = _fill_store(
+                row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps,
+                win_nulls[:n_win], raw, counts, offs, cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t,
+            )  # fmt: skip
+            win = seq[pos:stop]
+            for t in prange(n_gene_slots):
+                lo_c, hi_c, nul_c = lohi_t[t, 0], lohi_t[t, 1], lohi_t[t, 2]
+                tails, dp, sf, si = tails_t[t], dp_t[t], sf_t[t], si_t[t]
+                for gi in range(t, win.size, n_gene_slots):
+                    g = win[gi]
+                    obs = gene_observed[g, j]
+                    k, above, below, _ = _gene_guides(
+                        g, j, obs, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, construct_pool,
+                        construct_nn, null_base, null_index, null_pool, gene_offsets, offs, counts, lo_c, hi_c, nul_c,
+                        tails, dp,
+                    )  # fmt: skip
+                    if _over_cap(k, nul_c, raw):
+                        out[g, j] = np.nan
+                        unresolved[g, j] = True
+                        continue
+                    out[g, j] = _sweep_pvalue(
+                        k, lo_c, hi_c, vals, cum, obs, tails[0], tails[1], tails[2], tails[3], above, below, rtol, sf,
+                        si,
+                    )[0]  # fmt: skip
+            pos = stop
     return out, unresolved
 
 
@@ -1688,6 +1801,7 @@ def bootstrap_features(
             n_threads,
             8 * n_threads,
             float(rtol),
+            max(1, settings.bootstrap_null_bytes // 32),  # an atom takes 16 bytes, and as many again to sort it
         )
     if unresolved.any():
         logger.warning(
