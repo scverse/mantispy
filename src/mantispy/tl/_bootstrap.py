@@ -1284,8 +1284,10 @@ def _build_range(
         )  # fmt: skip
     vals[lo] = np.nextafter(vlo, -np.inf)
     cum[lo] = below
-    for i in prange(merged):
-        cum[lo + 1 + i] += below
+    n_blocks = min(4 * n_threads, max(1, merged // 65536))  # blocks, not single atoms: the threads take one at a time
+    for b in prange(n_blocks):
+        for i in range(b * merged // n_blocks, (b + 1) * merged // n_blocks):
+            cum[lo + 1 + i] += below
     end = lo + 1 + merged
     vals[end] = np.nextafter(vhi, np.inf)
     cum[end] = cum[end - 1] + beyond
@@ -1522,10 +1524,12 @@ def _fill_store(
         u = keep[i]
         n = counts[u]
         src = offs[u]
-        if total + n <= src:  # apart from its own old place, so the copy can be split over the threads
-            for z in prange(n):
-                vals[total + z] = vals[src + z]
-                cum[total + z] = cum[src + z]
+        if total + n <= src:  # apart from its own old place, so the copy can be split over the threads, in blocks
+            n_blocks = min(4 * n_slots, max(1, n // 65536))
+            for b in prange(n_blocks):
+                for z in range(b * n // n_blocks, (b + 1) * n // n_blocks):
+                    vals[total + z] = vals[src + z]
+                    cum[total + z] = cum[src + z]
         elif total < src:
             for z in range(n):
                 vals[total + z] = vals[src + z]
