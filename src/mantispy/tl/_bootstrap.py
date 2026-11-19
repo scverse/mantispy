@@ -1208,34 +1208,66 @@ def _count_nulls(
 @njit(parallel=True, cache=True, nogil=True)
 def _fill_store(
     row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps, nulls, raw, counts, offs,
-    cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t, wide,
+    cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t, wide, held,
 ):  # fmt: skip
     """Build the guide nulls ``nulls``, counted by :func:`_count_nulls`, into the store ``vals``/``cum``, back to back.
 
     Null ``u`` is built in place at ``offs[u]``, so that the store fits them exactly, and ``counts[u]`` is its merged
-    count. A null of more than ``wide`` atoms is built by every thread (:func:`_build_wide`), one after the other,
-    and the rest each by one. The store grows when it must and is returned.
+    count. A null the last window left in the store (``held``) is moved down to its place rather than built again;
+    afterwards ``held`` marks ``nulls``. A null of more than ``wide`` atoms is built by every thread
+    (:func:`_build_wide`), one after the other, and the rest each by one. The store grows when it must, dropping what
+    it held, and is returned.
     """
     n_slots = sort_t.shape[0]
     total = 0
+    for i in range(nulls.size):
+        total += max(raw[nulls[i]], 0)
+    if total > vals.size:  # the store is kept across windows and features, so its pages are touched once
+        vals = cum = np.empty(0, dtype=np.float64)  # the old one is freed before the new one is taken
+        vals = np.empty(total, dtype=np.float64)
+        cum = np.empty(total, dtype=np.float64)
+        held[:] = False
+    # the held nulls first, in the order they sit in, so that each moves down onto space already free
+    keep = np.empty(nulls.size, dtype=np.int64)
+    n_keep = 0
+    for i in range(nulls.size):
+        if held[nulls[i]]:
+            keep[n_keep] = nulls[i]
+            n_keep += 1
+    keep = keep[:n_keep][np.argsort(offs[keep[:n_keep]], kind="mergesort")]
+    held[:] = False
+    total = 0
+    for i in range(n_keep):
+        u = keep[i]
+        n = counts[u]
+        src = offs[u]
+        if total + n <= src:  # apart from its own old place, so the copy can be split over the threads
+            for z in prange(n):
+                vals[total + z] = vals[src + z]
+                cum[total + z] = cum[src + z]
+        elif total < src:
+            for z in range(n):
+                vals[total + z] = vals[src + z]
+                cum[total + z] = cum[src + z]
+        offs[u] = total
+        held[u] = True
+        total += max(raw[u], 0)
     widest = 0
-    win_cost = np.empty(nulls.size, dtype=np.float64)
+    win_cost = np.zeros(nulls.size, dtype=np.float64)
     for i in range(nulls.size):
         u = nulls[i]
+        if held[u]:
+            continue
         offs[u] = total
         total += max(raw[u], 0)
         win_cost[i] = cost[u] if raw[u] <= wide else 0.0
         if raw[u] > wide:
             widest = max(widest, raw[u])
-    if total > vals.size:  # the store is kept across windows and features, so its pages are touched once
-        vals = cum = np.empty(0, dtype=np.float64)  # the old one is freed before the new one is taken
-        vals = np.empty(total, dtype=np.float64)
-        cum = np.empty(total, dtype=np.float64)
     if widest > 0:
         wide2, wprob2 = np.empty(widest, dtype=np.float64), np.empty(widest, dtype=np.float64)
         for i in range(nulls.size):
             u = nulls[i]
-            if raw[u] > wide:
+            if raw[u] > wide and not held[u]:
                 p = null_pool[u]
                 counts[u] = _build_wide(
                     row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], null_size[u], null_eps[u], vals, cum,
@@ -1245,7 +1277,7 @@ def _fill_store(
     for t in prange(n_slots):
         for ui in range(null_start[t], null_start[t + 1]):
             u = nulls[null_order[ui]]
-            if raw[u] > wide:  # built above
+            if raw[u] > wide or held[u]:  # built above, or kept from the last window
                 continue
             counts[u] = 0
             if raw[u] >= 0:  # one of more atoms than max_cap keeps none
@@ -1254,6 +1286,8 @@ def _fill_store(
                     row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], null_size[u], null_eps[u],
                     sort_t[t], sval_t[t], sfl_t[t], sgt_t[t], vals, cum, offs[u], offs[u] + max(raw[u], 0),
                 )  # fmt: skip
+    for i in range(nulls.size):
+        held[nulls[i]] = True
     return vals, cum
 
 
@@ -1463,6 +1497,7 @@ def _gene_pvalues(
     all_genes = np.arange(n_genes)
     key = np.empty(n_genes, dtype=np.int64)
     in_win = np.zeros(n_nulls, dtype=np.bool_)
+    held = np.zeros(n_nulls, dtype=np.bool_)  # the nulls in the store, from the last window
     win_nulls = np.empty(n_nulls, dtype=np.int64)
     fine_eps = np.zeros((n_genes, n_features), dtype=np.float64)  # the tails a gene's nulls need, 0 for the store's
     null_eps = np.empty(n_nulls, dtype=np.float64)  # the tails each null leaves out
@@ -1480,6 +1515,7 @@ def _gene_pvalues(
             if u >= 0:
                 used[u] = True
         null_eps[:] = eps
+        held[:] = False  # the nulls of the last feature, or of the other pass
         _count_nulls(
             row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps, max_cap, used,
             raw, cost, sval_t, sfl_t, sgt_t,
@@ -1495,7 +1531,7 @@ def _gene_pvalues(
             )  # fmt: skip
             vals, cum = _fill_store(
                 row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps,
-                win_nulls[:n_win], raw, counts, offs, cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t, wide,
+                win_nulls[:n_win], raw, counts, offs, cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t, wide, held,
             )  # fmt: skip
             win = seq[pos:stop]
             # a gene costs about its guides' atom count, more when an even count sends it through the boundary sweep
@@ -1567,6 +1603,7 @@ def _gene_pvalues(
                 if u >= 0:
                     null_eps[u] = min(null_eps[u], fine_eps[g, j]) if used[u] else fine_eps[g, j]
                     used[u] = True
+        held[:] = False  # the nulls of the last feature, or of the other pass
         _count_nulls(
             row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps, max_cap, used,
             raw, cost, sval_t, sfl_t, sgt_t,
@@ -1582,7 +1619,7 @@ def _gene_pvalues(
             )  # fmt: skip
             vals, cum = _fill_store(
                 row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps,
-                win_nulls[:n_win], raw, counts, offs, cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t, wide,
+                win_nulls[:n_win], raw, counts, offs, cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t, wide, held,
             )  # fmt: skip
             win = seq[pos:stop]
             for t in prange(n_gene_slots):
