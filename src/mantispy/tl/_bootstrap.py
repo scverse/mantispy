@@ -284,6 +284,9 @@ def _two_sided(gt: float, lt: float, measured: float) -> float:
 #: Below this the binomial tails that place a control guide's far lower tail are too close to their rounding to be
 #: searched, so every value is tested in turn.
 _SEARCH_EPS = 1e-10
+#: A guide null built only over its genes' range (:func:`_range_nulls`) of more atoms than this is built by
+#: every thread at once: few genes share one, so a window holds few of them to build side by side.
+_SHARED = 1 << 20
 
 
 @njit(cache=True, nogil=True)
@@ -341,6 +344,7 @@ def _add_sub_atoms(v, lo, n, r, scale, eps, out_val, out_prob, cnt, limit, sval,
         # the far lower tail carries no atom: start past the part of it a search finds (a value's copies share the
         # test, so this is the first of them)
         i = lo + _skip_lower_tail(v, lo, n, sval[:0], n, t, r, eps)
+        i = max(i, lo + _count_below(v, lo, end, vlo, False))  # and past the values below those asked for
         above = 1.0 if i == lo else _binom_cdf(t, r, (i - lo) / n)  # P(median >= v[i])
         while i < end and above > eps:
             a = v[i]
@@ -392,6 +396,16 @@ def _add_sub_atoms(v, lo, n, r, scale, eps, out_val, out_prob, cnt, limit, sval,
     # pass 2: diagonal and off-diagonal atoms from the precomputed tables, past the part of the far lower tail a
     # search finds
     left = _skip_lower_tail(v, lo, n, sfl[:nd], nd, t - 1, r, eps)
+    ranged = vlo > -np.inf or vhi < np.inf
+    if ranged:  # and past the values whose every midpoint is below those asked for
+        qa, qb = left, nd
+        while qa < qb:
+            mid = (qa + qb) // 2
+            if (sval[mid] + sval[nd - 1]) / 2.0 < vlo:
+                qa = mid + 1
+            else:
+                qb = mid
+        left = qa
     above = 1.0 if left == 0 else _binom_cdf(t - 1, r, sfl[left - 1])  # P(t-th order stat >= sval[ka])
     for ka in range(left, nd):
         if above <= eps or sval[ka] > vhi:  # the far upper tail, or past the values asked for
@@ -429,6 +443,38 @@ def _add_sub_atoms(v, lo, n, r, scale, eps, out_val, out_prob, cnt, limit, sval,
                 out_val[cnt] = sval[ka]
                 out_prob[cnt] = scale * diag
             cnt += 1
+        if ranged and direct:
+            # the row's atoms in the range, the same as the walk below finds: the midpoints and the mass past each
+            # are monotone in lb, so the walk's two stops are found by bisection
+            qa, qb = ka + 1, nd
+            while qa < qb:
+                mid = (qa + qb) // 2
+                if (sval[ka] + sval[mid]) / 2.0 < vlo:
+                    qa = mid + 1
+                else:
+                    qb = mid
+            first = qa
+            qa, qb = ka + 1, nd
+            while qa < qb:
+                mid = (qa + qb) // 2
+                if coef * sgt[mid] > eps * marg:
+                    qa = mid + 1
+                else:
+                    qb = mid
+            stop = min(qa + 1, nd)  # the walk takes the atom at which the mass past it falls under eps
+            for lb in range(first, stop):
+                mid_v = (sval[ka] + sval[lb]) / 2.0
+                if mid_v > vhi:
+                    break
+                pr = coef * (sgt[lb - 1] - sgt[lb])
+                if pr > 0.0:
+                    if cnt >= limit:
+                        return -1
+                    if cnt < out_val.shape[0]:
+                        out_val[cnt] = mid_v
+                        out_prob[cnt] = scale * pr
+                    cnt += 1
+            continue
         for lb in range(ka + 1, nd):
             if lb > ka + 1:
                 pr = coef * (sgt[lb - 1] - sgt[lb]) if direct else pr * sgt[lb]
@@ -614,16 +660,18 @@ def _construct_atoms(
 
 @njit(cache=True, nogil=True)
 def _build_construct(
-    pool_sorted_row, sub_nn_row, sub_start, s0, s1, m, eps, val_buf, prob_buf, val2, prob2, ints, sval, sfl, sgt
-):
+    pool_sorted_row, sub_nn_row, sub_start, s0, s1, m, eps, val_buf, prob_buf, val2, prob2, ints, sval, sfl, sgt,
+    vlo=-np.inf, vhi=np.inf,
+):  # fmt: skip
     """Build one guide null as merged, sorted atoms in ``val_buf``/``prob_buf``; returns their count.
 
-    Mixes every control guide's exact median-atom distribution (:func:`_construct_atoms`), then sorts and
-    merges equal values. Returns ``-1`` if the atoms do not fit the buffer.
+    Mixes every control guide's exact median-atom distribution (:func:`_construct_atoms`), those at values in
+    ``[vlo, vhi]``, then sorts and merges equal values. Returns ``-1`` if the atoms do not fit the buffer.
     """
     cnt = _construct_atoms(
-        pool_sorted_row, sub_nn_row, sub_start, s0, s1, m, eps, val_buf, prob_buf, val_buf.shape[0], sval, sfl, sgt
-    )
+        pool_sorted_row, sub_nn_row, sub_start, s0, s1, m, eps, val_buf, prob_buf, val_buf.shape[0], sval, sfl, sgt,
+        vlo, vhi,
+    )  # fmt: skip
     if cnt <= 0:
         return cnt
     return _collapse(val_buf, prob_buf, 0, cnt, val2, prob2, ints)
@@ -1054,67 +1102,89 @@ def _sweep_pvalue(k, lo_c, hi_c, vals, cum, obs, gt, lt, le, ge, above, below, r
 
 
 @njit(cache=True, nogil=True)
-def _build_into(row, nn_row, sub_start, s0, s1, m, eps, ints, sval, sfl, sgt, vals, cum, lo, hi):
+def _build_into(
+    row, nn_row, sub_start, s0, s1, m, eps, ints, sval, sfl, sgt, vals, cum, lo, hi, ranged=False, vlo=-np.inf,
+    vhi=np.inf, below=0.0, beyond=0.0,
+):  # fmt: skip
     """Build a guide null of ``m`` draws in place, in the stretch ``[lo, hi)`` of the store that holds its atoms.
 
     The store keeps the atom values and their running mass from the bottom, ``cum``, which holds the masses until
-    they are summed. Returns the merged count.
+    they are summed. Returns the merged count. A ``ranged`` null holds only its atoms in ``[vlo, vhi]``, between
+    an atom just below the range of the exact mass ``below`` it and one just above of the mass ``beyond`` it, as
+    :func:`_build_range` builds one with every thread.
     """
-    n = hi - lo
-    end = _build_construct(
-        row, nn_row, sub_start, s0, s1, m, eps, vals[lo:hi], cum[lo:hi],
-        np.empty(n, dtype=np.float64), np.empty(n, dtype=np.float64), ints, sval, sfl, sgt,
-    )  # fmt: skip
-    running = 0.0
+    first = lo + 1 if ranged else lo
+    last = hi - 1 if ranged else hi
+    if not ranged:
+        vlo, vhi = -np.inf, np.inf
+    n = last - first
+    end = 0
+    if n > 0:
+        end = _build_construct(
+            row, nn_row, sub_start, s0, s1, m, eps, vals[first:last], cum[first:last],
+            np.empty(n, dtype=np.float64), np.empty(n, dtype=np.float64), ints, sval, sfl, sgt, vlo, vhi,
+        )  # fmt: skip
+    running = below if ranged else 0.0
+    if ranged:
+        vals[lo] = np.nextafter(vlo, -np.inf)
+        cum[lo] = below
     for z in range(end):
-        running += cum[lo + z]
-        cum[lo + z] = running
-    return end
+        running += cum[first + z]
+        cum[first + z] = running
+    if not ranged:
+        return end
+    vals[first + end] = np.nextafter(vhi, np.inf)
+    cum[first + end] = running + beyond
+    return end + 2
 
 
 @njit(parallel=True, cache=True, nogil=True)
 def _sort_wide(val, prob, lo, n, val2, prob2, n_threads):
-    """:func:`_radix_sort2` of ``val[lo:lo+n]`` by every thread: each pass histograms and scatters blocks in parallel.
+    """:func:`_radix_sort2` of ``val[lo:lo+n]`` by every thread, as a sample sort.
 
-    A stable sort has one result, so this is the serial sort's order.
+    Values drawn evenly from the range split it into a few parts per thread; each block of the range sends its values
+    to their parts in order, and each part, small enough to sort in cache, is sorted on its own. Equal values share
+    a part, so the order is the serial sort's but for equal values in a part of a few thousand, which
+    :func:`_sort2` may swap, and whose masses then merge in another order.
     """
-    n_blocks = min(4 * n_threads, max(1, n // 65536))
-    bounds = np.linspace(0, n, n_blocks + 1).astype(np.int64)
-    hist = np.empty((n_blocks, _SORT_SCRATCH), dtype=np.int64)
-    mask = np.uint64((1 << _RADIX_BITS) - 1)
-    src_b, dst_b = val.view(np.uint64), val2.view(np.uint64)
-    src_p, dst_p = prob, prob2
-    s_off, d_off = lo, 0
-    moved = 0
-    for shift in range(0, 64, _RADIX_BITS):
-        for b in prange(n_blocks):
-            hist[b, :] = 0
-            for i in range(bounds[b], bounds[b + 1]):
-                hist[b, np.int64((_radix_key(src_b[s_off + i]) >> np.uint64(shift)) & mask)] += 1
-        same = False
-        for d in range(_SORT_SCRATCH - 1):
-            same |= hist[:, d].sum() == n
-        if same:  # every value shares this digit
-            continue
-        running = 0
-        for d in range(_SORT_SCRATCH - 1):  # each block's start for each digit, digit by digit, block by block
-            for b in range(n_blocks):
-                c = hist[b, d]
-                hist[b, d] = running
-                running += c
-        for b in prange(n_blocks):
-            for i in range(bounds[b], bounds[b + 1]):
-                x = src_b[s_off + i]
-                d = np.int64((_radix_key(x) >> np.uint64(shift)) & mask)
-                dst_b[d_off + hist[b, d]] = x
-                dst_p[d_off + hist[b, d]] = src_p[s_off + i]
-                hist[b, d] += 1
-        src_b, dst_b = dst_b, src_b
-        src_p, dst_p = dst_p, src_p
-        s_off, d_off = d_off, s_off
-        moved += 1
-    if moved % 2 == 1:  # the sorted values sit in the scratch
-        for i in prange(n):
+    n_parts = min(4 * n_threads, max(1, n // 65536))
+    if n_parts == 1:
+        _radix_sort2(val, prob, lo, lo + n, val2, prob2, np.empty(_SORT_SCRATCH, dtype=np.int64))
+        return
+    n_sample = 32 * n_parts
+    sample = np.empty(n_sample)
+    for i in range(n_sample):
+        sample[i] = val[lo + (i * n) // n_sample]
+    sample.sort()
+    split = np.empty(n_parts - 1)
+    for q in range(n_parts - 1):
+        split[q] = sample[(q + 1) * n_sample // n_parts]
+    bounds = np.linspace(0, n, n_parts + 1).astype(np.int64)
+    hist = np.zeros((n_parts, n_parts), dtype=np.int64)  # block by part
+    for blk in prange(n_parts):
+        for i in range(bounds[blk], bounds[blk + 1]):
+            hist[blk, np.searchsorted(split, val[lo + i], side="right")] += 1
+    part = np.zeros(n_parts + 1, dtype=np.int64)
+    running = 0
+    for q in range(n_parts):  # each block's start in each part, part by part, block by block
+        part[q] = running
+        for blk in range(n_parts):
+            c = hist[blk, q]
+            hist[blk, q] = running
+            running += c
+    part[n_parts] = n
+    for blk in prange(n_parts):
+        for i in range(bounds[blk], bounds[blk + 1]):
+            q = np.searchsorted(split, val[lo + i], side="right")
+            val2[hist[blk, q]] = val[lo + i]
+            prob2[hist[blk, q]] = prob[lo + i]
+            hist[blk, q] += 1
+    for q in prange(n_parts):
+        a, b = part[q], part[q + 1]
+        if b > a:  # the part's own stretch of the range is its scratch
+            ints = np.empty(_SORT_SCRATCH, dtype=np.int64)
+            _radix_sort2(val2, prob2, a, b, val[lo + a : lo + b], prob[lo + a : lo + b], ints)
+        for i in range(a, b):
             val[lo + i] = val2[i]
             prob[lo + i] = prob2[i]
 
@@ -1426,8 +1496,8 @@ def _fill_store(
     Null ``u`` is built in place at ``offs[u]``, so that the store fits them exactly, and ``counts[u]`` is its merged
     count. A null the last window left in the store (``held``) is moved down to its place rather than built again;
     afterwards ``held`` marks ``nulls``. A null of more than ``wide`` atoms is built by every thread
-    (:func:`_build_wide`), one after the other, and the rest each by one; a ``ranged`` one only over its range
-    (:func:`_build_range`). The store grows when it must, dropping what it held, and is returned.
+    (:func:`_build_wide`, or :func:`_build_range` for a ``ranged`` one, built only over its range), one after the
+    other, and the rest each by one. The store grows when it must, dropping what it held, and is returned.
     """
     n_slots = sort_t.shape[0]
     total = 0
@@ -1471,15 +1541,15 @@ def _fill_store(
             continue
         offs[u] = total
         total += max(raw[u], 0)
-        if raw[u] > wide or ranged[u]:
+        if raw[u] > wide or (ranged[u] and raw[u] > _SHARED):
             widest = max(widest, raw[u])
         else:
-            win_cost[i] = cost[u]
+            win_cost[i] = max(raw[u], 0) if ranged[u] else cost[u]
     if widest > 0:
         wide2, wprob2 = np.empty(widest, dtype=np.float64), np.empty(widest, dtype=np.float64)
         for i in range(nulls.size):
             u = nulls[i]
-            if held[u] or raw[u] < 0:
+            if held[u] or not (raw[u] > wide or (ranged[u] and raw[u] > _SHARED)):
                 continue
             p = null_pool[u]
             if ranged[u]:
@@ -1488,7 +1558,7 @@ def _fill_store(
                     offs[u], raw[u], wide2, wprob2, sval_t.shape[1], n_slots, rng_lo[u], rng_hi[u], lump_lo[u],
                     lump_hi[u],
                 )  # fmt: skip
-            elif raw[u] > wide:
+            else:
                 counts[u] = _build_wide(
                     row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], null_size[u], null_eps[u], vals, cum,
                     offs[u], raw[u], wide2, wprob2, sval_t.shape[1], n_slots,
@@ -1497,7 +1567,7 @@ def _fill_store(
     for t in prange(n_slots):
         for ui in range(null_start[t], null_start[t + 1]):
             u = nulls[null_order[ui]]
-            if raw[u] > wide or ranged[u] or held[u]:  # built above, or kept from the last window
+            if raw[u] > wide or (ranged[u] and raw[u] > _SHARED) or held[u]:  # built above, or kept
                 continue
             counts[u] = 0
             if raw[u] >= 0:  # one of more atoms than max_cap keeps none
@@ -1505,6 +1575,7 @@ def _fill_store(
                 counts[u] = _build_into(
                     row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], null_size[u], null_eps[u],
                     sort_t[t], sval_t[t], sfl_t[t], sgt_t[t], vals, cum, offs[u], offs[u] + max(raw[u], 0),
+                    ranged[u], rng_lo[u], rng_hi[u], lump_lo[u], lump_hi[u],
                 )  # fmt: skip
     for i in range(nulls.size):
         held[nulls[i]] = True
@@ -1550,16 +1621,22 @@ def _window(pos, seq, n_seq, j, construct_pool, construct_nn, null_base, null_in
 
 
 @njit(cache=True, nogil=True)
-def _gene_order(genes, n, j, construct_pool, construct_nn, null_base, null_index, gene_offsets, n_nulls, key):
-    """``genes[:n]`` in the order of their guides' smallest null, so that the genes of a window share their nulls."""
+def _gene_order(genes, n, j, construct_pool, construct_nn, null_base, null_index, gene_offsets, n_nulls, key, ranged):
+    """``genes[:n]`` in the order of their guides' smallest null, so that the genes of a window share their nulls.
+
+    A ``ranged`` null, which few genes share, does not place its gene, so the genes that read one spread over the
+    windows rather than fill windows of their own with few genes each.
+    """
     for gi in range(n):
         g = genes[gi]
-        first = n_nulls
+        first = first_any = n_nulls
         for c in range(gene_offsets[g], gene_offsets[g + 1]):
             u = null_index[null_base[construct_pool[c]] + construct_nn[c, j]]
             if u >= 0:
-                first = min(first, u)
-        key[gi] = first
+                first_any = min(first_any, u)
+                if not ranged[u]:
+                    first = min(first, u)
+        key[gi] = first if first < n_nulls else first_any
     return genes[:n][np.argsort(key[:n], kind="mergesort")]
 
 
@@ -1753,8 +1830,9 @@ def _gene_pvalues(
                 lump_hi, sval_t, sfl_t, sgt_t,
             )  # fmt: skip
         seq = _gene_order(
-            all_genes, n_genes, j, construct_pool, construct_nn, null_base, null_index, gene_offsets, n_nulls, key
-        )
+            all_genes, n_genes, j, construct_pool, construct_nn, null_base, null_index, gene_offsets, n_nulls, key,
+            ranged,
+        )  # fmt: skip
         pos = 0
         while pos < n_genes:
             stop, n_win = _window(
@@ -1849,7 +1927,7 @@ def _gene_pvalues(
                 sfl_t, sgt_t,
             )  # fmt: skip
         seq = _gene_order(
-            fine, n_fine, j, construct_pool, construct_nn, null_base, null_index, gene_offsets, n_nulls, key
+            fine, n_fine, j, construct_pool, construct_nn, null_base, null_index, gene_offsets, n_nulls, key, ranged
         )
         pos = 0
         while pos < n_fine:
