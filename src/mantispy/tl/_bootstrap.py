@@ -828,9 +828,43 @@ def _sweep_up(k, lo_c, hi_c, sp, sp_l, vals, cum, obs, sc, budget):
     one). The pass starts at the first value at which either split's whole probability, every low guide at most that
     value and every high one past its cut, exceeds ``budget``, so either part it leaves out is at most ``budget``.
     """
+    x0 = _sweep_start(k, lo_c, hi_c, sp, sp_l, vals, cum, obs, sc, budget)
+    if x0 == np.inf:
+        return 0.0, 0.0
+    return _sweep_part(k, lo_c, hi_c, sp, sp_l, vals, cum, obs, sc, x0, np.inf)
+
+
+@njit(parallel=True, cache=True, nogil=True)
+def _sweep_up_wide(k, lo_c, hi_c, sp, sp_l, vals, cum, obs, sc, budget, n_parts):
+    """:func:`_sweep_up` by every thread: its pass split by value into ``n_parts`` parts, each from its own start.
+
+    The state at a low value, each guide's mass at most it and past its cuts, is the one the pass reaches there, so
+    each part sets it up at its first value (:func:`_sweep_part`) and the terms are the pass's, summed in parts.
+    """
+    x0 = _sweep_start(k, lo_c, hi_c, sp, sp_l, vals, cum, obs, sc, budget)
+    if x0 == np.inf:
+        return 0.0, 0.0
+    widest, first = 0, 0
+    for c in range(k):  # the parts split the low values of the guide with the most of them evenly
+        i = lo_c[c] + _count_below(vals, lo_c[c], sp[c], x0, False)
+        if sp[c] - i > widest:
+            widest, first = sp[c] - i, i
+    bounds = np.empty(n_parts + 1)
+    bounds[0], bounds[n_parts] = x0, np.inf
+    for i in range(1, n_parts):
+        bounds[i] = max(bounds[i - 1], vals[first + (i * widest) // n_parts])
+    over = np.zeros(n_parts)
+    at_least = np.zeros(n_parts)
+    for i in prange(n_parts):
+        if bounds[i + 1] > bounds[i]:
+            over[i], at_least[i] = _sweep_part(k, lo_c, hi_c, sp, sp_l, vals, cum, obs, sc, bounds[i], bounds[i + 1])
+    return over.sum(), at_least.sum()
+
+
+@njit(cache=True, nogil=True)
+def _sweep_start(k, lo_c, hi_c, sp, sp_l, vals, cum, obs, sc, budget):
+    """The value :func:`_sweep_up` starts at, ``inf`` where no term passes ``budget``."""
     lw_u, hw_u, lw_l, hw_l = sc[0], sc[1], sc[2], sc[3]
-    # the pass's own scratch: a view of the threads' shared scratch would touch its reference count at every call
-    ip, iq, ir = np.empty(k, dtype=np.int64), np.empty(k, dtype=np.int64), np.empty(k, dtype=np.int64)
     f, h, fl_, hr, poly = np.empty(k), np.empty(k), np.empty(k), np.empty(k), np.empty(k + 1)
     half = k // 2
     x0 = np.inf
@@ -854,10 +888,21 @@ def _sweep_up(k, lo_c, hi_c, sp, sp_l, vals, cum, obs, sc, budget):
                 left = mid + 1
         if left < sp[a]:
             x0 = min(x0, vals[left])
-    if x0 == np.inf:
-        return 0.0, 0.0
+    return x0
+
+
+@njit(cache=True, nogil=True)
+def _sweep_part(k, lo_c, hi_c, sp, sp_l, vals, cum, obs, sc, x0, x1):
+    """The terms of :func:`_sweep_up` of its low values in ``[x0, x1)``, its state set up at ``x0``."""
+    lw_u, hw_u, lw_l, hw_l = sc[0], sc[1], sc[2], sc[3]
+    # the pass's own scratch: a view of the threads' shared scratch would touch its reference count at every call
+    ip, iq, ir = np.empty(k, dtype=np.int64), np.empty(k, dtype=np.int64), np.empty(k, dtype=np.int64)
+    end = np.empty(k, dtype=np.int64)  # past each guide's last low value before x1
+    f, h, fl_, hr, poly = np.empty(k), np.empty(k), np.empty(k), np.empty(k), np.empty(k + 1)
+    half = k // 2
     for c in range(k):
         lo = lo_c[c]
+        end[c] = sp[c] if x1 == np.inf else lo + _count_below(vals, lo, sp[c], x1, False)
         ip[c] = lo + _count_below(vals, lo, sp[c], x0, False)
         low = cum[ip[c] - 1] if ip[c] > lo else 0.0
         f[c], fl_[c] = lw_u[c] * low, lw_l[c] * low  # x0 is at most obs, so the atoms below it are low in both
@@ -866,12 +911,12 @@ def _sweep_up(k, lo_c, hi_c, sp, sp_l, vals, cum, obs, sc, budget):
         ir[c], m = _past(lo, sp_l[c], hi_c[c], vals, cum, obs, x0, True)
         hr[c] = hw_l[c] * (cum[hi_c[c] - 1] - m)
     if k == 4:
-        return _sweep_up4(lo_c, hi_c, sp, sp_l, vals, cum, obs, sc, ip, iq, ir, f, fl_, h, hr)
+        return _sweep_up4(lo_c, hi_c, sp, sp_l, vals, cum, obs, sc, ip, iq, ir, f, fl_, h, hr, end)
     over = at_least = 0.0
     while True:
         x = np.inf
         for c in range(k):
-            if ip[c] < sp[c] and vals[ip[c]] < x:
+            if ip[c] < end[c] and vals[ip[c]] < x:
                 x = vals[ip[c]]
         if x == np.inf:
             break
@@ -891,7 +936,7 @@ def _sweep_up(k, lo_c, hi_c, sp, sp_l, vals, cum, obs, sc, budget):
                 hr[c] = hw_l[c] * (top - (cum[r - 1] if r > lo else 0.0))
         below_obs = x < obs
         for a in range(k):
-            if ip[a] < sp[a] and vals[ip[a]] == x:
+            if ip[a] < end[a] and vals[ip[a]] == x:
                 low = cum[ip[a]]
                 step = lw_u[a] * low - f[a]
                 over += step * _coef(k, a, h, f, poly, half - 1)
@@ -930,8 +975,8 @@ def _cuts(q, r, e, s, lo, vals, cum, x, obs, below, hw, hv, top, h, hr):
 
 
 @njit(cache=True, nogil=True)
-def _sweep_up4(lo_c, hi_c, sp, sp_l, vals, cum, obs, sc, ip, iq, ir, f, fl_, h, hr):
-    """The pass of :func:`_sweep_up` for four guides, from the state it set up, its state held in scalars.
+def _sweep_up4(lo_c, hi_c, sp, sp_l, vals, cum, obs, sc, ip, iq, ir, f, fl_, h, hr, end):
+    """The pass of :func:`_sweep_part` for four guides, from the state it set up, its state held in scalars.
 
     The probability that one of the other three guides is low and the other two high is written out.
     """
@@ -944,16 +989,17 @@ def _sweep_up4(lo_c, hi_c, sp, sp_l, vals, cum, obs, sc, ip, iq, ir, f, fl_, h, 
     lv0, lv1, lv2, lv3 = sc[2, 0], sc[2, 1], sc[2, 2], sc[2, 3]
     hv0, hv1, hv2, hv3 = sc[3, 0], sc[3, 1], sc[3, 2], sc[3, 3]
     p0, p1, p2, p3 = ip[0], ip[1], ip[2], ip[3]
+    u0, u1, u2, u3 = end[0], end[1], end[2], end[3]
     q0, q1, q2, q3 = iq[0], iq[1], iq[2], iq[3]
     r0, r1, r2, r3 = ir[0], ir[1], ir[2], ir[3]
     f0, f1, f2, f3 = f[0], f[1], f[2], f[3]  # F at <= obs
     g0, g1, g2, g3 = fl_[0], fl_[1], fl_[2], fl_[3]  # F at < obs
     h0, h1, h2, h3 = h[0], h[1], h[2], h[3]  # past the cut at > obs
     k0, k1, k2, k3 = hr[0], hr[1], hr[2], hr[3]  # past the cut at >= obs, high at >= obs
-    x0 = vals[p0] if p0 < e0 else np.inf
-    x1 = vals[p1] if p1 < e1 else np.inf
-    x2 = vals[p2] if p2 < e2 else np.inf
-    x3 = vals[p3] if p3 < e3 else np.inf
+    x0 = vals[p0] if p0 < u0 else np.inf
+    x1 = vals[p1] if p1 < u1 else np.inf
+    x2 = vals[p2] if p2 < u2 else np.inf
+    x3 = vals[p3] if p3 < u3 else np.inf
     over = at_least = 0.0
     while True:
         x = min(min(x0, x1), min(x2, x3))
@@ -974,7 +1020,7 @@ def _sweep_up4(lo_c, hi_c, sp, sp_l, vals, cum, obs, sc, ip, iq, ir, f, fl_, h, 
                 at_least += step * (g1 * k2 * k3 + g2 * k1 * k3 + g3 * k1 * k2)
                 g0 += step
             p0 += 1
-            x0 = vals[p0] if p0 < e0 else np.inf
+            x0 = vals[p0] if p0 < u0 else np.inf
         if x1 == x:
             low = cum[p1]
             step = lw1 * low - f1
@@ -985,7 +1031,7 @@ def _sweep_up4(lo_c, hi_c, sp, sp_l, vals, cum, obs, sc, ip, iq, ir, f, fl_, h, 
                 at_least += step * (g0 * k2 * k3 + g2 * k0 * k3 + g3 * k0 * k2)
                 g1 += step
             p1 += 1
-            x1 = vals[p1] if p1 < e1 else np.inf
+            x1 = vals[p1] if p1 < u1 else np.inf
         if x2 == x:
             low = cum[p2]
             step = lw2 * low - f2
@@ -996,7 +1042,7 @@ def _sweep_up4(lo_c, hi_c, sp, sp_l, vals, cum, obs, sc, ip, iq, ir, f, fl_, h, 
                 at_least += step * (g0 * k1 * k3 + g1 * k0 * k3 + g3 * k0 * k1)
                 g2 += step
             p2 += 1
-            x2 = vals[p2] if p2 < e2 else np.inf
+            x2 = vals[p2] if p2 < u2 else np.inf
         if x3 == x:
             low = cum[p3]
             step = lw3 * low - f3
@@ -1007,7 +1053,7 @@ def _sweep_up4(lo_c, hi_c, sp, sp_l, vals, cum, obs, sc, ip, iq, ir, f, fl_, h, 
                 at_least += step * (g0 * k1 * k2 + g1 * k0 * k2 + g2 * k0 * k1)
                 g3 += step
             p3 += 1
-            x3 = vals[p3] if p3 < e3 else np.inf
+            x3 = vals[p3] if p3 < u3 else np.inf
     return over, at_least
 
 
@@ -1069,7 +1115,7 @@ def _sweep_down(k, lo_c, hi_c, sp, vals, cum, obs, wl, wh, inv_low, inv_high, to
 
 
 @njit(cache=True, nogil=True)
-def _sweep_pvalue(k, lo_c, hi_c, vals, cum, obs, gt, lt, le, ge, above, below, rtol, fl, ints):
+def _sweep_pvalue(k, lo_c, hi_c, vals, cum, obs, gt, lt, le, ge, above, below, rtol, fl, ints, n_parts=1):
     """The two-sided p-value of a gene of an even number ``k`` of measured guides, none ever nan.
 
     ``above``/``below`` are ``P(#high > #low)`` and its mirror; the rest is the split into as many low as high guides,
@@ -1081,7 +1127,7 @@ def _sweep_pvalue(k, lo_c, hi_c, vals, cum, obs, gt, lt, le, ge, above, below, r
     so the p-value moves by at most half ``rtol`` of itself; ``rtol = 0`` leaves out only tails that cannot occur.
 
     Returns the p-value, how far the atoms the guide nulls left out can move it, and that per unit of each null's
-    mass left out (:func:`_sides`).
+    mass left out (:func:`_sides`). With ``n_parts`` above one, every thread sweeps (:func:`_sweep_up_wide`).
     """
     sp_u, sp_l = ints[0], ints[1]
     inv_low_u, inv_high_u, top_u, wl_u, wh_u = fl[0], fl[1], fl[2], fl[3], fl[4]
@@ -1093,7 +1139,10 @@ def _sweep_pvalue(k, lo_c, hi_c, vals, cum, obs, gt, lt, le, ge, above, below, r
         sc[0, a], sc[1, a] = wl_u[a] * inv_low_u[a], wh_u[a] * inv_high_u[a]
         sc[2, a], sc[3, a] = wl_l[a] * inv_low_l[a], wh_l[a] * inv_high_l[a]
     budget = 0.5 * rtol * min(above, below)
-    over, at_least = _sweep_up(k, lo_c, hi_c, sp_u, sp_l, vals, cum, obs, sc, budget)
+    if n_parts > 1:
+        over, at_least = _sweep_up_wide(k, lo_c, hi_c, sp_u, sp_l, vals, cum, obs, sc, budget, n_parts)
+    else:
+        over, at_least = _sweep_up(k, lo_c, hi_c, sp_u, sp_l, vals, cum, obs, sc, budget)
     split = _coef(k, -1, wh_l, wl_l, np.empty(k + 1), k // 2)
     under = split - at_least
     if under < _SWEEP_BOTH * split:
@@ -1301,10 +1350,12 @@ def _reach_bound(k, nul_c, tails, null_eps, row, nn_row, sub_start, pool_sub_sta
 
     The sweep's chance of a guide being low and at most ``x``, or high and past the cut, is the null's atom mass
     there over its atom mass on that side, times the side's exact chance (``tails``, at ``obs``), so never more than
-    that chance. The atoms lack at most three times the null's tails of each side (:func:`_add_sub_atoms`), so
-    where a side's chance is more than twice that, the atoms hold over half of it, and twice the null's exact
-    chance of being there bounds the sweep's. For :func:`_sweep_down`, ``x`` is the least high value and ``cut``
-    the bound of the low ones.
+    that chance. The atom mass there is at most the null's exact chance there, and the atoms lack at most three times
+    the null's tails in all (:func:`_add_sub_atoms`), so a side of exact chance ``c`` holds atom mass over ``c``
+    less that. Of the two splits at ``obs``, the one whose side is the smaller, ``lt`` or ``gt``, scales the most,
+    so the null's exact chance there times that side's chance over itself less the tails bounds the sweep's, with a
+    margin for rounding; a side of no more than twice the tails takes its whole chance instead. For
+    :func:`_sweep_down`, ``x`` is the least high value and ``cut`` the bound of the low ones.
     """
     gt, lt, le, ge = tails[0], tails[1], tails[2], tails[3]
     for a in range(k):
@@ -1314,9 +1365,12 @@ def _reach_bound(k, nul_c, tails, null_eps, row, nn_row, sub_start, pool_sub_sta
         _, _, le_c, ge_c, _ = _pool_tails(
             row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], null_size[u], cut
         )
-        held = 6.0 * null_eps[u]  # a side's chance past this, the atoms hold over half of it
-        low = min(le[a], 2.0 * (le_x if up else le_c)) if lt[a] > held else le[a]
-        high = min(ge[a], 2.0 * (ge_c if up else ge_x)) if gt[a] > held else ge[a]
+        lack = 3.0 * null_eps[u]
+        low, high = le[a], ge[a]
+        if lt[a] > 2.0 * lack:
+            low = min(low, (le_x if up else le_c) * (lt[a] / (lt[a] - lack)) * (1.0 + 1e-12))
+        if gt[a] > 2.0 * lack:
+            high = min(high, (ge_c if up else ge_x) * (gt[a] / (gt[a] - lack)) * (1.0 + 1e-12))
         if up:
             var[a], base[a] = low, high  # low at most x, high at least the cut
         else:
@@ -1723,6 +1777,40 @@ def _gene_guides(
     return km, above, below, measured
 
 
+@njit(cache=True, nogil=True)
+def _gene_pvalue(
+    g, j, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, construct_pool, construct_nn, null_base, null_index,
+    null_pool, gene_offsets, gene_observed, offs, counts, raw, vals, cum, eps, rtol, lo_c, hi_c, nul_c, tails, dp, sf,
+    si, n_parts,
+):  # fmt: skip
+    """Gene ``g``'s p-value in feature ``j`` from the store, and the tails its nulls need instead, or ``0``.
+
+    Where the tails its nulls leave out could move the p-value past ``rtol``, the p-value is left for the finer
+    pass and the tails that pass needs are returned. ``n_parts`` above one sweeps by every thread.
+    """
+    obs = gene_observed[g, j]
+    if np.isnan(obs):
+        return np.nan, 0.0
+    k, above, below, measured = _gene_guides(
+        g, j, obs, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, construct_pool, construct_nn, null_base,
+        null_index, null_pool, gene_offsets, offs, counts, lo_c, hi_c, nul_c, tails, dp,
+    )  # fmt: skip
+    if k < 0:
+        return _two_sided(above, below, measured), 0.0
+    p_val, lost, per_mass = _sweep_pvalue(
+        k, lo_c, hi_c, vals, cum, obs, tails[0], tails[1], tails[2], tails[3], above, below, rtol, sf, si, n_parts
+    )
+    if not _over_cap(k, nul_c, raw):  # no null in the store leaves out more than three times eps
+        lost = min(lost, 3.0 * eps * per_mass)
+    # the exact p-value is at least p_val less the sweep's tails and what the atoms leave out, and never under
+    # 2 * min(above, below): if those could move it past rtol of that, rebuild with tails that cannot
+    swept = rtol * min(above, below)
+    if lost > max(rtol * p_val / (1.0 + rtol) - swept, swept) + _ATOL:
+        least = max(p_val - swept - lost, 2.0 * min(above, below))
+        return np.nan, (max(rtol * least - swept, swept) + _ATOL) / (3.0 * per_mass)
+    return p_val, 0.0
+
+
 @njit(parallel=True, cache=True, nogil=True)
 def _gene_pvalues(
     pool_sorted,
@@ -1756,7 +1844,8 @@ def _gene_pvalues(
     null in feature ``j`` is ``null_index[null_base[pool] + construct_nn[c, j]]``, ``-1`` where the guide measures
     nothing and so leaves the gene. The nulls are dealt to ``n_slots`` slots and the genes to
     ``n_gene_slots`` (see :func:`_deal`), each with its own scratch; more gene slots than threads let a
-    thread that finishes early take another.
+    thread that finishes early take another. A gene of an even count whose nulls hold more than ``wide`` atoms is
+    swept by every thread (:func:`_sweep_up_wide`) once the rest of its window is done.
 
     An even count's boundary is swept by :func:`_sweep_pvalue` over atoms that leave out far tails of ``eps`` (of
     :data:`_ATOL` over three per guide when ``rtol`` is ``0``), and every atom of a null of more than the largest of
@@ -1797,6 +1886,7 @@ def _gene_pvalues(
     offs = np.zeros(n_nulls, dtype=np.int64)  # where each null of the window starts in the store
     cost = null_caps.astype(np.float64)  # a null's build cost, its atom count once known
     gene_cost = np.empty(n_genes, dtype=np.float64)
+    wide_gene = np.zeros(n_genes, dtype=np.bool_)  # the genes swept by every thread
     all_genes = np.arange(n_genes)
     key = np.empty(n_genes, dtype=np.int64)
     in_win = np.zeros(n_nulls, dtype=np.bool_)
@@ -1860,6 +1950,9 @@ def _gene_pvalues(
                         tot += counts[u]
                         k += 1
                 gene_cost[gi] = tot * (1.0 + (k % 2 == 0) * k) + 1.0 if k >= 2 else 1.0
+                wide_gene[gi] = k >= 2 and k % 2 == 0 and tot > wide
+                if wide_gene[gi]:  # swept after the others, so it weighs nothing in their deal
+                    gene_cost[gi] = 0.0
             gene_order, gene_start = _deal(gene_cost[: win.size], n_gene_slots)
             for t in prange(n_gene_slots):
                 # the slot's scratch views, taken once: each view touches the shared reference count
@@ -1867,33 +1960,23 @@ def _gene_pvalues(
                 tails, dp, sf, si = tails_t[t], dp_t[t], sf_t[t], si_t[t]
                 for gi in range(gene_start[t], gene_start[t + 1]):
                     g = win[gene_order[gi]]
-                    obs = gene_observed[g, j]
-                    if np.isnan(obs):
-                        out[g, j] = np.nan
-                        continue
-                    k, above, below, measured = _gene_guides(
-                        g, j, obs, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, construct_pool,
-                        construct_nn, null_base, null_index, null_pool, gene_offsets, offs, counts, lo_c, hi_c, nul_c,
-                        tails, dp,
+                    if not wide_gene[gene_order[gi]]:
+                        out[g, j], fine_eps[g, j] = _gene_pvalue(
+                            g, j, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, construct_pool, construct_nn,
+                            null_base, null_index, null_pool, gene_offsets, gene_observed, offs, counts, raw, vals,
+                            cum, eps, rtol, lo_c, hi_c, nul_c, tails, dp, sf, si, 1,
+                        )  # fmt: skip
+            # a gene whose sweep reads more than wide atoms is swept by every thread, one after the other
+            lo_c, hi_c, nul_c = lohi_t[0, 0], lohi_t[0, 1], lohi_t[0, 2]
+            tails, dp, sf, si = tails_t[0], dp_t[0], sf_t[0], si_t[0]
+            for gi in range(win.size):
+                if wide_gene[gi]:
+                    g = win[gi]
+                    out[g, j], fine_eps[g, j] = _gene_pvalue(
+                        g, j, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, construct_pool, construct_nn,
+                        null_base, null_index, null_pool, gene_offsets, gene_observed, offs, counts, raw, vals, cum,
+                        eps, rtol, lo_c, hi_c, nul_c, tails, dp, sf, si, 4 * n_slots,
                     )  # fmt: skip
-                    if k < 0:
-                        out[g, j] = _two_sided(above, below, measured)
-                        continue
-                    p_val, lost, per_mass = _sweep_pvalue(
-                        k, lo_c, hi_c, vals, cum, obs, tails[0], tails[1], tails[2], tails[3], above, below, rtol, sf,
-                        si,
-                    )  # fmt: skip
-                    if not _over_cap(k, nul_c, raw):  # no null in the store leaves out more than three times eps
-                        lost = min(lost, 3.0 * eps * per_mass)
-                    # the exact p-value is at least p_val less the sweep's tails and what the atoms leave out, and
-                    # never under 2 * min(above, below): if those could move it past rtol of that, rebuild with tails
-                    # that cannot
-                    swept = rtol * min(above, below)
-                    if lost > max(rtol * p_val / (1.0 + rtol) - swept, swept) + _ATOL:
-                        least = max(p_val - swept - lost, 2.0 * min(above, below))
-                        fine_eps[g, j] = (max(rtol * least - swept, swept) + _ATOL) / (3.0 * per_mass)
-                        continue
-                    out[g, j] = p_val
             pos = stop
     # the genes whose guide nulls need smaller tails, built once the shared store is freed, so that the two never
     # take memory at once; per feature, each null they read is built with the smallest tails any of them needs, in
