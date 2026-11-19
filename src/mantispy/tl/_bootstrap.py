@@ -1386,13 +1386,16 @@ def _reach(k, nul_c, tails, null_eps, obs, budget, row, nn_row, sub_start, pool_
     :func:`_sweep_up` starts at the first low atom whose weight passes ``budget`` and reads high atoms down from
     twice ``obs`` less it, so with ``lo`` below every value whose weight cannot pass it (:func:`_reach_bound`) and
     ``hi`` twice ``obs`` less ``lo``, no atom below ``lo`` is the sweep's low value and every one above ``hi`` is
-    past its cut; :func:`_sweep_down` the mirror. Each end leaves a margin of rounding.
+    past its cut; :func:`_sweep_down` the mirror. Each end is searched to a ten-thousandth of its distance from
+    ``obs``, on the side away from ``obs``, and leaves a margin of rounding.
     """
     args = (k, nul_c, tails, null_eps, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size)
     lo = obs
     if _reach_bound(*args, obs, obs, True, base, var, poly) > budget:
         a, b = vmin - 1.0, obs
-        for _ in range(48):
+        for _ in range(60):
+            if b - a <= 1e-4 * (obs - a):
+                break
             x = 0.5 * (a + b)
             cut = 2.0 * obs - x - 1e-9 * (abs(obs) + abs(x))
             if _reach_bound(*args, x, cut, True, base, var, poly) > budget:
@@ -1403,7 +1406,9 @@ def _reach(k, nul_c, tails, null_eps, obs, budget, row, nn_row, sub_start, pool_
     hi = obs
     if _reach_bound(*args, obs, obs, False, base, var, poly) > budget:
         a, b = obs, vmax + 1.0
-        for _ in range(48):
+        for _ in range(60):
+            if b - a <= 1e-4 * (b - obs):
+                break
             y = 0.5 * (a + b)
             cut = 2.0 * obs - y + 1e-9 * (abs(obs) + abs(y))
             if _reach_bound(*args, y, cut, False, base, var, poly) > budget:
@@ -1679,22 +1684,23 @@ def _window(pos, seq, n_seq, j, construct_pool, construct_nn, null_base, null_in
 
 
 @njit(cache=True, nogil=True)
-def _gene_order(genes, n, j, construct_pool, construct_nn, null_base, null_index, gene_offsets, n_nulls, key, ranged):
-    """``genes[:n]`` in the order of their guides' smallest null, so that the genes of a window share their nulls.
+def _gene_order(genes, n, j, construct_pool, construct_nn, null_base, null_index, gene_offsets, n_nulls, key, raw):
+    """``genes[:n]`` in the order of their guides' largest null, so that the genes of a window share their nulls.
 
-    A ``ranged`` null, which few genes share, does not place its gene, so the genes that read one spread over the
-    windows rather than fill windows of their own with few genes each.
+    Most of a window's atoms are in its genes' largest nulls, and few genes share one, so the genes that read a
+    large null come one after the other, and the store builds it once.
     """
     for gi in range(n):
         g = genes[gi]
-        first = first_any = n_nulls
+        first = n_nulls
+        most = -2
         for c in range(gene_offsets[g], gene_offsets[g + 1]):
             u = null_index[null_base[construct_pool[c]] + construct_nn[c, j]]
             if u >= 0:
-                first_any = min(first_any, u)
-                if not ranged[u]:
-                    first = min(first, u)
-        key[gi] = first if first < n_nulls else first_any
+                size = raw[u] if raw[u] >= 0 else np.iinfo(np.int64).max  # past the cap, the largest
+                if size > most or (size == most and u < first):
+                    most, first = size, u
+        key[gi] = first
     return genes[:n][np.argsort(key[:n], kind="mergesort")]
 
 
@@ -1908,7 +1914,8 @@ def _gene_pvalues(
     :data:`_ATOL` over three per guide when ``rtol`` is ``0``), and every atom of a null of more than the largest of
     ``null_caps``. Where what they leave out, with the sweep's own tails, could move the p-value by more than ``rtol``
     of the least it can be, the gene's guide nulls are built again after the last feature, with tails small enough
-    that it cannot, each null once per feature for every gene that needs it. A gene whose nulls then still have more
+    that it cannot, each null once per feature for every gene that needs it, and only over the values those genes
+    read (:func:`_range_nulls`), as few genes share one. A gene whose nulls then still have more
     atoms than that cap is left ``NaN``, and the second array returned marks those.
     """
     n_genes = gene_offsets.size - 1
@@ -1982,7 +1989,7 @@ def _gene_pvalues(
             )  # fmt: skip
         seq = _gene_order(
             all_genes, n_genes, j, construct_pool, construct_nn, null_base, null_index, gene_offsets, n_nulls, key,
-            ranged,
+            raw,
         )  # fmt: skip
         pos = 0
         while pos < n_genes:
@@ -2026,19 +2033,25 @@ def _gene_pvalues(
                     null_eps[u] = min(null_eps[u], fine_eps[g, j]) if used[u] else fine_eps[g, j]
                     used[u] = True
         held[:] = False  # the nulls of the last feature, or of the other pass
-        _count_nulls(
-            row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps, first_cap, used,
-            raw, cost, sval_t, sfl_t, sgt_t,
-        )  # fmt: skip
         if rtol > 0.0:
+            # few genes read each of these nulls, so every one is counted and built only over what they read
+            for u in range(n_nulls):
+                raw[u] = 1 if used[u] else 0
             _range_nulls(
                 fine, n_fine, j, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, construct_pool, construct_nn,
-                null_base, null_index, null_pool, null_size, null_eps, gene_offsets, gene_observed, used, raw, wide,
+                null_base, null_index, null_pool, null_size, null_eps, gene_offsets, gene_observed, used, raw, 0,
                 max_cap, rtol, offs, counts, lohi_t, tails_t, dp_t, ranged, rng_lo, rng_hi, lump_lo, lump_hi, sval_t,
                 sfl_t, sgt_t,
             )  # fmt: skip
+            for u in range(n_nulls):
+                cost[u] = max(raw[u], 0)
+        else:
+            _count_nulls(
+                row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps, max_cap,
+                used, raw, cost, sval_t, sfl_t, sgt_t,
+            )  # fmt: skip
         seq = _gene_order(
-            fine, n_fine, j, construct_pool, construct_nn, null_base, null_index, gene_offsets, n_nulls, key, ranged
+            fine, n_fine, j, construct_pool, construct_nn, null_base, null_index, gene_offsets, n_nulls, key, raw
         )
         pos = 0
         while pos < n_fine:
