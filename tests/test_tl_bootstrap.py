@@ -101,9 +101,19 @@ def _assert_matches_brute_force(adata, rtol):
         np.testing.assert_allclose(row.pvalue, expected, atol=1e-9)
 
 
+def _range_every_null(monkeypatch, ranged):
+    """Build every guide null only over the values its genes' sweeps read, as one past ``_WIDE`` atoms is."""
+    if ranged:
+        from mantispy.tl import _bootstrap
+
+        monkeypatch.setattr(_bootstrap, "_WIDE", 0)
+
+
+@pytest.mark.parametrize("ranged", [False, True])
 @pytest.mark.parametrize("rtol", [0.0, 1e-5])
-def test_exact_pvalues_match_brute_force_enumeration(rtol):
+def test_exact_pvalues_match_brute_force_enumeration(rtol, ranged, monkeypatch):
     """On a tiny screen the analytic p-values equal a full enumeration of every resample."""
+    _range_every_null(monkeypatch, ranged)
     rng = np.random.default_rng(0)
     # integer values so even-count medians land on exact ties, exercising the half-count rule
     groups = []
@@ -118,14 +128,16 @@ def test_exact_pvalues_match_brute_force_enumeration(rtol):
     _assert_matches_brute_force(adata, rtol)
 
 
+@pytest.mark.parametrize("ranged", [False, True])
 @pytest.mark.parametrize("rtol", [0.0, 1e-5])
 @pytest.mark.parametrize(("dtype", "missing"), [(np.float32, 0.0), (np.float32, 0.2), (np.float64, 0.2)])
-def test_missing_cells_match_brute_force_enumeration(dtype, missing, rtol):
+def test_missing_cells_match_brute_force_enumeration(dtype, missing, rtol, ranged, monkeypatch):
     """Missing cells in control and tested guides: the null draws the measured count and skips nan draws.
 
     A guide measuring nothing leaves its gene, and a null median that is missing counts neither way.
     Values on a grid of halves make even-count midpoints that float32 would round differently.
     """
+    _range_every_null(monkeypatch, ranged)
     rng = np.random.default_rng(1)
     groups = [("G0", "g0_0", 3, 0.0, "a"), ("G0", "g0_1", 4, 0.0, "a"), ("G1", "g1_0", 2, 0.0, "a")]
     groups += [("G1", "g1_1", 3, 0.0, "a"), ("G1", "g1_2", 2, 0.0, "a")]
@@ -140,14 +152,16 @@ def test_missing_cells_match_brute_force_enumeration(dtype, missing, rtol):
     _assert_matches_brute_force(adata, rtol)
 
 
+@pytest.mark.parametrize("ranged", [False, True])
 @pytest.mark.parametrize("rtol", [0.0, 1e-5])
-def test_nulls_of_a_growing_store_match_brute_force_enumeration(rtol):
+def test_nulls_of_a_growing_store_match_brute_force_enumeration(rtol, ranged, monkeypatch):
     """Each feature's guide nulls are counted and then built in place, in a store that grows with them.
 
     Integer values in the first feature put null atoms at the observed medians, so the lower side of the
     boundary is swept on its own; the continuous second feature has more atoms and grows the store; guides of
     one size share a null.
     """
+    _range_every_null(monkeypatch, ranged)
     rng = np.random.default_rng(19)
     groups = [("G0", "g0_0", 2, 0.0, "a"), ("G0", "g0_1", 2, 0.0, "a"), ("G1", "g1_0", 3, 0.0, "a")]
     groups += [("G1", "g1_1", 2, 0.0, "a"), ("G2", "g2_0", 1, 0.0, "a"), ("G2", "g2_1", 4, 0.0, "a")]
@@ -396,6 +410,29 @@ def test_a_gene_whose_guide_nulls_exceed_the_budget_is_left_nan(caplog, monkeypa
     assert np.isfinite(adata.uns["mantispy"]["bootstrap"]["pvalue"]).all()
 
 
+def test_nulls_built_over_the_values_their_genes_read_stay_within_rtol(monkeypatch):
+    """Every null built only over its genes' reach gives p-values within rtol of the whole nulls' ones.
+
+    Shifted genes put p-values deep in the tails, where the reach is widest; ties and missing cells sit at obs.
+    """
+    from mantispy.tl import _bootstrap
+
+    rng = np.random.default_rng(37)
+    groups = [("nontargeting", f"nt{i}", int(rng.integers(30, 60)), 0.0, "a") for i in range(5)]
+    for g in range(12):
+        shift = [0.0, 0.3, 1.0][g % 3]
+        groups += [(f"G{g}", f"g{g}_{s}", int(rng.integers(2, 25)), shift, "a") for s in range(2 + 2 * (g % 2))]
+    adata = _cells(groups, rng, n_features=3)
+    adata.X[:, 1] = np.round(2 * adata.X[:, 1])
+    adata.X[rng.random(adata.X.shape) < 0.05] = np.nan
+    whole = mt.tl.bootstrap_features(adata, copy=True).uns["mantispy"]["bootstrap"]["pvalue"].to_numpy()
+    monkeypatch.setattr(_bootstrap, "_WIDE", 0)
+    ranged = mt.tl.bootstrap_features(adata, copy=True).uns["mantispy"]["bootstrap"]["pvalue"].to_numpy()
+    np.testing.assert_array_equal(np.isnan(ranged), np.isnan(whole))
+    assert np.nanmax(np.abs(ranged - whole) - 2e-5 * whole) <= 1e-15
+    assert np.nanmin(whole) < 1e-6
+
+
 def test_nulls_built_by_every_thread_keep_the_pvalues(monkeypatch):
     """A null past the size one thread builds is built by all of them, with the same atoms and p-values."""
     from mantispy.tl import _bootstrap
@@ -406,9 +443,9 @@ def test_nulls_built_by_every_thread_keep_the_pvalues(monkeypatch):
         groups += [(f"G{g}", f"g{g}_{s}", int(rng.integers(2, 12)), 0.4 * (g % 2), "a") for s in range(2)]
     adata = _cells(groups, rng, n_features=2)
     adata.X[:, 1] = np.round(2 * adata.X[:, 1])
-    alone = mt.tl.bootstrap_features(adata, copy=True).uns["mantispy"]["bootstrap"]["pvalue"].to_numpy()
-    monkeypatch.setattr(_bootstrap, "_WIDE", 100)
-    shared = mt.tl.bootstrap_features(adata, copy=True).uns["mantispy"]["bootstrap"]["pvalue"].to_numpy()
+    alone = mt.tl.bootstrap_features(adata, rtol=0.0, copy=True).uns["mantispy"]["bootstrap"]["pvalue"].to_numpy()
+    monkeypatch.setattr(_bootstrap, "_WIDE", 100)  # at rtol 0 a null is built whole, however many atoms it has
+    shared = mt.tl.bootstrap_features(adata, rtol=0.0, copy=True).uns["mantispy"]["bootstrap"]["pvalue"].to_numpy()
     np.testing.assert_allclose(shared, alone, rtol=1e-12, atol=0)
     assert np.isfinite(alone).sum() > 6
 

@@ -321,7 +321,7 @@ def _skip_lower_tail(v, lo, n, fl, size, k, r, eps):
 
 
 @njit(cache=True, nogil=True)
-def _add_sub_atoms(v, lo, n, r, scale, eps, out_val, out_prob, cnt, limit, sval, sfl, sgt):
+def _add_sub_atoms(v, lo, n, r, scale, eps, out_val, out_prob, cnt, limit, sval, sfl, sgt, vlo=-np.inf, vhi=np.inf):
     """Append the atoms of the median of r draws from ``v[lo:lo+n]`` (sorted, no nan), and count them.
 
     Each atom is ``(value, scale*prob)``. Only the two far tails of the median's distribution are left out,
@@ -330,7 +330,8 @@ def _add_sub_atoms(v, lo, n, r, scale, eps, out_val, out_prob, cnt, limit, sval,
     mass between them, and ties make their sizes rise and fall. For even r the distinct values and their tail
     powers are precomputed into the scratch arrays ``sval``/``sfl``/``sgt`` so the off-diagonal inner loop
     is a plain product, O(distinct) powers rather than O(distinct^2). Only the atoms that fit ``out_val`` are
-    written, so an empty one counts them. Returns the count, or ``-1`` once it passes ``limit``.
+    written, so an empty one counts them, and only those at values in ``[vlo, vhi]``: the same atoms, of the same
+    masses, as the whole list holds there. Returns the count, or ``-1`` once it passes ``limit``.
     """
     if n == 0:
         return cnt
@@ -346,9 +347,11 @@ def _add_sub_atoms(v, lo, n, r, scale, eps, out_val, out_prob, cnt, limit, sval,
             j = i
             while j < end and v[j] == a:
                 j += 1
+            if a > vhi:
+                break
             beyond = _binom_cdf(t, r, (j - lo) / n)  # P(median > a)
             pr = above - beyond
-            if 1.0 - beyond > eps and pr > 0.0:  # not in the far lower tail
+            if 1.0 - beyond > eps and pr > 0.0 and a >= vlo:  # not in the far lower tail
                 if cnt >= limit:
                     return -1
                 if cnt < out_val.shape[0]:
@@ -391,7 +394,7 @@ def _add_sub_atoms(v, lo, n, r, scale, eps, out_val, out_prob, cnt, limit, sval,
     left = _skip_lower_tail(v, lo, n, sfl[:nd], nd, t - 1, r, eps)
     above = 1.0 if left == 0 else _binom_cdf(t - 1, r, sfl[left - 1])  # P(t-th order stat >= sval[ka])
     for ka in range(left, nd):
-        if above <= eps:  # the far upper tail
+        if above <= eps or sval[ka] > vhi:  # the far upper tail, or past the values asked for
             break
         f_prev = sfl[ka - 1] if ka > 0 else 0.0
         beyond = _binom_cdf(t - 1, r, sfl[ka])  # P(t-th order stat > a)
@@ -419,7 +422,7 @@ def _add_sub_atoms(v, lo, n, r, scale, eps, out_val, out_prob, cnt, limit, sval,
             if ka + 1 < nd:
                 log_g_next = (r - t) * log1p(-sfl[ka + 1]) if sfl[ka + 1] < 1.0 else -np.inf
                 pr = exp(log_coef + log_g + log(-expm1(log_g_next - log_g)))
-        if diag > 0.0:
+        if diag > 0.0 and sval[ka] >= vlo:
             if cnt >= limit:
                 return -1
             if cnt < out_val.shape[0]:
@@ -429,11 +432,14 @@ def _add_sub_atoms(v, lo, n, r, scale, eps, out_val, out_prob, cnt, limit, sval,
         for lb in range(ka + 1, nd):
             if lb > ka + 1:
                 pr = coef * (sgt[lb - 1] - sgt[lb]) if direct else pr * sgt[lb]
-            if pr > 0.0:
+            mid = (sval[ka] + sval[lb]) / 2.0
+            if mid > vhi:
+                break
+            if pr > 0.0 and mid >= vlo:
                 if cnt >= limit:
                     return -1
                 if cnt < out_val.shape[0]:
-                    out_val[cnt] = (sval[ka] + sval[lb]) / 2.0
+                    out_val[cnt] = mid
                     out_prob[cnt] = scale * pr
                 cnt += 1
             # the mass of the row's midpoints past this one, coef * (1 - F_lb)^(r-t)
@@ -580,10 +586,14 @@ def _collapse(val_buf, prob_buf, lo, hi, val2, prob2, ints):
 
 
 @njit(cache=True, nogil=True)
-def _construct_atoms(pool_sorted_row, sub_nn_row, sub_start, s0, s1, m, eps, val_buf, prob_buf, limit, sval, sfl, sgt):
+def _construct_atoms(
+    pool_sorted_row, sub_nn_row, sub_start, s0, s1, m, eps, val_buf, prob_buf, limit, sval, sfl, sgt, vlo=-np.inf,
+    vhi=np.inf,
+):  # fmt: skip
     """Every control guide's exact median atoms for one guide null, weighted as in :func:`_pool_tails`, unmerged.
 
-    Writes those that fit ``val_buf``/``prob_buf`` and returns their count, or ``-1`` past ``limit``.
+    Writes those at values in ``[vlo, vhi]`` that fit ``val_buf``/``prob_buf`` and returns their count, or ``-1``
+    past ``limit``.
     """
     total = 0
     for sub in range(s0, s1):
@@ -594,8 +604,9 @@ def _construct_atoms(pool_sorted_row, sub_nn_row, sub_start, s0, s1, m, eps, val
         if nn == 0:
             continue
         cnt = _add_sub_atoms(
-            pool_sorted_row, sub_start[sub], nn, m, nn / total, eps, val_buf, prob_buf, cnt, limit, sval, sfl, sgt
-        )
+            pool_sorted_row, sub_start[sub], nn, m, nn / total, eps, val_buf, prob_buf, cnt, limit, sval, sfl, sgt,
+            vlo, vhi,
+        )  # fmt: skip
         if cnt < 0:
             return -1
     return cnt
@@ -1109,8 +1120,13 @@ def _sort_wide(val, prob, lo, n, val2, prob2, n_threads):
 
 
 @njit(parallel=True, cache=True, nogil=True)
-def _build_wide(row, nn_row, sub_start, s0, s1, m, eps, vals, cum, lo, n, val2, prob2, max_width, n_threads):
+def _build_wide(
+    row, nn_row, sub_start, s0, s1, m, eps, vals, cum, lo, n, val2, prob2, max_width, n_threads, vlo=-np.inf,
+    vhi=np.inf,
+):  # fmt: skip
     """:func:`_build_into` of one guide null of ``n`` counted atoms by every thread; returns its merged count.
+
+    Only the atoms at values in ``[vlo, vhi]`` are built (:func:`_add_sub_atoms`).
 
     Each control guide's atoms are written in parallel where the serial build puts them, :func:`_sort_wide` sorts
     them, and equal values are merged in parallel blocks that start at a new value, so the atoms are the serial
@@ -1127,7 +1143,7 @@ def _build_wide(row, nn_row, sub_start, s0, s1, m, eps, vals, cum, lo, n, val2, 
         if nn > 0:
             sv, sf, sg = np.empty(max_width), np.empty(max_width), np.empty(max_width)
             sub_lo[i + 1] = _add_sub_atoms(
-                row, sub_start[s0 + i], nn, m, nn / total, eps, no_atoms, no_atoms, 0, n + 1, sv, sf, sg
+                row, sub_start[s0 + i], nn, m, nn / total, eps, no_atoms, no_atoms, 0, n + 1, sv, sf, sg, vlo, vhi
             )
     for i in range(n_sub):
         sub_lo[i + 1] += sub_lo[i]
@@ -1136,7 +1152,9 @@ def _build_wide(row, nn_row, sub_start, s0, s1, m, eps, vals, cum, lo, n, val2, 
         if nn > 0:
             sv, sf, sg = np.empty(max_width), np.empty(max_width), np.empty(max_width)
             a, b = lo + sub_lo[i], lo + sub_lo[i + 1]
-            _add_sub_atoms(row, sub_start[s0 + i], nn, m, nn / total, eps, vals[a:b], cum[a:b], 0, n + 1, sv, sf, sg)
+            _add_sub_atoms(
+                row, sub_start[s0 + i], nn, m, nn / total, eps, vals[a:b], cum[a:b], 0, n + 1, sv, sf, sg, vlo, vhi
+            )
     _sort_wide(vals, cum, lo, n, val2, prob2, n_threads)
     # merge equal values: blocks start at a new value, each merges into the scratch, then moves down
     n_blocks = min(4 * n_threads, max(1, n // 65536))
@@ -1179,6 +1197,199 @@ def _build_wide(row, nn_row, sub_start, s0, s1, m, eps, vals, cum, lo, n, val2, 
 
 
 @njit(parallel=True, cache=True, nogil=True)
+def _build_range(
+    row, nn_row, sub_start, s0, s1, m, eps, vals, cum, lo, n, val2, prob2, max_width, n_threads, vlo, vhi, below,
+    beyond,
+):  # fmt: skip
+    """A guide null of ``n`` counted atoms, two of them the mass outside ``[vlo, vhi]``; returns its merged count.
+
+    The atoms in the range are the whole null's (:func:`_build_wide`), and the mass below the range, ``below``, and
+    above it, ``beyond``, each sits in one atom just outside it, exact rather than summed from pruned atoms.
+    """
+    merged = 0
+    if n > 2:
+        merged = _build_wide(
+            row, nn_row, sub_start, s0, s1, m, eps, vals, cum, lo + 1, n - 2, val2, prob2, max_width, n_threads,
+            vlo, vhi,
+        )  # fmt: skip
+    vals[lo] = np.nextafter(vlo, -np.inf)
+    cum[lo] = below
+    for i in prange(merged):
+        cum[lo + 1 + i] += below
+    end = lo + 1 + merged
+    vals[end] = np.nextafter(vhi, np.inf)
+    cum[end] = cum[end - 1] + beyond
+    return merged + 2
+
+
+@njit(cache=True, nogil=True)
+def _reach_bound(k, nul_c, tails, null_eps, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool,
+                 null_size, x, cut, up, base, var, poly):  # fmt: skip
+    """At least what :func:`_sweep_up` (``up``) or :func:`_sweep_down` weighs against its budget, with low at ``x``.
+
+    The sweep's chance of a guide being low and at most ``x``, or high and past the cut, is the null's atom mass
+    there over its atom mass on that side, times the side's exact chance (``tails``, at ``obs``), so never more than
+    that chance. The atoms lack at most three times the null's tails of each side (:func:`_add_sub_atoms`), so
+    where a side's chance is more than twice that, the atoms hold over half of it, and twice the null's exact
+    chance of being there bounds the sweep's. For :func:`_sweep_down`, ``x`` is the least high value and ``cut``
+    the bound of the low ones.
+    """
+    gt, lt, le, ge = tails[0], tails[1], tails[2], tails[3]
+    for a in range(k):
+        u = nul_c[a]
+        p = null_pool[u]
+        _, _, le_x, ge_x, _ = _pool_tails(row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], null_size[u], x)
+        _, _, le_c, ge_c, _ = _pool_tails(
+            row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], null_size[u], cut
+        )
+        held = 6.0 * null_eps[u]  # a side's chance past this, the atoms hold over half of it
+        low = min(le[a], 2.0 * (le_x if up else le_c)) if lt[a] > held else le[a]
+        high = min(ge[a], 2.0 * (ge_c if up else ge_x)) if gt[a] > held else ge[a]
+        if up:
+            var[a], base[a] = low, high  # low at most x, high at least the cut
+        else:
+            var[a], base[a] = high, low  # high at least x, low at most the cut
+    return _coef(k, -1, base, var, poly, k // 2)
+
+
+@njit(cache=True, nogil=True)
+def _reach(k, nul_c, tails, null_eps, obs, budget, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool,
+           null_size, vmin, vmax, base, var, poly):  # fmt: skip
+    """The values ``[lo, hi]`` around ``obs`` a gene's boundary sweeps read, given a ``budget`` above zero.
+
+    :func:`_sweep_up` starts at the first low atom whose weight passes ``budget`` and reads high atoms down from
+    twice ``obs`` less it, so with ``lo`` below every value whose weight cannot pass it (:func:`_reach_bound`) and
+    ``hi`` twice ``obs`` less ``lo``, no atom below ``lo`` is the sweep's low value and every one above ``hi`` is
+    past its cut; :func:`_sweep_down` the mirror. Each end leaves a margin of rounding.
+    """
+    args = (k, nul_c, tails, null_eps, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size)
+    lo = obs
+    if _reach_bound(*args, obs, obs, True, base, var, poly) > budget:
+        a, b = vmin - 1.0, obs
+        for _ in range(48):
+            x = 0.5 * (a + b)
+            cut = 2.0 * obs - x - 1e-9 * (abs(obs) + abs(x))
+            if _reach_bound(*args, x, cut, True, base, var, poly) > budget:
+                b = x
+            else:
+                a = x
+        lo = a
+    hi = obs
+    if _reach_bound(*args, obs, obs, False, base, var, poly) > budget:
+        a, b = obs, vmax + 1.0
+        for _ in range(48):
+            y = 0.5 * (a + b)
+            cut = 2.0 * obs - y + 1e-9 * (abs(obs) + abs(y))
+            if _reach_bound(*args, y, cut, False, base, var, poly) > budget:
+                a = y
+            else:
+                b = y
+        hi = b
+    half_up = max(obs - lo, hi - obs)
+    margin = 1e-9 * (abs(obs) + half_up) + 1e-300
+    return obs - half_up - margin, obs + half_up + margin
+
+
+@njit(parallel=True, cache=True, nogil=True)
+def _range_nulls(
+    genes, n_genes, j, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, construct_pool, construct_nn,
+    null_base, null_index, null_pool, null_size, null_eps, gene_offsets, gene_observed, used, raw, wide, budget,
+    rtol, offs, counts, lohi_t, tails_t, dp_t, ranged, rng_lo, rng_hi, lump_lo, lump_hi, sval_t, sfl_t, sgt_t,
+):  # fmt: skip
+    """Count the guide nulls past ``wide`` atoms, or past ``budget``, only over the values their genes' sweeps read.
+
+    A gene reads its guide nulls between the ends :func:`_reach` gives, so such a null is built only between the
+    least and the largest of its genes' ends (:func:`_build_range`), with what lies outside in two exact atoms;
+    ``raw`` becomes its count with those two, or ``-1`` if even that is past ``budget``. ``ranged`` marks them.
+
+    Why the p-value is that of the whole null. Only a gene of an even count of measured guides reads atoms, through
+    :func:`_sides` and the two sweeps; one of an odd count, or of fewer than two guides, reads none, and an odd count
+    left after dropping a guide no control cell measures reads none either. :func:`_sides` splits at ``obs``, which
+    lies inside every range, and the two outside atoms lie strictly below its least end and above its largest one,
+    so every atom keeps its side, ties at ``obs`` included, and each side's mass is exact where the whole null's
+    lacks its pruned tails. :func:`_sweep_up` adds terms only from its first low value whose weight passes the
+    budget; every value at or below the gene's low end weighs no more than the budget (:func:`_reach_bound`), the
+    atom below the range included, as it holds the null's exact mass below it, so the first term comes from inside
+    the range. For a low value ``x`` there, both cuts, twice ``obs`` less ``x``, lie at or below twice ``obs`` less
+    the low end, the high end less its margin, so the atoms the cuts pass are the whole null's up to there, and
+    the atom above the range, with every value past it, lies past both cuts. :func:`_sweep_down` is the mirror,
+    with the high end. The deferred finer pass counts and ranges its own nulls the same way, for its own genes and
+    tails; a gene whose atoms lack more than half a side's mass, where the bound does not hold, is one whose
+    p-value that pass rebuilds. At ``rtol = 0`` the budget is zero and no null is ranged.
+    """
+    n_nulls = null_pool.size
+    n_slots = lohi_t.shape[0]
+    any_ranged = False
+    for u in range(n_nulls):
+        ranged[u] = used[u] and (raw[u] > wide or raw[u] < 0)
+        rng_lo[u], rng_hi[u] = np.inf, -np.inf
+        any_ranged |= ranged[u]
+    if not any_ranged:
+        return
+    vmin, vmax = np.inf, -np.inf
+    for x in row:
+        if not np.isnan(x):
+            vmin, vmax = min(vmin, x), max(vmax, x)
+    ends = np.full((n_genes, 2), np.nan)
+    for t in prange(n_slots):
+        lo_c, hi_c, nul_c = lohi_t[t, 0], lohi_t[t, 1], lohi_t[t, 2]
+        tails, dp = tails_t[t], dp_t[t]
+        base, var, poly = np.empty(lo_c.size), np.empty(lo_c.size), np.empty(lo_c.size + 1)
+        for gi in range(t, n_genes, n_slots):
+            g = genes[gi]
+            obs = gene_observed[g, j]
+            if np.isnan(obs):
+                continue
+            touches = False
+            for c in range(gene_offsets[g], gene_offsets[g + 1]):
+                u = null_index[null_base[construct_pool[c]] + construct_nn[c, j]]
+                touches |= u >= 0 and ranged[u]
+            if not touches:
+                continue
+            k, above, below, _ = _gene_guides(
+                g, j, obs, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, construct_pool, construct_nn,
+                null_base, null_index, null_pool, gene_offsets, offs, counts, lo_c, hi_c, nul_c, tails, dp,
+            )  # fmt: skip
+            if k < 0:
+                continue
+            ends[gi, 0], ends[gi, 1] = _reach(
+                k, nul_c, tails, null_eps, obs, 0.5 * rtol * min(above, below), row, nn_row, sub_start,
+                pool_sub_start, pool_sub_stop, null_pool, null_size, vmin, vmax, base, var, poly,
+            )  # fmt: skip
+    for gi in range(n_genes):
+        if np.isnan(ends[gi, 0]):
+            continue
+        g = genes[gi]
+        for c in range(gene_offsets[g], gene_offsets[g + 1]):
+            u = null_index[null_base[construct_pool[c]] + construct_nn[c, j]]
+            if u >= 0 and ranged[u]:
+                rng_lo[u] = min(rng_lo[u], ends[gi, 0])
+                rng_hi[u] = max(rng_hi[u], ends[gi, 1])
+    for u in prange(n_nulls):
+        if not ranged[u]:
+            continue
+        raw[u] = 2
+        if rng_lo[u] > rng_hi[u]:  # no gene reads it
+            rng_lo[u] = rng_hi[u] = 0.0
+            lump_lo[u] = lump_hi[u] = 0.0
+            continue
+        p = null_pool[u]
+        sv, sf, sg = np.empty(sval_t.shape[1]), np.empty(sval_t.shape[1]), np.empty(sval_t.shape[1])
+        no_atoms = np.empty(0, dtype=np.float64)
+        n = _construct_atoms(
+            row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], null_size[u], null_eps[u], no_atoms,
+            no_atoms, max(budget - 2, 0), sv, sf, sg, rng_lo[u], rng_hi[u],
+        )  # fmt: skip
+        raw[u] = n + 2 if n >= 0 else -1
+        lump_lo[u] = _pool_tails(
+            row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], null_size[u], rng_lo[u]
+        )[1]  # fmt: skip
+        lump_hi[u] = _pool_tails(
+            row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], null_size[u], rng_hi[u]
+        )[0]  # fmt: skip
+
+
+@njit(parallel=True, cache=True, nogil=True)
 def _count_nulls(
     row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps, max_cap, used, raw, cost,
     sval_t, sfl_t, sgt_t,
@@ -1208,15 +1419,15 @@ def _count_nulls(
 @njit(parallel=True, cache=True, nogil=True)
 def _fill_store(
     row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps, nulls, raw, counts, offs,
-    cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t, wide, held,
+    cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t, wide, held, ranged, rng_lo, rng_hi, lump_lo, lump_hi,
 ):  # fmt: skip
     """Build the guide nulls ``nulls``, counted by :func:`_count_nulls`, into the store ``vals``/``cum``, back to back.
 
     Null ``u`` is built in place at ``offs[u]``, so that the store fits them exactly, and ``counts[u]`` is its merged
     count. A null the last window left in the store (``held``) is moved down to its place rather than built again;
     afterwards ``held`` marks ``nulls``. A null of more than ``wide`` atoms is built by every thread
-    (:func:`_build_wide`), one after the other, and the rest each by one. The store grows when it must, dropping what
-    it held, and is returned.
+    (:func:`_build_wide`), one after the other, and the rest each by one; a ``ranged`` one only over its range
+    (:func:`_build_range`). The store grows when it must, dropping what it held, and is returned.
     """
     n_slots = sort_t.shape[0]
     total = 0
@@ -1260,15 +1471,24 @@ def _fill_store(
             continue
         offs[u] = total
         total += max(raw[u], 0)
-        win_cost[i] = cost[u] if raw[u] <= wide else 0.0
-        if raw[u] > wide:
+        if raw[u] > wide or ranged[u]:
             widest = max(widest, raw[u])
+        else:
+            win_cost[i] = cost[u]
     if widest > 0:
         wide2, wprob2 = np.empty(widest, dtype=np.float64), np.empty(widest, dtype=np.float64)
         for i in range(nulls.size):
             u = nulls[i]
-            if raw[u] > wide and not held[u]:
-                p = null_pool[u]
+            if held[u] or raw[u] < 0:
+                continue
+            p = null_pool[u]
+            if ranged[u]:
+                counts[u] = _build_range(
+                    row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], null_size[u], null_eps[u], vals, cum,
+                    offs[u], raw[u], wide2, wprob2, sval_t.shape[1], n_slots, rng_lo[u], rng_hi[u], lump_lo[u],
+                    lump_hi[u],
+                )  # fmt: skip
+            elif raw[u] > wide:
                 counts[u] = _build_wide(
                     row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], null_size[u], null_eps[u], vals, cum,
                     offs[u], raw[u], wide2, wprob2, sval_t.shape[1], n_slots,
@@ -1277,7 +1497,7 @@ def _fill_store(
     for t in prange(n_slots):
         for ui in range(null_start[t], null_start[t + 1]):
             u = nulls[null_order[ui]]
-            if raw[u] > wide or held[u]:  # built above, or kept from the last window
+            if raw[u] > wide or ranged[u] or held[u]:  # built above, or kept from the last window
                 continue
             counts[u] = 0
             if raw[u] >= 0:  # one of more atoms than max_cap keeps none
@@ -1476,6 +1696,8 @@ def _gene_pvalues(
     for u in range(n_nulls):
         max_cap = max(max_cap, null_caps[u])
     max_cap = min(max_cap, budget)
+    # past wide atoms a null is counted again only over the values its genes read, unless rtol leaves no tail out
+    first_cap = min(max_cap, wide) if rtol > 0.0 else max_cap
     sort_t = np.empty((n_slots, max(_SORT_SCRATCH, 128)), dtype=np.int64)
     sval_t = np.empty((n_slots, max_width), dtype=np.float64)
     sfl_t = np.empty((n_slots, max_width), dtype=np.float64)
@@ -1498,6 +1720,9 @@ def _gene_pvalues(
     key = np.empty(n_genes, dtype=np.int64)
     in_win = np.zeros(n_nulls, dtype=np.bool_)
     held = np.zeros(n_nulls, dtype=np.bool_)  # the nulls in the store, from the last window
+    ranged = np.zeros(n_nulls, dtype=np.bool_)  # the nulls built only over the values their genes read
+    rng_lo, rng_hi = np.zeros(n_nulls), np.zeros(n_nulls)  # those values
+    lump_lo, lump_hi = np.zeros(n_nulls), np.zeros(n_nulls)  # and the exact mass below and above them
     win_nulls = np.empty(n_nulls, dtype=np.int64)
     fine_eps = np.zeros((n_genes, n_features), dtype=np.float64)  # the tails a gene's nulls need, 0 for the store's
     null_eps = np.empty(n_nulls, dtype=np.float64)  # the tails each null leaves out
@@ -1517,9 +1742,16 @@ def _gene_pvalues(
         null_eps[:] = eps
         held[:] = False  # the nulls of the last feature, or of the other pass
         _count_nulls(
-            row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps, max_cap, used,
+            row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps, first_cap, used,
             raw, cost, sval_t, sfl_t, sgt_t,
         )  # fmt: skip
+        if rtol > 0.0:
+            _range_nulls(
+                all_genes, n_genes, j, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, construct_pool,
+                construct_nn, null_base, null_index, null_pool, null_size, null_eps, gene_offsets, gene_observed, used,
+                raw, wide, max_cap, rtol, offs, counts, lohi_t, tails_t, dp_t, ranged, rng_lo, rng_hi, lump_lo,
+                lump_hi, sval_t, sfl_t, sgt_t,
+            )  # fmt: skip
         seq = _gene_order(
             all_genes, n_genes, j, construct_pool, construct_nn, null_base, null_index, gene_offsets, n_nulls, key
         )
@@ -1531,7 +1763,8 @@ def _gene_pvalues(
             )  # fmt: skip
             vals, cum = _fill_store(
                 row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps,
-                win_nulls[:n_win], raw, counts, offs, cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t, wide, held,
+                win_nulls[:n_win], raw, counts, offs, cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t, wide, held, ranged, rng_lo, rng_hi,
+                lump_lo, lump_hi,
             )  # fmt: skip
             win = seq[pos:stop]
             # a gene costs about its guides' atom count, more when an even count sends it through the boundary sweep
@@ -1605,9 +1838,16 @@ def _gene_pvalues(
                     used[u] = True
         held[:] = False  # the nulls of the last feature, or of the other pass
         _count_nulls(
-            row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps, max_cap, used,
+            row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps, first_cap, used,
             raw, cost, sval_t, sfl_t, sgt_t,
         )  # fmt: skip
+        if rtol > 0.0:
+            _range_nulls(
+                fine, n_fine, j, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, construct_pool, construct_nn,
+                null_base, null_index, null_pool, null_size, null_eps, gene_offsets, gene_observed, used, raw, wide,
+                max_cap, rtol, offs, counts, lohi_t, tails_t, dp_t, ranged, rng_lo, rng_hi, lump_lo, lump_hi, sval_t,
+                sfl_t, sgt_t,
+            )  # fmt: skip
         seq = _gene_order(
             fine, n_fine, j, construct_pool, construct_nn, null_base, null_index, gene_offsets, n_nulls, key
         )
@@ -1619,7 +1859,8 @@ def _gene_pvalues(
             )  # fmt: skip
             vals, cum = _fill_store(
                 row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps,
-                win_nulls[:n_win], raw, counts, offs, cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t, wide, held,
+                win_nulls[:n_win], raw, counts, offs, cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t, wide, held, ranged, rng_lo, rng_hi,
+                lump_lo, lump_hi,
             )  # fmt: skip
             win = seq[pos:stop]
             for t in prange(n_gene_slots):
