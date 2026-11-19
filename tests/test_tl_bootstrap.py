@@ -372,23 +372,45 @@ def test_a_one_guide_gene_against_large_control_guides_has_its_guide_pvalue():
     assert 0.0 < gene[0] == pytest.approx(guide[0], abs=1e-12)
 
 
-def test_a_gene_whose_guide_nulls_are_too_fine_to_hold_is_left_nan(caplog):
-    """Two-cell guides against control guides of 15,000 cells: their nulls have more distinct medians than fit.
+def test_a_gene_whose_guide_nulls_exceed_the_budget_is_left_nan(caplog, monkeypatch):
+    """Two-cell guides against control guides of hundreds of cells, under a budget of a thousand atoms.
 
-    The boundary of an even guide count needs those medians, so the gene is left missing with a warning rather
-    than given the p-value of a tie; its guides keep their exact p-values.
+    Their nulls have more distinct medians than the budget holds, and the boundary of an even guide count needs
+    them, so the gene is left missing with a warning rather than given the p-value of a tie; its guides keep their
+    exact p-values. The default budget holds them.
     """
     import logging
 
     rng = np.random.default_rng(3)
-    groups = [("nontargeting", f"nt{i}", 15_000, 0.0, "a") for i in range(2)]
+    groups = [("nontargeting", f"nt{i}", 300, 0.0, "a") for i in range(2)]
     groups += [("G", "g0", 2, 0.5, "a"), ("G", "g1", 2, 0.5, "a")]
     adata = _cells(groups, rng, n_features=1)
+    monkeypatch.setattr(mt.settings, "bootstrap_null_bytes", 32 * 1000)
     with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         mt.tl.bootstrap_features(adata)
     assert "1 gene-feature p-value(s) are left NaN" in caplog.text
     assert np.isnan(adata.uns["mantispy"]["bootstrap"]["pvalue"]).all()
     assert np.isfinite(adata.uns["mantispy"]["bootstrap_guides"]["pvalue"]).all()
+    monkeypatch.undo()
+    mt.tl.bootstrap_features(adata)
+    assert np.isfinite(adata.uns["mantispy"]["bootstrap"]["pvalue"]).all()
+
+
+def test_nulls_built_by_every_thread_keep_the_pvalues(monkeypatch):
+    """A null past the size one thread builds is built by all of them, with the same atoms and p-values."""
+    from mantispy.tl import _bootstrap
+
+    rng = np.random.default_rng(31)
+    groups = [("nontargeting", f"nt{i}", int(rng.integers(40, 80)), 0.0, "a") for i in range(4)]
+    for g in range(6):
+        groups += [(f"G{g}", f"g{g}_{s}", int(rng.integers(2, 12)), 0.4 * (g % 2), "a") for s in range(2)]
+    adata = _cells(groups, rng, n_features=2)
+    adata.X[:, 1] = np.round(2 * adata.X[:, 1])
+    alone = mt.tl.bootstrap_features(adata, copy=True).uns["mantispy"]["bootstrap"]["pvalue"].to_numpy()
+    monkeypatch.setattr(_bootstrap, "_WIDE", 100)
+    shared = mt.tl.bootstrap_features(adata, copy=True).uns["mantispy"]["bootstrap"]["pvalue"].to_numpy()
+    np.testing.assert_allclose(shared, alone, rtol=1e-12, atol=0)
+    assert np.isfinite(alone).sum() > 6
 
 
 def test_no_measured_guide_and_no_feature_leave_empty_results():
@@ -481,20 +503,21 @@ def test_a_gene_keeps_its_pvalues_when_other_genes_are_dropped():
 
 
 def test_genes_tested_in_windows_keep_their_pvalues(monkeypatch):
-    """A budget too small for any two genes' guide nulls tests each gene in its own window, with the same p-values.
+    """A budget that holds any one guide null but not two tests each gene in its own window, with the same p-values.
 
-    Guides of a few sizes share their nulls across genes, so windows rebuild nulls an earlier window freed; integer
-    values and missing cells put ties and nan guides in the boundary.
+    Control guides of at most 20 cells keep every null under 1,200 atoms. Guides of a few sizes share their nulls
+    across genes, so windows rebuild nulls an earlier window freed; integer values and missing cells put ties and
+    nan guides in the boundary.
     """
     rng = np.random.default_rng(29)
-    groups = [("nontargeting", f"nt{i}", int(rng.integers(20, 40)), 0.0, "a") for i in range(5)]
+    groups = [("nontargeting", f"nt{i}", int(rng.integers(12, 21)), 0.0, "a") for i in range(5)]
     for g in range(10):
         groups += [(f"G{g}", f"g{g}_{s}", int(rng.choice([3, 4, 8, 9])), 0.3 * (g % 3), "a") for s in range(2 + g % 3)]
     adata = _cells(groups, rng, n_features=3)
     adata.X[:, 1] = np.round(2 * adata.X[:, 1])
     adata.X[rng.random(adata.X.shape) < 0.05] = np.nan
     whole = mt.tl.bootstrap_features(adata, copy=True).uns["mantispy"]
-    monkeypatch.setattr(mt.settings, "bootstrap_null_bytes", 1)
+    monkeypatch.setattr(mt.settings, "bootstrap_null_bytes", 32 * 1200)
     windowed = mt.tl.bootstrap_features(adata, copy=True).uns["mantispy"]
     np.testing.assert_array_equal(windowed["bootstrap"]["pvalue"], whole["bootstrap"]["pvalue"])
     np.testing.assert_array_equal(windowed["bootstrap_guides"]["pvalue"], whole["bootstrap_guides"]["pvalue"])

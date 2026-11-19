@@ -1062,6 +1062,123 @@ def _build_into(row, nn_row, sub_start, s0, s1, m, eps, ints, sval, sfl, sgt, va
 
 
 @njit(parallel=True, cache=True, nogil=True)
+def _sort_wide(val, prob, lo, n, val2, prob2, n_threads):
+    """:func:`_radix_sort2` of ``val[lo:lo+n]`` by every thread: each pass histograms and scatters blocks in parallel.
+
+    A stable sort has one result, so this is the serial sort's order.
+    """
+    n_blocks = min(4 * n_threads, max(1, n // 65536))
+    bounds = np.linspace(0, n, n_blocks + 1).astype(np.int64)
+    hist = np.empty((n_blocks, _SORT_SCRATCH), dtype=np.int64)
+    mask = np.uint64((1 << _RADIX_BITS) - 1)
+    src_b, dst_b = val.view(np.uint64), val2.view(np.uint64)
+    src_p, dst_p = prob, prob2
+    s_off, d_off = lo, 0
+    moved = 0
+    for shift in range(0, 64, _RADIX_BITS):
+        for b in prange(n_blocks):
+            hist[b, :] = 0
+            for i in range(bounds[b], bounds[b + 1]):
+                hist[b, np.int64((_radix_key(src_b[s_off + i]) >> np.uint64(shift)) & mask)] += 1
+        same = False
+        for d in range(_SORT_SCRATCH - 1):
+            same |= hist[:, d].sum() == n
+        if same:  # every value shares this digit
+            continue
+        running = 0
+        for d in range(_SORT_SCRATCH - 1):  # each block's start for each digit, digit by digit, block by block
+            for b in range(n_blocks):
+                c = hist[b, d]
+                hist[b, d] = running
+                running += c
+        for b in prange(n_blocks):
+            for i in range(bounds[b], bounds[b + 1]):
+                x = src_b[s_off + i]
+                d = np.int64((_radix_key(x) >> np.uint64(shift)) & mask)
+                dst_b[d_off + hist[b, d]] = x
+                dst_p[d_off + hist[b, d]] = src_p[s_off + i]
+                hist[b, d] += 1
+        src_b, dst_b = dst_b, src_b
+        src_p, dst_p = dst_p, src_p
+        s_off, d_off = d_off, s_off
+        moved += 1
+    if moved % 2 == 1:  # the sorted values sit in the scratch
+        for i in prange(n):
+            val[lo + i] = val2[i]
+            prob[lo + i] = prob2[i]
+
+
+@njit(parallel=True, cache=True, nogil=True)
+def _build_wide(row, nn_row, sub_start, s0, s1, m, eps, vals, cum, lo, n, val2, prob2, max_width, n_threads):
+    """:func:`_build_into` of one guide null of ``n`` counted atoms by every thread; returns its merged count.
+
+    Each control guide's atoms are written in parallel where the serial build puts them, :func:`_sort_wide` sorts
+    them, and equal values are merged in parallel blocks that start at a new value, so the atoms are the serial
+    build's; only the running mass is summed block by block.
+    """
+    n_sub = s1 - s0
+    total = 0
+    for sub in range(s0, s1):
+        total += nn_row[sub]
+    sub_lo = np.zeros(n_sub + 1, dtype=np.int64)
+    no_atoms = np.empty(0, dtype=np.float64)
+    for i in prange(n_sub):
+        nn = nn_row[s0 + i]
+        if nn > 0:
+            sv, sf, sg = np.empty(max_width), np.empty(max_width), np.empty(max_width)
+            sub_lo[i + 1] = _add_sub_atoms(
+                row, sub_start[s0 + i], nn, m, nn / total, eps, no_atoms, no_atoms, 0, n + 1, sv, sf, sg
+            )
+    for i in range(n_sub):
+        sub_lo[i + 1] += sub_lo[i]
+    for i in prange(n_sub):
+        nn = nn_row[s0 + i]
+        if nn > 0:
+            sv, sf, sg = np.empty(max_width), np.empty(max_width), np.empty(max_width)
+            a, b = lo + sub_lo[i], lo + sub_lo[i + 1]
+            _add_sub_atoms(row, sub_start[s0 + i], nn, m, nn / total, eps, vals[a:b], cum[a:b], 0, n + 1, sv, sf, sg)
+    _sort_wide(vals, cum, lo, n, val2, prob2, n_threads)
+    # merge equal values: blocks start at a new value, each merges into the scratch, then moves down
+    n_blocks = min(4 * n_threads, max(1, n // 65536))
+    bounds = np.linspace(0, n, n_blocks + 1).astype(np.int64)
+    for b in range(1, n_blocks):
+        while bounds[b] < n and bounds[b] > 0 and vals[lo + bounds[b]] == vals[lo + bounds[b] - 1]:
+            bounds[b] += 1
+        bounds[b] = max(bounds[b], bounds[b - 1])
+    merged = np.zeros(n_blocks + 1, dtype=np.int64)
+    for b in prange(n_blocks):
+        w = bounds[b]
+        z = bounds[b]
+        while z < bounds[b + 1]:
+            v = vals[lo + z]
+            acc = cum[lo + z]
+            z += 1
+            while z < bounds[b + 1] and vals[lo + z] == v:
+                acc += cum[lo + z]
+                z += 1
+            val2[w] = v
+            prob2[w] = acc
+            w += 1
+        merged[b + 1] = w - bounds[b]
+    sums = np.zeros(n_blocks + 1)
+    for b in prange(n_blocks):
+        acc = 0.0
+        for i in range(merged[b + 1]):
+            acc += prob2[bounds[b] + i]
+        sums[b + 1] = acc
+    for b in range(n_blocks):
+        merged[b + 1] += merged[b]
+        sums[b + 1] += sums[b]
+    for b in prange(n_blocks):
+        running = sums[b]
+        for i in range(merged[b + 1] - merged[b]):
+            running += prob2[bounds[b] + i]
+            vals[lo + merged[b] + i] = val2[bounds[b] + i]
+            cum[lo + merged[b] + i] = running
+    return merged[n_blocks]
+
+
+@njit(parallel=True, cache=True, nogil=True)
 def _count_nulls(
     row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps, max_cap, used, raw, cost,
     sval_t, sfl_t, sgt_t,
@@ -1091,29 +1208,45 @@ def _count_nulls(
 @njit(parallel=True, cache=True, nogil=True)
 def _fill_store(
     row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps, nulls, raw, counts, offs,
-    cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t,
+    cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t, wide,
 ):  # fmt: skip
     """Build the guide nulls ``nulls``, counted by :func:`_count_nulls`, into the store ``vals``/``cum``, back to back.
 
     Null ``u`` is built in place at ``offs[u]``, so that the store fits them exactly, and ``counts[u]`` is its merged
-    count. The store grows when it must and is returned.
+    count. A null of more than ``wide`` atoms is built by every thread (:func:`_build_wide`), one after the other,
+    and the rest each by one. The store grows when it must and is returned.
     """
     n_slots = sort_t.shape[0]
     total = 0
+    widest = 0
     win_cost = np.empty(nulls.size, dtype=np.float64)
     for i in range(nulls.size):
         u = nulls[i]
         offs[u] = total
         total += max(raw[u], 0)
-        win_cost[i] = cost[u]
+        win_cost[i] = cost[u] if raw[u] <= wide else 0.0
+        if raw[u] > wide:
+            widest = max(widest, raw[u])
     if total > vals.size:  # the store is kept across windows and features, so its pages are touched once
         vals = cum = np.empty(0, dtype=np.float64)  # the old one is freed before the new one is taken
         vals = np.empty(total, dtype=np.float64)
         cum = np.empty(total, dtype=np.float64)
+    if widest > 0:
+        wide2, wprob2 = np.empty(widest, dtype=np.float64), np.empty(widest, dtype=np.float64)
+        for i in range(nulls.size):
+            u = nulls[i]
+            if raw[u] > wide:
+                p = null_pool[u]
+                counts[u] = _build_wide(
+                    row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], null_size[u], null_eps[u], vals, cum,
+                    offs[u], raw[u], wide2, wprob2, sval_t.shape[1], n_slots,
+                )  # fmt: skip
     null_order, null_start = _deal(win_cost, n_slots)
     for t in prange(n_slots):
         for ui in range(null_start[t], null_start[t + 1]):
             u = nulls[null_order[ui]]
+            if raw[u] > wide:  # built above
+                continue
             counts[u] = 0
             if raw[u] >= 0:  # one of more atoms than max_cap keeps none
                 p = null_pool[u]
@@ -1277,6 +1410,7 @@ def _gene_pvalues(
     n_gene_slots,
     rtol,
     budget,
+    wide,
 ):
     """Two-sided p-value of every gene against its guides' control pools, within ``rtol`` of the exact one.
 
@@ -1304,9 +1438,10 @@ def _gene_pvalues(
     unresolved = np.zeros((n_genes, n_features), dtype=np.bool_)
     max_k = max(1, np.diff(gene_offsets).max())
     max_width = max(1, (sub_stop - sub_start).max())
-    max_cap = 1  # a null of more atoms than this keeps none
+    max_cap = 1  # a null of more atoms than this, or than the budget holds, keeps none
     for u in range(n_nulls):
         max_cap = max(max_cap, null_caps[u])
+    max_cap = min(max_cap, budget)
     sort_t = np.empty((n_slots, max(_SORT_SCRATCH, 128)), dtype=np.int64)
     sval_t = np.empty((n_slots, max_width), dtype=np.float64)
     sfl_t = np.empty((n_slots, max_width), dtype=np.float64)
@@ -1360,7 +1495,7 @@ def _gene_pvalues(
             )  # fmt: skip
             vals, cum = _fill_store(
                 row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps,
-                win_nulls[:n_win], raw, counts, offs, cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t,
+                win_nulls[:n_win], raw, counts, offs, cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t, wide,
             )  # fmt: skip
             win = seq[pos:stop]
             # a gene costs about its guides' atom count, more when an even count sends it through the boundary sweep
@@ -1447,7 +1582,7 @@ def _gene_pvalues(
             )  # fmt: skip
             vals, cum = _fill_store(
                 row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps,
-                win_nulls[:n_win], raw, counts, offs, cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t,
+                win_nulls[:n_win], raw, counts, offs, cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t, wide,
             )  # fmt: skip
             win = seq[pos:stop]
             for t in prange(n_gene_slots):
@@ -1524,9 +1659,8 @@ def _null_index(construct_pool, construct_nn, null_base, n_keys):
     return index
 
 
-#: Hard limit on a guide null's atoms, so a huge screen cannot ask for unbounded memory;
-#: the probability pruning keeps the real count far below this, and small problems never approach it.
-_ATOM_CAP_MAX = 40_000_000
+#: A guide null of more atoms than this is built by every thread at once rather than by one.
+_WIDE = 40_000_000
 
 
 def _sub_atom_bound(nn: np.ndarray, r: np.ndarray) -> np.ndarray:
@@ -1552,7 +1686,7 @@ def _null_caps(sub_start, sub_stop, pool_sub_start, pool_sub_stop, null_pool, nu
         nulls = np.flatnonzero(null_pool == p)
         w = widths[pool_sub_start[p] : pool_sub_stop[p]]
         bound = _sub_atom_bound(w[None, :], null_size[nulls].astype(np.int64)[:, None]).sum(axis=1)
-        caps[nulls] = np.minimum(bound + 16, _ATOM_CAP_MAX)
+        caps[nulls] = bound + 16
     return caps
 
 
@@ -1623,7 +1757,7 @@ def bootstrap_features(
         A null median equal to the observed one counts half, so a feature where most cells share one value, such as a count that is mostly zero, is not called because its median cannot move; Brieflow counts such ties as below.
         Medians skip missing values, and each feature is tested on the cells that measure it: a guide's null picks a control guide in proportion to the cells it measures in the feature and draws as many of those as the tested guide measures, and a guide that measures none leaves its gene's median and null.
         A feature whose observed median is missing, or that no control cell measures, is left ``NaN``.
-        So is a gene whose median can fall between two of its guides when a guide null has more distinct medians than can be held, with a warning; this takes thousands of cells in every control guide against guides of a few.
+        So is a gene whose median can fall between two of its guides when a guide null has more distinct medians than :attr:`mantispy.settings.bootstrap_null_bytes` holds, with a warning; this takes thousands of cells in every control guide against guides of a few.
 
         The null resamples a control guide's own cells, so it carries that sample's error on top of the spread between control guides, while a tested guide carries only its own.
         The test therefore runs conservative when guides barely differ from one another, and near the nominal rate when they differ by more than the error of a guide's median.
@@ -1802,11 +1936,13 @@ def bootstrap_features(
             8 * n_threads,
             float(rtol),
             max(1, settings.bootstrap_null_bytes // 32),  # an atom takes 16 bytes, and as many again to sort it
+            _WIDE,
         )
     if unresolved.any():
         logger.warning(
             "bootstrap_features: %d gene-feature p-value(s) are left NaN: a gene whose median can fall between two "
-            "of its guides needs their nulls' distinct medians, and a guide null had too many to hold",
+            "of its guides needs their nulls' distinct medians, and a guide null had more than "
+            "mt.settings.bootstrap_null_bytes holds",
             int(unresolved.sum()),
         )
 
