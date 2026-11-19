@@ -1781,12 +1781,14 @@ def _gene_guides(
 def _gene_pvalue(
     g, j, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, construct_pool, construct_nn, null_base, null_index,
     null_pool, gene_offsets, gene_observed, offs, counts, raw, vals, cum, eps, rtol, lo_c, hi_c, nul_c, tails, dp, sf,
-    si, n_parts,
+    si, n_parts, final,
 ):  # fmt: skip
     """Gene ``g``'s p-value in feature ``j`` from the store, and the tails its nulls need instead, or ``0``.
 
     Where the tails its nulls leave out could move the p-value past ``rtol``, the p-value is left for the finer
-    pass and the tails that pass needs are returned. ``n_parts`` above one sweeps by every thread.
+    pass and the tails that pass needs are returned. In that pass, ``final``, the p-value is taken as it is, or left
+    ``NaN`` with tails of ``-1`` where a null has more atoms than the store keeps. ``n_parts`` above one sweeps by
+    every thread.
     """
     obs = gene_observed[g, j]
     if np.isnan(obs):
@@ -1797,9 +1799,13 @@ def _gene_pvalue(
     )  # fmt: skip
     if k < 0:
         return _two_sided(above, below, measured), 0.0
+    if final and _over_cap(k, nul_c, raw):
+        return np.nan, -1.0
     p_val, lost, per_mass = _sweep_pvalue(
         k, lo_c, hi_c, vals, cum, obs, tails[0], tails[1], tails[2], tails[3], above, below, rtol, sf, si, n_parts
     )
+    if final:
+        return p_val, 0.0
     if not _over_cap(k, nul_c, raw):  # no null in the store leaves out more than three times eps
         lost = min(lost, 3.0 * eps * per_mass)
     # the exact p-value is at least p_val less the sweep's tails and what the atoms leave out, and never under
@@ -1809,6 +1815,57 @@ def _gene_pvalue(
         least = max(p_val - swept - lost, 2.0 * min(above, below))
         return np.nan, (max(rtol * least - swept, swept) + _ATOL) / (3.0 * per_mass)
     return p_val, 0.0
+
+
+@njit(parallel=True, cache=True, nogil=True)
+def _window_pvalues(
+    win, j, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, construct_pool, construct_nn, null_base,
+    null_index, null_pool, gene_offsets, gene_observed, offs, counts, raw, vals, cum, eps, rtol, lohi_t, tails_t,
+    dp_t, sf_t, si_t, gene_cost, wide_gene, wide, n_slots, final, out, fine_eps,
+):  # fmt: skip
+    """The p-values of a window's genes ``win`` in feature ``j`` (:func:`_gene_pvalue`), into ``out``/``fine_eps``.
+
+    The genes are dealt to the gene slots by cost (:func:`_deal`); a gene of an even count whose nulls hold more
+    than ``wide`` atoms is swept by every thread instead (:func:`_sweep_up_wide`), once the rest are done.
+    """
+    n_gene_slots = lohi_t.shape[0]
+    # a gene costs about its guides' atom count, more when an even count sends it through the boundary sweep
+    for gi in range(win.size):
+        g = win[gi]
+        tot = 0
+        k = 0
+        for c in range(gene_offsets[g], gene_offsets[g + 1]):
+            u = null_index[null_base[construct_pool[c]] + construct_nn[c, j]]
+            if u >= 0:
+                tot += counts[u]
+                k += 1
+        gene_cost[gi] = tot * (1.0 + (k % 2 == 0) * k) + 1.0 if k >= 2 else 1.0
+        wide_gene[gi] = k >= 2 and k % 2 == 0 and tot > wide
+        if wide_gene[gi]:  # swept after the others, so it weighs nothing in their deal
+            gene_cost[gi] = 0.0
+    gene_order, gene_start = _deal(gene_cost[: win.size], n_gene_slots)
+    for t in prange(n_gene_slots):
+        # the slot's scratch views, taken once: each view touches the shared reference count
+        lo_c, hi_c, nul_c = lohi_t[t, 0], lohi_t[t, 1], lohi_t[t, 2]
+        tails, dp, sf, si = tails_t[t], dp_t[t], sf_t[t], si_t[t]
+        for gi in range(gene_start[t], gene_start[t + 1]):
+            if not wide_gene[gene_order[gi]]:
+                g = win[gene_order[gi]]
+                out[g, j], fine_eps[g, j] = _gene_pvalue(
+                    g, j, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, construct_pool, construct_nn,
+                    null_base, null_index, null_pool, gene_offsets, gene_observed, offs, counts, raw, vals, cum, eps,
+                    rtol, lo_c, hi_c, nul_c, tails, dp, sf, si, 1, final,
+                )  # fmt: skip
+    lo_c, hi_c, nul_c = lohi_t[0, 0], lohi_t[0, 1], lohi_t[0, 2]
+    tails, dp, sf, si = tails_t[0], dp_t[0], sf_t[0], si_t[0]
+    for gi in range(win.size):
+        if wide_gene[gi]:
+            g = win[gi]
+            out[g, j], fine_eps[g, j] = _gene_pvalue(
+                g, j, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, construct_pool, construct_nn, null_base,
+                null_index, null_pool, gene_offsets, gene_observed, offs, counts, raw, vals, cum, eps, rtol, lo_c,
+                hi_c, nul_c, tails, dp, sf, si, 4 * n_slots, final,
+            )  # fmt: skip
 
 
 @njit(parallel=True, cache=True, nogil=True)
@@ -1939,44 +1996,11 @@ def _gene_pvalues(
                 lump_lo, lump_hi,
             )  # fmt: skip
             win = seq[pos:stop]
-            # a gene costs about its guides' atom count, more when an even count sends it through the boundary sweep
-            for gi in range(win.size):
-                g = win[gi]
-                tot = 0
-                k = 0
-                for c in range(gene_offsets[g], gene_offsets[g + 1]):
-                    u = null_index[null_base[construct_pool[c]] + construct_nn[c, j]]
-                    if u >= 0:
-                        tot += counts[u]
-                        k += 1
-                gene_cost[gi] = tot * (1.0 + (k % 2 == 0) * k) + 1.0 if k >= 2 else 1.0
-                wide_gene[gi] = k >= 2 and k % 2 == 0 and tot > wide
-                if wide_gene[gi]:  # swept after the others, so it weighs nothing in their deal
-                    gene_cost[gi] = 0.0
-            gene_order, gene_start = _deal(gene_cost[: win.size], n_gene_slots)
-            for t in prange(n_gene_slots):
-                # the slot's scratch views, taken once: each view touches the shared reference count
-                lo_c, hi_c, nul_c = lohi_t[t, 0], lohi_t[t, 1], lohi_t[t, 2]
-                tails, dp, sf, si = tails_t[t], dp_t[t], sf_t[t], si_t[t]
-                for gi in range(gene_start[t], gene_start[t + 1]):
-                    g = win[gene_order[gi]]
-                    if not wide_gene[gene_order[gi]]:
-                        out[g, j], fine_eps[g, j] = _gene_pvalue(
-                            g, j, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, construct_pool, construct_nn,
-                            null_base, null_index, null_pool, gene_offsets, gene_observed, offs, counts, raw, vals,
-                            cum, eps, rtol, lo_c, hi_c, nul_c, tails, dp, sf, si, 1,
-                        )  # fmt: skip
-            # a gene whose sweep reads more than wide atoms is swept by every thread, one after the other
-            lo_c, hi_c, nul_c = lohi_t[0, 0], lohi_t[0, 1], lohi_t[0, 2]
-            tails, dp, sf, si = tails_t[0], dp_t[0], sf_t[0], si_t[0]
-            for gi in range(win.size):
-                if wide_gene[gi]:
-                    g = win[gi]
-                    out[g, j], fine_eps[g, j] = _gene_pvalue(
-                        g, j, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, construct_pool, construct_nn,
-                        null_base, null_index, null_pool, gene_offsets, gene_observed, offs, counts, raw, vals, cum,
-                        eps, rtol, lo_c, hi_c, nul_c, tails, dp, sf, si, 4 * n_slots,
-                    )  # fmt: skip
+            _window_pvalues(
+                win, j, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, construct_pool, construct_nn,
+                null_base, null_index, null_pool, gene_offsets, gene_observed, offs, counts, raw, vals, cum, eps,
+                rtol, lohi_t, tails_t, dp_t, sf_t, si_t, gene_cost, wide_gene, wide, n_slots, False, out, fine_eps,
+            )  # fmt: skip
             pos = stop
     # the genes whose guide nulls need smaller tails, built once the shared store is freed, so that the two never
     # take memory at once; per feature, each null they read is built with the smallest tails any of them needs, in
@@ -2028,25 +2052,14 @@ def _gene_pvalues(
                 lump_lo, lump_hi,
             )  # fmt: skip
             win = seq[pos:stop]
-            for t in prange(n_gene_slots):
-                lo_c, hi_c, nul_c = lohi_t[t, 0], lohi_t[t, 1], lohi_t[t, 2]
-                tails, dp, sf, si = tails_t[t], dp_t[t], sf_t[t], si_t[t]
-                for gi in range(t, win.size, n_gene_slots):
-                    g = win[gi]
-                    obs = gene_observed[g, j]
-                    k, above, below, _ = _gene_guides(
-                        g, j, obs, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, construct_pool,
-                        construct_nn, null_base, null_index, null_pool, gene_offsets, offs, counts, lo_c, hi_c, nul_c,
-                        tails, dp,
-                    )  # fmt: skip
-                    if _over_cap(k, nul_c, raw):
-                        out[g, j] = np.nan
-                        unresolved[g, j] = True
-                        continue
-                    out[g, j] = _sweep_pvalue(
-                        k, lo_c, hi_c, vals, cum, obs, tails[0], tails[1], tails[2], tails[3], above, below, rtol, sf,
-                        si,
-                    )[0]  # fmt: skip
+            _window_pvalues(
+                win, j, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, construct_pool, construct_nn,
+                null_base, null_index, null_pool, gene_offsets, gene_observed, offs, counts, raw, vals, cum, eps,
+                rtol, lohi_t, tails_t, dp_t, sf_t, si_t, gene_cost, wide_gene, wide, n_slots, True, out, fine_eps,
+            )  # fmt: skip
+            for gi in range(win.size):
+                g = win[gi]
+                unresolved[g, j] = fine_eps[g, j] < 0.0
             pos = stop
     return out, unresolved
 
