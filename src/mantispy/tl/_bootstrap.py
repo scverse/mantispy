@@ -280,6 +280,45 @@ def _two_sided(gt: float, lt: float, measured: float) -> float:
     return min(1.0, max(0.0, 2.0 * min(gt + half_eq, lt + half_eq) / measured))
 
 
+#: Below this the binomial tails that place a control guide's far lower tail are too close to their rounding to be
+#: searched, so every value is tested in turn.
+_SEARCH_EPS = 1e-10
+
+
+@njit(cache=True, nogil=True)
+def _below_tail(v, lo, n, fl, i, k, r, eps):
+    """Whether entry ``i`` lies deep in the far lower tail: ``P(Binomial(r, F) <= k) >= 1 - eps / 2`` at its ``F``.
+
+    ``F`` is ``fl[i]``, or with ``fl`` empty the share of the sorted ``v[lo:lo+n]`` at most ``v[lo + i]``.
+    """
+    f = fl[i] if fl.size else _count_below(v, lo, lo + n, v[lo + i], True) / n
+    return 1.0 - _binom_cdf(k, r, f) <= 0.5 * eps
+
+
+@njit(cache=True, nogil=True)
+def _skip_lower_tail(v, lo, n, fl, size, k, r, eps):
+    """How many of the ``size`` entries the far lower tail holds for sure, by a galloping search from the bottom.
+
+    The binomial tail falls as ``F`` grows, so the entries below the first one :func:`_below_tail` rejects add no
+    atom, and each would cost a binomial tail to test; the search costs a few, wherever the band starts. Its margin
+    of half ``eps`` keeps it inside the entries a test in turn would skip, so the atoms are the same.
+    """
+    if eps < _SEARCH_EPS:
+        return 0
+    left, step = 0, 1
+    while left + step <= size and _below_tail(v, lo, n, fl, left + step - 1, k, r, eps):
+        left += step
+        step *= 2
+    right = min(left + step, size)
+    while left < right:
+        mid = (left + right) // 2
+        if _below_tail(v, lo, n, fl, mid, k, r, eps):
+            left = mid + 1
+        else:
+            right = mid
+    return left
+
+
 @njit(cache=True, nogil=True)
 def _add_sub_atoms(v, lo, n, r, scale, eps, out_val, out_prob, cnt, limit, sval, sfl, sgt):
     """Append the atoms of the median of r draws from ``v[lo:lo+n]`` (sorted, no nan), and count them.
@@ -296,9 +335,11 @@ def _add_sub_atoms(v, lo, n, r, scale, eps, out_val, out_prob, cnt, limit, sval,
         return cnt
     t = r // 2
     if r % 2 == 1:
-        i = lo
         end = lo + n
-        above = 1.0  # P(median >= v[i])
+        # the far lower tail carries no atom: start past the part of it a search finds (a value's copies share the
+        # test, so this is the first of them)
+        i = lo + _skip_lower_tail(v, lo, n, sval[:0], n, t, r, eps)
+        above = 1.0 if i == lo else _binom_cdf(t, r, (i - lo) / n)  # P(median >= v[i])
         while i < end and above > eps:
             a = v[i]
             j = i
@@ -344,9 +385,11 @@ def _add_sub_atoms(v, lo, n, r, scale, eps, out_val, out_prob, cnt, limit, sval,
             sgt[lb] = sgt[lb - 1] + log(-expm1(sgt[lb] - sgt[lb - 1]))
         for lb in range(nd - 1, 1, -1):
             sgt[lb] = exp(sgt[lb] - sgt[lb - 1])
-    # pass 2: diagonal and off-diagonal atoms from the precomputed tables
-    above = 1.0  # P(t-th order stat >= sval[ka])
-    for ka in range(nd):
+    # pass 2: diagonal and off-diagonal atoms from the precomputed tables, past the part of the far lower tail a
+    # search finds
+    left = _skip_lower_tail(v, lo, n, sfl[:nd], nd, t - 1, r, eps)
+    above = 1.0 if left == 0 else _binom_cdf(t - 1, r, sfl[left - 1])  # P(t-th order stat >= sval[ka])
+    for ka in range(left, nd):
         if above <= eps:  # the far upper tail
             break
         f_prev = sfl[ka - 1] if ka > 0 else 0.0
