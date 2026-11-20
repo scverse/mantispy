@@ -136,6 +136,23 @@ def test_a_singleton_gene_is_scored_against_the_single_guide_null():
     assert bool(solo["is_hit"].iloc[0])  # a lone guide at z=5 beats the single-NTC null
 
 
+def test_a_guide_with_no_gene_is_left_out(adata):
+    """A guide whose gene label is missing belongs to no gene, so it is not tested and gets no p-value."""
+    unlabelled = adata.obs["Metadata_Gene"] == "null0"
+    adata.obs["Metadata_Gene"] = adata.obs["Metadata_Gene"].astype(object).where(~unlabelled, np.nan)
+    table = _call(adata)
+    assert len(table) == 299 and table["group"].notna().all() and "nan" not in set(table["group"])
+    assert adata.obs.loc[unlabelled, "gene_aggregation_pvalue"].isna().all()
+
+
+@pytest.mark.parametrize("value", [0.0, -1.0])
+def test_a_weight_that_is_not_positive_is_rejected(adata, value):
+    adata.obs["w"] = 1.0
+    adata.obs.loc[adata.obs.index[0], "w"] = value
+    with pytest.raises(ValueError, match="must be positive"):
+        _call(adata, weight="w")
+
+
 def test_bad_method_and_misplaced_weight_or_direction_are_rejected(adata):
     with pytest.raises(ValueError, match="method must be one of"):
         mt.tl.aggregate_guides(
