@@ -24,6 +24,8 @@ MEAN, MEDIAN, MAD, STD, QUANTILE = 0, 1, 2, 3, 4
 N_CHUNKS = 64
 #: Spread selector for :func:`grouped_median_spread` only, alongside :data:`MAD`.
 IQR = 5
+#: The lower median, the order statistic ``ceil(n / 2)``: the median of an odd count and the lower middle of an even one.
+LOWER_MEDIAN = 6
 
 
 @njit(cache=True, nogil=True)
@@ -196,6 +198,8 @@ def _grouped(
                 out[group, j] = total / n
             elif stat == 1:  # median
                 out[group, j] = _median_select(buffer, n)
+            elif stat == 6:  # lower median
+                out[group, j] = _select_kth(buffer, n, (n - 1) // 2)
             elif stat == 2:  # median absolute deviation, unscaled
                 centre = _median_select(buffer, n)
                 for k in range(n):
