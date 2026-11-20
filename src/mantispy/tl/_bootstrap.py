@@ -1607,7 +1607,7 @@ def bootstrap_features(
     key_added: str = "bootstrap",
     copy: bool = False,
     *,
-    method: str = "stouffer",
+    method: str = "order",
     median: str = "lower",
     rtol: float = 1e-5,
 ) -> AnnData | None:
@@ -1625,13 +1625,14 @@ def bootstrap_features(
     ``"midpoint"`` takes the mean of the two middle cells, as :func:`numpy.median` and Brieflow do.
 
     ``method`` turns a gene's guides into one call.
-    ``"stouffer"``, ``"order"`` and ``"fisher"`` combine the guides' exact one-sided p-values in closed form, once for each direction, and the gene's p-value is twice the smaller; they cost little beyond the guides' own tests.
-    ``"stouffer"``, the default, sums the guides' z-scores, each weighted by the root of the guide's cells, so a shift the guides share adds up and a guide of many cells counts for more; use it for most screens.
-    ``"order"`` takes the ``k // 2 + 1``-th smallest of the ``k`` guides' p-values, so a strict majority of a gene's guides must show the phenotype and no single guide can carry a gene of two or more; use it when off-target guides are a concern, at the cost of some power.
-    ``"fisher"`` sums the guides' log p-values and fires when any one guide is strongly significant, which finds a gene with a single potent guide but lets one off-target guide carry its gene to a call.
+    ``"order"``, ``"stouffer"`` and ``"fisher"`` combine the guides' exact one-sided p-values in closed form, once for each direction, and the gene's p-value is twice the smaller; they cost little beyond the guides' own tests.
+    ``"order"``, the default, takes the ``k // 2 + 1``-th smallest of the ``k`` guides' p-values, so a gene is called only when a strict majority of its guides agree, and one odd guide, off-target or merely far from the others, cannot carry a gene of two or more.
+    Guides of one gene often differ from one another by more than chance, and the majority calls a gene on what most of its guides share rather than on its farthest guide.
+    ``"stouffer"`` sums the guides' z-scores, each weighted by the root of the guide's cells, so a shift the guides share adds up and a guide of many cells counts for more; choose it for more power when a gene's guides are known to behave alike, since when they vary one extreme guide can carry its gene to a call.
+    ``"fisher"`` sums the guides' log p-values and fires when any one guide is strongly significant, so choose it to find a gene with a single potent guide, at the cost of letting one off-target guide carry its gene to a call.
     Each guide's p-value is kept away from zero and one, so that one guide cannot alone send its gene's to either.
     ``"median"`` tests Brieflow's statistic, the median of the guides' medians, against its exact null, the distribution of that median over the gene's independent guide nulls, and ``median`` picks the median of an even count of guides too.
-    With ``median="midpoint"`` it is Brieflow's gene test and reproduces Brieflow's numbers on its standard feature set; its null of an even count is the mean of two guide medians, whose distinct values the test must enumerate, so it does not scale to large feature sets or the largest screens, and a gene's p-value stays within ``rtol`` of the exact one rather than equal to it.
+    Choose it to compare with Brieflow: with ``median="midpoint"`` it is Brieflow's gene test and reproduces Brieflow's numbers on its standard feature set; its null of an even count is the mean of two guide medians, whose distinct values the test must enumerate, so it does not scale to large feature sets or the largest screens, and a gene's p-value stays within ``rtol`` of the exact one rather than equal to it.
     Use the default for real screens.
 
     The output has the layout of :func:`~mantispy.tl.differential_features`, so :func:`~mantispy.pl.feature_volcano` and :func:`~mantispy.pl.effect_sizes` read it with ``key=key_added``.
@@ -1657,7 +1658,7 @@ def bootstrap_features(
         layer: Read this layer instead of ``X``.
         key_added: Name for the output tables.
         copy: Return a modified copy instead of mutating in place.
-        method: ``"stouffer"``, ``"fisher"``, ``"order"`` or ``"median"``, the gene-level test, as above.
+        method: ``"order"``, ``"stouffer"``, ``"fisher"`` or ``"median"``, the gene-level test, as above.
         median: ``"lower"`` or ``"midpoint"``, the median of an even count of cells and, under ``method="median"``, of guides, as above.
         rtol: Under ``method="median", median="midpoint"``, how close each gene's p-value stays to the exact one, relative to it: within ``rtol`` times the p-value, and ``1e-15`` for rounding.
             The far tails of the gene null and of its guides' nulls that cannot move the p-value by more than that are not summed.

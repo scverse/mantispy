@@ -556,23 +556,25 @@ def _spread_null_screen():
 
 
 @pytest.mark.parametrize(
-    "method",
+    "kwargs",
     [
+        pytest.param({}, id="default"),
         pytest.param(
-            "stouffer",
+            {"method": "stouffer"},
+            id="stouffer",
             marks=pytest.mark.xfail(
                 reason="Stouffer adds the guides' spread around the controls, which each guide's null already "
                 "carries, so with guides that differ by more than the error of their medians it calls null genes",
                 strict=True,
             ),
         ),
-        "median",
+        pytest.param({"method": "median"}, id="median"),
     ],
 )
-def test_guide_spread_does_not_call_null_genes(method):
+def test_guide_spread_does_not_call_null_genes(kwargs):
     """Pseudo-genes of control guides with spread between guides: no gene-feature pair passes q < 0.05."""
     adata = _spread_null_screen()
-    mt.tl.bootstrap_features(adata, method=method)
+    mt.tl.bootstrap_features(adata, **kwargs)
     assert (adata.uns["mantispy"]["bootstrap"]["qvalue"] < 0.05).sum() == 0
 
 
