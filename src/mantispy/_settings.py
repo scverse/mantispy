@@ -28,8 +28,8 @@ def _default_map_table_bytes() -> int:
 
 
 def _default_bootstrap_null_bytes() -> int:
-    """An eighth of the machine's memory, at most 16 GiB, or 4 GiB when the system does not say."""
-    return min(_machine_memory() // 8, 2**34) or 2**32
+    """An eighth of the machine's memory, at most 40 GiB, or 4 GiB when the system does not say."""
+    return min(_machine_memory() // 8, 40 * 2**30) or 2**32
 
 
 class MantispySettings(Settings):
@@ -61,8 +61,8 @@ class MantispySettings(Settings):
     bootstrap_null_bytes: Annotated[int, Field(gt=0)] = _default_bootstrap_null_bytes()
     """How many bytes of guide nulls :func:`mantispy.tl.bootstrap_features` builds at once, with their sort's scratch.
 
-    The default is an eighth of the machine's memory, at most 16 GiB.
-    A feature's genes are tested in windows whose guide nulls fit this, so a smaller value lowers the peak memory, and the nulls that windows share are built once for each.
+    The default is an eighth of the machine's memory, at most 40 GiB.
+    A feature's genes are tested in windows whose guide nulls fit this, and a null that genes of several windows read is built again for each, so a larger value builds fewer of them again and a smaller one lowers the peak memory.
     It must be positive.
     """
 
