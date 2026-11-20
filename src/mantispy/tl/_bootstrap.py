@@ -318,8 +318,11 @@ def _two_sided(gt: float, lt: float, measured: float) -> float:
 
 
 @njit(cache=True, nogil=True)
-def _add_sub_atoms(v, lo, n, r, scale, eps, out_val, out_prob, cnt, limit, sval, sfl, sgt):
+def _add_sub_atoms(v, lo, n, r, scale, eps, out_val, out_prob, cnt, limit, sval, sfl, sgt, lower=False):
     """Append the atoms of the median of r draws from ``v[lo:lo+n]`` (sorted, no nan), and count them.
+
+    With ``lower``, the median of an even r is the lower of the two middle draws, an order statistic as the median of
+    an odd r is, whose atoms are the distinct values.
 
     Each atom is ``(value, scale*prob)``. Only the two far tails of the median's distribution are left out,
     each of mass at most ``eps``, and for even r the far end of each row of midpoints, at most ``eps`` of the
@@ -331,8 +334,8 @@ def _add_sub_atoms(v, lo, n, r, scale, eps, out_val, out_prob, cnt, limit, sval,
     """
     if n == 0:
         return cnt
-    t = r // 2
-    if r % 2 == 1:
+    t = (r - 1) // 2 if lower else r // 2  # the median is the (t + 1)-th smallest draw
+    if r % 2 == 1 or lower:
         i = lo
         end = lo + n
         above = 1.0  # P(median >= v[i])
@@ -573,7 +576,9 @@ def _collapse(val_buf, prob_buf, lo, hi, val2, prob2, ints):
 
 
 @njit(cache=True, nogil=True)
-def _construct_atoms(pool_sorted_row, sub_nn_row, sub_start, s0, s1, m, eps, val_buf, prob_buf, limit, sval, sfl, sgt):
+def _construct_atoms(
+    pool_sorted_row, sub_nn_row, sub_start, s0, s1, m, eps, val_buf, prob_buf, limit, sval, sfl, sgt, lower=False
+):
     """Every control guide's exact median atoms for one guide null, weighted as in :func:`_pool_tails`, unmerged.
 
     Writes those that fit ``val_buf``/``prob_buf`` and returns their count, or ``-1`` past ``limit``.
@@ -587,8 +592,9 @@ def _construct_atoms(pool_sorted_row, sub_nn_row, sub_start, s0, s1, m, eps, val
         if nn == 0:
             continue
         cnt = _add_sub_atoms(
-            pool_sorted_row, sub_start[sub], nn, m, nn / total, eps, val_buf, prob_buf, cnt, limit, sval, sfl, sgt
-        )
+            pool_sorted_row, sub_start[sub], nn, m, nn / total, eps, val_buf, prob_buf, cnt, limit, sval, sfl, sgt,
+            lower,
+        )  # fmt: skip
         if cnt < 0:
             return -1
     return cnt
@@ -596,16 +602,18 @@ def _construct_atoms(pool_sorted_row, sub_nn_row, sub_start, s0, s1, m, eps, val
 
 @njit(cache=True, nogil=True)
 def _build_construct(
-    pool_sorted_row, sub_nn_row, sub_start, s0, s1, m, eps, val_buf, prob_buf, val2, prob2, ints, sval, sfl, sgt
-):
+    pool_sorted_row, sub_nn_row, sub_start, s0, s1, m, eps, val_buf, prob_buf, val2, prob2, ints, sval, sfl, sgt,
+    lower=False,
+):  # fmt: skip
     """Build one guide null as merged, sorted atoms in ``val_buf``/``prob_buf``; returns their count.
 
     Mixes every control guide's exact median-atom distribution (:func:`_construct_atoms`), then sorts and
     merges equal values. Returns ``-1`` if the atoms do not fit the buffer.
     """
     cnt = _construct_atoms(
-        pool_sorted_row, sub_nn_row, sub_start, s0, s1, m, eps, val_buf, prob_buf, val_buf.shape[0], sval, sfl, sgt
-    )
+        pool_sorted_row, sub_nn_row, sub_start, s0, s1, m, eps, val_buf, prob_buf, val_buf.shape[0], sval, sfl, sgt,
+        lower,
+    )  # fmt: skip
     if cnt <= 0:
         return cnt
     return _collapse(val_buf, prob_buf, 0, cnt, val2, prob2, ints)
@@ -1036,7 +1044,7 @@ def _sweep_pvalue(k, lo_c, hi_c, vals, cum, obs, gt, lt, le, ge, above, below, r
 
 
 @njit(cache=True, nogil=True)
-def _build_into(row, nn_row, sub_start, s0, s1, m, eps, ints, sval, sfl, sgt, vals, cum, lo, hi):
+def _build_into(row, nn_row, sub_start, s0, s1, m, eps, ints, sval, sfl, sgt, vals, cum, lo, hi, lower=False):
     """Build a guide null of ``m`` draws in place, in the stretch ``[lo, hi)`` of the store that holds its atoms.
 
     The store keeps the atom values and their running mass from the bottom, ``cum``, which holds the masses until
@@ -1045,7 +1053,7 @@ def _build_into(row, nn_row, sub_start, s0, s1, m, eps, ints, sval, sfl, sgt, va
     n = hi - lo
     end = _build_construct(
         row, nn_row, sub_start, s0, s1, m, eps, vals[lo:hi], cum[lo:hi],
-        np.empty(n, dtype=np.float64), np.empty(n, dtype=np.float64), ints, sval, sfl, sgt,
+        np.empty(n, dtype=np.float64), np.empty(n, dtype=np.float64), ints, sval, sfl, sgt, lower,
     )  # fmt: skip
     running = 0.0
     for z in range(end):
@@ -1057,7 +1065,7 @@ def _build_into(row, nn_row, sub_start, s0, s1, m, eps, ints, sval, sfl, sgt, va
 @njit(parallel=True, cache=True, nogil=True)
 def _fill_store(
     row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps, max_cap, used,
-    raw, counts, offs, cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t,
+    raw, counts, offs, cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t, lower,
 ):  # fmt: skip
     """Build every ``used`` guide null of one feature into the store ``vals``/``cum``, null ``u`` leaving out tails of ``null_eps[u]``.
 
@@ -1078,7 +1086,7 @@ def _fill_store(
                 p = null_pool[u]
                 raw[u] = _construct_atoms(
                     row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], null_size[u], null_eps[u],
-                    no_atoms, no_atoms, max_cap, sval_t[t], sfl_t[t], sgt_t[t],
+                    no_atoms, no_atoms, max_cap, sval_t[t], sfl_t[t], sgt_t[t], lower,
                 )  # fmt: skip
     for u in range(n_nulls):
         offs[u + 1] = offs[u] + max(raw[u], 0)
@@ -1096,7 +1104,7 @@ def _fill_store(
                 p = null_pool[u]
                 counts[u] = _build_into(
                     row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], null_size[u], null_eps[u],
-                    sort_t[t], sval_t[t], sfl_t[t], sgt_t[t], vals, cum, offs[u], offs[u + 1],
+                    sort_t[t], sval_t[t], sfl_t[t], sgt_t[t], vals, cum, offs[u], offs[u + 1], lower,
                 )  # fmt: skip
     return vals, cum
 
@@ -1142,7 +1150,7 @@ def _deal(cost, n_slots):
 @njit(cache=True, nogil=True, inline="always")
 def _gene_guides(
     g, j, obs, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, construct_pool, construct_nn,
-    null_base, null_index, null_pool, gene_offsets, offs, counts, lo_c, hi_c, nul_c, tails, dp,
+    null_base, null_index, null_pool, gene_offsets, offs, counts, lo_c, hi_c, nul_c, tails, dp, lower,
 ):  # fmt: skip
     """Gather gene ``g``'s measured guides in feature ``j``: their atoms in the store, nulls and exact tails at ``obs``.
 
@@ -1163,7 +1171,7 @@ def _gene_guides(
         # significance never depends on the atom pruning
         p = null_pool[u]
         gt_arr[k], lt_arr[k], le_arr[k], ge_arr[k], meas_arr[k] = _pool_tails(
-            row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], construct_nn[c, j], obs
+            row, nn_row, sub_start, pool_sub_start[p], pool_sub_stop[p], construct_nn[c, j], obs, lower
         )
         nan_arr[k] = 1.0 - meas_arr[k]
         k += 1
@@ -1193,54 +1201,6 @@ def _gene_guides(
 
 
 @njit(parallel=True, cache=True, nogil=True)
-def _lower_gene_pvalues(
-    pool_sorted, sub_nn, sub_start, pool_sub_start, pool_sub_stop, construct_pool, construct_nn, gene_offsets,
-    gene_observed,
-):  # fmt: skip
-    """Two-sided p-value of every gene against its guides' control pools, exactly, for the lower median.
-
-    The gene's lower median is above ``obs`` when more of its measured guides' lower medians are above it than at
-    or below it, and below it when at least as many are below it as at or above it for an even count, more for an
-    odd one. Each guide's chance of either is its null's exact tail (:func:`_pool_tails`), and the counts over the
-    gene's independent guides are a dynamic program (:func:`_count_above`), so no null is enumerated.
-    """
-    n_genes = gene_offsets.size - 1
-    n_features = gene_observed.shape[1]
-    out = np.empty((n_genes, n_features), dtype=np.float64)
-    for item in prange(n_genes * n_features):
-        g, j = item // n_features, item % n_features
-        obs = gene_observed[g, j]
-        if np.isnan(obs):
-            out[g, j] = np.nan
-            continue
-        k_max = gene_offsets[g + 1] - gene_offsets[g]
-        gt, lt, le, ge, nan = np.empty(k_max), np.empty(k_max), np.empty(k_max), np.empty(k_max), np.empty(k_max)
-        dp = np.empty((2, 2 * k_max + 5))
-        k = 0
-        n_measured = 0
-        for c in range(gene_offsets[g], gene_offsets[g + 1]):
-            if construct_nn[c, j] == 0:  # its observed median is nan, so it is not in the gene's median either
-                continue
-            p = construct_pool[c]
-            gt[k], lt[k], le[k], ge[k], measured = _pool_tails(
-                pool_sorted[j], sub_nn[j], sub_start, pool_sub_start[p], pool_sub_stop[p], construct_nn[c, j], obs,
-                True,
-            )  # fmt: skip
-            nan[k] = 1.0 - measured
-            n_measured += measured > 0.0
-            k += 1
-        if n_measured == 0:
-            out[g, j] = np.nan
-            continue
-        above = _count_above(k, gt, le, nan, dp)
-        below = _count_above(k, lt, ge, nan, dp)
-        if n_measured % 2 == 0:  # as many guides below as at or above puts an even count's lower median below
-            below += dp[k % 2, k + 2]
-        out[g, j] = _two_sided(above, below, 1.0)
-    return out
-
-
-@njit(parallel=True, cache=True, nogil=True)
 def _gene_pvalues(
     pool_sorted,
     sub_nn,
@@ -1261,8 +1221,11 @@ def _gene_pvalues(
     n_slots,
     n_gene_slots,
     rtol,
+    lower=False,
 ):
     """Two-sided p-value of every gene against its guides' control pools, within ``rtol`` of the exact one.
+
+    With ``lower``, each guide's null is of its lower median.
 
     A guide's null depends only on its pool and measured cell count, so per feature each distinct
     ``(null_pool, null_size)`` null is built once into a shared atom store, and the genes then only
@@ -1326,7 +1289,7 @@ def _gene_pvalues(
         _bound_unknown_costs(cost, used, null_caps)
         vals, cum = _fill_store(
             row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps, max_cap, used,
-            raw, counts, offs, cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t,
+            raw, counts, offs, cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t, lower,
         )  # fmt: skip
         # a gene costs about its guides' atom count, more when an even count sends it through the boundary sweep
         for g in range(n_genes):
@@ -1352,6 +1315,7 @@ def _gene_pvalues(
                 k, above, below, measured = _gene_guides(
                     g, j, obs, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, construct_pool, construct_nn,
                     null_base, null_index, null_pool, gene_offsets, offs, counts, lo_c, hi_c, nul_c, tails, dp,
+                    lower,
                 )  # fmt: skip
                 if k < 0:
                     out[g, j] = _two_sided(above, below, measured)
@@ -1394,7 +1358,7 @@ def _gene_pvalues(
         _bound_unknown_costs(cost, used, null_caps)
         vals, cum = _fill_store(
             row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps, max_cap, used,
-            raw, counts, offs, cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t,
+            raw, counts, offs, cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t, lower,
         )  # fmt: skip
         for t in prange(n_gene_slots):
             lo_c, hi_c, nul_c = lohi_t[t, 0], lohi_t[t, 1], lohi_t[t, 2]
@@ -1405,6 +1369,7 @@ def _gene_pvalues(
                 k, above, below, _ = _gene_guides(
                     g, j, obs, row, nn_row, sub_start, pool_sub_start, pool_sub_stop, construct_pool, construct_nn,
                     null_base, null_index, null_pool, gene_offsets, offs, counts, lo_c, hi_c, nul_c, tails, dp,
+                    lower,
                 )  # fmt: skip
                 if _over_cap(k, nul_c, raw):
                     out[g, j] = np.nan
@@ -1499,11 +1464,11 @@ def _null_caps(sub_start, sub_stop, pool_sub_start, pool_sub_stop, null_pool, nu
     return caps
 
 
-def _midpoint_gene_pvalues(
+def _gene_pvalues_of(
     pool_sorted, sub_nn, sub_start, sub_stop, pool_sub_start, pool_sub_stop, construct_pool, construct_nn,
-    construct_size, gene_offsets, gene_observed, rtol, n_pools, logger,
+    construct_size, gene_offsets, gene_observed, rtol, n_pools, lower, logger,
 ):  # fmt: skip
-    """The gene p-values of :func:`bootstrap_features` under ``median="midpoint"``, within ``rtol`` of the exact ones."""
+    """The gene p-values of :func:`bootstrap_features`, within ``rtol`` of the exact ones, from its guides' nulls."""
     # a guide's null depends only on its pool and measured cell count, so guides sharing both share it; a pool's
     # keys run over the counts up to its largest guide
     pool_largest = np.zeros(n_pools, dtype=np.int64)
@@ -1536,6 +1501,7 @@ def _midpoint_gene_pvalues(
             n_threads,
             8 * n_threads,
             rtol,
+            lower,
         )
     if unresolved.any():
         logger.warning(
@@ -1569,12 +1535,13 @@ def bootstrap_features(
     Because each draw comes from one control guide, the null carries the spread between control guides as well as the sampling error of a median.
 
     The null is not simulated but computed exactly: the median of a resample is an order statistic, a binomial tail in the guide's empirical distribution; the guide null is the cell-count-weighted mixture of its control guides' such distributions, and the gene null is the order-statistic distribution of its independent guide nulls, summed over its guides by a dynamic program so that a gene of many guides stays cheap.
-    The p-values are therefore the ones an infinite bootstrap converges to, with no simulation noise and no lower limit.
+    The p-values are therefore the ones an infinite bootstrap converges to, with no simulation noise and no lower limit; a gene's, by default, to within ``rtol`` of itself.
 
-    ``median`` picks the median of an even count, at both levels, for the observed medians and the null alike.
-    ``"lower"``, the default, takes the lower of the two middle values, an order statistic like the median of an odd count, so the gene null stays a count over its guides and every p-value is exact and cheap.
-    ``"midpoint"`` takes the mean of the two middle values, as :func:`numpy.median` and Brieflow do; use it to reproduce Brieflow's numbers.
-    Its null of an even count is the mean of two order statistics, whose distinct values the test must enumerate, so it takes far longer and far more memory, and a gene's p-value stays within ``rtol`` of the exact one rather than equal to it.
+    ``median`` picks a guide's median of an even count of cells, for its observed median and its null alike; a gene's is always the median of its guides' medians, the mean of the two middle ones for an even count of guides, as in Brieflow.
+    ``"lower"``, the default, takes the lower of the two middle cells, an order statistic like the median of an odd count, so a guide null's distinct values are the control guides' own and the test stays fast and small at any screen size.
+    With hundreds of cells to a guide it moves a guide's median by a fraction of the gap between neighbouring values, so the gene calls barely change.
+    ``"midpoint"`` takes the mean of the two middle cells, as :func:`numpy.median` and Brieflow do; use it to reproduce Brieflow's numbers.
+    Its null of an even count is the mean of two order statistics, whose distinct values the test must enumerate, so it takes far longer and far more memory.
 
     The test is Brieflow's bootstrap for optical pooled screens, a gene-level call; the guide-level call is :func:`~mantispy.tl.hit_calling` with ``null="pseudogenes"``.
     Every feature of ``adata`` is tested, so subset ``adata`` to the features you want tested.
@@ -1600,11 +1567,11 @@ def bootstrap_features(
         layer: Read this layer instead of ``X``.
         key_added: Name for the output tables.
         copy: Return a modified copy instead of mutating in place.
-        median: ``"lower"`` or ``"midpoint"``, the median of an even count, as above.
-        rtol: Under ``median="midpoint"``, how close each gene's p-value stays to the exact one, relative to it: within ``rtol`` times the p-value, and ``1e-15`` for rounding.
+        median: ``"lower"`` or ``"midpoint"``, a guide's median of an even count of cells, as above.
+        rtol: How close each gene's p-value stays to the exact one, relative to it: within ``rtol`` times the p-value, and ``1e-15`` for rounding.
             The far tails of the gene null and of its guides' nulls that cannot move the p-value by more than that are not summed.
             ``0`` sums every tail, so the p-values are exact up to rounding.
-            Guides' p-values, and every p-value under ``median="lower"``, are always exact.
+            Guides' p-values are always exact.
 
     Returns:
         ``None``, or the modified copy.
@@ -1620,7 +1587,7 @@ def bootstrap_features(
         A null median equal to the observed one counts half, so a feature where most cells share one value, such as a count that is mostly zero, is not called because its median cannot move; Brieflow counts such ties as below.
         Medians skip missing values, and each feature is tested on the cells that measure it: a guide's null picks a control guide in proportion to the cells it measures in the feature and draws as many of those as the tested guide measures, and a guide that measures none leaves its gene's median and null.
         A feature whose observed median is missing, or that no control cell measures, is left ``NaN``.
-        Under ``median="midpoint"``, so is a gene whose median can fall between two of its guides when a guide null has more distinct medians than can be held, with a warning; this takes thousands of cells in every control guide against guides of a few.
+        So is a gene whose median can fall between two of its guides when a guide null has more distinct medians than can be held, with a warning; under ``median="midpoint"`` this takes thousands of cells in every control guide against guides of a few.
 
         The null resamples a control guide's own cells, so it carries that sample's error on top of the spread between control guides, while a tested guide carries only its own.
         The test therefore runs conservative when guides barely differ from one another, and near the nominal rate when they differ by more than the error of a guide's median.
@@ -1757,8 +1724,8 @@ def bootstrap_features(
     genes, gene_starts = np.unique(construct_unit, return_index=True)
     gene_offsets = np.append(gene_starts, construct_unit.size).astype(np.int64)
     gene_of_construct = np.searchsorted(genes, construct_unit)
-    gene_observed = grouped_stat(construct_observed, gene_of_construct, genes.size, stat)
-    gene_baseline = grouped_stat(pool_median[construct_pool], gene_of_construct, genes.size, stat)
+    gene_observed = grouped_stat(construct_observed, gene_of_construct, genes.size, MEDIAN)
+    gene_baseline = grouped_stat(pool_median[construct_pool], gene_of_construct, genes.size, MEDIAN)
 
     guide_p = _guide_pvalues(
         pool_sorted,
@@ -1771,16 +1738,10 @@ def bootstrap_features(
         construct_observed,
         lower,
     )
-    if lower:
-        gene_p = _lower_gene_pvalues(
-            pool_sorted, sub_nn, sub_start, pool_sub_start, pool_sub_stop, construct_pool, construct_nn, gene_offsets,
-            gene_observed,
-        )  # fmt: skip
-    else:
-        gene_p = _midpoint_gene_pvalues(
-            pool_sorted, sub_nn, sub_start, sub_stop, pool_sub_start, pool_sub_stop, construct_pool, construct_nn,
-            construct_size, gene_offsets, gene_observed, float(rtol), pool_keys.size, logger,
-        )  # fmt: skip
+    gene_p = _gene_pvalues_of(
+        pool_sorted, sub_nn, sub_start, sub_stop, pool_sub_start, pool_sub_stop, construct_pool, construct_nn,
+        construct_size, gene_offsets, gene_observed, float(rtol), pool_keys.size, lower, logger,
+    )  # fmt: skip
 
     features = adata.var_names.to_numpy()
     n_features = features.size
