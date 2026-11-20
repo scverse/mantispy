@@ -14,6 +14,7 @@ import pandas as pd
 from anndata import AnnData
 from numba import njit
 
+from mantispy._core._combine import FISHER, ORDER, STOUFFER, combine, combined_pvalue, guide_z
 from mantispy._core._numba import (
     LOWER_MEDIAN,
     MEDIAN,
@@ -37,6 +38,9 @@ else:
 
 #: The medians :func:`bootstrap_features` can take, named as :func:`numpy.quantile` names its methods.
 MEDIANS = ("lower", "midpoint")
+#: The gene-level tests of :func:`bootstrap_features`.
+METHODS = ("stouffer", "order", "fisher", "median", "lower_median")
+_RULES = {"stouffer": STOUFFER, "order": ORDER, "fisher": FISHER}
 #: Where each guide's null is drawn from; see :func:`bootstrap_features`.
 CONTROL_SCOPES = ("pooled", "within_group", "reference_group", "within_perturbation")
 
@@ -237,7 +241,7 @@ def _median_lt(v: np.ndarray, lo: int, n: int, m: int, x: float) -> float:
 
 
 @njit(parallel=True, cache=True, nogil=True)
-def _guide_pvalues(
+def _guide_tails(
     pool_sorted: np.ndarray,
     sub_nn: np.ndarray,
     sub_start: np.ndarray,
@@ -247,14 +251,16 @@ def _guide_pvalues(
     construct_nn: np.ndarray,
     construct_observed: np.ndarray,
     lower: bool = False,
-) -> np.ndarray:
-    """Two-sided p-value of every guide against its control pool, exactly.
+) -> tuple[np.ndarray, np.ndarray]:
+    """One-sided p-values of every guide against its control pool, exactly: up, ``P(> obs)``, and down, ``P(< obs)``.
 
-    A guide's null draws as many cells as the guide has measured in the feature, from the control cells
-    that measure it; with no such control cell the p-value is ``NaN``. ``lower`` takes the lower median.
+    A null median equal to the observed one counts half to each. A guide's null draws as many cells as the guide has
+    measured in the feature, from the control cells that measure it; with no such control cell both are ``NaN``.
+    ``lower`` takes the lower median.
     """
     n_constructs, n_features = construct_observed.shape
-    out = np.empty((n_constructs, n_features), dtype=np.float64)
+    up = np.empty((n_constructs, n_features), dtype=np.float64)
+    down = np.empty((n_constructs, n_features), dtype=np.float64)
     for c in prange(n_constructs):
         p = construct_pool[c]
         s0 = pool_sub_start[p]
@@ -262,12 +268,96 @@ def _guide_pvalues(
         for j in range(n_features):
             obs = construct_observed[c, j]
             if np.isnan(obs):
-                out[c, j] = np.nan
+                up[c, j] = down[c, j] = np.nan
                 continue
             gt, lt, _, _, measured = _pool_tails(
                 pool_sorted[j], sub_nn[j], sub_start, s0, s1, construct_nn[c, j], obs, lower
             )
-            out[c, j] = _two_sided(gt, lt, measured)
+            if measured <= 0.0:
+                up[c, j] = down[c, j] = np.nan
+                continue
+            half_eq = 0.5 * max(0.0, measured - gt - lt)
+            up[c, j] = min(1.0, (gt + half_eq) / measured)
+            down[c, j] = min(1.0, (lt + half_eq) / measured)
+    return up, down
+
+
+@njit(parallel=True, cache=True, nogil=True)
+def _combined_gene_pvalues(up, down, construct_nn, gene_offsets, method):
+    """Two-sided p-value of every gene: its guides' one-sided p-values combined by ``method``, each way.
+
+    A guide is weighted by the root of its measured cells; a guide with no null leaves its gene.
+    """
+    n_genes = gene_offsets.size - 1
+    n_features = up.shape[1]
+    out = np.empty((n_genes, n_features), dtype=np.float64)
+    for item in prange(n_genes * n_features):
+        g, j = item // n_features, item % n_features
+        a, b = gene_offsets[g], gene_offsets[g + 1]
+        pu, pd_, zu, zd, w = np.empty(b - a), np.empty(b - a), np.empty(b - a), np.empty(b - a), np.empty(b - a)
+        k = 0
+        for c in range(a, b):
+            if np.isnan(up[c, j]):
+                continue
+            pu[k], pd_[k] = up[c, j], down[c, j]
+            zu[k] = guide_z(pu[k], pd_[k])
+            zd[k] = -zu[k]
+            w[k] = np.sqrt(construct_nn[c, j])
+            k += 1
+        if k == 0:
+            out[g, j] = np.nan
+            continue
+        p_up = combined_pvalue(combine(pu, zu, w, k, method), k, method)
+        p_down = combined_pvalue(combine(pd_, zd, w, k, method), k, method)
+        out[g, j] = min(1.0, 2.0 * min(p_up, p_down))
+    return out
+
+
+@njit(parallel=True, cache=True, nogil=True)
+def _lower_median_gene_pvalues(
+    pool_sorted, sub_nn, sub_start, pool_sub_start, pool_sub_stop, construct_pool, construct_nn, gene_offsets,
+    gene_observed, lower,
+):  # fmt: skip
+    """Two-sided p-value of every gene's lower median of its guides' medians, exactly.
+
+    The gene's lower median is above ``obs`` when more of its measured guides' medians are above it than at or below
+    it, and below it when at least as many are below it as at or above it for an even count, more for an odd one.
+    Each guide's chance of either is its null's exact tail (:func:`_pool_tails`), and the counts over the gene's
+    independent guides are a dynamic program (:func:`_count_above`), so no null is enumerated.
+    """
+    n_genes = gene_offsets.size - 1
+    n_features = gene_observed.shape[1]
+    out = np.empty((n_genes, n_features), dtype=np.float64)
+    for item in prange(n_genes * n_features):
+        g, j = item // n_features, item % n_features
+        obs = gene_observed[g, j]
+        if np.isnan(obs):
+            out[g, j] = np.nan
+            continue
+        k_max = gene_offsets[g + 1] - gene_offsets[g]
+        gt, lt, le, ge, nan = np.empty(k_max), np.empty(k_max), np.empty(k_max), np.empty(k_max), np.empty(k_max)
+        dp = np.empty((2, 2 * k_max + 5))
+        k = 0
+        n_measured = 0
+        for c in range(gene_offsets[g], gene_offsets[g + 1]):
+            if construct_nn[c, j] == 0:  # its observed median is nan, so it is not in the gene's median either
+                continue
+            p = construct_pool[c]
+            gt[k], lt[k], le[k], ge[k], measured = _pool_tails(
+                pool_sorted[j], sub_nn[j], sub_start, pool_sub_start[p], pool_sub_stop[p], construct_nn[c, j], obs,
+                lower,
+            )  # fmt: skip
+            nan[k] = 1.0 - measured
+            n_measured += measured > 0.0
+            k += 1
+        if n_measured == 0:
+            out[g, j] = np.nan
+            continue
+        above = _count_above(k, gt, le, nan, dp)
+        below = _count_above(k, lt, ge, nan, dp)
+        if n_measured % 2 == 0:  # as many guides below as at or above puts an even count's lower median below
+            below += dp[k % 2, k + 2]
+        out[g, j] = _two_sided(above, below, 1.0)
     return out
 
 
@@ -1525,23 +1615,36 @@ def bootstrap_features(
     key_added: str = "bootstrap",
     copy: bool = False,
     *,
+    method: str = "stouffer",
     median: str = "lower",
     rtol: float = 1e-5,
 ) -> AnnData | None:
     """Test each feature of each gene against the null of resampling the control guides' cells.
 
-    Each guide (each ``replicate`` within a ``groupby`` group) is summarised by the median of its cells, per feature, and each gene by the median of its guides' medians.
-    The guide's null draws one control guide with probability proportional to its cell count, draws as many of that guide's cells as the tested guide has, with replacement, and takes their median; the gene's null is the median across its guides' such nulls.
+    Each guide (each ``replicate`` within a ``groupby`` group) is summarised by the median of its cells, per feature.
+    The guide's null draws one control guide with probability proportional to its cell count, draws as many of that guide's cells as the tested guide has, with replacement, and takes their median.
     Because each draw comes from one control guide, the null carries the spread between control guides as well as the sampling error of a median.
+    The null is not simulated but computed exactly: the median of a resample is an order statistic, a binomial tail in the guide's empirical distribution, and the guide null is the cell-count-weighted mixture of its control guides' such distributions.
+    The p-values are therefore the ones an infinite bootstrap converges to, with no simulation noise and no lower limit.
 
-    The null is not simulated but computed exactly: the median of a resample is an order statistic, a binomial tail in the guide's empirical distribution; the guide null is the cell-count-weighted mixture of its control guides' such distributions, and the gene null is the order-statistic distribution of its independent guide nulls, summed over its guides by a dynamic program so that a gene of many guides stays cheap.
-    The p-values are therefore the ones an infinite bootstrap converges to, with no simulation noise and no lower limit; a gene's, by default, to within ``rtol`` of itself.
-
-    ``median`` picks a guide's median of an even count of cells, for its observed median and its null alike; a gene's is always the median of its guides' medians, the mean of the two middle ones for an even count of guides, as in Brieflow.
+    ``median`` picks a guide's median of an even count of cells, for its observed median and its null alike.
     ``"lower"``, the default, takes the lower of the two middle cells, an order statistic like the median of an odd count, so a guide null's distinct values are the control guides' own and the test stays fast and small at any screen size.
-    With hundreds of cells to a guide it moves a guide's median by a fraction of the gap between neighbouring values, so the gene calls barely change.
-    ``"midpoint"`` takes the mean of the two middle cells, as :func:`numpy.median` and Brieflow do; use it to reproduce Brieflow's numbers.
-    Its null of an even count is the mean of two order statistics, whose distinct values the test must enumerate, so it takes far longer and far more memory.
+    With hundreds of cells to a guide it moves a guide's median by a fraction of the gap between neighbouring values.
+    ``"midpoint"`` takes the mean of the two middle cells, as :func:`numpy.median` and Brieflow do.
+
+    ``method`` turns a gene's guides into one call.
+    ``"stouffer"``, ``"order"`` and ``"fisher"`` combine the guides' exact one-sided p-values in closed form, once for each direction, and the gene's p-value is twice the smaller; they cost little beyond the guides' own tests.
+    ``"stouffer"``, the default, sums the guides' z-scores, each weighted by the root of the guide's cells, so a shift the guides share adds up and a guide of many cells counts for more; use it for most screens.
+    ``"order"`` takes the ``ceil(k / 2)``-th smallest of the ``k`` guides' p-values, so at least half of a gene's guides must show the phenotype and no single guide can carry it; use it when off-target guides are a concern, at the cost of some power.
+    ``"fisher"`` sums the guides' log p-values and fires when any one guide is strongly significant, which finds a gene with a single potent guide but lets one off-target guide carry its gene to a call.
+    Each guide's p-value is kept away from zero and one, so that one guide cannot alone send its gene's to either.
+    ``"median"`` and ``"lower_median"`` test Brieflow's statistic, the median of the guides' medians, against its exact null, the order-statistic distribution of the gene's independent guide nulls.
+    ``"median"`` takes the mean of the two middle guides for an even count, as Brieflow does; with ``median="midpoint"`` it reproduces Brieflow's numbers.
+    Its null of an even count is the mean of two guide medians, whose distinct values the test must enumerate, so it takes far longer and far more memory, and a gene's p-value stays within ``rtol`` of the exact one rather than equal to it.
+    ``"lower_median"`` takes the lower of the two middle guides, so the gene null stays a count over its guides and the p-value is exact and cheap.
+
+    Cutting a gene's DNA can itself change the cells, the same for every gene, so a gene's call against non-targeting controls mixes the effect of losing the gene with that of the cut.
+    Pass a boolean ``obs`` column marking cutting controls, guides that cut where no gene's loss shows a phenotype, as ``reference``, and the null carries the cut, so that only the loss of the gene is called.
 
     The test is Brieflow's bootstrap for optical pooled screens, a gene-level call; the guide-level call is :func:`~mantispy.tl.hit_calling` with ``null="pseudogenes"``.
     Every feature of ``adata`` is tested, so subset ``adata`` to the features you want tested.
@@ -1567,32 +1670,35 @@ def bootstrap_features(
         layer: Read this layer instead of ``X``.
         key_added: Name for the output tables.
         copy: Return a modified copy instead of mutating in place.
+        method: ``"stouffer"``, ``"order"``, ``"fisher"``, ``"median"`` or ``"lower_median"``, the gene-level test, as above.
         median: ``"lower"`` or ``"midpoint"``, a guide's median of an even count of cells, as above.
-        rtol: How close each gene's p-value stays to the exact one, relative to it: within ``rtol`` times the p-value, and ``1e-15`` for rounding.
+        rtol: Under ``method="median"``, how close each gene's p-value stays to the exact one, relative to it: within ``rtol`` times the p-value, and ``1e-15`` for rounding.
             The far tails of the gene null and of its guides' nulls that cannot move the p-value by more than that are not summed.
             ``0`` sums every tail, so the p-values are exact up to rounding.
-            Guides' p-values are always exact.
+            Guides' p-values, and genes' under every other method, are always exact.
 
     Returns:
         ``None``, or the modified copy.
-        Writes ``uns["mantispy"][key_added]``, a tidy frame of ``group``, ``feature``, ``effect`` (the gene's median minus the median of its guides' control pools, in the units of ``X``), ``pvalue`` and ``qvalue`` (Benjamini-Hochberg over every gene and feature at once).
+        Writes ``uns["mantispy"][key_added]``, a tidy frame of ``group``, ``feature``, ``effect`` (the gene's median of its guides' medians, the lower one under ``method="lower_median"``, minus the same of its guides' control pools, in the units of ``X``), ``pvalue`` and ``qvalue`` (Benjamini-Hochberg over every gene and feature at once).
         Also writes ``uns["mantispy"][key_added + "_guides"]``, the same per guide, with ``replicate`` and ``n_cells`` columns and its own q-values.
 
     Raises:
-        ValueError: ``median`` is unknown, ``rtol`` is negative or not finite, ``control_scope`` is unknown, a scope that needs ``condition`` or ``reference_condition`` lacks it, ``"within_perturbation"`` is used without ``condition`` in ``groupby``, the controls in ``reference_condition`` are empty, no guide has a null to draw from, or the matrix holds an infinite value.
+        ValueError: ``method`` or ``median`` is unknown, ``rtol`` is negative or not finite, ``control_scope`` is unknown, a scope that needs ``condition`` or ``reference_condition`` lacks it, ``"within_perturbation"`` is used without ``condition`` in ``groupby``, the controls in ``reference_condition`` are empty, no guide has a null to draw from, or the matrix holds an infinite value.
 
     Notes:
-        The p-value is two-sided, ``2 * min(p, 1 - p)`` with ``p`` the probability that a null median exceeds the observed one.
+        A guide's p-value is two-sided, ``2 * min(p, 1 - p)`` with ``p`` the probability that a null median exceeds the observed one, and so is a gene's under ``"median"`` and ``"lower_median"``.
         It is exact rather than simulated, so it has no lower floor and can be zero when the observed median lies beyond every attainable null median.
         A null median equal to the observed one counts half, so a feature where most cells share one value, such as a count that is mostly zero, is not called because its median cannot move; Brieflow counts such ties as below.
-        Medians skip missing values, and each feature is tested on the cells that measure it: a guide's null picks a control guide in proportion to the cells it measures in the feature and draws as many of those as the tested guide measures, and a guide that measures none leaves its gene's median and null.
+        Medians skip missing values, and each feature is tested on the cells that measure it: a guide's null picks a control guide in proportion to the cells it measures in the feature and draws as many of those as the tested guide measures, and a guide that measures none leaves its gene's test.
         A feature whose observed median is missing, or that no control cell measures, is left ``NaN``.
-        So is a gene whose median can fall between two of its guides when a guide null has more distinct medians than can be held, with a warning; under ``median="midpoint"`` this takes thousands of cells in every control guide against guides of a few.
+        Under ``method="median"``, so is a gene whose median can fall between two of its guides when a guide null has more distinct medians than can be held, with a warning; with ``median="midpoint"`` this takes thousands of cells in every control guide against guides of a few.
 
         The null resamples a control guide's own cells, so it carries that sample's error on top of the spread between control guides, while a tested guide carries only its own.
         The test therefore runs conservative when guides barely differ from one another, and near the nominal rate when they differ by more than the error of a guide's median.
         Check the rate on your own screen by grouping held-out control guides into pseudo-genes and testing them against the other control guides.
     """
+    if method not in METHODS:
+        raise ValueError(f"method must be one of {METHODS}, got {method!r}")
     if median not in MEDIANS:
         raise ValueError(f"median must be one of {MEDIANS}, got {median!r}")
     if not (np.isfinite(rtol) and rtol >= 0):
@@ -1724,10 +1830,11 @@ def bootstrap_features(
     genes, gene_starts = np.unique(construct_unit, return_index=True)
     gene_offsets = np.append(gene_starts, construct_unit.size).astype(np.int64)
     gene_of_construct = np.searchsorted(genes, construct_unit)
-    gene_observed = grouped_stat(construct_observed, gene_of_construct, genes.size, MEDIAN)
-    gene_baseline = grouped_stat(pool_median[construct_pool], gene_of_construct, genes.size, MEDIAN)
+    gene_stat = LOWER_MEDIAN if method == "lower_median" else MEDIAN
+    gene_observed = grouped_stat(construct_observed, gene_of_construct, genes.size, gene_stat)
+    gene_baseline = grouped_stat(pool_median[construct_pool], gene_of_construct, genes.size, gene_stat)
 
-    guide_p = _guide_pvalues(
+    up, down = _guide_tails(
         pool_sorted,
         sub_nn,
         sub_start,
@@ -1738,10 +1845,19 @@ def bootstrap_features(
         construct_observed,
         lower,
     )
-    gene_p = _gene_pvalues_of(
-        pool_sorted, sub_nn, sub_start, sub_stop, pool_sub_start, pool_sub_stop, construct_pool, construct_nn,
-        construct_size, gene_offsets, gene_observed, float(rtol), pool_keys.size, lower, logger,
-    )  # fmt: skip
+    guide_p = np.minimum(1.0, 2.0 * np.minimum(up, down))
+    if method in _RULES:
+        gene_p = _combined_gene_pvalues(up, down, construct_nn, gene_offsets, _RULES[method])
+    elif method == "lower_median":
+        gene_p = _lower_median_gene_pvalues(
+            pool_sorted, sub_nn, sub_start, pool_sub_start, pool_sub_stop, construct_pool, construct_nn, gene_offsets,
+            gene_observed, lower,
+        )  # fmt: skip
+    else:
+        gene_p = _gene_pvalues_of(
+            pool_sorted, sub_nn, sub_start, sub_stop, pool_sub_start, pool_sub_stop, construct_pool, construct_nn,
+            construct_size, gene_offsets, gene_observed, float(rtol), pool_keys.size, lower, logger,
+        )  # fmt: skip
 
     features = adata.var_names.to_numpy()
     n_features = features.size

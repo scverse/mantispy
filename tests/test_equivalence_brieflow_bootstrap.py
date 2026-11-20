@@ -174,7 +174,7 @@ def test_pvalues_match_brieflow_within_monte_carlo_error():
     Monte-Carlo error: an exact p the simulation converges to, so the standardized deviation is small."""
     adata = _screen()
     n_sims = 40_000
-    mt.tl.bootstrap_features(adata, median="midpoint")
+    mt.tl.bootstrap_features(adata, method="median", median="midpoint")
     ours = adata.uns["mantispy"]["bootstrap"].pivot(index="group", columns="feature", values="pvalue")
     our_guides = adata.uns["mantispy"]["bootstrap_guides"].pivot(index="replicate", columns="feature", values="pvalue")
 

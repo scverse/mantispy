@@ -77,6 +77,31 @@ def test_fisher_fires_on_a_single_strong_guide_where_stouffer_does_not():
     fisher = _call(AnnData(np.zeros((len(genes), 1), "float32"), obs=obs), method="fisher")
     assert fisher["is_hit"].sum() > stouffer["is_hit"].sum()
     assert fisher[fisher["group"].str.startswith("os")]["is_hit"].mean() > 0.8
+    order = _call(AnnData(np.zeros((len(genes), 1), "float32"), obs=obs), method="order")
+    assert not order["is_hit"].any()  # one guide of four is not half of them
+
+
+def test_the_order_rule_calls_genes_whose_guides_mostly_agree(adata):
+    table = _call(adata, method="order", alpha=0.05, seed=0)
+    called = table[table["is_hit"]]
+    assert called["group"].str.startswith("hit").sum() > 0.6 * 60
+    assert (~called["group"].str.startswith("hit")).sum() / max(len(called), 1) < 0.1
+
+
+@pytest.mark.parametrize("method", ["stouffer", "fisher", "order"])
+@pytest.mark.parametrize("k", [1, 2, 4, 7])
+def test_combined_pvalues_of_independent_uniform_guides_are_uniform(method, k):
+    """The closed-form p-value of each rule, over guides with uniform one-sided p-values and unequal weights."""
+    from mantispy._core._combine import METHODS, combine_groups, combined_pvalue
+
+    rng = np.random.default_rng(k)
+    n = 40_000
+    p = rng.uniform(size=n * k)
+    code = METHODS.index(method)
+    statistic = combine_groups(p, stats.norm.isf(p), rng.uniform(1, 30, n * k), np.arange(0, n * k + 1, k), code)
+    combined = np.array([combined_pvalue(s, k, code) for s in statistic])
+    for alpha in (0.01, 0.05, 0.5):
+        assert (combined <= alpha).mean() == pytest.approx(alpha, rel=0.15)
 
 
 def test_control_guides_and_unscored_guides_are_never_hits_and_get_no_pvalue(adata):
