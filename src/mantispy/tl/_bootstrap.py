@@ -1065,6 +1065,18 @@ def _fill_store(
 
 
 @njit(cache=True, nogil=True)
+def _bound_unknown_costs(cost, used, null_caps):
+    """Give each ``used`` null that no earlier feature built, of cost at most zero, its atom bound as its cost.
+
+    :func:`_deal` puts items that cost nothing on the least-loaded slot without loading it, so the nulls a feature
+    builds for the first time would otherwise all be counted by one thread.
+    """
+    for u in range(cost.size):
+        if used[u] and cost[u] <= 0:
+            cost[u] = null_caps[u]
+
+
+@njit(cache=True, nogil=True)
 def _over_cap(k, nulls, raw):
     """Whether any of the guide nulls ``nulls[:k]`` had more atoms than the store holds, and so has none in it."""
     for a in range(k):
@@ -1226,6 +1238,7 @@ def _gene_pvalues(
             if u >= 0:
                 used[u] = True
         null_eps[:] = eps
+        _bound_unknown_costs(cost, used, null_caps)
         vals, cum = _fill_store(
             row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps, max_cap, used,
             raw, counts, offs, cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t,
@@ -1293,6 +1306,7 @@ def _gene_pvalues(
                 if u >= 0:
                     null_eps[u] = min(null_eps[u], fine_eps[g, j]) if used[u] else fine_eps[g, j]
                     used[u] = True
+        _bound_unknown_costs(cost, used, null_caps)
         vals, cum = _fill_store(
             row, nn_row, sub_start, pool_sub_start, pool_sub_stop, null_pool, null_size, null_eps, max_cap, used,
             raw, counts, offs, cost, vals, cum, sort_t, sval_t, sfl_t, sgt_t,

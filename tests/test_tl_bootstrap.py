@@ -490,6 +490,18 @@ def test_binomial_cdf_matches_scipy(n, p):
         assert _binom_cdf(k, n, p) == pytest.approx(binom.cdf(k, n, p), abs=1e-12, rel=1e-9)
 
 
+def test_nulls_no_earlier_feature_built_are_counted_by_every_thread():
+    """A feature's first-built nulls carry no cost from the last one; they are dealt by their bound, not to one slot."""
+    from mantispy.tl._bootstrap import _bound_unknown_costs, _deal
+
+    n_nulls, n_slots = 64, 8
+    cost = np.zeros(n_nulls)  # the costs the previous feature left: it built none of these
+    used = np.ones(n_nulls, dtype=bool)
+    _bound_unknown_costs(cost, used, np.arange(1, n_nulls + 1, dtype=np.int64))
+    _, start = _deal(cost, n_slots)
+    assert np.diff(start).max() < n_nulls // 2
+
+
 @pytest.mark.parametrize("decimals", [None, 3])
 @pytest.mark.parametrize("m", [2, 7, 50, 1500])
 def test_a_guide_null_keeps_its_mass(decimals, m):
