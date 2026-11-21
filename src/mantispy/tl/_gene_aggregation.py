@@ -7,23 +7,12 @@ import pandas as pd
 from anndata import AnnData
 from scipy import stats
 
+from mantispy._core._combine import METHODS, P_CLIP, combine_groups
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy._core.mutation import inplace_or_copy
 
-METHODS = ("stouffer", "fisher")
-
 _FEW_CONTROLS = 50
-#: p-values are clipped to [_P_CLIP, 1 - _P_CLIP] so a guide at 0 or 1 does not send its z to +/-infinity.
-_P_CLIP = 1e-12
-
-
-def _combine(z: np.ndarray, p: np.ndarray, weight: np.ndarray, method: str) -> float:
-    """Combine one group of guides into a single statistic, higher for a stronger phenotype."""
-    if method == "stouffer":
-        return float(np.sum(weight * z) / np.sqrt(np.sum(weight**2)))
-    # Fisher: -2 sum ln(p) over the one-sided p-values, larger when any guide is strongly significant.
-    return float(-2.0 * np.sum(np.log(p)))
 
 
 @inplace_or_copy()
@@ -52,6 +41,7 @@ def aggregate_guides(
     :func:`~mantispy.tl.guide_activity` produces the per-guide p-value this reads, scoring each guide against a reference control class.
     The scoring reference and the ``control`` null must be two different control classes, or the null is scored against itself; a screen that carries both intergenic and non-targeting guides can set the scale with one and keep the other as the null.
     ``"stouffer"`` turns each p into a z and sums the z's, so it rewards a consistent effect across a gene's guides; ``"fisher"`` combines the p's and fires when any one guide is strongly significant, which is more powerful for a gene with a single potent guide but lets one off-target reagent carry the gene to a false call.
+    ``"order"`` takes the ``k // 2 + 1``-th smallest p of the gene's ``k`` guides, so a gene is called only when a strict majority of its guides show the phenotype, and no single guide can carry a gene of two or more.
     This combines per-guide evidence within a gene, where :func:`~mantispy.tl.empirical_fdr` calibrates an already-per-gene score against a set of non-responding genes.
 
     Args:
@@ -60,8 +50,8 @@ def aggregate_guides(
         guide: ``obs`` column naming the guide; one scored row per guide is expected, and a repeated id warns.
         gene: ``obs`` column naming the gene the guide targets.
         control: The value of `gene` that marks the non-targeting guides forming the null, such as ``"nontargeting"``.
-        method: ``"stouffer"`` (default) or ``"fisher"`` (see above and Notes).
-        weight: ``obs`` column of per-guide weights for a weighted Stouffer combination, such as a replicate or cell count; equal weights when ``None``. Only ``"stouffer"`` accepts weights.
+        method: ``"stouffer"`` (default), ``"fisher"`` or ``"order"`` (see above and Notes).
+        weight: ``obs`` column of per-guide weights for a weighted Stouffer combination, such as a replicate or cell count; equal weights when ``None``. Only ``"stouffer"`` accepts weights, and they must be positive.
         direction: ``obs`` column whose sign says which way a guide moved, so guides that disagree cancel instead of adding. Only ``"stouffer"`` uses it; a one-sided p already fixes the direction for ``"fisher"``.
         n_null: Random NTC groups drawn per distinct guide count to build the null.
         alpha: The q-value cutoff a gene must clear to be called a hit.
@@ -73,10 +63,10 @@ def aggregate_guides(
         ``None``, or the modified copy.
         Writes ``uns["mantispy"][key_added]`` with one row per gene: ``group`` (the gene), ``n_guides``, ``statistic``, ``pvalue``, ``qvalue`` and ``is_hit``, sorted by ``pvalue``.
         Joins ``obs[key_added + "_pvalue"]``, ``obs[key_added + "_qvalue"]`` and ``obs[key_added]`` onto the guide rows, broadcast from each guide's gene.
-        Non-targeting guides, guides with a missing score, and genes left with no scored guide get a missing ``pvalue`` and ``qvalue`` and are never hits.
+        Non-targeting guides, guides with a missing score or gene, and genes left with no scored guide get a missing ``pvalue`` and ``qvalue`` and are never hits.
 
     Raises:
-        ValueError: `method` is not one of ``METHODS``, `weight` or `direction` is given with ``"fisher"``, `alpha` is not in ``(0, 1)``, `n_null` is below one, a finite `score` falls outside ``[0, 1]`` (so it is not a p-value), no control guide is present, or no gene has a scored guide.
+        ValueError: `method` is not one of ``METHODS``, `weight` or `direction` is given with a method other than ``"stouffer"``, `alpha` is not in ``(0, 1)``, `n_null` is below one, a finite `score` falls outside ``[0, 1]`` (so it is not a p-value), a finite weight is not positive, no control guide is present, or no gene has a scored guide.
         KeyError: `score`, `guide`, `gene`, `weight` or `direction` is not an ``obs`` column.
 
     Notes:
@@ -86,13 +76,13 @@ def aggregate_guides(
 
         The non-targeting guides must behave like a true-null gene for the calibration to hold.
         With few NTC guides the null is coarse and a warning fires.
-        A gene whose guides disagree in direction scores low under ``"stouffer"`` unless `direction` lets them cancel; under ``"fisher"`` a one-sided p already points one way, so opposing guides cannot cancel.
+        A gene whose guides disagree in direction scores low under ``"stouffer"`` unless `direction` lets them cancel; under ``"fisher"`` and ``"order"`` a one-sided p already points one way, so opposing guides cannot cancel.
     """
     if method not in METHODS:
         raise ValueError(f"method must be one of {METHODS}, got {method!r}")
-    if method == "fisher" and weight is not None:
-        raise ValueError("weight is only supported for method='stouffer'; Fisher combines p-values directly")
-    if method == "fisher" and direction is not None:
+    if method != "stouffer" and weight is not None:
+        raise ValueError(f"weight is only supported for method='stouffer'; {method!r} combines p-values directly")
+    if method != "stouffer" and direction is not None:
         raise ValueError("direction is only supported for method='stouffer'; a one-sided p already fixes the direction")
     if not 0.0 < alpha < 1.0:
         raise ValueError(f"alpha must be in (0, 1), got {alpha}")
@@ -117,7 +107,7 @@ def aggregate_guides(
             "is reversed; pass its complement, or the activity p-value from mt.tl.guide_activity."
         )
     # Clip both ends: isf(0)=+inf and isf(1)=-inf, and a guide at 1.0 would otherwise be dropped as non-finite.
-    p = np.clip(raw, _P_CLIP, 1.0 - _P_CLIP)  # clip keeps NaN
+    p = np.clip(raw, P_CLIP, 1.0 - P_CLIP)  # clip keeps NaN
     z = stats.norm.isf(p)  # one-sided: small p -> large positive z
     if direction is not None:
         sign = np.sign(pd.to_numeric(obs[direction], errors="coerce").to_numpy(dtype=float))
@@ -128,6 +118,8 @@ def aggregate_guides(
         if weight is not None
         else np.ones(adata.n_obs)
     )
+    if (w[np.isfinite(w)] <= 0.0).any():
+        raise ValueError(f"weight={weight!r} must be positive, but it holds a value at most zero")
 
     is_control = genes == str(control)
     scored = np.isfinite(p) & np.isfinite(z) & np.isfinite(w)
@@ -162,17 +154,16 @@ def aggregate_guides(
         )
 
     # One combined statistic per gene, over its scored, non-control guides.
-    tested = scored & ~is_control
-    frame = pd.DataFrame({"gene": genes[tested], "z": z[tested], "p": p[tested], "w": w[tested]})
-    gene_names: list[str] = []
-    stat_list: list[float] = []
-    k_list: list[int] = []
-    for gene_name, g in frame.groupby("gene", sort=False):
-        gene_names.append(str(gene_name))
-        stat_list.append(_combine(g["z"].to_numpy(), g["p"].to_numpy(), g["w"].to_numpy(), method))
-        k_list.append(len(g))
-    if not gene_names:
+    tested = scored & ~is_control & obs[gene].notna().to_numpy()
+    code = METHODS.index(method)
+    gene_codes, gene_index = pd.factorize(genes[tested])
+    if gene_index.size == 0:
         raise ValueError("no gene has a scored, non-control guide to aggregate")
+    rows = np.argsort(gene_codes, kind="stable")
+    k_arr = np.bincount(gene_codes, minlength=gene_index.size)
+    offsets = np.concatenate([[0], np.cumsum(k_arr)]).astype(np.int64)
+    stat = combine_groups(p[tested][rows], z[tested][rows], w[tested][rows], offsets, code)
+    k_list = k_arr.tolist()
 
     # NTC-size-matched null: for each distinct guide count, draw n_null groups of that many NTC guides,
     # without replacement so each group is a genuine same-size sample of the controls.
@@ -190,18 +181,13 @@ def aggregate_guides(
             idx = np.argpartition(rng.random((n_null, n_control)), k - 1, axis=1)[:, :k]
         else:
             idx = rng.integers(0, n_control, size=(n_null, k))
-        if method == "stouffer":
-            gz, gw = ctrl_z[idx], ctrl_w[idx]
-            draws = (gw * gz).sum(axis=1) / np.sqrt((gw**2).sum(axis=1))
-        else:
-            draws = -2.0 * np.log(ctrl_p[idx]).sum(axis=1)
+        flat = idx.ravel()
+        draws = combine_groups(ctrl_p[flat], ctrl_z[flat], ctrl_w[flat], np.arange(0, flat.size + 1, k), code)
         null_by_k[k] = np.sort(draws)
 
-    names = np.array(gene_names)
-    stat = np.array(stat_list)
-    k_arr = np.array(k_list)
+    names = np.asarray(gene_index, dtype=str)
     pvalue = np.empty(names.size)
-    for i, (s, k) in enumerate(zip(stat, k_arr, strict=True)):
+    for i, (s, k) in enumerate(zip(stat, k_list, strict=True)):
         nd = null_by_k[k]
         at_or_above = nd.size - np.searchsorted(nd, s, side="left")
         pvalue[i] = (at_or_above + 1) / (nd.size + 1)
