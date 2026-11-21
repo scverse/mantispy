@@ -150,12 +150,12 @@ def guide_qc(
     Flags select guides to look at; testing genes again without them, with ``exclude="qc_guide_fail"``, makes their p-values optimistic when the guides were flagged on the same cells and features, because a guide that disagreed with its siblings by chance is dropped and the rest agree more than they would.
     Exclude guides on evidence independent of the test: inactivity from a separate readout or half of the cells, or a thin guide.
 
-    A guide is significant as the strict-majority rule, ``method="order"``, the default of :func:`~mantispy.tl.bootstrap_features`, counts it.
+    A guide is significant as the strict-majority rule, ``method="order"`` of :func:`~mantispy.tl.bootstrap_features`, counts it, whichever ``method`` called the gene.
     That rule calls a gene of ``k`` guides when ``k // 2 + 1`` of them move its way, each at a one-sided p-value below a level set by ``k`` and ``alpha``, the level at which that many guides give the gene a p-value of ``alpha``.
-    ``n_significant`` counts the guides below that level, and ``majority`` says whether they make a strict majority, which is whether the gene's p-value under the rule is below ``alpha``.
-    So under the default a called gene always has a majority and is never a single-guide call; under ``"stouffer"`` or ``"fisher"`` one strong guide can carry a gene, and ``single_guide`` marks it.
-    A guide that does not cut votes against its gene, so the rest of its guides must carry the majority alone: a gene with an inactive guide and no majority may be missed because of a bad reagent rather than its biology.
-    Excluding a guide lowers ``k``, and with it the number of guides the gene needs and the level each must reach: a gene of four guides needs three, but of three, two.
+    ``n_significant`` counts the guides below that level, and ``majority`` says whether they make a strict majority, which is whether the gene's p-value under that rule is below ``alpha``.
+    Under ``"stouffer"`` and ``"fisher"`` every guide adds to its gene's evidence, so one strong guide can carry a gene: ``single_guide`` marks a called gene that only one significant guide backs, and those are the calls to check.
+    Under ``"order"`` a called gene always has a majority and is never a single-guide call, but a guide that does not cut votes against its gene, so the rest of its guides must carry the majority alone: a gene with an inactive guide and no majority may be missed because of a bad reagent rather than its biology.
+    Excluding a guide lowers ``k``, and with it the number of guides a strict majority needs and the level each must reach: a gene of four guides needs three, but of three, two.
 
     Args:
         adata: The object either function wrote its results to.

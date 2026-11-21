@@ -591,7 +591,7 @@ def test_guide_qc_flags_inactive_outlying_and_thin_guides_and_exclude_leaves_the
     groups += [("THIN", f"thin{i}", 40 if i < 3 else 5, 1.0, "a") for i in range(4)]
     groups += [("ONE", "one0", 40, 3.0, "a"), ("ONE", "one1", 40, 0.0, "a")]
     adata = _cells(groups, rng, n_features=2, guide_sd=0.0)
-    mt.tl.bootstrap_features(adata)
+    mt.tl.bootstrap_features(adata, method="order")
     mt.pp.guide_qc(adata)
     guides = adata.uns["mantispy"]["guide_qc"].set_index("replicate")
     failed = set(guides.index[guides["qc_guide_fail"]])
