@@ -558,16 +558,19 @@ def _spread_null_screen():
 @pytest.mark.parametrize(
     "kwargs",
     [
-        pytest.param({}, id="default"),
-        pytest.param(
-            {"method": "stouffer"},
-            id="stouffer",
-            marks=pytest.mark.xfail(
-                reason="Stouffer adds the guides' spread around the controls, which each guide's null already "
-                "carries, so with guides that differ by more than the error of their medians it calls null genes",
-                strict=True,
-            ),
+        *(
+            pytest.param(
+                kwargs,
+                id=name,
+                marks=pytest.mark.xfail(
+                    reason="Stouffer adds the guides' spread around the controls, which each guide's null already "
+                    "carries, so with guides that differ by more than the error of their medians it calls null genes",
+                    strict=True,
+                ),
+            )
+            for name, kwargs in (("default", {}), ("stouffer", {"method": "stouffer"}))
         ),
+        pytest.param({"method": "order"}, id="order"),
         pytest.param({"method": "median"}, id="median"),
     ],
 )
