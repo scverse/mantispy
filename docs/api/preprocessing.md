@@ -32,6 +32,7 @@ Annotate, quality-control, normalize, select and batch-correct profiles.
    pp.image_qc
    pp.filter_images
    pp.well_qc
+   pp.guide_qc
    pp.downsample
 ```
 

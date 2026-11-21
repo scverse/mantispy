@@ -104,6 +104,38 @@ def test_combined_pvalues_of_independent_uniform_guides_are_uniform(method, k):
         assert (combined <= alpha).mean() == pytest.approx(alpha, rel=0.15)
 
 
+def test_guide_qc_flags_the_lone_potent_guide_of_a_gene():
+    """Fisher calls genes with one potent guide of four: it fails as outlying, and its three dead siblings stay, since one
+    active sibling is not most of them. A gene whose four guides all move fails none."""
+    rng = np.random.default_rng(1)
+    genes, sgrnas, z = [], [], []
+    for g in range(40):
+        for j, zi in enumerate(np.array([4.0, 0.0, 0.0, 0.0] if g % 2 else [3.0] * 4) + rng.normal(0, 0.2, 4)):
+            genes.append(f"g{g}")
+            sgrnas.append(f"g{g}_{j}")
+            z.append(zi)
+    genes += ["nontargeting"] * 600
+    sgrnas += [f"ntc{i}" for i in range(600)]
+    z += list(rng.normal(0, 1.0, 600))
+    obs = pd.DataFrame({"Metadata_Gene": genes, "Metadata_sgRNA": sgrnas, "p": stats.norm.sf(z)})
+    adata = AnnData(np.zeros((len(genes), 1), "float32"), obs=obs)
+    table = _call(adata, method="fisher").set_index("group")
+    mt.pp.guide_qc(adata, key="gene_aggregation")
+    guides = adata.uns["mantispy"]["guide_qc"].set_index("replicate")
+    summary = adata.uns["mantispy"]["guide_qc_summary"].set_index("group")
+    one, all_four = [f"g{g}" for g in range(1, 40, 2)], [f"g{g}" for g in range(0, 40, 2)]
+    assert table.loc[one, "is_hit"].all() and summary.loc[one, "single_guide"].all()
+    assert guides.loc[[f"{g}_0" for g in one], "qc_guide_outlier_fail"].all()
+    assert not guides.loc[[f"{g}_{j}" for g in one for j in (1, 2, 3)], "qc_guide_fail"].any()
+    assert not guides.loc[[f"{g}_{j}" for g in all_four for j in range(4)], "qc_guide_fail"].any()
+    assert (summary.loc[all_four, "n_usable"] == 4).all() and (summary.loc[one, "n_usable"] == 3).all()
+    assert (summary.loc[one, "cochran_pvalue"] < 0.05).all() and (summary.loc[all_four, "cochran_pvalue"] > 0.05).all()
+    assert not adata.obs.loc[adata.obs["Metadata_Gene"] == "nontargeting", "qc_guide_fail"].any()
+
+    kept = _call(adata, method="fisher", exclude="qc_guide_fail").set_index("group")
+    assert (kept.loc[one, "n_guides"] == 3).all() and not kept.loc[one, "is_hit"].any()
+
+
 def test_control_guides_and_unscored_guides_are_never_hits_and_get_no_pvalue(adata):
     adata.obs.loc[adata.obs["Metadata_Gene"] == "hit0", "p"] = np.nan  # a gene with no scored guide
     _call(adata)

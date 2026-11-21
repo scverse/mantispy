@@ -10,6 +10,7 @@ from mantispy.pp._batch import (
 )
 from mantispy.pp._chatterjee import feature_select_chatterjee
 from mantispy.pp._feature_qc import feature_batch_sensitivity, feature_reproducibility
+from mantispy.pp._guide_qc import guide_qc
 from mantispy.pp._image_qc import filter_images, image_qc
 from mantispy.pp._impute import impute
 from mantispy.pp._names import standardize_feature_names
@@ -47,6 +48,7 @@ __all__ = [
     "filter_features",
     "filter_images",
     "find_perturbation_key",
+    "guide_qc",
     "harmony",
     "image_qc",
     "impute",

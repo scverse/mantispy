@@ -1609,6 +1609,7 @@ def bootstrap_features(
     *,
     method: str = "stouffer",
     median: str = "lower",
+    exclude: str | None = None,
     rtol: float = 1e-5,
 ) -> AnnData | None:
     """Test each feature of each gene against the null of resampling the control guides' cells.
@@ -1660,6 +1661,8 @@ def bootstrap_features(
         copy: Return a modified copy instead of mutating in place.
         method: ``"stouffer"``, ``"order"``, ``"fisher"`` or ``"median"``, the gene-level test, as above.
         median: ``"lower"`` or ``"midpoint"``, the median of an even count of cells and, under ``method="median"``, of guides, as above.
+        exclude: Boolean ``obs`` column marking cells to leave out of the test, tested and control alike, such as ``"qc_guide_fail"`` from :func:`~mantispy.pp.guide_qc`.
+            Leaving out guides flagged on the cells and features under test makes the p-values optimistic, so flag them on independent evidence.
         rtol: Under ``method="median", median="midpoint"``, how close each gene's p-value stays to the exact one, relative to it: within ``rtol`` times the p-value, and ``1e-15`` for rounding.
             The far tails of the gene null and of its guides' nulls that cannot move the p-value by more than that are not summed.
             ``0`` sums every tail, so the p-values are exact up to rounding.
@@ -1672,6 +1675,7 @@ def bootstrap_features(
 
     Raises:
         ValueError: ``method`` or ``median`` is unknown, ``rtol`` is negative or not finite, ``control_scope`` is unknown, a scope that needs ``condition`` or ``reference_condition`` lacks it, ``"within_perturbation"`` is used without ``condition`` in ``groupby``, the controls in ``reference_condition`` are empty, no guide has a null to draw from, or the matrix holds an infinite value.
+        KeyError: ``exclude`` is not an ``obs`` column.
 
     Notes:
         A guide's p-value is two-sided, ``2 * min(p, 1 - p)`` with ``p`` the probability that a null median exceeds the observed one, and so is a gene's under ``"median"``.
@@ -1748,6 +1752,13 @@ def bootstrap_features(
             else:
                 condition_codes = pd.factorize(condition_values, sort=True)[0].astype(np.int64)
                 pool_of_row = np.where(is_control, condition_codes, -1)
+
+    if exclude is not None:
+        if exclude not in obs:
+            raise KeyError(f"exclude={exclude!r} is not an obs column")
+        left_out = obs[exclude].to_numpy(dtype=bool)
+        tested &= ~left_out
+        pool_of_row = np.where(left_out, -1, pool_of_row)
 
     # The pool a tested row's guide draws its null from, by the scope's key.
     if control_scope in ("pooled", "reference_group"):

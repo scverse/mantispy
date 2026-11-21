@@ -581,6 +581,64 @@ def test_guide_spread_does_not_call_null_genes(kwargs):
     assert (adata.uns["mantispy"]["bootstrap"]["qvalue"] < 0.05).sum() == 0
 
 
+def test_guide_qc_flags_inactive_outlying_and_thin_guides_and_exclude_leaves_them_out():
+    """Genes whose guides all move, one of whose guides moves the other way, does not move, or has a few cells.
+
+    Thirty control guides let a moving guide's activity clear the floor of its p-value.
+    """
+    rng = np.random.default_rng(1)
+    groups = [("nontargeting", f"nt{i}", 30, 0.0, "a") for i in range(30)]
+    groups += [("HIT", f"hit{i}", 40, 1.0, "a") for i in range(3)]
+    groups += [("OUT", f"out{i}", 40, 1.0 if i < 3 else -1.0, "a") for i in range(4)]
+    groups += [("INACT", f"inact{i}", 40, 1.0 if i < 3 else 0.0, "a") for i in range(4)]
+    groups += [("THIN", f"thin{i}", 40 if i < 3 else 5, 1.0, "a") for i in range(4)]
+    groups += [("ONE", "one0", 40, 3.0, "a"), ("ONE", "one1", 40, 0.0, "a")]
+    adata = _cells(groups, rng, n_features=2, guide_sd=0.0)
+    mt.tl.bootstrap_features(adata, method="order")
+    mt.pp.guide_qc(adata)
+    guides = adata.uns["mantispy"]["guide_qc"].set_index("replicate")
+    failed = set(guides.index[guides["qc_guide_fail"]])
+    assert failed == {"out3", "inact3", "thin3", "one1"}
+    assert guides.loc["out3", "qc_guide_outlier_fail"] and guides.loc["inact3", "qc_guide_inactive_fail"]
+    assert guides.loc["thin3", "qc_guide_cells_fail"] and guides.loc["one1", "qc_guide_inactive_fail"]
+    summary = adata.uns["mantispy"]["guide_qc_summary"].set_index(["group", "feature"])
+    hit, one = summary.loc["HIT"].iloc[0], summary.loc["ONE"].iloc[0]
+    assert [hit["n_guides"], hit["n_usable"], hit["n_agree"], hit["n_significant"]] == [3, 3, 3, 3]
+    assert hit["cochran_pvalue"] > 0.05 and hit["majority"] and not hit["single_guide"]
+    # the strict majority of two guides is both, so one moving guide is no majority and no call
+    assert one["n_significant"] == 1 and not one["majority"] and not one["single_guide"]
+    assert one["n_usable"] == 1 and one["cochran_pvalue"] < 1e-4 and one["i2"] > 0.9
+    genes = adata.uns["mantispy"]["bootstrap"].set_index(["group", "feature"])
+    np.testing.assert_array_equal(summary["majority"], genes.loc[summary.index, "pvalue"] < 0.05)
+    flagged_cells = adata.obs["Metadata_sgRNA"].isin(failed).to_numpy()
+    np.testing.assert_array_equal(adata.obs["qc_guide_fail"].to_numpy(), flagged_cells)
+    assert not any("not a registered result key" in w for w in mt.io.validate(adata).warnings)
+
+    mt.tl.bootstrap_features(adata, exclude="qc_guide_fail", key_added="kept")
+    assert set(adata.uns["mantispy"]["kept_guides"]["replicate"]).isdisjoint(failed)
+
+    mt.tl.bootstrap_features(adata, method="stouffer")
+    mt.pp.guide_qc(adata)
+    one = adata.uns["mantispy"]["guide_qc_summary"].set_index(["group", "feature"]).loc["ONE"].iloc[0]
+    assert one["single_guide"] and not one["majority"]
+
+
+def test_guide_qc_keys_a_guide_by_its_condition():
+    """Within each condition's controls, a guide in two conditions is two guides, flagged and broadcast apart."""
+    rng = np.random.default_rng(4)
+    groups = [("nontargeting", f"nt{i}", 30, 0.0, c) for i in range(20) for c in ("a", "b")]
+    groups += [("G", f"g{i}", 40, 1.0, "a") for i in range(4)]
+    groups += [("G", f"g{i}", 40, 1.0 if i < 3 else 0.0, "b") for i in range(4)]
+    adata = _cells(groups, rng, n_features=2, guide_sd=0.0)
+    mt.tl.bootstrap_features(adata, control_scope="within_group", condition="Metadata_Treatment")
+    mt.pp.guide_qc(adata)
+    guides = adata.uns["mantispy"]["guide_qc"].set_index(["replicate", "Metadata_Treatment"])
+    assert len(guides) == 8 and guides["n_cells"].eq(40).all()
+    assert guides.index[guides["qc_guide_fail"]].tolist() == [("g3", "b")]
+    flagged = (adata.obs["Metadata_sgRNA"] == "g3") & (adata.obs["Metadata_Treatment"] == "b")
+    np.testing.assert_array_equal(adata.obs["qc_guide_fail"].to_numpy(), flagged.to_numpy())
+
+
 def test_a_median_that_cannot_move_is_not_called():
     """A feature that is zero in most cells has a median of zero in the null and the guide alike: a tie, not a hit."""
     rng = np.random.default_rng(2)
