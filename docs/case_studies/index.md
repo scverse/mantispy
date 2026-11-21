@@ -14,5 +14,6 @@ phate_leiden
 crispr
 empirical_fdr
 gene_aggregation
+guide_calls
 plate_position
 ```
