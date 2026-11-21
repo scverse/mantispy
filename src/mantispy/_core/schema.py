@@ -199,6 +199,7 @@ UNS_RESULTS: tuple[str, ...] = (
     "perturbation_score",
     "bootstrap",
     "composition_shift",
+    "guide_qc",
 )
 
 #: Suffixes of a companion table written beside a result (e.g. ``effect_groups`` beside ``effect``). A key

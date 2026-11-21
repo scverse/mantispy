@@ -26,6 +26,7 @@ def aggregate_guides(
     method: str = "stouffer",
     weight: str | None = None,
     direction: str | None = None,
+    exclude: str | None = None,
     n_null: int = 10000,
     alpha: float = 0.05,
     key_added: str = "gene_aggregation",
@@ -53,6 +54,8 @@ def aggregate_guides(
         method: ``"stouffer"`` (default), ``"fisher"`` or ``"order"`` (see above and Notes).
         weight: ``obs`` column of per-guide weights for a weighted Stouffer combination, such as a replicate or cell count; equal weights when ``None``. Only ``"stouffer"`` accepts weights, and they must be positive.
         direction: ``obs`` column whose sign says which way a guide moved, so guides that disagree cancel instead of adding. Only ``"stouffer"`` uses it; a one-sided p already fixes the direction for ``"fisher"``.
+        exclude: Boolean ``obs`` column marking guides to leave out, as if unscored, such as ``"qc_guide_fail"`` from :func:`~mantispy.pp.guide_qc`.
+            Leaving out guides flagged on the scores under test makes the p-values optimistic, so flag them on independent evidence.
         n_null: Random NTC groups drawn per distinct guide count to build the null.
         alpha: The q-value cutoff a gene must clear to be called a hit.
         key_added: Prefix for the outputs.
@@ -67,7 +70,7 @@ def aggregate_guides(
 
     Raises:
         ValueError: `method` is not one of ``METHODS``, `weight` or `direction` is given with a method other than ``"stouffer"``, `alpha` is not in ``(0, 1)``, `n_null` is below one, a finite `score` falls outside ``[0, 1]`` (so it is not a p-value), a finite weight is not positive, no control guide is present, or no gene has a scored guide.
-        KeyError: `score`, `guide`, `gene`, `weight` or `direction` is not an ``obs`` column.
+        KeyError: `score`, `guide`, `gene`, `weight`, `direction` or `exclude` is not an ``obs`` column.
 
     Notes:
         The p-value is the share of same-size NTC groups whose combined statistic reaches the gene's or beyond, with one added to the count and the total so a gene past every NTC group gets a small positive value rather than zero.
@@ -93,7 +96,7 @@ def aggregate_guides(
     for name, value in (("score", score), ("guide", guide), ("gene", gene)):
         if value not in obs:
             raise KeyError(f"{name}={value!r} is not an obs column")
-    for name, optional in (("weight", weight), ("direction", direction)):
+    for name, optional in (("weight", weight), ("direction", direction), ("exclude", exclude)):
         if optional is not None and optional not in obs:
             raise KeyError(f"{name}={optional!r} is not an obs column")
 
@@ -123,6 +126,8 @@ def aggregate_guides(
 
     is_control = genes == str(control)
     scored = np.isfinite(p) & np.isfinite(z) & np.isfinite(w)
+    if exclude is not None:
+        scored &= ~obs[exclude].to_numpy(dtype=bool)
     control_scored = is_control & scored
     if not is_control.any():
         raise ValueError(f"no control guide is present; obs[{gene!r}] has no value equal to {control!r}")
