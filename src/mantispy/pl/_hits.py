@@ -26,9 +26,9 @@ def _significance(values: pd.Series | np.ndarray) -> np.ndarray:
     return -np.log10(np.clip(np.asarray(values, dtype=float), _FLOOR, None))
 
 
-def _threshold(adata: AnnData, function: str, default: float = 0.05) -> float:
-    """The threshold the run used, so the drawn line matches the table."""
-    recorded = adata.uns.get("mantispy", {}).get("params", {}).get(function, {})
+def _threshold(adata: AnnData, function: str, key: str, default: float = 0.05) -> float:
+    """The threshold the run under ``key`` used, so the drawn line matches the table."""
+    recorded = adata.uns.get("mantispy", {}).get("params", {}).get(f"{function}:{key}", {})
     return float(recorded.get("threshold", default))
 
 
@@ -53,9 +53,9 @@ def _count_either_side(ax: Axes, significance: np.ndarray, line: float) -> None:
         )
 
 
-def _recorded_response(adata: AnnData, function: str, default: str) -> str:
-    """The response column the run read, so the plot draws what the table was built from."""
-    recorded = adata.uns.get("mantispy", {}).get("params", {}).get(function, {})
+def _recorded_response(adata: AnnData, function: str, key: str, default: str) -> str:
+    """The response column the run under ``key`` read, so the plot draws what the table was built from."""
+    recorded = adata.uns.get("mantispy", {}).get("params", {}).get(f"{function}:{key}", {})
     return str(recorded.get("response", default))
 
 
@@ -86,7 +86,7 @@ def hits(adata: AnnData, key: str = "hits", label_top: int = 10, ax: Axes | None
     ax.scatter(table["distance"][called], significance[called], s=14, color="crimson", label="hit")
 
     # Params are stored under the function name, not the table's `key`.
-    threshold = _threshold(adata, "hit_calling")
+    threshold = _threshold(adata, "hit_calling", key)
     ax.axhline(-np.log10(threshold), color="grey", ls="--", lw=1, label=f"q = {threshold}")
     _count_either_side(ax, significance, -np.log10(threshold))
     for _, row in table.nlargest(label_top, "distance").iterrows():
@@ -307,7 +307,7 @@ def dose_response(
     row = _rows_for(table, "group", compound, key)
 
     if response is None:
-        response = _recorded_response(adata, "dose_response", "hits_row_distance")
+        response = _recorded_response(adata, "dose_response", key, "hits_row_distance")
 
     obs = as_frame(adata.obs)
     selected = obs[obs[compound_key].astype(str) == str(compound)]

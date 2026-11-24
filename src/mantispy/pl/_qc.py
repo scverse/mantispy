@@ -326,7 +326,7 @@ def cytotoxicity(adata: AnnData, key: str = "cytotoxicity", label_top: int = 8, 
     ax.scatter(table["viability"][~suspect], table["distance"][~suspect], s=16, color="tab:blue", label="ok")
     ax.scatter(table["viability"][suspect], table["distance"][suspect], s=16, color="crimson", label="suspect")
 
-    threshold = adata.uns.get("mantispy", {}).get("params", {}).get("cytotoxicity", {}).get("min_viability", 0.7)
+    threshold = adata.uns.get("mantispy", {}).get("params", {}).get(f"cytotoxicity:{key}", {}).get("min_viability", 0.7)
     ax.axvline(threshold, color="grey", ls="--", lw=1, label=f"viability = {threshold}")
     for _, row in table[suspect].nlargest(label_top, "distance").iterrows():
         ax.annotate(str(row["group"]), (row["viability"], row["distance"]), fontsize=6)

@@ -202,7 +202,7 @@ def replicate_saturation(
     return None
 
 
-@inplace_or_copy(expects=("well", "aggregate"))
+@inplace_or_copy(expects=("well", "aggregate"), record_by_key=True)
 def cytotoxicity(
     adata: AnnData,
     groupby: str = "Metadata_Perturbation",

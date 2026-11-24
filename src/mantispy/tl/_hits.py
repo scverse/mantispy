@@ -524,7 +524,7 @@ def _warn_on_floor(floors: np.ndarray, threshold: float, limited_by_draws: bool)
         )
 
 
-@inplace_or_copy()
+@inplace_or_copy(record_by_key=True)
 def hit_calling(
     adata: AnnData,
     groupby: str = "Metadata_Perturbation",

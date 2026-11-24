@@ -82,6 +82,7 @@ def test_the_hits_plot_draws_the_threshold_that_colored_the_points():
     )
     wells = mt.tl.aggregate(cells, min_cells=0)
     mt.tl.hit_calling(wells, n_permutations=15, threshold=0.25)  # the plot marks the threshold; not a p-value assertion
+    mt.tl.hit_calling(wells, n_permutations=15, threshold=0.05, key_added="strict")  # a later run under another key
 
     _, ax = plt.subplots()
     mt.pl.hits(wells, ax=ax)
