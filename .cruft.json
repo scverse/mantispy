@@ -1,6 +1,6 @@
 {
   "template": "https://github.com/scverse/cookiecutter-scverse",
-  "commit": "e6f473c32cd4bda50015ac236697ee3223c70bde",
+  "commit": "f46993f4adbb5834b59e5b0551409237c78d689e",
   "checkout": null,
   "context": {
     "cookiecutter": {
@@ -24,8 +24,12 @@
         "LICENSE",
         "README.md",
         "docs/api.md",
+        "docs/api/**",
+        "docs/citation.md",
         "docs/index.md",
+        "docs/installation.md",
         "docs/notebooks/example.ipynb",
+        "docs/quickstart.md",
         "docs/references.bib",
         "docs/references.md",
         "src/**",
@@ -37,7 +41,7 @@
         "trim_blocks": true
       },
       "_template": "https://github.com/scverse/cookiecutter-scverse",
-      "_commit": "e6f473c32cd4bda50015ac236697ee3223c70bde"
+      "_commit": "f46993f4adbb5834b59e5b0551409237c78d689e"
     }
   },
   "directory": null
