@@ -172,7 +172,7 @@ def guide_qc(
 
     Raises:
         KeyError: ``uns["mantispy"]`` holds no result under ``key``.
-        ValueError: ``alpha`` is not in ``(0, 1)``, ``min_cells`` is negative, or the result under ``key`` is not the latest of either function.
+        ValueError: ``alpha`` is not in ``(0, 1)``, or ``min_cells`` is negative.
 
     Notes:
         A guide's signed z-score is read from its p-value and direction: from :func:`~mantispy.tl.bootstrap_features`, half its two-sided p-value in the direction of its ``effect``, against a null that already carries the spread between control guides; from :func:`~mantispy.tl.aggregate_guides`, its ``score`` in the direction of its ``direction`` column, or the same for every guide without one.
@@ -192,9 +192,7 @@ def guide_qc(
     genes = store[key]
     keys = ["group", "replicate"]
     if f"{key}_guides" in store:
-        params = store.get("params", {}).get("bootstrap_features", {})
-        if params.get("key_added") != key:
-            raise ValueError(f"uns['mantispy'][{key!r}] is not the latest result of mt.tl.bootstrap_features")
+        params = store["params"][f"bootstrap_features:{key}"]
         if params.get("condition") is not None:
             keys.append(params["condition"])
         every, guide_codes = _bootstrap_guides(adata, params)
@@ -221,9 +219,7 @@ def guide_qc(
         called = genes[by].assign(called=(genes["qvalue"] < alpha).to_numpy())
         check_cells = True
     elif "is_hit" in genes:
-        params = store.get("params", {}).get("aggregate_guides", {})
-        if params.get("key_added") != key:
-            raise ValueError(f"uns['mantispy'][{key!r}] is not the latest result of mt.tl.aggregate_guides")
+        params = store["params"][f"aggregate_guides:{key}"]
         obs = as_frame(adata.obs)
         rows = np.flatnonzero(obs[params["gene"]].astype(str).isin(genes["group"]).to_numpy())
         sub = obs.iloc[rows]

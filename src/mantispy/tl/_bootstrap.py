@@ -1594,7 +1594,7 @@ def _gene_pvalues_of(
     return gene_p
 
 
-@inplace_or_copy(expects="object")
+@inplace_or_copy(expects="object", record_by_key=True)
 def bootstrap_features(
     adata: AnnData,
     groupby: str | list[str] = "Metadata_Gene",

@@ -251,7 +251,7 @@ def test_gene_pvalues_stay_within_rtol_of_the_exact_ones():
     assert np.nanmin(exact) < 1e-8
     assert (bounded != exact).any()  # tails were left out
     assert np.nanmax(np.abs(bounded - exact) - 1e-5 * exact) <= 1e-15
-    assert adata.uns["mantispy"]["params"]["bootstrap_features"]["rtol"] == 1e-5
+    assert adata.uns["mantispy"]["params"]["bootstrap_features:bootstrap"]["rtol"] == 1e-5
 
 
 def test_a_gene_whose_pvalue_rests_on_the_far_tails_of_its_guide_nulls_stays_within_rtol():
@@ -637,6 +637,20 @@ def test_guide_qc_keys_a_guide_by_its_condition():
     assert guides.index[guides["qc_guide_fail"]].tolist() == [("g3", "b")]
     flagged = (adata.obs["Metadata_sgRNA"] == "g3") & (adata.obs["Metadata_Treatment"] == "b")
     np.testing.assert_array_equal(adata.obs["qc_guide_fail"].to_numpy(), flagged.to_numpy())
+
+
+def test_guide_qc_reads_the_call_under_its_key_whatever_ran_after_it():
+    """A later bootstrap_features call under another key leaves guide_qc of the first one unchanged."""
+    rng = np.random.default_rng(4)
+    groups = [("nontargeting", f"nt{i}", 30, 0.0, c) for i in range(20) for c in ("a", "b")]
+    groups += [("G", f"g{i}", 40, 1.0 if i < 3 or c == "a" else 0.0, c) for i in range(4) for c in ("a", "b")]
+    adata = _cells(groups, rng, n_features=2, guide_sd=0.0)
+    mt.tl.bootstrap_features(adata, control_scope="within_group", condition="Metadata_Treatment")
+    mt.pp.guide_qc(adata)
+    before = adata.uns["mantispy"]["guide_qc"].copy()
+    mt.tl.bootstrap_features(adata, key_added="pooled")
+    mt.pp.guide_qc(adata)
+    pd.testing.assert_frame_equal(adata.uns["mantispy"]["guide_qc"], before)
 
 
 def test_a_median_that_cannot_move_is_not_called():

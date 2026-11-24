@@ -15,7 +15,7 @@ from mantispy._core.mutation import inplace_or_copy
 _FEW_CONTROLS = 50
 
 
-@inplace_or_copy()
+@inplace_or_copy(record_by_key=True)
 def aggregate_guides(
     adata: AnnData,
     *,
