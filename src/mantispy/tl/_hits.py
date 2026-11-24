@@ -616,7 +616,8 @@ def hit_calling(
         Under ``null="pseudogenes"`` the table has no row for a group of reference rows only, and adds the calibration pseudo-genes as rows marked by an ``is_pseudogene`` column (see Notes).
 
     Raises:
-        ValueError: ``method`` is not one of ``METHODS``, ``null`` is not one of ``NULLS``, ``reference`` selects fewer than four rows, or ``replicate`` is not given on a pooled design at cell resolution.
+        ValueError: ``method`` is not one of ``METHODS``, ``null`` is not one of ``NULLS``, ``covariance`` is not one of ``COVARIANCES``, ``reference`` selects fewer than four rows, or ``replicate`` is not given on a pooled design at cell resolution.
+            Under ``covariance="robust"``: a fit gets no more complete rows than one plus the number of features.
             Under ``null="pseudogenes"``: ``method`` is not ``"mahalanobis"``, every tested group is a single guide, a group has more guides than the held-out controls, or ``match_cells`` finds guide profiles without ``obs["Metadata_CellCount"]`` or with control guides that carry clearly more cells than the tested guides.
 
     Notes:
