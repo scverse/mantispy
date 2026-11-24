@@ -271,7 +271,7 @@ def _baseline_and_cutoff(
     return baseline, _CUTOFF_MADS * spread if spread > 0 else np.nan
 
 
-@inplace_or_copy()
+@inplace_or_copy(record_by_key=True)
 def dose_response(
     adata: AnnData,
     compound_key: str = "Metadata_Compound",
