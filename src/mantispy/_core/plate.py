@@ -45,6 +45,30 @@ def normalize_well(well: str) -> str:
     return f"{row}{column:02d}"
 
 
+def normalize_wells(wells: pd.Series) -> tuple[pd.Series, list[str]]:
+    """Each well of `wells` in canonical ``A01`` form, keeping a well that has no row and column as given.
+
+    PERISCOPE names its wells ``Well1``: there is no plate position to read from that, and inventing one would make
+    plate-position corrections act on a layout the screen never had.
+
+    Args:
+        wells: Well names; missing values stay missing.
+
+    Returns:
+        The wells, normalized where they parse, and the sorted names that did not parse and were kept as given.
+    """
+    names = wells.dropna().astype(str).unique()
+    mapping, kept = {}, []
+    for name in names:
+        try:
+            mapping[name] = normalize_well(name)
+        except ValueError:
+            mapping[name] = name
+            kept.append(name)
+    normalized = wells.astype(object).where(wells.isna(), wells.astype(str).map(mapping))
+    return normalized, sorted(kept)
+
+
 def well_row(well: str) -> int:
     """0-based row index of ``well`` (``A`` -> 0, ``AA`` -> 26)."""
     letters = normalize_well(well)[:-2]

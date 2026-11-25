@@ -423,23 +423,22 @@ def _set_wells(values):
         (lambda a: a.uns.pop("mantispy"), "schema_version"),
         (lambda a: a.uns["mantispy"].update(schema_version="99.0"), "99.0"),
         (lambda a: setattr(a, "X", a.X.astype(bool)), "integer or floating-point"),
-        (_set_wells(["A01", "A01", "nope", "A02"]), "Metadata_Well"),
     ],
-    ids=[
-        "no_image_id",
-        "no_object_number",
-        "no_var_column",
-        "no_uns",
-        "wrong_version",
-        "boolean_X",
-        "bad_well_name",
-    ],
+    ids=["no_image_id", "no_object_number", "no_var_column", "no_uns", "wrong_version", "boolean_X"],
 )
 def test_each_single_mutation_is_rejected(adata, mutate, message):
     mutate(adata)
     report = validate(adata)
     assert not report.ok
     assert any(message in error for error in report.errors), report.errors
+
+
+def test_a_well_without_row_and_column_is_a_warning(adata):
+    """PERISCOPE's Well1 has no plate position; it is kept as given, which plate-position tools cannot place."""
+    _set_wells(["A01", "A01", "Well1", "A02"])(adata)
+    report = validate(adata)
+    assert report.ok, report.errors
+    assert any("Well1" in warning for warning in report.warnings), report.warnings
 
 
 @pytest.mark.parametrize("column", ["Metadata_Plate", "Metadata_Well"])

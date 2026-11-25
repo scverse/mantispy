@@ -238,6 +238,7 @@ Requirements:
 - Mantispy does not define a second `Metadata_PlateID` field.
 
 `Metadata_Well` identifies a well within a plate and MUST use the normalized well format already used by mantispy, such as `A01`.
+A well name with no row and column, such as PERISCOPE’s `Well1`, is kept as given. Importers MUST NOT invent a plate position for it, and validation reports it as a warning, because plate-position tools cannot place it.
 
 A well is identified by:
 
@@ -254,7 +255,7 @@ Requirements:
 - `Metadata_ImageID` MUST be globally unique within data that may be combined.
 - Consumers MUST treat the value as opaque and MUST NOT parse semantic information from it.
 - Importers SHOULD generate the identifier deterministically when the source provides stable field identity.
-- `Metadata_ImageNumber` SHOULD preserve the original CellProfiler image number when one exists.
+- `Metadata_ImageNumber` SHOULD preserve the original CellProfiler image number when one exists. When imported metadata also carries an image number, CellProfiler's keeps the name and the imported one is renamed to `Metadata_ImportedImageNumber`.
 - `Metadata_Site` SHOULD preserve the source site or field number when one exists.
 
 The schema does not require a global experiment identifier. Global uniqueness of plate and image identifiers is the responsibility of the importer or exporter.
@@ -728,6 +729,10 @@ It SHOULD preserve:
 - CellProfiler pipeline provenance
 
 The importer MUST NOT place parent, child, neighbour object identifiers, file paths, counts, or other non-measurement numeric metadata into `X`.
+The same holds for barcode calls (`Barcode_*`), image channel indices (`Channel_*`), and RelateObjects’ per-parent means of such columns (`<Parent>_Mean_<Child>_Location_Center_X`).
+A CalculateMath result (`<Object>_Math_<name>`) is a measurement of its object.
+
+An export that identifies no objects, such as a quality-control pipeline’s, is read as one row per image at `aggregate` resolution with `grouped_by=["Metadata_ImageID"]`, as aggregating objects by image would record it.
 
 ## 19. SpatialData import and export requirements
 

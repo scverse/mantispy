@@ -136,6 +136,51 @@ def test_non_features_flagged(name):
     assert not _row(name)["is_feature"]
 
 
+@pytest.mark.parametrize(
+    "name",
+    ["Nuclei_Neighbors_FirstClosestObjectNumber_Expanded", "Nuclei_Neighbors_SecondClosestObjectNumber_2"],
+)
+def test_neighbour_object_numbers_are_not_features(name):
+    """MeasureObjectNeighbors' closest-object number identifies another object, as spec 18 keeps out of X."""
+    assert not _row(name)["is_feature"]
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Cells_Mean_Mitochondria_Location_Center_X",
+        "Nuclei_Mean_Nucleoli_AreaShape_Center_Y",
+        "Nuclei_Mean_Nucleoli_AreaShape_BoundingBoxMinimum_X",
+        "Nuclei_Mean_Nucleoli_Number_Object_Number",
+        "Cells_Mean_Mitochondria_Neighbors_FirstClosestObjectNumber_Expanded",
+        "Cells_Mean_BarcodeFoci_Children_Foci_NonCellEdge_Count",
+        "Cells_Mean_Foci_NonCellEdge_Parent_BarcodeFoci",
+    ],
+)
+def test_a_per_parent_mean_follows_the_childs_non_feature_rule(name):
+    """RelateObjects' <Parent>_Mean_<Child>_<column> of a location or an object number is no measurement either."""
+    assert not _row(name)["is_feature"]
+
+
+def test_a_per_parent_mean_of_a_measurement_stays_on_the_parent():
+    row = _row("Nuclei_Mean_Nucleoli_AreaShape_Area")
+    assert row["is_feature"]
+    assert (row["object"], row["feature_group"]) == ("Nuclei", "Mean")
+
+
+@pytest.mark.parametrize(
+    "name", ["Foci_Barcode_BarcodeCalled", "Foci_Barcode_MatchedTo_ID", "Foci_Barcode_MatchedTo_Score"]
+)
+def test_barcode_calls_are_not_features(name):
+    """CallBarcodes' output identifies the object's perturbation; it is not morphology."""
+    assert not _row(name)["is_feature"]
+
+
+@pytest.mark.parametrize("name", ["Channel_OrigDNA", "Image_Channel_OrigDNA"])
+def test_image_channel_indices_are_not_features(name):
+    assert not _row(name)["is_feature"]
+
+
 @pytest.mark.parametrize("angle", ["00", "01", "02", "03"])
 def test_cp_measure_haralick_correlation_is_texture_like_cellprofiler(angle):
     """cp_measure writes Haralick Correlation as Correlation_<scale>_<angle>_<levels>, the colocalization group's name."""

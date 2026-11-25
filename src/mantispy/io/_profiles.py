@@ -29,7 +29,7 @@ from mantispy._core.features import (
 from mantispy._core.frames import as_frame, categorize_metadata
 from mantispy._core.logging import get_logger, report_drop
 from mantispy._core.masks import feature_mask
-from mantispy._core.plate import fill_well_grid, normalize_well
+from mantispy._core.plate import fill_well_grid, normalize_wells
 from mantispy._core.provenance import record_params
 from mantispy._core.schema import (
     FEATURE_KINDS,
@@ -48,7 +48,7 @@ from mantispy._core.schema import (
 )
 from mantispy._core.schema import stamp as _record
 from mantispy._settings import settings
-from mantispy.io._cellprofiler import export_prefix, read_export
+from mantispy.io._cellprofiler import export_prefix, object_tables, read_export, read_image_export
 
 #: Real accessions use all four.
 METADATA_PREFIXES: tuple[str, ...] = ("Image_Metadata_", "Metadata_", "metadata_", "meta_")
@@ -308,7 +308,13 @@ def from_dataframe(
             "file uses."
         )
     if "Metadata_Well" in obs:
-        obs["Metadata_Well"] = [normalize_well(well) for well in obs["Metadata_Well"].astype(str)]
+        obs["Metadata_Well"], rowless = normalize_wells(obs["Metadata_Well"])
+        if rowless:
+            get_logger().warning(
+                "kept the well name(s) %s as given: they name no plate row and column, so plate-position tools "
+                "cannot place them",
+                rowless[:5],
+            )
     fill_well_grid(obs)
     obs = categorize_metadata(_adopt_counts(obs))
     if resolution == "object":
@@ -333,7 +339,7 @@ def _join_platemap(obs: pd.DataFrame, platemap: str | Path | pd.DataFrame) -> pd
     frame = platemap.copy() if isinstance(platemap, pd.DataFrame) else _read_frame(Path(platemap))
     if "Metadata_Well" not in frame:
         raise ValueError("platemap must contain a 'Metadata_Well' column")
-    frame["Metadata_Well"] = [normalize_well(well) for well in frame["Metadata_Well"].astype(str)]
+    frame["Metadata_Well"] = normalize_wells(frame["Metadata_Well"])[0]
     on = ["Metadata_Well"] + (["Metadata_Plate"] if "Metadata_Plate" in frame and "Metadata_Plate" in obs else [])
     left = obs.astype(dict.fromkeys(on, str))
     frame = frame.astype(dict.fromkeys(on, str))
@@ -397,8 +403,10 @@ def read_profiles(
 
     - one or more CSV, TSV or parquet files, stacked row-wise;
     - a directory an ``ExportToSpreadsheet`` run wrote, one row per `primary_object` with every other object joined onto it through the ``Parent_`` column that links the two, and the ``MeasureImageQuality`` columns of ``Image.csv`` kept in ``uns["mantispy"]["image_table"]``;
+    - a directory an ``ExportToSpreadsheet`` run wrote without any object table, as a quality-control pipeline does, one row per image stamped as :func:`~mantispy.tl.aggregate` with ``by=["Metadata_ImageID"]`` stamps it;
     - a directory of parquet parts, as CytoTable writes them.
 
+    A well name with no plate row and column, such as PERISCOPE's ``Well1``, is kept as given with a warning, and the rows get no ``Metadata_Row`` or ``Metadata_Col``.
     Numeric columns that parse as CellProfiler features become ``X``.
     Text and ``Metadata_`` columns become ``obs``, with every metadata prefix normalized to ``Metadata_``.
     Numeric columns that follow no CellProfiler naming (a learned embedding, a proprietary feature table) are kept as features with ``feature_kind="embedding"``.
@@ -426,7 +434,7 @@ def read_profiles(
         primary_object: For an export directory, the object one row of the result is.
         strict_one_to_one: For an export directory, raise when another object does not match the primary object exactly once.
             ``False`` keeps the first match.
-        resolution: Resolution to record, ``"object"`` for a directory and ``"well"`` for files when omitted.
+        resolution: Resolution to record, ``"object"`` for a directory, ``"aggregate"`` for an export without object tables and ``"well"`` for files when omitted.
             The 1.0 names ``"cell"`` and ``"perturbation"`` are read as ``"object"`` and ``"aggregate"``.
         grouped_by: For ``"aggregate"`` resolution, the ``obs`` columns that define one row; required there.
 
@@ -434,8 +442,8 @@ def read_profiles(
         An :class:`~anndata.AnnData` at the recorded resolution, with the parsed feature annotation in ``var``, the metadata in ``obs`` with pycytominer's per-well counts copied to ``Metadata_CellCount`` and ``Metadata_SiteCount``, and the schema stamp, the resolution, the channel vocabulary, this call's parameters and, from an export directory, the per-image quality table under ``uns["mantispy"]``.
 
     Raises:
-        ValueError: No paths were given, `on_column_mismatch` is not one of the two accepted values, a directory was given together with other paths, the files disagree on columns while `on_column_mismatch` is ``"raise"``, a file holds a header and no rows, no column parses as a feature on `objects`, `index_columns` do not identify observations uniquely, the platemap repeats a well, or an export object cannot be linked one to one.
-        FileNotFoundError: A directory holds neither an ``Image.csv`` nor parquet parts, or has no table for `primary_object`.
+        ValueError: No paths were given, `on_column_mismatch` is not one of the two accepted values, a directory was given together with other paths, the files disagree on columns while `on_column_mismatch` is ``"raise"``, a file holds a header and no rows, no column parses as a feature on `objects`, `index_columns` do not identify observations uniquely, the platemap repeats a well, an export object cannot be linked one to one, an export table repeats a column with different values, or an export holds image metadata and no measurement.
+        FileNotFoundError: A directory holds neither an ``Image.csv`` (or tab-delimited ``Image.txt``) nor parquet parts, or has no table for `primary_object`.
         KeyError: A name in `metadata_columns` or `index_columns` is not in the data.
 
     Examples:
@@ -451,6 +459,8 @@ def read_profiles(
     given = [str(path) for path in files]
 
     image = None
+    per_image = False
+    feature_objects = objects
     vocabulary = list(channels) if channels is not None else None
     if any(path.is_dir() for path in files):
         if len(files) > 1:
@@ -460,9 +470,17 @@ def read_profiles(
                 "share ImageNumbers."
             )
         directory = files[0]
+        per_image = export_prefix(directory) is not None and not object_tables(directory)
+        if per_image and resolution is None:
+            # Image measurements only: one row per image, stamped as tl.aggregate(by="Metadata_ImageID") stamps it.
+            resolution, grouped_by = "aggregate", grouped_by or ["Metadata_ImageID"]
         resolution = RESOLUTION_RENAMES.get(resolution, resolution) if resolution is not None else "object"
         if export_prefix(directory) is not None:
-            frame, image, found = read_export(directory, primary_object, objects, strict_one_to_one)
+            if per_image:
+                frame, image, found = read_image_export(directory)
+                feature_objects = ("Image",) if objects is not None else None
+            else:
+                frame, image, found = read_export(directory, primary_object, objects, strict_one_to_one)
             vocabulary = vocabulary if vocabulary is not None else (found or None)
             lengths = [len(frame)]
         else:
@@ -490,13 +508,15 @@ def read_profiles(
         channels=vocabulary,
         sentinels=sentinels,
         keep_non_features=keep_non_features,
-        objects=objects,
+        objects=feature_objects,
         resolution=resolution,
         grouped_by=grouped_by,
     )
     obs = as_frame(adata.obs)
     if platemap is not None:
         obs = _join_platemap(obs, platemap)
+    if per_image:
+        obs.index = pd.Index(obs["Metadata_ImageID"].astype(str).to_numpy())
     if index_columns:
         if missing := [column for column in index_columns if column not in obs.columns]:
             raise KeyError(f"index columns not in metadata: {missing}")

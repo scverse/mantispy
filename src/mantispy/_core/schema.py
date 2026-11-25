@@ -19,7 +19,7 @@ from .features import measurement_kind
 from .frames import as_frame
 from .logging import get_logger
 from .masks import _flag_mask, feature_mask
-from .plate import normalize_well
+from .plate import normalize_wells
 
 if TYPE_CHECKING:
     from anndata import AnnData
@@ -782,14 +782,11 @@ def validate(adata: AnnData, *, raise_on_error: bool = False) -> ValidationRepor
         wells = pd.Series(adata.obs["Metadata_Well"])
         if wells.isna().any():
             report.errors.append(f"Metadata_Well has {int(wells.isna().sum())} missing value(s)")
-        unparsable = []
-        for well in wells.dropna().astype(str).unique():
-            try:
-                normalize_well(well)
-            except ValueError:
-                unparsable.append(well)
-        if unparsable:
-            report.errors.append(f"Metadata_Well has unparsable values: {sorted(unparsable)[:5]}")
+        if rowless := normalize_wells(wells)[1]:
+            report.warnings.append(
+                f"Metadata_Well has values with no plate row and column, {rowless[:5]}, which plate-position tools "
+                "cannot place"
+            )
 
     _check_controls(adata, report)
     _check_composite_perturbation(adata, report)

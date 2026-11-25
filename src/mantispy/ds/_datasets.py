@@ -48,7 +48,7 @@ TARGET2_DEFAULT = (
 )
 
 #: Bumped whenever the assembled jump_cells object changes, so an older cached assembly is not reused.
-_ASSEMBLY_VERSION = 3
+_ASSEMBLY_VERSION = 4
 
 _EXPORT_FOV = "BR00121438-J04-1"
 

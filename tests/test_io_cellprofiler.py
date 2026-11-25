@@ -1,6 +1,9 @@
 """Reading a CellProfiler ExportToSpreadsheet directory through read_profiles."""
 
+import logging
+import shutil
 import warnings
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -8,6 +11,10 @@ import pytest
 
 import mantispy as mt
 from mantispy._core.schema import validate
+
+#: Slices of real exports of the CellProfiler tutorials and of PERISCOPE (cpg0021, plate CP257A, Well1 site 21):
+#: the first images and a few linked objects of each table, with absolute paths scrubbed.
+EXPORTS = Path(__file__).parent / "data" / "cellprofiler"
 
 
 @pytest.mark.parametrize("link_on", ["child", "primary"])
@@ -171,3 +178,114 @@ def test_image_table_joins_one_to_one_on_image_id(cellprofiler_dir):
     assert table.index.name == "Metadata_ImageID"
     assert set(adata.obs["Metadata_ImageID"]) <= set(table.index)
     assert validate(adata).ok, validate(adata).errors
+
+
+# --- real tutorial exports --------------------------------------------------
+
+
+def test_neighbour_object_numbers_stay_out_of_x():
+    """MeasureObjectNeighbors' FirstClosestObjectNumber names another object; it was read as a measurement."""
+    adata = mt.io.read_profiles(EXPORTS / "advanced")
+    assert "Nuclei_Neighbors_FirstClosestDistance_Expanded" in adata.var_names
+    assert not [name for name in adata.var_names if "ClosestObjectNumber" in name]
+
+
+def test_per_parent_means_of_locations_and_ids_stay_out_of_x():
+    """RelateObjects writes Mean_<Child>_<column> for every child column, centroids and object numbers included."""
+    adata = mt.io.read_profiles(EXPORTS / "advanced")
+    assert adata.var.loc["Nuclei_Mean_Nucleoli_AreaShape_Area", "object"] == "Nuclei"
+    leaked = [
+        name
+        for name in adata.var_names
+        if "_Mean_" in name
+        and any(token in name for token in ("_Location_", "_Center_", "BoundingBoxM", "_Number_Object", "ObjectNumber"))
+    ]
+    assert not leaked
+
+
+def test_calculate_math_features_keep_their_object_when_every_object_is_read():
+    """objects=None filed Cytoplasm_Math_IntensityRatio as an object-less embedding."""
+    adata = mt.io.read_profiles(EXPORTS / "translocation", objects=None)
+    row = adata.var.loc["Cytoplasm_Math_IntensityRatio"]
+    assert (row["object"], row["feature_group"], row["feature_kind"]) == ("Cytoplasm", "Math", "measurement")
+
+
+def test_a_rowless_well_is_kept_and_round_trips(tmp_path, caplog):
+    """PERISCOPE names its well Well1; the read raised on it, and a plate position must not be invented."""
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
+        adata = mt.io.read_profiles(EXPORTS / "periscope_site21")
+    assert "Well1" in caplog.text
+    assert set(adata.obs["Metadata_Well"]) == {"Well1"}
+    assert not {"Metadata_Row", "Metadata_Col"} & set(adata.obs.columns)
+    report = validate(adata)
+    assert report.ok and report.warnings, report.errors
+    mt.io.write(adata, tmp_path / "periscope.h5ad")
+    assert set(mt.io.read(tmp_path / "periscope.h5ad").obs["Metadata_Well"]) == {"Well1"}
+
+
+def test_a_platemap_joins_a_rowless_well():
+    platemap = pd.DataFrame({"Metadata_Well": ["Well1"], "Metadata_Perturbation": ["library"]})
+    adata = mt.io.read_profiles(EXPORTS / "periscope_site21", platemap=platemap)
+    assert set(adata.obs["Metadata_Perturbation"]) == {"library"}
+
+
+def test_an_imported_image_number_does_not_replace_cellprofilers():
+    """The BBBC022 metadata file has an ImageNumber column, read as Metadata_ImageNumber beside CellProfiler's own."""
+    adata = mt.io.read_profiles(EXPORTS / "advanced")
+    image = pd.read_csv(EXPORTS / "advanced" / "MyExpt_Image.csv")
+    assert set(adata.obs["Metadata_ImageNumber"]) == set(image["ImageNumber"])
+    assert set(adata.obs["Metadata_ImportedImageNumber"]) == set(image["Metadata_ImageNumber"])
+
+
+def test_a_tab_delimited_export_reads_like_the_csv_one():
+    """A run set to tab delimiters writes Run1_Image.txt, which was not recognised as an export."""
+    tab = mt.io.read_profiles(EXPORTS / "beginner_nulltab")
+    csv = mt.io.read_profiles(EXPORTS / "beginner")
+    assert list(tab.var_names) == list(csv.var_names)
+    assert validate(tab).ok, validate(tab).errors
+
+
+def test_a_repeated_header_with_different_values_is_refused(tmp_path):
+    """Adding image metadata to the object tables writes Metadata_Well twice; the copies must agree to keep one."""
+    directory = tmp_path / "nulltab"
+    shutil.copytree(EXPORTS / "beginner_nulltab", directory)
+    path = directory / "Run1_Cells.txt"
+    lines = path.read_text().splitlines()
+    second = [i for i, name in enumerate(lines[0].split("\t")) if name == "Metadata_Well"][1]
+    row = lines[1].split("\t")
+    row[second] = "Z99"
+    lines[1] = "\t".join(row)
+    path.write_text("\n".join(lines) + "\n")
+    with pytest.raises(ValueError, match="'Metadata_Well' holding different values"):
+        mt.io.read_profiles(directory)
+
+
+def test_an_image_only_export_gives_one_row_per_image(tmp_path):
+    """A QC pipeline identifies no objects; the read raised for want of a Cells table."""
+    adata = mt.io.read_profiles(EXPORTS / "qc")
+    image = pd.read_csv(EXPORTS / "qc" / "MyExpt_Image.csv")
+    assert adata.n_obs == len(image)
+    assert adata.uns["mantispy"]["resolution"] == "aggregate"
+    assert list(adata.uns["mantispy"]["grouped_by"]) == ["Metadata_ImageID"]
+    assert list(adata.obs_names) == list(adata.obs["Metadata_ImageID"].astype(str))
+    assert set(adata.var["feature_group"]) == {"ImageQuality"}
+    assert set(adata.uns["mantispy"]["image_table"].index) == set(adata.obs["Metadata_ImageID"])
+    mt.io.write(adata, tmp_path / "qc.h5ad")
+    assert mt.io.read(tmp_path / "qc.h5ad").n_obs == len(image)
+
+
+def test_an_identity_column_left_empty_is_left_out(tmp_path):
+    """The Metadata module writes Metadata_Well even when it extracted nothing, and no image id can be built from that."""
+    directory = tmp_path / "qc"
+    shutil.copytree(EXPORTS / "qc", directory)
+    image = pd.read_csv(directory / "MyExpt_Image.csv")
+    image["Metadata_Well"] = np.nan
+    image.to_csv(directory / "MyExpt_Image.csv", index=False)
+    adata = mt.io.read_profiles(directory)
+    assert "Metadata_Well" not in adata.obs
+    assert validate(adata).ok, validate(adata).errors
+
+
+def test_an_export_of_image_metadata_only_says_there_is_nothing_to_profile():
+    with pytest.raises(ValueError, match="only image metadata"):
+        mt.io.read_profiles(EXPORTS / "im_2d_ex1")

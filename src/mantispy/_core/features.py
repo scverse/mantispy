@@ -19,7 +19,8 @@ A bare token such as Area is a feature with no group, and the object comes from 
 parse_feature_names(convention=...) selects the grammar.
 An explicit value wins, and None reads the names as cp_measure's when any of them contains __.
 
-Columns that are not measurements (object numbers, parent/child links, locations, file names, metadata) get ``is_feature = False`` so callers can route them somewhere other than ``X``.
+Columns that are not measurements (object numbers, parent/child links, neighbour object numbers, locations, file names, metadata) get ``is_feature = False`` so callers can route them somewhere other than ``X``.
+RelateObjects writes the per-parent mean of each child column as ``<Parent>_Mean_<Child>_<column>``, and that mean follows the child column's rule: the mean of a location or an object number is not a feature either.
 """
 
 from __future__ import annotations
@@ -74,6 +75,10 @@ NON_FEATURE_GROUPS = frozenset(
         "Width",
         "Height",
         "Threshold",
+        # CallBarcodes' call and its match to the library identify the object; they are not morphology.
+        "Barcode",
+        # NamesAndTypes' channel index of each image.
+        "Channel",
     }
 )
 
@@ -92,10 +97,13 @@ CHANNEL_BEARING_GROUPS = frozenset(
 
 #: Measurement groups that carry no channel in CellProfiler; Slope may carry channels in cp_measure.
 PLAIN_FEATURE_GROUPS = frozenset(
-    {"AreaShape", "SizeShape", "Neighbors", "AreaOccupied", "Zernike", "Skeleton", "ObjectSkeleton", "Slope"}
+    {"AreaShape", "SizeShape", "Neighbors", "AreaOccupied", "Zernike", "Skeleton", "ObjectSkeleton", "Slope", "Math"}
 )
 
-_KNOWN_GROUPS = NON_FEATURE_GROUPS | CHANNEL_BEARING_GROUPS | PLAIN_FEATURE_GROUPS
+#: RelateObjects' per-parent mean of a child column: ``<Parent>_Mean_<Child>_<column>``.
+_PER_PARENT_MEAN = "Mean"
+
+_KNOWN_GROUPS = NON_FEATURE_GROUPS | CHANNEL_BEARING_GROUPS | PLAIN_FEATURE_GROUPS | {_PER_PARENT_MEAN}
 
 #: Adapted from scverse/cell-painting-io (MIT).
 CHANNEL_ALIASES: dict[str, str] = {
@@ -210,6 +218,28 @@ def _extract_channels(rest: list[str], specs: list[list[str]]) -> tuple[list[str
     return found, remaining
 
 
+def _locates_or_identifies(group: str, rest: list[str]) -> bool:
+    """Whether a column of `group`, followed by the tokens `rest`, places or names an object rather than measuring it.
+
+    MeasureObjectNeighbors writes the number of the closest object as ``Neighbors_FirstClosestObjectNumber_<distance>``,
+    an identifier like any other object number.
+    """
+    return (
+        group in NON_FEATURE_GROUPS
+        or (group == "AreaShape" and bool(rest) and rest[0] in _POSITIONAL_AREASHAPE)
+        or (bool(rest) and rest[0].endswith("ObjectNumber"))
+    )
+
+
+def _mean_of_non_feature(rest: list[str]) -> bool:
+    """Whether a per-parent mean, ``<Child>_<column>`` split into `rest`, averages a column that is no feature of the child.
+
+    The child's name may itself hold an underscore (``Foci_NonCellEdge``), so the column starts at the first known group after the name's first token.
+    """
+    start = next((i for i, token in enumerate(rest) if i > 0 and token in _KNOWN_GROUPS), None)
+    return start is not None and _locates_or_identifies(rest[start], rest[start + 1 :])
+
+
 def _split_object(tokens: list[str]) -> tuple[str | None, str, list[str]]:
     """Split a token list into ``(object, feature_group, rest)``."""
     if tokens[0] == "Image":
@@ -271,7 +301,7 @@ def _parse_cp_measure(name: str) -> dict:
     elif group in _CP_MEASURE_SHAPE:
         group, rest = "AreaShape", [group, *rest]
     row["feature_group"] = group
-    if group in NON_FEATURE_GROUPS or (group == "AreaShape" and rest[0] in _POSITIONAL_AREASHAPE):
+    if _locates_or_identifies(group, rest):
         return row
     _read_suffixes(row, rest, group)
     return row
@@ -289,7 +319,7 @@ def _parse_one(name: str, specs: list[list[str]]) -> dict:
     row["object"] = obj
     row["feature_group"] = group
 
-    if group in NON_FEATURE_GROUPS or (group == "AreaShape" and rest and rest[0] in _POSITIONAL_AREASHAPE):
+    if _locates_or_identifies(group, rest) or (group == _PER_PARENT_MEAN and _mean_of_non_feature(rest)):
         return row
     if not rest:
         row["feature"] = group
