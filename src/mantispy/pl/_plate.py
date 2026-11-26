@@ -62,7 +62,7 @@ def plate(
         When several plates are drawn each panel is labeled with the plate's own well grid.
 
     Raises:
-        ValueError: ``color`` is both a feature name and an ``obs`` column, ``agg`` is not one of ``AGGREGATIONS``, ``ax`` was passed for more than one plate, ``groupby`` varies within a drawn plate, it or ``Metadata_Plate`` has missing values, or a well names no plate row and column (``Well1``).
+        ValueError: ``color`` is both a feature name and an ``obs`` column, ``agg`` is not one of ``AGGREGATIONS``, ``ax`` was passed for more than one plate, ``groupby`` varies within a drawn plate, it or ``Metadata_Plate`` has missing values, or a drawn well is missing or names no plate row and column (``Well1``).
         KeyError: ``color`` is neither a feature name nor an ``obs`` column, ``groupby`` is not an ``obs`` column, or ``plate`` is not a plate of ``adata``.
     """
     import matplotlib.pyplot as plt
@@ -81,14 +81,15 @@ def plate(
         raise ValueError("pass plate= when supplying a single ax, or leave ax=None")
     drawn.sort(key=lambda index: [_natural(str(part)) for part in panels[index]])
 
-    wells = pd.Categorical(as_frame(adata.obs)["Metadata_Well"])
-    positions = np.column_stack(well_positions(wells.categories))[wells.codes]
+    wells = as_frame(adata.obs)["Metadata_Well"].to_numpy()
     order, offsets = group_offsets(codes, len(keys))
     grids = []
     for index in drawn:
         rows = order[offsets[index] : offsets[index + 1]]
-        grid = np.full(plate_grid(wells.categories[np.unique(wells.codes[rows])]), np.nan)
-        combined = pd.Series(values[rows]).groupby([positions[rows, 0], positions[rows, 1]]).agg(agg)
+        # Positions of the drawn plates only, so a plate left out may name its wells in any way.
+        well_rows, well_columns = well_positions(wells[rows])
+        grid = np.full(plate_grid(np.unique(wells[rows].astype(str))), np.nan)
+        combined = pd.Series(values[rows]).groupby([well_rows, well_columns]).agg(agg)
         grid[combined.index.get_level_values(0), combined.index.get_level_values(1)] = combined.to_numpy()
         grids.append(grid)
     if share_colorbar and "norm" not in kwargs:

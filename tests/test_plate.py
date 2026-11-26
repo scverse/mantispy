@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 
 import mantispy as mt
@@ -6,6 +7,7 @@ from mantispy._core.plate import (
     normalize_well,
     row_label,
     well_name,
+    well_positions,
     well_row,
 )
 
@@ -57,3 +59,34 @@ def test_plate_position_tools_name_the_wells_without_a_position(wells, tool):
     wells.obs["Metadata_Well"] = wells.obs["Metadata_Well"].astype(str).map(numbers)
     with pytest.raises(ValueError, match=r"\['Well1', 'Well10'.*no plate position"):
         tool(wells)
+
+
+def _number_the_wells_of(adata, plate):
+    """Rename the wells of `plate` to Well1, Well2, ... as PERISCOPE names them."""
+    obs = adata.obs.copy()
+    on_plate = obs["Metadata_Plate"].astype(str) == plate
+    wells = obs["Metadata_Well"].astype(str)
+    numbers = {well: f"Well{i}" for i, well in enumerate(sorted(set(wells[on_plate])), start=1)}
+    obs["Metadata_Well"] = wells.where(~on_plate, wells.map(numbers))
+    adata.obs = obs
+
+
+def test_a_plate_without_positions_does_not_block_the_others(wells):
+    """Only the plates a tool corrects, scores or draws need a plate position."""
+    numbered, placed = sorted(set(wells.obs["Metadata_Plate"].astype(str)))
+    _number_the_wells_of(wells, numbered)
+    mt.pp.correct_plate_position(wells, reference=None, plates=[placed], key_added="corrected")
+    assert np.allclose(
+        wells.layers["corrected"][wells.obs["Metadata_Plate"].astype(str) == numbered],
+        wells.X[wells.obs["Metadata_Plate"].astype(str) == numbered],
+    )
+    mt.pl.plate(wells, color=wells.var_names[0], plate=placed)
+    mt.pp.detect_plate_position(wells, reference=None, min_controls=2)
+    table = wells.uns["mantispy"]["plate_position_detection"].set_index("group")
+    assert "no plate position" in table.loc[numbered, "reason"]
+    assert np.isfinite(table.loc[placed, "cv_r2_median"])
+
+
+def test_a_missing_well_is_reported_as_missing():
+    with pytest.raises(ValueError, match="1 missing value"):
+        well_positions(["A01", np.nan])

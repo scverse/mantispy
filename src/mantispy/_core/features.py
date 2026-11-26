@@ -261,7 +261,8 @@ def _split_object(tokens: list[str], objects: Sequence[list[str]] = ()) -> tuple
             return "_".join(spec), tokens[len(spec)], tokens[len(spec) + 1 :]
     if tokens[0] == "Image":
         return "Image", tokens[1], tokens[2:]
-    if tokens[0] in _KNOWN_GROUPS:
+    # A leading Mean_ is ExportToSpreadsheet's per-image mean (Mean_Cells_AreaShape_Area), read like Median_ and StDev_.
+    if tokens[0] in _KNOWN_GROUPS and tokens[0] != _PER_PARENT_MEAN:
         return None, tokens[0], tokens[1:]
     if tokens[1] in _KNOWN_GROUPS or len(tokens) >= 3:
         return tokens[0], tokens[1], tokens[2:]

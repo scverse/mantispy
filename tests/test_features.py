@@ -172,6 +172,14 @@ def test_a_per_parent_mean_of_a_measurement_stays_on_the_parent():
     assert (row["object"], row["feature_group"]) == ("Nuclei", "Mean")
 
 
+def test_a_leading_mean_is_a_per_image_statistic_read_like_median():
+    """ExportToSpreadsheet's per-image Mean_<Object>_* parses as Median_ and StDev_ do, not as a per-parent mean."""
+    parsed = parse_feature_names(["Mean_Cells_AreaShape_Area", "Median_Cells_AreaShape_Area"])
+    assert list(parsed["object"]) == ["Mean", "Median"]
+    assert list(parsed["feature_group"]) == ["Cells", "Cells"]
+    assert parsed["is_feature"].all()
+
+
 @pytest.mark.parametrize("name", ["Nucleoli_Distance_Centroid_Nuclei", "Mitochondria_Distance_Minimum_Cells"])
 def test_distances_to_the_parent_are_not_features(name):
     """RelateObjects' distance from a child to its parent places the child, so it stays out of X."""

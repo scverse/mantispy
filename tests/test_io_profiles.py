@@ -931,3 +931,20 @@ def test_from_embedding_like_inherits_metadata_and_the_perturbation_record():
     assert latent.uns["mantispy"]["resolution"] == "object"
     with pytest.raises(ValueError, match="rows"):
         mt.io.from_embedding(rng.normal(size=(5, 2)), like=cells)
+
+
+@pytest.mark.parametrize("well", ["A1O", "nope"])
+def test_a_well_name_that_is_neither_a_plate_well_nor_numbered_is_refused(well):
+    """Only a well named by its number alone (Well1) is kept as given; anything else is likely a typo."""
+    frame = pd.DataFrame(
+        {"Metadata_Plate": ["P1", "P1"], "Metadata_Well": ["A01", well], "Cells_AreaShape_Area": [1.0, 2.0]}
+    )
+    with pytest.raises(ValueError, match="cannot parse well name"):
+        from_dataframe(frame)
+
+
+def test_a_numbered_well_is_kept_without_its_surrounding_whitespace():
+    frame = pd.DataFrame(
+        {"Metadata_Plate": ["P1", "P1"], "Metadata_Well": [" Well1", "a1"], "Cells_AreaShape_Area": [1.0, 2.0]}
+    )
+    assert list(from_dataframe(frame).obs["Metadata_Well"]) == ["Well1", "A01"]
