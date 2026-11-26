@@ -80,7 +80,7 @@ def classify(
     pipeline: str | None,
     counts: pd.DataFrame,
     relations: Mapping[str, Mapping[str, str]] | None,
-) -> dict[str, dict[str, str]]:
+) -> tuple[dict[str, dict[str, str]], dict[tuple[str, str], str]]:
     """The kind of every ``Parent_`` link of every table, keyed by child and then by parent.
 
     Args:
@@ -91,17 +91,17 @@ def classify(
         relations: Kinds given by the user, which override any other source.
 
     Returns:
-        For each table, its parent objects and the kind of the link to each.
+        For each table, its parent objects and the kind of the link to each; and the ``(child, parent)`` links neither the pipeline nor a name rule classifies, with the kind the tables suggest for each.
 
     Raises:
-        ValueError: A link was made by SplitOrMergeObjects, a kind in `relations` is unknown, or a link can be classified by neither the pipeline nor a name rule.
+        ValueError: A link was made by SplitOrMergeObjects, or a kind in `relations` is unknown.
     """
     from_pipeline = pipeline_links(pipeline) if pipeline else {}
     given = {(child, parent): kind for child, parents in (relations or {}).items() for parent, kind in parents.items()}
     if unknown := {kind for kind in given.values() if kind not in LINK_KINDS}:
         raise ValueError(f"relations= kinds must be among {LINK_KINDS}, got {sorted(unknown)}")
     links: dict[str, dict[str, str]] = {}
-    unexplained: list[str] = []
+    unexplained: dict[tuple[str, str], str] = {}
     for child, frame in tables.items():
         links[child] = {}
         for parent in (column.removeprefix("Parent_") for column in frame.columns if column.startswith("Parent_")):
@@ -116,16 +116,35 @@ def classify(
             if kind == "subset" and not measured.get(parent, True):
                 kind = "carrier"
             if kind is None:
-                unexplained.append(f"{child} -> {parent}")
+                unexplained[(child, parent)] = _likely(child, parent, tables, measured)
                 continue
             links[child][parent] = kind
-    if unexplained:
-        source = "the pipeline does not make them" if pipeline else "the export holds no pipeline"
-        raise ValueError(
-            f"cannot tell what the link(s) {unexplained} mean: {source}. Pass relations= with each child's parents, "
-            "for example relations={'Nucleoli': {'Nuclei': 'aggregate'}}, using the kinds " + ", ".join(LINK_KINDS)
-        )
-    return links
+    return links, unexplained
+
+
+def _likely(child: str, parent: str, tables: Mapping[str, pd.DataFrame], measured: Mapping[str, bool]) -> str:
+    """The kind a link the pipeline does not explain most likely has, offered to the user to confirm.
+
+    A child without measurements is a copy that carries the link, a parent with several children aggregates them, and otherwise the child is a compartment of its parent.
+    """
+    if not measured.get(child, True):
+        return "carrier"
+    frame = tables[child]
+    linked = frame.loc[frame[f"Parent_{parent}"].fillna(0) > 0, ["ImageNumber", f"Parent_{parent}"]]
+    return "aggregate" if linked.duplicated().any() else "compartment"
+
+
+def unexplained_message(unexplained: Mapping[tuple[str, str], str], pipeline: bool) -> str:
+    """What the links in `unexplained` lack, and the ``relations=`` that reads them as the tables suggest."""
+    names = ", ".join(f"{child} -> {parent}" for child, parent in sorted(unexplained))
+    suggested: dict[str, dict[str, str]] = {}
+    for (child, parent), kind in sorted(unexplained.items()):
+        suggested.setdefault(child, {})[parent] = kind
+    source = "the pipeline does not make them" if pipeline else "the export holds no pipeline"
+    return (
+        f"cannot tell what the link(s) {names} mean, as {source}; pass relations={suggested} if the pipeline made "
+        f"them so (the kinds are {', '.join(LINK_KINDS)})"
+    )
 
 
 def _by_name(child: str, parent: str, tables: Mapping[str, pd.DataFrame], counts: pd.DataFrame) -> str | None:
@@ -166,9 +185,14 @@ def link_edges(links: Mapping[str, Mapping[str, str]]) -> Sequence[tuple[str, st
 
 @dataclass
 class Omissions:
-    """What a read left out of the profile, gathered over its objects and logged once, one warning line per kind."""
+    """What a read left out, gathered over its objects and logged once, one warning line per kind."""
 
-    root: str
+    #: The root of the profile, or None for the per-object readers.
+    root: str | None
+    #: Links nothing classifies, with the kind the tables suggest for each.
+    unexplained: dict[tuple[str, str], str] = field(default_factory=dict)
+    #: Whether the export held its pipeline, which the message about `unexplained` says.
+    pipeline: bool = True
     #: Objects of which one root has several, left out without ``aggregate=``.
     several: set[str] = field(default_factory=set)
     #: Objects with no link to the root.
@@ -187,6 +211,12 @@ class Omissions:
     def log(self) -> None:
         """Log what was left out, at warning level."""
         log = get_logger()
+        if self.unexplained:
+            log.warning(
+                "left out %s: %s",
+                sorted({child for child, _ in self.unexplained}),
+                unexplained_message(self.unexplained, self.pipeline),
+            )
         if self.several:
             log.warning(
                 "left out %s, of which one %s can have several; pass aggregate= (for example aggregate='mean') to "

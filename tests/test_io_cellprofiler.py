@@ -1,6 +1,7 @@
 """Reading CellProfiler exports: per-object tables, and the one profile read_cellprofiler joins from them."""
 
 import logging
+import re
 import shutil
 import sqlite3
 import warnings
@@ -89,7 +90,7 @@ def test_a_compartment_that_is_not_one_to_one_raises(tmp_path, make_cellprofiler
     assert adata[:, "Nuclei_count"].X.sum() == 25
 
 
-def test_a_link_nothing_explains_raises_naming_it(tmp_path, make_cellprofiler_dir):
+def test_a_link_nothing_explains_leaves_its_table_out_and_suggests_its_kind(tmp_path, make_cellprofiler_dir, caplog):
     """Without the pipeline, only the compartments with matching counts and RelateObjects' columns are read by name."""
     directory = make_cellprofiler_dir(tmp_path / "spots")
     image = pd.read_csv(directory / "Image.csv").assign(Count_Spots=2)
@@ -97,8 +98,17 @@ def test_a_link_nothing_explains_raises_naming_it(tmp_path, make_cellprofiler_di
     pd.DataFrame(
         {"ImageNumber": [1, 1], "ObjectNumber": [1, 2], "Parent_Cells": [1, 1], "Intensity_MeanIntensity_DNA": 0.5}
     ).to_csv(directory / "Spots.csv", index=False)
-    with pytest.raises(ValueError, match=r"\['Spots -> Cells'\].*relations="):
-        mt.io.read_cellprofiler(directory)
+    suggestion = "relations={'Spots': {'Cells': 'aggregate'}}"
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
+        tables = mt.io.read_cellprofiler_csv(directory)
+        adata = mt.io.read_cellprofiler(directory, aggregate="count")
+    assert "Spots" not in tables
+    assert "Spots_count" not in adata.var_names
+    assert caplog.text.count(f"left out ['Spots']: cannot tell what the link(s) Spots -> Cells mean") == 2
+    assert suggestion in caplog.text
+    # The root's own links decide what a row is, so they are never guessed.
+    with pytest.raises(ValueError, match=re.escape(suggestion)):
+        mt.io.read_cellprofiler(directory, root="Spots")
     adata = mt.io.read_cellprofiler(directory, relations={"Spots": {"Cells": "aggregate"}}, aggregate="count")
     assert adata[:, "Spots_count"].X.ravel().tolist()[:2] == [2.0, 0.0]
 
@@ -270,14 +280,19 @@ def test_a_tab_delimited_export_reads_like_the_csv_one():
     )
 
 
-def test_a_combined_table_splits_into_the_per_object_tables():
+def test_a_combined_table_splits_into_the_per_object_tables(caplog):
     """ExportToSpreadsheet can write every object into one file with two header rows, and no pipeline beside it."""
-    with pytest.raises(ValueError, match="NucleoliChildObjects -> Nucleoli"):
-        mt.io.read_cellprofiler_csv(EXPORTS / "beginner_combined")
-    combined = mt.io.read_cellprofiler_csv(
-        EXPORTS / "beginner_combined", relations={"NucleoliChildObjects": {"Nucleoli": "carrier"}}
-    )
-    _assert_same_tables(combined, mt.io.read_cellprofiler_csv(EXPORTS / "beginner"))
+    beginner = mt.io.read_cellprofiler_csv(EXPORTS / "beginner")
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
+        _assert_same_tables(mt.io.read_cellprofiler_csv(EXPORTS / "beginner_combined"), beginner)
+    assert "relations={'NucleoliChildObjects': {'Nucleoli': 'carrier'}}" in caplog.text
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
+        combined = mt.io.read_cellprofiler_csv(
+            EXPORTS / "beginner_combined", relations={"NucleoliChildObjects": {"Nucleoli": "carrier"}}
+        )
+    assert not caplog.text
+    _assert_same_tables(combined, beginner)
 
 
 @pytest.mark.parametrize("database", ["beginner_db_view.db", "beginner_db_single.db"])

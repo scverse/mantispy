@@ -21,7 +21,7 @@ from mantispy._core.plate import normalize_wells
 from mantispy._core.provenance import record_params
 from mantispy._core.schema import make_image_id
 from mantispy.io._cp_export import SQLITE_SUFFIXES, RawExport, export_prefix, extract_csv, extract_sqlite
-from mantispy.io._cp_links import carriers, classify
+from mantispy.io._cp_links import Omissions, carriers, classify, unexplained_message
 
 __all__ = ["export_prefix", "read_cellprofiler", "read_cellprofiler_csv", "read_cellprofiler_sqlite"]
 
@@ -139,11 +139,15 @@ def _finish(
     relations: Mapping[str, Mapping[str, str]] | None = None,
     channels: Sequence[str] | None = None,
     sentinels: float | Collection[float] | None = None,
+    root: str | None = None,
+    omissions: Omissions | None = None,
 ) -> dict[str, AnnData]:
     """Turn the tables of an export into one stamped AnnData per object.
 
+    A table with a link nothing classifies is left out and added to `omissions`, or logged here without it.
+
     Raises:
-        ValueError: The export measured objects in 3D, or a link cannot be classified, or links to an object number the parent table lacks.
+        ValueError: The export measured objects in 3D, a link of `root` itself cannot be classified, or a link points to an object number the parent table lacks.
     """
     log = get_logger()
     if raw.renamed_image_number:
@@ -178,7 +182,17 @@ def _finish(
         )
         for name, frame in prefixed.items()
     }
-    links = classify(tables, measured, raw.pipeline, image, relations)
+    links, unexplained = classify(tables, measured, raw.pipeline, image, relations)
+    if unexplained:
+        if any(child == root for child, _ in unexplained):
+            raise ValueError(unexplained_message(unexplained, raw.pipeline is not None))
+        report = Omissions(root) if omissions is None else omissions
+        report.unexplained |= unexplained
+        report.pipeline = raw.pipeline is not None
+        for child in {child for child, _ in unexplained}:
+            del prefixed[child], links[child]
+        if omissions is None:
+            report.log()
     # A copy that only carries a link adds nothing a profile can use, so it is not returned.
     hidden = set(carriers(links, measured))
 
@@ -247,6 +261,8 @@ def read_cellprofiler_csv(
     Each table is one row per object, stamped at object resolution, with the object's measurements in ``X`` and, in ``obs``, ``Metadata_ImageID``, ``Metadata_ObjectNumber``, the centroid as ``Metadata_Center_X``/``Metadata_Center_Y`` and the number of each parent object as ``Metadata_<Parent>ObjectNumber``.
     No row is left out: an object without a parent keeps a parent number of 0.
     ``uns["mantispy"]["links"]`` says what each link means, ``"compartment"``, ``"subset"``, ``"aggregate"`` or ``"carrier"``, as the module that made the object decides it: the pipeline text the export stores is read for it.
+    Without the pipeline, only RelateObjects' columns and the cell, cytoplasm and nucleus compartments with equal counts are read by name.
+    A table with a link nothing explains is left out, with one warning naming the link and the `relations` that reads it as the tables suggest.
     ``uns["mantispy"]["image_table"]`` holds the image quality measurements and the object counts of every image.
     A table that holds only locations, as an imported mask gives, has no feature and keeps its locations in ``obs``.
     A copy that only carries a link, such as the objects ResizeObjects writes or the children RelateObjects saves, is not returned; the link to it stays in ``obs`` and ``links`` of the tables that have one.
@@ -263,7 +279,7 @@ def read_cellprofiler_csv(
 
     Raises:
         FileNotFoundError: `path` holds no ``Image.csv`` or ``Image.txt``.
-        ValueError: A link cannot be classified, a table repeats a column with different values, or the export was measured in 3D.
+        ValueError: A table repeats a column with different values, or the export was measured in 3D.
 
     Examples:
         >>> import mantispy as mt
@@ -293,7 +309,7 @@ def read_cellprofiler_sqlite(
 
     Raises:
         FileNotFoundError: The database holds no ``Per_Image`` table.
-        ValueError: A link cannot be classified, or the export was measured in 3D.
+        ValueError: The export was measured in 3D.
     """
     return _read_tables(Path(path), "sqlite", relations=relations)
 
@@ -306,11 +322,12 @@ def _read_tables(
     relations: Mapping[str, Mapping[str, str]] | None = None,
     channels: Sequence[str] | None = None,
     sentinels: float | Collection[float] | None = None,
+    root: str | None = None,
 ) -> dict[str, AnnData]:
     raw = extract_csv(path, files) if kind == "csv" else extract_sqlite(_database(path))
     if not raw.objects:
         return {"Image": _image_only(raw, channels)}
-    return _finish(raw, relations=relations, channels=channels, sentinels=sentinels)
+    return _finish(raw, relations=relations, channels=channels, sentinels=sentinels, root=root)
 
 
 def _image_only(raw: RawExport, channels: Sequence[str] | None) -> AnnData:
@@ -361,6 +378,7 @@ def read_cellprofiler(
     The compartments of `root` (the objects one to one with it, such as the cytoplasm and nucleus of a cell) and its ancestors are joined onto it.
     Objects of which a root has several, such as the nucleoli of a nucleus, are rolled into it by :func:`~mantispy.tl.aggregate_objects` when `aggregate` is given, and otherwise left out with one warning naming them.
     Objects not linked to `root` at all, such as the objects of an imported mask, are left out with one warning; their counts per image stay in ``uns["mantispy"]["image_table"]``.
+    So is an object with a link nothing explains, unless it is `root`, whose own links must be explained.
 
     Args:
         path: The export directory or database.
@@ -383,7 +401,7 @@ def read_cellprofiler(
     Raises:
         FileNotFoundError: `path` is not a CellProfiler export.
         NotImplementedError: `path` is an ExportToSpatialData store or a Cell Painting Gallery plate, which :func:`~mantispy.io.read_plate` reads.
-        ValueError: There is no table for `root`, a link cannot be classified, a compartment is not one to one with `root`, `strict` is set and an object has no partner, or `aggregate` names an unknown statistic.
+        ValueError: There is no table for `root`, a link of `root` cannot be classified, a compartment is not one to one with `root`, `strict` is set and an object has no partner, or `aggregate` names an unknown statistic.
 
     Examples:
         >>> import mantispy as mt
@@ -395,7 +413,9 @@ def read_cellprofiler(
 
     path = Path(path)
     func = statistics(aggregate) if aggregate is not None else None
-    tables = _read_tables(path, _kind(path), files=files, relations=relations, channels=channels, sentinels=sentinels)
+    tables = _read_tables(
+        path, _kind(path), files=files, relations=relations, channels=channels, sentinels=sentinels, root=root
+    )
     if list(tables) == ["Image"]:
         adata = tables["Image"]
     else:
