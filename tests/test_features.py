@@ -1,9 +1,12 @@
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
 from mantispy._core.features import parse_feature_names
 
 CHANNELS = ["DNA", "ER", "RNA", "AGP", "Mito"]
+EXPORTS = Path(__file__).parent / "data" / "cellprofiler"
 
 
 def _row(name, channels=CHANNELS):
@@ -134,6 +137,101 @@ def test_inference_keeps_a_known_stain_beside_an_underscored_channel():
 )
 def test_non_features_flagged(name):
     assert not _row(name)["is_feature"]
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["Nuclei_Neighbors_FirstClosestObjectNumber_Expanded", "Nuclei_Neighbors_SecondClosestObjectNumber_2"],
+)
+def test_neighbour_object_numbers_are_not_features(name):
+    """MeasureObjectNeighbors' closest-object number identifies another object, as spec 18 keeps out of X."""
+    assert not _row(name)["is_feature"]
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Cells_Mean_Mitochondria_Location_Center_X",
+        "Nuclei_Mean_Nucleoli_AreaShape_Center_Y",
+        "Nuclei_Mean_Nucleoli_AreaShape_BoundingBoxMinimum_X",
+        "Nuclei_Mean_Nucleoli_Number_Object_Number",
+        "Cells_Mean_Mitochondria_Neighbors_FirstClosestObjectNumber_Expanded",
+        "Cells_Mean_Mitochondria_Distance_Centroid_Cells",
+        "Cells_Mean_BarcodeFoci_Children_Foci_NonCellEdge_Count",
+        "Cells_Mean_Foci_NonCellEdge_Parent_BarcodeFoci",
+    ],
+)
+def test_a_per_parent_mean_follows_the_childs_non_feature_rule(name):
+    """RelateObjects' <Parent>_Mean_<Child>_<column> of a location or an object number is no measurement either."""
+    assert not _row(name)["is_feature"]
+
+
+def test_a_per_parent_mean_of_a_measurement_stays_on_the_parent():
+    row = _row("Nuclei_Mean_Nucleoli_AreaShape_Area")
+    assert row["is_feature"]
+    assert (row["object"], row["feature_group"]) == ("Nuclei", "Mean")
+
+
+@pytest.mark.parametrize("name", ["Nucleoli_Distance_Centroid_Nuclei", "Mitochondria_Distance_Minimum_Cells"])
+def test_distances_to_the_parent_are_not_features(name):
+    """RelateObjects' distance from a child to its parent places the child, so it stays out of X."""
+    assert not _row(name)["is_feature"]
+
+
+@pytest.mark.parametrize(
+    "name", ["Foci_Barcode_BarcodeCalled", "Foci_Barcode_MatchedTo_ID", "Foci_Barcode_MatchedTo_Score"]
+)
+def test_barcode_calls_are_not_features(name):
+    """CallBarcodes' output identifies the object's perturbation; it is not morphology."""
+    assert not _row(name)["is_feature"]
+
+
+@pytest.mark.parametrize("name", ["Channel_OrigDNA", "Image_Channel_OrigDNA"])
+def test_image_channel_indices_are_not_features(name):
+    assert not _row(name)["is_feature"]
+
+
+def _export_columns(export, tables):
+    """The columns of the real export tables `tables`, each prefixed with its object as the reader prefixes them."""
+    columns = []
+    for file, obj in tables.items():
+        header = pd.read_csv(EXPORTS / export / f"{file}.csv", nrows=0).columns
+        columns += [f"{obj}_{column}" for column in header if column not in {"ImageNumber", "ObjectNumber"}]
+    return columns
+
+
+def test_neighbour_ids_and_relate_objects_positions_stay_out_of_x_on_a_real_export():
+    """The BBBC022 tutorial export: closest-object numbers, distances to the parent and their per-parent means."""
+    tables = {"MyExpt_Nuclei": "Nuclei", "MyExpt_Cells": "Cells", "MyExpt_Mitochondria": "Mitochondria"}
+    parsed = parse_feature_names(_export_columns("advanced", tables))
+    features = set(parsed.index[parsed["is_feature"]])
+    assert {"Nuclei_Neighbors_FirstClosestDistance_Expanded", "Nuclei_Mean_Nucleoli_AreaShape_Area"} <= features
+    assert parsed.loc["Nuclei_Mean_Nucleoli_AreaShape_Area", "object"] == "Nuclei"
+    tokens = ("ClosestObjectNumber", "Distance_Centroid", "Distance_Minimum", "_Location_", "_Center_", "Object_Number")
+    assert not [name for name in features if any(token in name for token in tokens)]
+
+
+def test_an_object_name_with_an_underscore_is_read_whole():
+    """PERISCOPE's Foci_NonCellEdge was read as object Foci with the unknown group NonCellEdge."""
+    names = [
+        "Foci_NonCellEdge_Number_Object_Number",
+        "Foci_NonCellEdge_Location_Center_X",
+        "Foci_NonCellEdge_Parent_BarcodeFoci",
+        "Foci_NonCellEdge_AreaShape_Area",
+        "Foci_AreaShape_Area",
+    ]
+    parsed = parse_feature_names(names, channels=CHANNELS)
+    assert set(parsed["object"].iloc[:4]) == {"Foci_NonCellEdge"}
+    assert list(parsed["is_feature"]) == [False, False, False, True, True]
+    assert parsed.loc["Foci_NonCellEdge_AreaShape_Area", "feature_group"] == "AreaShape"
+    assert parsed.loc["Foci_AreaShape_Area", "object"] == "Foci"
+
+
+def test_an_object_name_with_an_underscore_is_read_whole_on_a_real_export():
+    """PERISCOPE's Foci_NonCellEdge table holds locations and links only, which were read as features of Foci."""
+    parsed = parse_feature_names(_export_columns("periscope_site21", {"Foci_NonCellEdge": "Foci_NonCellEdge"}))
+    assert set(parsed["object"]) == {"Foci_NonCellEdge"}
+    assert not parsed["is_feature"].any()
 
 
 @pytest.mark.parametrize("angle", ["00", "01", "02", "03"])

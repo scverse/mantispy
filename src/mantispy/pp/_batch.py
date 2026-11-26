@@ -17,7 +17,7 @@ from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy._core.masks import reference_mask
 from mantispy._core.mutation import inplace_or_copy
-from mantispy._core.plate import well_col, well_row
+from mantispy._core.plate import well_positions
 
 METHODS = ("b_score", "median_polish")
 
@@ -70,7 +70,7 @@ def correct_plate_position(
         Writes ``X`` or ``layers[key_added]``, and the fitted effects per corrected plate to ``uns["mantispy"]["plate_position"]``.
 
     Raises:
-        ValueError: If ``method`` is unknown, a corrected plate holds no reference rows, or ``plates`` names a value absent from ``by``.
+        ValueError: If ``method`` is unknown, a corrected plate holds no reference rows, ``plates`` names a value absent from ``by``, or a well names no plate row and column (``Well1``).
 
     Notes:
         The polish is fitted on the well grid.
@@ -88,8 +88,7 @@ def correct_plate_position(
             "add the column or read the platemap with mt.io.read_profiles(platemap=...)"
         )
     wells = adata.obs["Metadata_Well"].to_numpy()
-    rows = np.array([well_row(well) for well in wells])
-    columns = np.array([well_col(well) for well in wells])
+    rows, columns = well_positions(wells)
 
     fit_mask = reference_mask(adata, reference)
     codes, keys = group_codes(adata, by)
@@ -297,7 +296,7 @@ def detect_plate_position(
 
     Raises:
         KeyError: If ``reference`` names a column that is not present.
-        ValueError: If the reference column has missing values.
+        ValueError: If the reference column has missing values, or a well names no plate row and column (``Well1``).
         TypeError: If the reference column is not boolean.
 
     Notes:
@@ -314,8 +313,7 @@ def detect_plate_position(
             "add the column or read the platemap with mt.io.read_profiles(platemap=...)"
         )
     wells = adata.obs["Metadata_Well"].to_numpy()
-    all_rows = np.array([well_row(well) for well in wells])
-    all_columns = np.array([well_col(well) for well in wells])
+    all_rows, all_columns = well_positions(wells)
     is_control = reference_mask(adata, reference)
     codes, keys = group_codes(adata, by)
 

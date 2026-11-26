@@ -29,7 +29,7 @@ from mantispy._core.features import (
 from mantispy._core.frames import as_frame, categorize_metadata
 from mantispy._core.logging import get_logger, report_drop
 from mantispy._core.masks import feature_mask
-from mantispy._core.plate import fill_well_grid, normalize_well
+from mantispy._core.plate import fill_well_grid, normalize_wells
 from mantispy._core.provenance import record_params
 from mantispy._core.schema import (
     FEATURE_KINDS,
@@ -308,7 +308,7 @@ def from_dataframe(
             "file uses."
         )
     if "Metadata_Well" in obs:
-        obs["Metadata_Well"] = [normalize_well(well) for well in obs["Metadata_Well"].astype(str)]
+        obs["Metadata_Well"] = normalize_wells(obs["Metadata_Well"])
     fill_well_grid(obs)
     obs = categorize_metadata(_adopt_counts(obs))
     if resolution == "object":
@@ -333,7 +333,7 @@ def _join_platemap(obs: pd.DataFrame, platemap: str | Path | pd.DataFrame) -> pd
     frame = platemap.copy() if isinstance(platemap, pd.DataFrame) else _read_frame(Path(platemap))
     if "Metadata_Well" not in frame:
         raise ValueError("platemap must contain a 'Metadata_Well' column")
-    frame["Metadata_Well"] = [normalize_well(well) for well in frame["Metadata_Well"].astype(str)]
+    frame["Metadata_Well"] = normalize_wells(frame["Metadata_Well"])
     on = ["Metadata_Well"] + (["Metadata_Plate"] if "Metadata_Plate" in frame and "Metadata_Plate" in obs else [])
     left = obs.astype(dict.fromkeys(on, str))
     frame = frame.astype(dict.fromkeys(on, str))
@@ -401,6 +401,7 @@ def read_profiles(
 
     Numeric columns that parse as CellProfiler features become ``X``.
     Text and ``Metadata_`` columns become ``obs``, with every metadata prefix normalized to ``Metadata_``.
+    Well names are normalized to ``A01`` form, and a well named by its number alone, such as PERISCOPE's ``Well1``, is kept as given with no ``Metadata_Row`` or ``Metadata_Col``.
     Numeric columns that follow no CellProfiler naming (a learned embedding, a proprietary feature table) are kept as features with ``feature_kind="embedding"``.
     A column named for one of `objects` is a measurement on that object even when its feature group is not one of CellProfiler's.
     Numeric columns that parse as non-features (object numbers, parent links, centroids) are dropped and logged, because published profile tables often carry dozens of them and they mean nothing at well level.

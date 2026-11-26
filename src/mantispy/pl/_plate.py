@@ -10,7 +10,7 @@ import pandas as pd
 
 from mantispy._core._reduce import group_codes, group_offsets
 from mantispy._core.frames import as_frame
-from mantispy._core.plate import plate_grid, row_label, well_col, well_row
+from mantispy._core.plate import plate_grid, row_label, well_positions
 from mantispy.pl._common import obs_or_feature as _obs_or_feature
 from mantispy.pl._common import returned as _returned
 
@@ -62,7 +62,7 @@ def plate(
         When several plates are drawn each panel is labeled with the plate's own well grid.
 
     Raises:
-        ValueError: ``color`` is both a feature name and an ``obs`` column, ``agg`` is not one of ``AGGREGATIONS``, ``ax`` was passed for more than one plate, ``groupby`` varies within a drawn plate, or it or ``Metadata_Plate`` has missing values.
+        ValueError: ``color`` is both a feature name and an ``obs`` column, ``agg`` is not one of ``AGGREGATIONS``, ``ax`` was passed for more than one plate, ``groupby`` varies within a drawn plate, it or ``Metadata_Plate`` has missing values, or a well names no plate row and column (``Well1``).
         KeyError: ``color`` is neither a feature name nor an ``obs`` column, ``groupby`` is not an ``obs`` column, or ``plate`` is not a plate of ``adata``.
     """
     import matplotlib.pyplot as plt
@@ -82,7 +82,7 @@ def plate(
     drawn.sort(key=lambda index: [_natural(str(part)) for part in panels[index]])
 
     wells = pd.Categorical(as_frame(adata.obs)["Metadata_Well"])
-    positions = np.array([(well_row(well), well_col(well)) for well in wells.categories])[wells.codes]
+    positions = np.column_stack(well_positions(wells.categories))[wells.codes]
     order, offsets = group_offsets(codes, len(keys))
     grids = []
     for index in drawn:

@@ -1,5 +1,6 @@
 import pytest
 
+import mantispy as mt
 from mantispy._core.plate import (
     detect_plate_format,
     normalize_well,
@@ -38,3 +39,21 @@ def test_detect_plate_format_rejects_oversized():
 def test_detect_plate_format_rejects_empty():
     with pytest.raises(ValueError, match="no wells given"):
         detect_plate_format([])
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        lambda adata: mt.pl.plate(adata, color=adata.var_names[0]),
+        lambda adata: mt.pl.plate_effects(adata),
+        lambda adata: mt.pp.correct_plate_position(adata, reference=None),
+        lambda adata: mt.pp.detect_plate_position(adata, reference=None),
+    ],
+    ids=["pl.plate", "pl.plate_effects", "pp.correct_plate_position", "pp.detect_plate_position"],
+)
+def test_plate_position_tools_name_the_wells_without_a_position(wells, tool):
+    """PERISCOPE's Well1 has no plate row and column; the tools failed on the first such well with no reason given."""
+    numbers = {well: f"Well{i}" for i, well in enumerate(sorted(set(wells.obs["Metadata_Well"])), start=1)}
+    wells.obs["Metadata_Well"] = wells.obs["Metadata_Well"].astype(str).map(numbers)
+    with pytest.raises(ValueError, match=r"\['Well1', 'Well10'.*no plate position"):
+        tool(wells)
