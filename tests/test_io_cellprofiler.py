@@ -642,6 +642,18 @@ def test_a_cell_without_foci_has_no_call_and_round_trips(periscope, tmp_path):
     assert obs[f"{column}_fraction"].dtype == "float64"
 
 
+def test_the_reader_passes_score_to_the_roll_up(periscope):
+    """The barcode score of the winning call could only be had by reading the tables and rolling them up by hand."""
+    score = "Foci_Barcode_MatchedTo_Score"
+    adata = mt.io.read_cellprofiler(EXPORTS / "periscope_site21", aggregate="count", score=score)
+    expected = mt.tl.aggregate_objects(periscope, root="Cells", func="count", score=score)
+    column = "Foci_Barcode_MatchedTo_GeneCode_majority_score"
+    np.testing.assert_array_equal(adata.obs[column].to_numpy(), expected.obs[column].to_numpy())
+    assert adata.uns["mantispy"]["params"]["read_cellprofiler"]["score"] == score
+    with pytest.raises(ValueError, match="pass aggregate= as well"):
+        mt.io.read_cellprofiler(EXPORTS / "periscope_site21", score=score)
+
+
 def test_a_score_that_is_no_childs_column_is_refused(periscope):
     with pytest.raises(KeyError, match="'Barcode_MatchedTo_Score' is not a column"):
         mt.tl.aggregate_objects(periscope, root="Cells", func="count", score="Barcode_MatchedTo_Score")

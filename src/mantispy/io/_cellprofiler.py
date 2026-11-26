@@ -34,6 +34,8 @@ FILE_PREFIXES = ("FileName_", "PathName_", "URL_")
 def _is_file_column(column: str) -> bool:
     """Whether `column` locates an image file, as CellProfiler names it or as LoadData read it back as metadata."""
     return column.removeprefix("Metadata_Image_").startswith(FILE_PREFIXES)
+
+
 #: Feature groups that identify an object rather than measure it, kept in ``obs`` of its table even where numeric.
 IDENTITY_GROUPS = ("Barcode",)
 #: Identity columns the Metadata module writes even when it extracted no value for them.
@@ -430,6 +432,7 @@ def _profile(
     strict: bool,
     platemap: str | Path | pd.DataFrame | None,
     index_columns: Sequence[str] | None,
+    score: str | None = None,
     omissions: Omissions | None = None,
 ) -> AnnData:
     """One export's tables as one profile: the image-only table without bookkeeping, or every root with its objects joined and rolled up."""
@@ -440,7 +443,7 @@ def _profile(
         adata = tables["Image"]
         adata.obs = profile_obs(as_frame(adata.obs), "Image")
     else:
-        adata = combine(tables, root, func=func, strict=strict, omissions=omissions)
+        adata = combine(tables, root, func=func, strict=strict, omissions=omissions, score=score)
     obs = as_frame(adata.obs)
     if platemap is not None:
         obs = _join_platemap(obs, platemap)
@@ -467,6 +470,7 @@ def read_cellprofiler(
     relations: Mapping[str, Mapping[str, str]] | None = None,
     files: Mapping[str, str | Path] | None = None,
     strict: bool = False,
+    score: str | None = None,
     skip_non_exports: bool = False,
     out: str | Path | None = None,
 ) -> AnnData:
@@ -498,6 +502,7 @@ def read_cellprofiler(
         files: Object tables under custom file names, by object name, for a spreadsheet export.
         strict: Raise when a compartment row has no root or a root has no compartment, instead of warning with the count.
             A compartment row without a root is otherwise left out, and a root without a compartment gets NaN for its features.
+        score: With `aggregate`, a numeric ``obs`` column of a child, such as ``"Foci_Barcode_MatchedTo_Score"``, averaged over the children that hold the most common value, as :func:`~mantispy.tl.aggregate_objects` does.
         skip_non_exports: Skip the paths of a list that are not CellProfiler exports, with one log line naming them, instead of raising.
         out: An ``.h5ad`` or ``.zarr`` path to write the profile to, one export at a time, for a screen that does not fit in memory.
             The profile is then read back from it lazily, as :func:`~mantispy.io.read` with ``lazy=True`` reads it.
@@ -526,12 +531,15 @@ def read_cellprofiler(
     from mantispy.tl._aggregate_objects import statistics
 
     func = statistics(aggregate) if aggregate is not None else None
-    params = {"root": root, "aggregate": func, "channels": channels, "strict": strict}
+    if score is not None and func is None:
+        raise ValueError("score= summarises the children rolled up with aggregate=; pass aggregate= as well")
+    params = {"root": root, "aggregate": func, "channels": channels, "strict": strict, "score": score}
     read: dict[str, Any] = {"files": files, "relations": relations, "channels": channels, "sentinels": sentinels}
     profile: dict[str, Any] = {
         "root": root,
         "func": func,
         "strict": strict,
+        "score": score,
         "platemap": platemap,
         "index_columns": index_columns,
     }

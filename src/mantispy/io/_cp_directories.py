@@ -124,9 +124,7 @@ def read_directories(
                 parts.append(part)
         omissions.log()
         if without_root and (parts or image_only):
-            log.warning(
-                "found no %s in %s; their images are in uns['mantispy']['image_table']", root, without_root
-            )
+            log.warning("found no %s in %s; their images are in uns['mantispy']['image_table']", root, without_root)
         if parts and image_only:
             log.info(
                 "%d exports measure images only; their images are in uns['mantispy']['image_table']", len(image_only)
