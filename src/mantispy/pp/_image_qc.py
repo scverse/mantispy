@@ -115,7 +115,7 @@ def image_qc(
     if "image_table" not in store:
         raise KeyError(
             "uns['mantispy']['image_table'] is missing; read the data with "
-            "mt.io.read_profiles on an ExportToSpreadsheet directory, which fills it from Image.csv"
+            "mt.io.read_cellprofiler, which fills it from the export's Image table"
         )
     table = pd.DataFrame(store["image_table"]).copy()
 

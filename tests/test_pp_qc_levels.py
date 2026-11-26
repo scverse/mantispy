@@ -57,7 +57,7 @@ def test_image_qc_reports_a_missing_table_and_unknown_metrics(imaged):
     with pytest.raises(KeyError, match="Available"):
         mt.pp.image_qc(imaged, metrics=("NoSuchMetric",))
     del imaged.uns["mantispy"]["image_table"]
-    with pytest.raises(KeyError, match="read_profiles"):
+    with pytest.raises(KeyError, match="read_cellprofiler"):
         mt.pp.image_qc(imaged)
 
 

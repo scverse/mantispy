@@ -288,8 +288,14 @@ def test_a_directory_of_parquet_parts_reads_as_cells(tmp_path):
 
 
 def test_a_directory_with_nothing_to_read_says_so(tmp_path):
-    with pytest.raises(FileNotFoundError, match="neither an ExportToSpreadsheet Image.csv nor .parquet parts"):
+    with pytest.raises(FileNotFoundError, match="holds no .parquet parts"):
         mt.io.read_profiles(tmp_path)
+
+
+def test_a_cellprofiler_export_is_pointed_at_read_cellprofiler(cellprofiler_dir):
+    """read_profiles reads flat tables; an export's object tables are joined by read_cellprofiler."""
+    with pytest.raises(ValueError, match="read_cellprofiler"):
+        mt.io.read_profiles(cellprofiler_dir)
 
 
 def test_an_unknown_on_column_mismatch_is_refused(tmp_path):

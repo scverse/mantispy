@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any
 
 from mantispy._core.schema import validate
 
+from ._cellprofiler import read_cellprofiler, read_cellprofiler_csv, read_cellprofiler_sqlite
 from ._jump import read_jump, unexpressed_genes
 from ._profiles import METADATA_PREFIXES, from_dataframe, from_embedding, read, read_profiles, stamp, write
 
@@ -15,6 +16,9 @@ __all__ = [
     "from_dataframe",
     "from_embedding",
     "read",
+    "read_cellprofiler",
+    "read_cellprofiler_csv",
+    "read_cellprofiler_sqlite",
     "read_jump",
     "read_plate",
     "read_profiles",

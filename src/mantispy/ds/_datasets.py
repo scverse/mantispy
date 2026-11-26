@@ -20,6 +20,7 @@ from mantispy._core.frames import as_frame, categorize_metadata
 from mantispy._core.logging import get_logger, report_drop
 from mantispy._core.schema import SCHEMA_VERSION, ensure_object_identity, migrate, set_control_columns, stamp
 from mantispy._settings import settings
+from mantispy.io._cellprofiler import read_cellprofiler
 from mantispy.io._jump import join_jump_annotation, read_jump
 from mantispy.io._profiles import _UPSTREAM_COUNTS, _adopt_counts, from_dataframe, read, read_profiles, write
 
@@ -48,7 +49,7 @@ TARGET2_DEFAULT = (
 )
 
 #: Bumped whenever the assembled jump_cells object changes, so an older cached assembly is not reused.
-_ASSEMBLY_VERSION = 3
+_ASSEMBLY_VERSION = 4
 
 _EXPORT_FOV = "BR00121438-J04-1"
 
@@ -1136,13 +1137,12 @@ def depmap_expression(cache_dir: str | Path | None = None) -> Path:
 def _read_site(directory: Path, source: str, channels: Sequence[str]) -> AnnData:
     """One analysis directory as cells, checked against the ``<plate>-<well>-<site>`` name it is filed under.
 
-    The JUMP pipeline gives ``Cytoplasm`` a ``Parent_Cells`` and a ``Parent_Nuclei`` and gives ``Cells`` no parent at all, so ``Cytoplasm`` is the only primary object that joins all three tables.
+    The JUMP pipeline gives ``Cytoplasm`` a ``Parent_Cells`` and a ``Parent_Nuclei`` and gives ``Cells`` no parent among the exported objects, so ``Cytoplasm`` is the root the JUMP profiles have always used.
     One cytoplasm is one cell here, and the three tables have equal length.
     """
-    adata = read_profiles(
+    adata = read_cellprofiler(
         directory,
-        primary_object="Cytoplasm",
-        resolution="object",
+        root="Cytoplasm",
         channels=channels,
         index_columns=("Metadata_Plate", "Metadata_Well", "Metadata_Site", "Metadata_ObjectNumber"),
     )
@@ -1200,7 +1200,7 @@ def _mark_selected(adata: AnnData) -> None:
 def jump_export(cache_dir: str | Path | None = None) -> Path:
     """One real ``ExportToSpreadsheet`` directory, as CellProfiler wrote it.
 
-    A single field of view of a DMSO well of ``BR00121438``: ``Image.csv`` plus the ``Cells``, ``Cytoplasm`` and ``Nuclei`` tables, unmodified, for reading with :func:`mantispy.io.read_profiles`.
+    A single field of view of a DMSO well of ``BR00121438``: ``Image.csv`` plus the ``Cells``, ``Cytoplasm`` and ``Nuclei`` tables, unmodified, for reading with :func:`mantispy.io.read_cellprofiler`.
     Part of the download :func:`jump_cells` makes, so asking for both costs nothing extra.
 
     The images this was measured from are in :func:`jump_plate`, and the well-level profiles of the same plate are in :func:`jump_target2`.
@@ -1210,7 +1210,7 @@ def jump_export(cache_dir: str | Path | None = None) -> Path:
             Defaults to :attr:`mantispy.settings.cache_dir`.
 
     Returns:
-        The directory, to pass to :func:`mantispy.io.read_profiles`.
+        The directory, to pass to :func:`mantispy.io.read_cellprofiler`.
 
     References:
         :cite:t:`Chandrasekaran_2023`.

@@ -145,6 +145,7 @@ REQUIRED_UNS: tuple[str, ...] = (
 UNS_KEYS: tuple[str, ...] = (
     *REQUIRED_UNS,
     "image_table",
+    "links",
     "params",
     "perturbation",
 )
@@ -723,10 +724,13 @@ def validate(adata: AnnData, *, raise_on_error: bool = False) -> ValidationRepor
     """
     report = ValidationReport()
 
-    if adata.n_vars == 0:
+    # An object table read from a CellProfiler export records its links; one of locations only, as an imported
+    # mask gives, or an image table of metadata only, holds no feature and is still a valid table (spec 3.1).
+    store = adata.uns.get("mantispy")
+    if adata.n_vars == 0 and not (isinstance(store, dict) and "links" in store):
         report.errors.append(
             "the object has no features, so the other checks would pass on an empty matrix. "
-            "If it came from mt.io.read_profiles, check the objects= argument."
+            "If it came from mt.io.read_profiles or mt.io.read_cellprofiler, check the objects= or root= argument."
         )
         if raise_on_error and not report.ok:
             raise ValueError("\n".join(report.errors))

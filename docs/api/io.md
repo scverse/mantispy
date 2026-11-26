@@ -5,12 +5,15 @@
 .. currentmodule:: mantispy
 ```
 
-Read profiles, plates and JUMP data into `AnnData` or `SpatialData`, and check them against the schema.
+Read CellProfiler exports, profiles, plates and JUMP data into `AnnData` or `SpatialData`, and check them against the schema.
 
 ```{eval-rst}
 .. autosummary::
    :toctree: generated
 
+   io.read_cellprofiler
+   io.read_cellprofiler_csv
+   io.read_cellprofiler_sqlite
    io.read_profiles
    io.read_plate
    io.read_jump

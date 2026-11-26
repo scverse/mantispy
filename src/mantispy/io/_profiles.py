@@ -48,7 +48,7 @@ from mantispy._core.schema import (
 )
 from mantispy._core.schema import stamp as _record
 from mantispy._settings import settings
-from mantispy.io._cellprofiler import export_prefix, read_export
+from mantispy.io._cp_export import SQLITE_SUFFIXES, export_prefix
 
 #: Real accessions use all four.
 METADATA_PREFIXES: tuple[str, ...] = ("Image_Metadata_", "Metadata_", "metadata_", "meta_")
@@ -124,6 +124,8 @@ def _feature_matrix(features: pd.DataFrame, *, missing_possible: bool = False) -
     The common dtype is what :func:`numpy.result_type` finds: all-``float32`` columns stay ``float32``, all-integer columns stay integer, and ``float32`` next to a ``float64`` or ``int64`` column becomes ``float64``.
     Integer columns that hold a missing value, or that sentinels will be replaced in, become ``float64``, which keeps every integer up to 2**53 and can represent ``NaN``.
     """
+    if features.shape[1] == 0:
+        return np.empty((len(features), 0))
     # A nullable or Arrow-backed column carries the numpy dtype of its values as numpy_dtype.
     extension = [isinstance(column, pd.api.extensions.ExtensionDtype) for column in features.dtypes]
     dtype = np.result_type(*{np.dtype(getattr(column, "numpy_dtype", column)) for column in features.dtypes})
@@ -360,20 +362,6 @@ def _join_platemap(obs: pd.DataFrame, platemap: str | Path | pd.DataFrame) -> pd
     return categorize_metadata(joined)
 
 
-def _image_table(image: pd.DataFrame, obs: pd.DataFrame) -> pd.DataFrame:
-    """Per-image quality measurements, keyed by ``Metadata_ImageID`` and carrying plate/well.
-
-    The plate and well columns let :func:`~mantispy.pp.image_qc` threshold per plate instead of pooling every plate together.
-    Keyed by the canonical opaque image id (spec 8), so image QC broadcasts back onto ``obs`` through it; images that produced no object have no id and are dropped.
-    """
-    quality = [c for c in image.columns if "ImageQuality" in c]
-    table = image[["ImageNumber", *quality]].set_index("ImageNumber")
-    present = [c for c in ("Metadata_Plate", "Metadata_Well", "Metadata_Site") if c in obs.columns]
-    by_number = obs.groupby("Metadata_ImageNumber", observed=True)
-    table = table.join(by_number[[*present, "Metadata_ImageID"]].first(), how="left")
-    return table.dropna(subset=["Metadata_ImageID"]).set_index("Metadata_ImageID")
-
-
 def read_profiles(
     paths: str | Path | Sequence[str | Path],
     metadata_prefixes: Sequence[str] = METADATA_PREFIXES,
@@ -386,8 +374,6 @@ def read_profiles(
     on_column_mismatch: Literal["raise", "intersect"] = "raise",
     path_columns: Mapping[str, int] | None = None,
     platemap: str | Path | pd.DataFrame | None = None,
-    primary_object: str = "Cells",
-    strict_one_to_one: bool = True,
     resolution: str | None = None,
     grouped_by: Sequence[str] | None = None,
 ) -> ad.AnnData:
@@ -396,8 +382,9 @@ def read_profiles(
     What `paths` points at decides how it is read:
 
     - one or more CSV, TSV or parquet files, stacked row-wise;
-    - a directory an ``ExportToSpreadsheet`` run wrote, one row per `primary_object` with every other object joined onto it through the ``Parent_`` column that links the two, and the ``MeasureImageQuality`` columns of ``Image.csv`` kept in ``uns["mantispy"]["image_table"]``;
     - a directory of parquet parts, as CytoTable writes them.
+
+    A directory a CellProfiler export module wrote is read by :func:`~mantispy.io.read_cellprofiler` instead.
 
     Numeric columns that parse as CellProfiler features become ``X``.
     Text and ``Metadata_`` columns become ``obs``, with every metadata prefix normalized to ``Metadata_``.
@@ -414,35 +401,32 @@ def read_profiles(
         index_columns: ``obs`` columns, named as they are after the prefix is normalized, joined with ``:`` into the observation index.
             Without them the index is the row number.
         channels: Channel vocabulary passed to the feature-name parser.
-            Read from the ``FileName_`` columns of an export directory, and inferred from the feature names otherwise.
+            Inferred from the feature names when omitted.
         sentinels: Values in the feature matrix that stand for missing, replaced with NaN.
         keep_non_features: Keep the numeric columns that do not parse as features in ``obs`` instead.
-        objects: Which CellProfiler objects count as features, and for an export directory which object tables are read.
+        objects: Which CellProfiler objects count as features.
             The default is the three compartments, matching ``pycytominer.infer_cp_features``.
             ``None`` keeps every object, including the whole-field ``Image`` measurements.
         on_column_mismatch: ``"raise"``, or ``"intersect"`` to keep the shared columns in the first file's order.
             Batches with disjoint feature sets do occur.
         path_columns: Metadata read from the path: maps a column name to how many directories up to take the name of, counting the directory holding a file, or a directory that was given, as 1.
         platemap: A table, or a path to one, with a ``Metadata_Well`` column and optionally ``Metadata_Plate``, left-joined onto ``obs``.
-        primary_object: For an export directory, the object one row of the result is.
-        strict_one_to_one: For an export directory, raise when another object does not match the primary object exactly once.
-            ``False`` keeps the first match.
         resolution: Resolution to record, ``"object"`` for a directory and ``"well"`` for files when omitted.
             The 1.0 names ``"cell"`` and ``"perturbation"`` are read as ``"object"`` and ``"aggregate"``.
         grouped_by: For ``"aggregate"`` resolution, the ``obs`` columns that define one row; required there.
 
     Returns:
-        An :class:`~anndata.AnnData` at the recorded resolution, with the parsed feature annotation in ``var``, the metadata in ``obs`` with pycytominer's per-well counts copied to ``Metadata_CellCount`` and ``Metadata_SiteCount``, and the schema stamp, the resolution, the channel vocabulary, this call's parameters and, from an export directory, the per-image quality table under ``uns["mantispy"]``.
+        An :class:`~anndata.AnnData` at the recorded resolution, with the parsed feature annotation in ``var``, the metadata in ``obs`` with pycytominer's per-well counts copied to ``Metadata_CellCount`` and ``Metadata_SiteCount``, and the schema stamp, the resolution, the channel vocabulary and this call's parameters under ``uns["mantispy"]``.
 
     Raises:
-        ValueError: No paths were given, `on_column_mismatch` is not one of the two accepted values, a directory was given together with other paths, the files disagree on columns while `on_column_mismatch` is ``"raise"``, a file holds a header and no rows, no column parses as a feature on `objects`, `index_columns` do not identify observations uniquely, the platemap repeats a well, or an export object cannot be linked one to one.
-        FileNotFoundError: A directory holds neither an ``Image.csv`` nor parquet parts, or has no table for `primary_object`.
+        ValueError: No paths were given, `on_column_mismatch` is not one of the two accepted values, a directory was given together with other paths, a directory is a CellProfiler export, the files disagree on columns while `on_column_mismatch` is ``"raise"``, a file holds a header and no rows, no column parses as a feature on `objects`, `index_columns` do not identify observations uniquely, or the platemap repeats a well.
+        FileNotFoundError: A directory holds no parquet parts.
         KeyError: A name in `metadata_columns` or `index_columns` is not in the data.
 
     Examples:
         >>> import mantispy as mt
         >>> wells = mt.io.read_profiles("BR00116991_augmented.csv.gz", sentinels=-999)  # doctest: +SKIP
-        >>> cells = mt.io.read_profiles("analysis/", platemap="platemap.csv")  # doctest: +SKIP
+        >>> wells = mt.io.read_profiles("profiles/", platemap="platemap.csv")  # doctest: +SKIP
     """
     if on_column_mismatch not in {"raise", "intersect"}:
         raise ValueError(f"on_column_mismatch must be 'raise' or 'intersect', got {on_column_mismatch!r}")
@@ -451,28 +435,21 @@ def read_profiles(
         raise ValueError("no profile files given")
     given = [str(path) for path in files]
 
-    image = None
     vocabulary = list(channels) if channels is not None else None
+    if exports := [path for path in files if export_prefix(path) is not None or path.suffix in SQLITE_SUFFIXES]:
+        raise ValueError(
+            f"{exports[0]} is a CellProfiler export; read it with mt.io.read_cellprofiler, which joins its object "
+            "tables into one profile"
+        )
     if any(path.is_dir() for path in files):
         if len(files) > 1:
-            raise ValueError(
-                f"got {len(files)} paths and at least one is a directory; read one directory at a time. "
-                "ExportToSpreadsheet numbers images from 1 in every directory, so stacked directories would "
-                "share ImageNumbers."
-            )
+            raise ValueError(f"got {len(files)} paths and at least one is a directory; read one directory at a time")
         directory = files[0]
         resolution = RESOLUTION_RENAMES.get(resolution, resolution) if resolution is not None else "object"
-        if export_prefix(directory) is not None:
-            frame, image, found = read_export(directory, primary_object, objects, strict_one_to_one)
-            vocabulary = vocabulary if vocabulary is not None else (found or None)
-            lengths = [len(frame)]
-        else:
-            parts = sorted(directory.glob("**/*.parquet"))
-            if not parts:
-                raise FileNotFoundError(
-                    f"{directory} holds neither an ExportToSpreadsheet Image.csv nor .parquet parts"
-                )
-            frame, lengths, files = _stack(parts, on_column_mismatch)
+        parts = sorted(directory.glob("**/*.parquet"))
+        if not parts:
+            raise FileNotFoundError(f"{directory} holds no .parquet parts")
+        frame, lengths, files = _stack(parts, on_column_mismatch)
     else:
         resolution = RESOLUTION_RENAMES.get(resolution, resolution) if resolution is not None else "well"
         frame, lengths, files = _stack(files, on_column_mismatch)
@@ -506,20 +483,10 @@ def read_profiles(
             raise ValueError(f"{list(index_columns)} do not identify observations uniquely")
         obs.index = pd.Index(index.to_numpy())
     adata.obs = obs
-    if image is not None:
-        adata.uns["mantispy"]["image_table"] = _image_table(image, obs)
-
     record_params(
         adata,
         "read_profiles",
-        {
-            "paths": given,
-            "objects": objects,
-            "channels": vocabulary,
-            "primary_object": primary_object,
-            "strict_one_to_one": strict_one_to_one,
-            "resolution": resolution,
-        },
+        {"paths": given, "objects": objects, "channels": vocabulary, "resolution": resolution},
     )
     return adata
 
