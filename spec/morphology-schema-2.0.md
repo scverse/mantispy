@@ -73,6 +73,8 @@ Requirements:
 - `X` MUST be numeric: an integer or floating-point dtype. Boolean, complex and object dtypes are not.
 - mantispy MUST NOT change the dtype of `X` it is given. Readers keep the dtype of the source; a reader that has to combine columns of different dtypes uses their common dtype, and one that has to represent a missing value in integer columns uses `float64`. A tool that rewrites `X`, a layer or an embedding writes its result in the dtype of its input, with integers written as `float64`.
 - Metadata, identifiers, counts, coordinates, labels, and result columns MUST NOT be stored in `X`.
+  One count is a feature: the number of child objects a root object holds (`<Child>_count`, written when children such as nucleoli or foci are rolled into their cell), with `var["aggregation"] == "count"`. CellProfiler's own `Children_<Child>_Count` stays out of `X`.
+- An object table read from a CellProfiler export MAY hold no feature, when its object was only located (an imported mask) or the export holds image metadata only. Such a table records its links in `uns["mantispy"]["links"]` (section 18), which marks it as one.
 - CellProfiler measurements, learned embeddings, and derived feature matrices may all live in `X`, but `var["feature_kind"]` MUST distinguish their type.
 
 Sparse input MAY be accepted by readers and functions, but the schema does not require sparse storage.
@@ -139,6 +141,8 @@ The namespace MUST contain:
 - `schema_version`
 - `resolution`
 - `grouped_by`
+
+It MAY contain `image_table` (section 8) and, on an object table read from a CellProfiler export, `links` (section 18).
 
 The schema’s stability status is stated in section 21, not stored in the object.
 
@@ -731,6 +735,16 @@ It SHOULD preserve:
 The importer MUST NOT place parent, child, neighbour object identifiers, file paths, counts, or other non-measurement numeric metadata into `X`.
 The same holds for barcode calls (`Barcode_*`), image channel indices (`Channel_*`), RelateObjects’ distances from a child to its parent (`Distance_Centroid_<Parent>`, `Distance_Minimum_<Parent>`), and RelateObjects’ per-parent means of such columns (`<Parent>_Mean_<Child>_Location_Center_X`).
 A CalculateMath result (`<Object>_Math_<name>`) is a measurement of its object.
+
+An importer that returns one table per object keeps each link to a parent object as `Metadata_<Parent>ObjectNumber` in `obs`, with 0 for an object without a parent, and records what the link means in `uns["mantispy"]["links"]`, a mapping from the parent’s name to one of:
+
+- `compartment`: one child per parent, a region of the same cell (IdentifySecondaryObjects, IdentifyTertiaryObjects, ExpandOrShrinkObjects);
+- `subset`: the child is one of the parent's objects, kept by FilterObjects or MaskObjects;
+- `aggregate`: a parent has many children (RelateObjects);
+- `carrier`: a copy of an object that holds only the link (ResizeObjects, RelateObjects' saved children, the measurement-free input of a filter).
+
+Compartments are joined one to one onto a root object, and aggregate children are summarised per root; neither decision is taken from the observed counts.
+A summary column is named `<Child>_<column>_<stat>`, keeps the child column’s parsed annotation in `var`, and adds `var["aggregation"]` (the statistic) and `var["parent"]` (the root object).
 
 ## 19. SpatialData import and export requirements
 

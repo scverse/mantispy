@@ -19,7 +19,7 @@ def _canonical(row: dict[Hashable, Any]) -> str:
     """Rebuild a name from its parsed components, in cp_measure order."""
     parts = [row["object"], row["feature_group"], row["feature"], row["channel"]]
     tokens = [str(part) for part in parts if isinstance(part, str) and part]
-    for key in ("params", "radial_bin"):
+    for key in ("params", "radial_bin", "aggregation"):
         if isinstance(row.get(key), str) and row[key]:
             tokens.append(row[key])
     return "_".join(tokens)

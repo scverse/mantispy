@@ -141,10 +141,20 @@ def test_jump_export_is_an_export_directory_that_reads() -> None:
         "Image.csv",
         "Nuclei.csv",
     }
-    # JUMP gives Cytoplasm both parents and Cells none, so Cytoplasm is the primary that joins all three.
-    adata = mt.io.read_profiles(directory, primary_object="Cytoplasm")
+    # JUMP gives Cytoplasm both parents and Cells none, so Cytoplasm is the root that joins all three.
+    adata = mt.io.read_cellprofiler(directory, root="Cytoplasm")
     assert str(adata.obs["Metadata_Well"].iloc[0]) == "J04"
     assert mt.io.validate(adata).ok
+
+    # Each row holds its cytoplasm's own cell and nucleus, matched by the links and not by object number.
+    cytoplasm = pd.read_csv(directory / "Cytoplasm.csv")
+    for obj in ("Cells", "Nuclei"):
+        table = pd.read_csv(directory / f"{obj}.csv").set_index(["ImageNumber", "ObjectNumber"])
+        keys = pd.MultiIndex.from_arrays([cytoplasm["ImageNumber"], cytoplasm[f"Parent_{obj}"]])
+        np.testing.assert_array_equal(
+            np.asarray(adata[:, f"{obj}_AreaShape_Area"].X).ravel(), table.loc[keys, "AreaShape_Area"].to_numpy()
+        )
+    assert adata.obs["Metadata_Site"].dtype == np.int64
 
 
 @pytest.mark.network

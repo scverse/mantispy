@@ -163,7 +163,12 @@ def _area_features(adata: AnnData, area_feature: str | None = None) -> pd.Index:
         if area_feature not in adata.var_names:
             raise KeyError(f"area_feature={area_feature!r} is not a var name")
         return pd.Index([area_feature])
-    named = adata.var["feature"].astype(str).eq("Area") if "feature" in adata.var else []
+    if "feature" not in adata.var:
+        return adata.var_names[[]]
+    named = adata.var["feature"].astype(str).eq("Area")
+    if "aggregation" in adata.var:
+        # The mean area of a cell's nucleoli is not the area of the cell.
+        named &= adata.var["aggregation"].isna()
     return adata.var_names[named]
 
 

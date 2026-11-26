@@ -89,6 +89,7 @@
         "resolution",
         "grouped_by",
         "image_table",
+        "links",
         "params",
         "perturbation"
     ],

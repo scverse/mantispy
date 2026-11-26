@@ -268,6 +268,8 @@ def write_cellprofiler_dir(
             "Metadata_Well": (["A01", "A01", "A02", "A02"] * n_images)[:n_images],
             "Metadata_Site": ([1, 2] * n_images)[:n_images],
             "Count_Cells": [n_cells] * n_images,
+            "Count_Cytoplasm": [n_cells] * n_images,
+            "Count_Nuclei": [n_cells] * n_images,
         }
     )
     for channel in channels:

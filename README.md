@@ -27,7 +27,9 @@ mantispy is in alpha: the API may still change.
 import mantispy as mt
 import scanpy as sc
 
-cells = mt.io.read_profiles("analysis/", platemap="platemap.csv")  # an ExportToSpreadsheet directory, or profile files
+cells = mt.io.read_cellprofiler(
+    "analysis/", platemap="platemap.csv"
+)  # a CellProfiler export; read_profiles reads profile files
 mt.pp.annotate_controls(cells)  # assumes the negative control is labeled "DMSO"; see negcon= for other names
 mt.pp.image_qc(cells)  # which fields were out of focus
 mt.pp.normalize(cells, by="Metadata_Plate", reference="negcon")  # robust MAD against the negative controls

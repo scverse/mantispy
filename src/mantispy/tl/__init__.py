@@ -1,6 +1,7 @@
 """Tools."""
 
 from mantispy.tl._aggregate import aggregate
+from mantispy.tl._aggregate_objects import aggregate_objects
 from mantispy.tl._bootstrap import bootstrap_features
 from mantispy.tl._cell_cycle import fit_cell_cycle, phase_order, project_cell_cycle
 from mantispy.tl._cluster import cluster
@@ -37,6 +38,7 @@ from mantispy.tl._transport import transport
 __all__ = [
     "aggregate",
     "aggregate_guides",
+    "aggregate_objects",
     "bootstrap_features",
     "cluster",
     "cluster_composition",

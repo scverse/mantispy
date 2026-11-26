@@ -1,38 +1,33 @@
-"""Join a CellProfiler ``ExportToSpreadsheet`` directory into one table.
+"""Read a CellProfiler export into one table per object, or into one profile.
 
-The module writes ``Image.csv`` beside one CSV per object, all behind the file-name prefix a run was configured with (``MyExpt_Image.csv``, ``MyExpt_Cells.csv``).
-Inside an object table the columns do not carry the object's name, so they are prefixed with it before the objects are joined.
+ExportToSpreadsheet writes an ``Image`` table beside one table per object, all behind the file-name prefix a run was configured with (``MyExpt_Image.csv``, ``MyExpt_Cells.csv``); ExportToDatabase writes the same tables into an SQLite database.
+Inside an object table the columns do not carry the object's name, so they are prefixed with it.
+Each object table keeps its links to other objects as ``Metadata_<Parent>ObjectNumber``, and records in ``uns["mantispy"]["links"]`` what each link means.
 """
 
 from __future__ import annotations
 
-import re
-from collections.abc import Sequence
+from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
+from anndata import AnnData
 
+from mantispy._core.features import parse_feature_names
+from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
+from mantispy._core.plate import normalize_wells
+from mantispy._core.provenance import record_params
 from mantispy._core.schema import make_image_id
+from mantispy.io._cp_export import SQLITE_SUFFIXES, RawExport, export_prefix, extract_csv, extract_sqlite
+from mantispy.io._cp_links import classify
+
+__all__ = ["export_prefix", "read_cellprofiler", "read_cellprofiler_csv", "read_cellprofiler_sqlite"]
 
 _KEYS = ("ImageNumber", "ObjectNumber")
-_FILENAME_RE = re.compile(r"^(?:Image_)?FileName_(.+)$")
-_NOT_OBJECTS = ("Image", "Experiment")
-
-
-def export_prefix(path: Path) -> str | None:
-    """The file-name prefix an ``ExportToSpreadsheet`` run used, or ``None`` if `path` is not such a directory.
-
-    Args:
-        path: The directory to look in, which such a run writes ``<prefix>Image.csv`` into.
-
-    Returns:
-        The shortest prefix a ``*Image.csv`` in `path` carries, which is ``""`` for a run configured without one, and ``None`` when `path` is not a directory or holds no such file.
-    """
-    if not path.is_dir():
-        return None
-    prefixes = sorted((file.name.removesuffix("Image.csv") for file in path.glob("*Image.csv")), key=len)
-    return prefixes[0] if prefixes else None
+#: Identity columns the Metadata module writes even when it extracted no value for them.
+_IDENTITY = ("Metadata_Plate", "Metadata_Well", "Metadata_Site")
 
 
 def infer_channels(image: pd.DataFrame, features: Sequence[str] = ()) -> list[str]:
@@ -42,7 +37,7 @@ def infer_channels(image: pd.DataFrame, features: Sequence[str] = ()) -> list[st
     The file names can differ from it: a pipeline loads ``OrigDNA``, corrects it with ``IllumDNA`` and saves ``CellOutlines``, and measures the corrected image as ``DNA``.
 
     Args:
-        image: The ``Image.csv`` table of an export.
+        image: The ``Image`` table of an export.
         features: The feature columns of the export.
 
     Returns:
@@ -55,7 +50,11 @@ def infer_channels(image: pd.DataFrame, features: Sequence[str] = ()) -> list[st
     }
     if measured:
         return sorted(measured)
-    names = {match.group(1) for match in map(_FILENAME_RE.match, image.columns) if match}
+    names = {
+        column.removeprefix("Image_").removeprefix("FileName_")
+        for column in image.columns
+        if column.removeprefix("Image_").startswith("FileName_")
+    }
     return sorted({name.removeprefix("Orig").removeprefix("Illum") for name in names if not name.endswith("Outlines")})
 
 
@@ -65,120 +64,353 @@ def _prefix(frame: pd.DataFrame, obj: str) -> pd.DataFrame:
     return frame.rename(columns={c: c if c in _KEYS or c.startswith(keep) else f"{obj}_{c}" for c in frame.columns})
 
 
-def _link_columns(
-    primary_frame: pd.DataFrame, child_frame: pd.DataFrame, primary: str, obj: str
-) -> tuple[pd.Series, pd.Series]:
-    """Locate the parent/child link, which may be on either table.
-
-    CellProfiler writes ``Cells_Parent_Nuclei`` on the primary table when cells were identified from nuclei, and ``Cytoplasm_Parent_Cells`` on the child table for a tertiary object.
-    JUMP writes neither for ``Cells`` and ``Nuclei``: only ``Cytoplasm`` has a parent of each.
-    The objects already joined onto `primary_frame` are searched for a ``<child>_Parent_<obj>`` column then, which links `obj` to the primary object through that shared child.
-    Using the wrong column would silently pair unrelated objects that share an object number.
-    """
-    on_child = f"{obj}_Parent_{primary}"
-    on_primary = f"{primary}_Parent_{obj}"
-    if on_child in child_frame.columns:
-        return primary_frame["ObjectNumber"], child_frame[on_child]
-    if on_primary in primary_frame.columns:
-        return primary_frame[on_primary], child_frame["ObjectNumber"]
-    via = [c for c in primary_frame.columns if c.endswith(f"_Parent_{obj}")]
-    if len(via) == 1:
-        return primary_frame[via[0]], child_frame["ObjectNumber"]
-    if len(via) > 1:
-        raise ValueError(
-            f"cannot link {obj!r} to {primary!r}: {via} all point to {obj!r}. Pass objects= to leave one out."
-        )
-    raise ValueError(
-        f"cannot link {obj!r} to {primary!r}: neither {on_child!r} nor {on_primary!r} is present. "
-        f"Pass objects= to read only the tables that are related, or set a different primary_object."
-    )
-
-
-def _join_child(merged: pd.DataFrame, child: pd.DataFrame, primary: str, obj: str, strict: bool) -> pd.DataFrame:
-    primary_link, child_link = _link_columns(merged, child, primary, obj)
-
-    left = pd.DataFrame({"ImageNumber": merged["ImageNumber"], "_link": primary_link.to_numpy()})
-    # Keep the child's own object number as Metadata_<obj>ObjectNumber rather than dropping it: nuclei
-    # and cytoplasm need not share the primary object's instance number (spec 5.4).
-    # Add _link via concat, not .assign: a single insert onto a wide, many-block child table trips
-    # pandas' fragmentation warning, while concat consolidates the blocks first.
-    right = pd.concat([child, pd.DataFrame({"_link": child_link.to_numpy()}, index=child.index)], axis=1).rename(
-        columns={"ObjectNumber": f"Metadata_{obj}ObjectNumber"}
-    )
-
-    counts = right.groupby(["ImageNumber", "_link"], dropna=False).size()
-    wanted = pd.MultiIndex.from_frame(left)
-    matches = counts.reindex(wanted, fill_value=0).to_numpy()
-
-    if strict and not (matches == 1).all():
-        without = int((matches == 0).sum())
-        several = int((matches > 1).sum())
-        raise ValueError(
-            f"join to {obj!r} is not one-to-one with {primary!r}: "
-            f"{without} {primary} object(s) have no {obj} and {several} have more than one. "
-            "Pass strict_one_to_one=False to keep the first match and leave the rest missing."
-        )
-
-    right = right.drop_duplicates(subset=["ImageNumber", "_link"], keep="first")
-    joined = left.merge(right, on=["ImageNumber", "_link"], how="left", validate="m:1")
-    return joined.drop(columns=["ImageNumber", "_link"])
-
-
-def read_export(
-    directory: Path, primary_object: str, objects: Sequence[str] | None, strict_one_to_one: bool
-) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
-    """Join one export directory into a table with one row per `primary_object`.
-
-    Args:
-        directory: A directory an ``ExportToSpreadsheet`` run wrote.
-        primary_object: The object one row of the table is.
-        objects: Object tables to join onto it, defaulting to every one in the directory.
-        strict_one_to_one: Raise when an object does not match the primary object exactly once.
-
-    Returns:
-        The joined table, with identifiers, image metadata and the primary object's centroid as ``Metadata_`` columns and every measurement prefixed by its object; the ``Image.csv`` table; and the channels its ``FileName_`` columns name.
-        Where an object table and ``Image.csv`` both carry the same ``Metadata_`` column, the ``Image.csv`` value is the one kept.
-
-    Raises:
-        FileNotFoundError: There is no table for `primary_object`.
-        ValueError: An object cannot be linked to the primary object, or does not match it one to one.
-    """
-    prefix = export_prefix(directory) or ""
-    found = [
-        name
-        for path in sorted(directory.glob(f"{prefix}*.csv"))
-        if (name := path.stem.removeprefix(prefix)) not in _NOT_OBJECTS
-    ]
-    if primary_object not in found:
-        raise FileNotFoundError(f"no {prefix}{primary_object}.csv in {directory}; found {found}")
-    children = [name for name in found if name != primary_object and (objects is None or name in objects)]
-
-    merged = _prefix(pd.read_csv(directory / f"{prefix}{primary_object}.csv"), primary_object)
-    n_primary = len(merged)
-    for obj in children:
-        child = _prefix(pd.read_csv(directory / f"{prefix}{obj}.csv"), obj)
-        merged = pd.concat([merged, _join_child(merged, child, primary_object, obj, strict_one_to_one)], axis=1)
-    if len(merged) != n_primary:
-        raise AssertionError("object join changed the row count")
-
-    image = pd.read_csv(directory / f"{prefix}Image.csv")
+def _image_metadata(image: pd.DataFrame) -> pd.DataFrame:
+    """``ImageNumber`` and the image metadata, ``Image_Metadata_`` read as ``Metadata_``."""
     renames = {
         c: "Metadata_" + c.removeprefix("Image_Metadata_") for c in image.columns if c.startswith("Image_Metadata_")
     }
     renames |= {c: c for c in image.columns if c.startswith("Metadata_")}
-    per_image = image[["ImageNumber", *renames]].rename(columns=renames)
+    return image[["ImageNumber", *renames]].rename(columns=renames)
+
+
+def _image_table(image: pd.DataFrame, metadata: pd.DataFrame, ids: np.ndarray) -> pd.DataFrame:
+    """Per-image quality measurements and object counts, keyed by ``Metadata_ImageID`` and carrying plate/well/site.
+
+    The plate and well columns let :func:`~mantispy.pp.image_qc` threshold per plate instead of pooling every plate together.
+    Every image is a row, including those in which no object was found.
+    """
+    measured = [c for c in image.columns if "ImageQuality" in c or c.startswith("Count_")]
+    table = image[measured].copy()
+    for column in _IDENTITY:
+        if column in metadata:
+            values = metadata[column].to_numpy()
+            table[column] = normalize_wells(pd.Series(values)).to_numpy() if column == "Metadata_Well" else values
+    table.index = pd.Index(ids.astype(str), name="Metadata_ImageID")
+    return table
+
+
+def _table(
+    frame: pd.DataFrame,
+    obj: str,
+    metadata: pd.DataFrame,
+    ids: pd.Series,
+    *,
+    measured: bool,
+    channels: list[str] | None,
+    sentinels: float | Collection[float] | None,
+) -> AnnData:
+    """One object table as an object-resolution AnnData, its links and centroid in ``obs``."""
+    from mantispy.io._profiles import from_dataframe
+
+    frame = frame.rename(
+        columns={
+            c: f"Metadata_{c.removeprefix(f'{obj}_Parent_')}ObjectNumber"
+            for c in frame.columns
+            if c.startswith(f"{obj}_Parent_")
+        }
+    )
     # ExportToSpreadsheet can also copy the image metadata into the object tables, and merging both copies would suffix them _x/_y.
-    if shared := [c for c in per_image.columns if c != "ImageNumber" and c in merged.columns]:
-        get_logger().debug("%s are on both the object tables and Image.csv; keeping the Image.csv value", shared)
-        merged = merged.drop(columns=shared)
-    table = merged.merge(per_image, on="ImageNumber", how="left", validate="m:1")
+    if shared := [c for c in metadata.columns if c != "ImageNumber" and c in frame.columns]:
+        get_logger().debug("%s are on both the %s and Image tables; keeping the Image value", shared, obj)
+        frame = frame.drop(columns=shared)
+    frame = frame.merge(metadata, on="ImageNumber", how="left", validate="m:1")
+    added = {"Metadata_ImageID": frame["ImageNumber"].map(ids).to_numpy(), "Metadata_ObjectType": obj}
     # CellProfiler 4 writes centroids under AreaShape, older versions under Location.
     for axis in ("X", "Y"):
-        for source in (f"{primary_object}_Location_Center_{axis}", f"{primary_object}_AreaShape_Center_{axis}"):
-            if source in table.columns:
-                table[f"Metadata_Center_{axis}"] = table[source].to_numpy()
+        for source in (f"{obj}_Location_Center_{axis}", f"{obj}_AreaShape_Center_{axis}"):
+            if source in frame.columns:
+                added[f"Metadata_Center_{axis}"] = frame[source].to_numpy()
                 break
-    table = table.rename(columns={key: f"Metadata_{key}" for key in _KEYS})
-    table["Metadata_ObjectType"] = primary_object
-    table["Metadata_ImageID"] = make_image_id(table)
-    return table, image, infer_channels(image, list(table.columns))
+    # Added in one concat: inserting one column at a time into a wide table trips pandas' fragmentation warning.
+    frame = pd.concat([frame, pd.DataFrame(added, index=frame.index)], axis=1)
+    frame = frame.rename(columns={key: f"Metadata_{key}" for key in _KEYS})
+    numeric = frame.select_dtypes("number").columns
+    identity = [c for c in numeric if c.startswith(f"{obj}_Barcode_")]
+    # A table of locations only, as an imported mask gives, keeps them in obs and has no feature.
+    kept = identity if measured else [c for c in numeric if not c.startswith("Metadata_")]
+    return from_dataframe(
+        frame, metadata_columns=kept, channels=channels, sentinels=sentinels, objects=(obj,), resolution="object"
+    )
+
+
+def _finish(
+    raw: RawExport,
+    *,
+    relations: Mapping[str, Mapping[str, str]] | None = None,
+    channels: Sequence[str] | None = None,
+    sentinels: float | Collection[float] | None = None,
+) -> dict[str, AnnData]:
+    """Turn the tables of an export into one stamped AnnData per object.
+
+    Raises:
+        ValueError: The export measured objects in 3D, or a link cannot be classified, or links to an object number the parent table lacks.
+    """
+    log = get_logger()
+    if raw.renamed_image_number:
+        log.info("kept the imported Metadata_ImageNumber as Metadata_ImportedImageNumber")
+    image = raw.image
+    if empty := [column for column in _IDENTITY if column in image and image[column].isna().all()]:
+        log.info("%s are empty in every image and were left out", empty)
+        image = image.drop(columns=empty)
+    for name, frame in raw.objects.items():
+        if "Location_Center_Z" in frame and (frame["Location_Center_Z"].fillna(0) != 0).any():
+            raise ValueError(f"{name} was measured in 3D (Location_Center_Z is not 0); mantispy reads 2D exports only")
+
+    tables = {name: frame for name, frame in raw.objects.items() if len(frame)}
+    if empty_tables := sorted(set(raw.objects) - set(tables)):
+        log.debug("left out %s, which hold no object", empty_tables)
+    unexported: dict[str, list[str]] = {}
+    for name, frame in tables.items():
+        if dangling := [
+            c for c in frame.columns if c.startswith("Parent_") and c.removeprefix("Parent_") not in tables
+        ]:
+            unexported[name] = [c.removeprefix("Parent_") for c in dangling]
+            tables[name] = frame.drop(columns=dangling)
+    if unexported:
+        log.info("left out the links to objects that have no table: %s", unexported)
+
+    prefixed = {name: _prefix(frame, name) for name, frame in tables.items()}
+    columns = [c for frame in prefixed.values() for c in frame.columns]
+    vocabulary = list(channels) if channels is not None else (infer_channels(image, columns) or None)
+    measured = {
+        name: bool(
+            parse_feature_names(list(frame.select_dtypes("number").columns), channels=vocabulary)["is_feature"].any()
+        )
+        for name, frame in prefixed.items()
+    }
+    links = classify(tables, measured, raw.pipeline, image, relations)
+
+    metadata = _image_metadata(image)
+    ids = make_image_id(metadata.rename(columns={"ImageNumber": "Metadata_ImageNumber"}))
+    image_table = _image_table(image, metadata, ids)
+    by_number = pd.Series(ids, index=metadata["ImageNumber"].to_numpy())
+    result = {}
+    for name, frame in prefixed.items():
+        adata = _table(
+            frame, name, metadata, by_number, measured=measured[name], channels=vocabulary, sentinels=sentinels
+        )
+        adata.uns["mantispy"]["links"] = dict(links[name])
+        adata.uns["mantispy"]["image_table"] = image_table.copy()
+        result[name] = adata
+    return result
+
+
+def _kind(path: Path) -> str:
+    """``"csv"`` or ``"sqlite"``: which export `path` holds.
+
+    Raises:
+        NotImplementedError: `path` is an ExportToSpatialData store or a Cell Painting Gallery plate.
+        FileNotFoundError: `path` is neither.
+    """
+    if export_prefix(path) is not None:
+        return "csv"
+    if path.is_file():
+        with path.open("rb") as handle:
+            if handle.read(16) == b"SQLite format 3\x00":
+                return "sqlite"
+    if path.is_dir() and len([p for p in path.iterdir() if p.suffix in SQLITE_SUFFIXES]) == 1:
+        return "sqlite"
+    if path.suffix == ".zarr" or (path / "tables").is_dir() or (path / "images").is_dir():
+        raise NotImplementedError(
+            f"{path} looks like an ExportToSpatialData store or a Cell Painting Gallery plate; read it with mt.io.read_plate"
+        )
+    found = sorted(p.name for p in path.iterdir())[:10] if path.is_dir() else []
+    raise FileNotFoundError(
+        f"{path} is not a CellProfiler export: no <prefix>Image.csv or Image.txt, and no SQLite database"
+        + (f"; it holds {found}" if found else "")
+    )
+
+
+def _database(path: Path) -> Path:
+    if path.is_file():
+        return path
+    (database,) = (p for p in path.iterdir() if p.suffix in SQLITE_SUFFIXES)
+    return database
+
+
+def read_cellprofiler_csv(
+    path: str | Path,
+    *,
+    files: Mapping[str, str | Path] | None = None,
+    relations: Mapping[str, Mapping[str, str]] | None = None,
+) -> dict[str, AnnData]:
+    """Read a directory an ``ExportToSpreadsheet`` run wrote into one table per object.
+
+    The objects are those the ``Image`` table counts (``Count_<Object>``), so the relationship and experiment tables are not read as objects.
+    A file holding every object in one table, which ExportToSpreadsheet writes with two header rows, is split into its objects.
+    Tab-delimited ``.txt`` exports read like ``.csv`` ones.
+
+    Each table is one row per object, stamped at object resolution, with the object's measurements in ``X`` and, in ``obs``, ``Metadata_ImageID``, ``Metadata_ObjectNumber``, the centroid as ``Metadata_Center_X``/``Metadata_Center_Y`` and the number of each parent object as ``Metadata_<Parent>ObjectNumber``.
+    No row is left out: an object without a parent keeps a parent number of 0.
+    ``uns["mantispy"]["links"]`` says what each link means, ``"compartment"``, ``"subset"``, ``"aggregate"`` or ``"carrier"``, as the module that made the object decides it: the pipeline text the export stores is read for it.
+    ``uns["mantispy"]["image_table"]`` holds the image quality measurements and the object counts of every image.
+    A table that holds only locations, as an imported mask gives, has no feature and keeps its locations in ``obs``.
+    An export of image measurements only, as a quality-control pipeline writes, gives one ``"Image"`` table of one row per image.
+
+    Args:
+        path: The export directory.
+        files: Object tables under custom file names, by object name, for example ``{"Spots": "spots.csv"}``.
+        relations: What a link means, by child and then by parent, for example ``{"Nucleoli": {"Nuclei": "aggregate"}}``.
+            Needed for links the pipeline does not explain, and overrides it.
+
+    Returns:
+        One AnnData per object, keyed by the object's name.
+
+    Raises:
+        FileNotFoundError: `path` holds no ``Image.csv`` or ``Image.txt``.
+        ValueError: A link cannot be classified, a table repeats a column with different values, or the export was measured in 3D.
+
+    Examples:
+        >>> import mantispy as mt
+        >>> objects = mt.io.read_cellprofiler_csv("analysis/")  # doctest: +SKIP
+        >>> objects["Nucleoli"].uns["mantispy"]["links"]  # doctest: +SKIP
+        {'Nuclei': 'aggregate'}
+    """
+    return _read_tables(Path(path), "csv", files=files, relations=relations)
+
+
+def read_cellprofiler_sqlite(
+    path: str | Path, *, relations: Mapping[str, Mapping[str, str]] | None = None
+) -> dict[str, AnnData]:
+    """Read an SQLite database an ``ExportToDatabase`` run wrote into one table per object.
+
+    The run may have written one table per object, or one ``Per_Object`` table that lines up every object by its number, which is split into the objects; a ``Per_Object`` view is not read, because it joins the objects on their number and loses those without a partner.
+    A table-name prefix is found from the ``Per_Image`` table.
+    Column names ExportToDatabase shortened to fit its limit are restored where exactly one full name shortens to them.
+    The tables are then the same as :func:`read_cellprofiler_csv` gives for the same run.
+
+    Args:
+        path: The database, or a directory holding one.
+        relations: What a link means, by child and then by parent, as for :func:`read_cellprofiler_csv`.
+
+    Returns:
+        One AnnData per object, keyed by the object's name.
+
+    Raises:
+        FileNotFoundError: The database holds no ``Per_Image`` table.
+        ValueError: A link cannot be classified, or the export was measured in 3D.
+    """
+    return _read_tables(Path(path), "sqlite", relations=relations)
+
+
+def _read_tables(
+    path: Path,
+    kind: str,
+    *,
+    files: Mapping[str, str | Path] | None = None,
+    relations: Mapping[str, Mapping[str, str]] | None = None,
+    channels: Sequence[str] | None = None,
+    sentinels: float | Collection[float] | None = None,
+) -> dict[str, AnnData]:
+    raw = extract_csv(path, files) if kind == "csv" else extract_sqlite(_database(path))
+    if not raw.objects:
+        return {"Image": _image_only(raw, channels)}
+    return _finish(raw, relations=relations, channels=channels, sentinels=sentinels)
+
+
+def _image_only(raw: RawExport, channels: Sequence[str] | None) -> AnnData:
+    """An export of image measurements only, as one row per image stamped as ``tl.aggregate(by="Metadata_ImageID")`` stamps it."""
+    from mantispy.io._profiles import from_dataframe
+
+    image = raw.image
+    if empty := [column for column in _IDENTITY if column in image and image[column].isna().all()]:
+        image = image.drop(columns=empty)
+    metadata = _image_metadata(image)
+    ids = make_image_id(metadata.rename(columns={"ImageNumber": "Metadata_ImageNumber"}))
+    frame = _prefix(image.drop(columns=[c for c in metadata.columns if c != "ImageNumber"]), "Image")
+    identity = metadata.drop(columns="ImageNumber").assign(Metadata_ImageID=ids)
+    frame = pd.concat([frame, identity], axis=1).rename(columns={"ImageNumber": "Metadata_ImageNumber"})
+    numeric = [c for c in frame.select_dtypes("number").columns if not c.startswith("Metadata_")]
+    vocabulary = list(channels) if channels is not None else (infer_channels(image) or None)
+    features = parse_feature_names(numeric, channels=vocabulary)["is_feature"]
+    adata = from_dataframe(
+        frame,
+        metadata_columns=numeric if not features.any() else (),
+        channels=vocabulary,
+        objects=("Image",),
+        resolution="aggregate",
+        grouped_by=["Metadata_ImageID"],
+    )
+    adata.obs_names = as_frame(adata.obs)["Metadata_ImageID"].astype(str).to_list()
+    adata.uns["mantispy"]["links"] = {}
+    adata.uns["mantispy"]["image_table"] = _image_table(image, metadata, ids)
+    return adata
+
+
+def read_cellprofiler(
+    path: str | Path,
+    *,
+    root: str = "Cells",
+    aggregate: str | Sequence[str] | None = None,
+    platemap: str | Path | pd.DataFrame | None = None,
+    index_columns: Sequence[str] | None = None,
+    channels: Sequence[str] | None = None,
+    sentinels: float | Collection[float] | None = None,
+    relations: Mapping[str, Mapping[str, str]] | None = None,
+    files: Mapping[str, str | Path] | None = None,
+    strict: bool = False,
+) -> AnnData:
+    """Read a CellProfiler export into one profile, one row per `root` object.
+
+    `path` is a directory an ``ExportToSpreadsheet`` run wrote or an SQLite database an ``ExportToDatabase`` run wrote; :func:`read_cellprofiler_csv` and :func:`read_cellprofiler_sqlite` describe how each is read.
+    The compartments of `root` (the objects one to one with it, such as the cytoplasm and nucleus of a cell) and its ancestors are joined onto it.
+    Objects of which a root has several, such as the nucleoli of a nucleus, are rolled into it by :func:`~mantispy.tl.aggregate_objects` when `aggregate` is given, and otherwise left out with one log line naming them.
+    Objects not linked to `root` at all, such as the objects of an imported mask, are left out with one log line; their counts per image stay in ``uns["mantispy"]["image_table"]``.
+
+    Args:
+        path: The export directory or database.
+        root: The object one row of the profile is.
+        aggregate: The statistics to roll the objects a root has several of into it with, from ``"count"``, ``"mean"``, ``"median"`` and ``"std"``.
+        platemap: A table, or a path to one, with a ``Metadata_Well`` column and optionally ``Metadata_Plate``, left-joined onto ``obs``.
+        index_columns: ``obs`` columns joined with ``:`` into the observation index.
+            Without them the index is the row number.
+        channels: Channel vocabulary passed to the feature-name parser.
+            Read from the image table's ``FileName_`` columns and the intensity features when omitted.
+        sentinels: Values in the feature matrix that stand for missing, replaced with NaN before any statistic is taken.
+        relations: What a link means, by child and then by parent, as for :func:`read_cellprofiler_csv`.
+        files: Object tables under custom file names, by object name, for a spreadsheet export.
+        strict: Raise when a compartment row has no root or a root has no compartment, instead of logging the count.
+            A compartment row without a root is otherwise left out, and a root without a compartment gets NaN for its features.
+
+    Returns:
+        An object-resolution :class:`~anndata.AnnData` with `root`'s centroid as ``Metadata_Center_X``/``Metadata_Center_Y``, the number of each joined object as ``Metadata_<Object>ObjectNumber``, the image table under ``uns["mantispy"]["image_table"]`` and this call's parameters.
+
+    Raises:
+        FileNotFoundError: `path` is not a CellProfiler export, or there is no table for `root`.
+        NotImplementedError: `path` is an ExportToSpatialData store or a Cell Painting Gallery plate, which :func:`~mantispy.io.read_plate` reads.
+        ValueError: A link cannot be classified, a compartment is not one to one with `root`, `strict` is set and an object has no partner, or `aggregate` names an unknown statistic.
+
+    Examples:
+        >>> import mantispy as mt
+        >>> cells = mt.io.read_cellprofiler("analysis/", platemap="platemap.csv")  # doctest: +SKIP
+        >>> cells = mt.io.read_cellprofiler("analysis/", aggregate=("count", "mean"))  # doctest: +SKIP
+    """
+    from mantispy.io._profiles import _join_platemap
+    from mantispy.tl._aggregate_objects import combine, statistics
+
+    path = Path(path)
+    func = statistics(aggregate) if aggregate is not None else None
+    tables = _read_tables(path, _kind(path), files=files, relations=relations, channels=channels, sentinels=sentinels)
+    if list(tables) == ["Image"]:
+        adata = tables["Image"]
+    else:
+        if root not in tables:
+            raise FileNotFoundError(f"no table for {root!r} in {path}; found {sorted(tables)}")
+        adata = combine(tables, root, func=func, strict=strict)
+    obs = as_frame(adata.obs)
+    if platemap is not None:
+        obs = _join_platemap(obs, platemap)
+    if index_columns:
+        if missing := [column for column in index_columns if column not in obs.columns]:
+            raise KeyError(f"index columns not in metadata: {missing}")
+        index = obs[list(index_columns)].astype(str).agg(":".join, axis=1)
+        if index.duplicated().any():
+            raise ValueError(f"{list(index_columns)} do not identify observations uniquely")
+        obs.index = pd.Index(index.to_numpy())
+    adata.obs = obs
+    record_params(
+        adata,
+        "read_cellprofiler",
+        {"path": str(path), "root": root, "aggregate": func, "channels": channels, "strict": strict},
+    )
+    return adata

@@ -14,6 +14,7 @@ Aggregate profiles and ask what the perturbations did.
    :toctree: generated
 
    tl.aggregate
+   tl.aggregate_objects
    tl.consensus
 ```
 
