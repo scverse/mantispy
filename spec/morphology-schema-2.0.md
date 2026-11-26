@@ -746,6 +746,17 @@ An importer that returns one table per object keeps each link to a parent object
 Compartments are joined one to one onto a root object, and aggregate children are summarised per root; neither decision is taken from the observed counts.
 A summary column is named `<Child>_<column>_<stat>`, keeps the child column’s parsed annotation in `var`, and adds `var["aggregation"]` (the statistic) and `var["parent"]` (the root object).
 
+A child column that names a value instead of measuring one (text, and the barcode calls `Barcode_*`, including the integer `Barcode_MatchedTo_ID`) is summarised in `obs`, never in `X`, per root:
+
+- `<Child>_<column>_majority`: the most common value, as text; a tie goes to the smallest value;
+- `<Child>_<column>_fraction`: the share of the root’s children holding it, `float64`;
+- `<Child>_<column>_n_distinct`: the number of distinct values, `int64`, 0 for a root without children;
+- `<Child>_<column>_tie`: whether another value is as common, nullable boolean, missing for a root without children.
+
+Missing values are not counted. An optional `<Child>_<column>_majority_score` holds the mean of a chosen score column over the children holding the most common value.
+
+An importer that reads several exports into one table keeps `Metadata_ImageID` unique across them (section 5.2): when the exports carry no plate, well or site metadata, it puts the export’s directory name into the identifier, and it MUST refuse two exports that hold the same image.
+
 ## 19. SpatialData import and export requirements
 
 A CellProfiler-to-SpatialData path MUST produce a mantispy-compatible AnnData table and valid SpatialData table linkage.

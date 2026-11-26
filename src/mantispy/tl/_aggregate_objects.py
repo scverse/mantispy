@@ -17,6 +17,7 @@ from mantispy._core.features import _TEXT_COLUMNS, annotation
 from mantispy._core.frames import as_frame, categorize_metadata
 from mantispy._core.provenance import record_params
 from mantispy._core.schema import stamp
+from mantispy.io._cellprofiler import IDENTITY_GROUPS
 from mantispy.io._cp_links import Omissions, carriers, link_edges
 
 #: The statistics a child's features are rolled into its root with; ``count`` is the number of children.
@@ -64,6 +65,7 @@ def aggregate_objects(
     root: str = "Cells",
     func: str | Sequence[str] = STATISTICS,
     relations: Mapping[str, Mapping[str, str]] | None = None,
+    score: str | None = None,
 ) -> AnnData:
     """Roll the per-object tables of an export into one table, one row per `root` object.
 
@@ -76,19 +78,25 @@ def aggregate_objects(
     ``std`` is the sample standard deviation (``ddof=1``), NaN for a single child, and ``median`` averages the two middle values of an even count.
     Children that link to no root (a parent number of 0) are left out before the statistics, with one warning giving their number for every child.
 
+    A child's columns that name a value instead of measuring one, its text columns and the barcode calls (``Barcode_*``) of a pooled screen, are summarised in ``obs`` by their most common value per root.
+    Missing values are not counted, and a tie goes to the smallest value.
+
     Args:
         objects: The per-object tables, keyed by object name, or a SpatialData holding them as its tables.
         root: The object one row of the result is.
         func: The statistics to take, from ``"count"``, ``"mean"``, ``"median"`` and ``"std"``.
         relations: Link kinds that override the recorded ones, by child and then by parent, for example ``{"Nucleoli": {"Nuclei": "aggregate"}}``.
+        score: A numeric ``obs`` column of a child, such as ``"Foci_Barcode_MatchedTo_Score"``, averaged over the children that hold the most common value of each of that child's summarised columns.
 
     Returns:
         An object-resolution :class:`~anndata.AnnData` with the root's features, those of the joined objects, and per child the column ``<Child>_count`` and ``<Child>_<column>_<stat>`` for each of its features and statistics.
         ``var`` keeps the parsed annotation of the child's column and adds ``aggregation``, the statistic, and ``parent``, the root.
         CellProfiler's own ``<Parent>_Mean_<Child>_`` columns are left out for each child rolled up here.
-        ``obs`` is the root's, with the number of each joined object as ``Metadata_<Object>ObjectNumber`` and without the bookkeeping :func:`~mantispy.io.read_cellprofiler` leaves out.
+        ``obs`` is the root's, with the number of each joined object as ``Metadata_<Object>ObjectNumber`` and without the bookkeeping :func:`~mantispy.io.read_cellprofiler` leaves out, and per summarised column ``<column>_majority`` (the most common value, as text), ``<column>_fraction`` (the share of the root's children that hold it), ``<column>_n_distinct`` (the number of distinct values, 0 without a child) and ``<column>_tie`` (whether another value is as common, missing without a child).
+        With `score`, ``<column>_majority_score`` holds its mean over the children that hold the most common value.
 
     Raises:
+        KeyError: `score` is not a column of a child rolled into `root`.
         ValueError: There is no table for `root`, `func` names an unknown statistic, a compartment is not one to one with its parent, a child links to an object number its parent table lacks, or two result columns share a name.
 
     Examples:
@@ -97,8 +105,12 @@ def aggregate_objects(
         >>> cells = mt.tl.aggregate_objects(objects, root="Cells", func=("count", "mean"))  # doctest: +SKIP
     """
     tables = dict(objects.tables) if hasattr(objects, "tables") else dict(objects)
-    adata = combine(tables, root, func=statistics(func), relations=relations)
-    record_params(adata, "aggregate_objects", {"root": root, "func": list(statistics(func)), "relations": relations})
+    adata = combine(tables, root, func=statistics(func), relations=relations, score=score)
+    record_params(
+        adata,
+        "aggregate_objects",
+        {"root": root, "func": list(statistics(func)), "relations": relations, "score": score},
+    )
     return adata
 
 
@@ -214,6 +226,80 @@ def _gather_column(column: pd.Series, rows: np.ndarray) -> np.ndarray:
     return taken
 
 
+def categorical_annotation(var: pd.DataFrame, variables: Sequence[pd.DataFrame]) -> pd.DataFrame:
+    """`var`, stacked from `variables`, with each text annotation one categorical holding the categories of all of them.
+
+    Concatenating categoricals with different categories degrades them to object.
+    """
+    for column in (c for c in [*_TEXT_COLUMNS, "aggregation", "parent"] if c in var):
+        known = [
+            v[column].cat.categories
+            for v in variables
+            if column in v and isinstance(v[column].dtype, pd.CategoricalDtype)
+        ]
+        categories = sorted(set().union(*known, var[column].dropna().unique()))
+        var[column] = pd.Categorical(var[column], categories=categories)
+    return var
+
+
+def _identity_columns(obs: pd.DataFrame, name: str) -> list[str]:
+    """The columns of a child's ``obs`` that name a value rather than measure one: text, and integer identity groups."""
+    identity = tuple(f"{name}_{group}_" for group in IDENTITY_GROUPS)
+    return [
+        column
+        for column in obs.columns
+        if column.startswith(f"{name}_")
+        and (
+            not pd.api.types.is_numeric_dtype(obs[column])
+            or (pd.api.types.is_integer_dtype(obs[column]) and column.startswith(identity))
+        )
+    ]
+
+
+def _majority(
+    values: pd.Series, codes: np.ndarray, n_root: int, score: np.ndarray | None = None
+) -> dict[str, np.ndarray | pd.api.extensions.ExtensionArray]:
+    """Per root, the most common value of the children, its fraction, the number of distinct values and whether it ties.
+
+    Missing values are not counted; a tie goes to the smallest value.
+    With `score`, also the mean score of the children that hold the winning value.
+    """
+    present = values.notna().to_numpy()
+    codes = codes[present]
+    value_codes, uniques = pd.factorize(values[present], sort=True)
+    n_values = max(len(uniques), 1)
+    pairs, counts = np.unique(codes.astype(np.int64) * n_values + value_codes, return_counts=True)
+    roots, kinds = pairs // n_values, pairs % n_values
+    n_distinct = np.bincount(roots, minlength=n_root).astype(np.int64)
+    total = np.bincount(roots, weights=counts, minlength=n_root)
+    # Most children first and, among equal counts, the smallest value, so the first row of each root is its winner.
+    order = np.lexsort((kinds, -counts, roots))
+    first = order[np.r_[True, roots[order][1:] != roots[order][:-1]]] if len(order) else order
+    winner = np.full(n_root, -1)
+    winner[roots[first]] = kinds[first]
+    top = np.zeros(n_root)
+    top[roots[first]] = counts[first]
+    has = n_distinct > 0
+    tie = np.bincount(roots[counts == top[roots]], minlength=n_root) > 1
+    labels = np.asarray(uniques.astype(str), dtype=object)
+    majority = np.full(n_root, None, dtype=object)
+    majority[has] = labels[winner[has]]
+    ties = pd.array(tie, dtype="boolean")
+    ties[~has] = pd.NA
+    result: dict[str, np.ndarray | pd.api.extensions.ExtensionArray] = {
+        "majority": majority,
+        "fraction": np.divide(top, total, out=np.full(n_root, np.nan), where=has),
+        "n_distinct": n_distinct,
+        "tie": ties,
+    }
+    if score is not None:
+        held = (value_codes == winner[codes]) & ~np.isnan(score[present])
+        sums = np.bincount(codes[held], weights=score[present][held], minlength=n_root)
+        held_counts = np.bincount(codes[held], minlength=n_root)
+        result["majority_score"] = np.divide(sums, held_counts, out=np.full(n_root, np.nan), where=held_counts > 0)
+    return result
+
+
 def combine(
     tables: Mapping[str, AnnData],
     root: str,
@@ -222,6 +308,7 @@ def combine(
     relations: Mapping[str, Mapping[str, str]] | None = None,
     strict: bool = False,
     omissions: Omissions | None = None,
+    score: str | None = None,
 ) -> AnnData:
     """One table per `root` object: compartments and ancestors joined, and children rolled up with `func` when it is given.
 
@@ -276,13 +363,21 @@ def combine(
         for column in (c for c in table_obs.columns if c.startswith(f"{name}_")):
             obs[column] = _gather_column(table_obs[column], rows)
 
+    if score is not None and not any(score in tables[name].obs for name in children):
+        raise KeyError(f"score {score!r} is not a column of the objects rolled into {root}: {children}")
     rolled = [*joined, root]
+    named: dict[str, Any] = {}
     for name in children:
         _, rows, _ = state[name]
         table = tables[name]
         linked = rows >= 0
         report.add_orphans(name, int((~linked).sum()), table.n_obs)
         codes = rows[linked]
+        child_obs = as_frame(table.obs).loc[linked]
+        scores = child_obs[score].to_numpy(dtype=np.float64) if score in child_obs else None
+        for column in _identity_columns(child_obs, name):
+            for key, values in _majority(child_obs[column], codes, n_root, scores).items():
+                named[f"{column}_{key}"] = values
         if "count" in stats:
             blocks.append(group_counts(codes, n_root).astype(np.float64)[:, None])
             variables.append(
@@ -312,18 +407,11 @@ def combine(
                 variables[position] = variables[position].loc[keep]
                 blocks[position] = blocks[position][:, keep]
 
-    var = pd.concat(variables)
-    for column in (c for c in [*_TEXT_COLUMNS, "aggregation", "parent"] if c in var):
-        # Concatenating categoricals with different categories degrades them to object; keep every table's categories.
-        known = [
-            v[column].cat.categories
-            for v in variables
-            if column in v and isinstance(v[column].dtype, pd.CategoricalDtype)
-        ]
-        categories = sorted(set().union(*known, var[column].dropna().unique()))
-        var[column] = pd.Categorical(var[column], categories=categories)
+    var = categorical_annotation(pd.concat(variables), variables)
     if var.index.has_duplicates:
         raise ValueError(f"the rolled-up columns repeat names: {sorted(set(var.index[var.index.duplicated()]))[:5]}")
+    if named:
+        obs = pd.concat([obs, pd.DataFrame(named, index=obs.index)], axis=1)
     X = np.hstack(blocks) if blocks else np.empty((n_root, 0))
     result = ad.AnnData(X=X, obs=categorize_metadata(profile_obs(obs, root)), var=var)
     stamp(result, resolution="object")

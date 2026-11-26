@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -33,8 +34,8 @@ FILE_PREFIXES = ("FileName_", "PathName_", "URL_")
 def _is_file_column(column: str) -> bool:
     """Whether `column` locates an image file, as CellProfiler names it or as LoadData read it back as metadata."""
     return column.removeprefix("Metadata_Image_").startswith(FILE_PREFIXES)
-
-
+#: Feature groups that identify an object rather than measure it, kept in ``obs`` of its table even where numeric.
+IDENTITY_GROUPS = ("Barcode",)
 #: Identity columns the Metadata module writes even when it extracted no value for them.
 _IDENTITY = ("Metadata_Plate", "Metadata_Well", "Metadata_Site")
 
@@ -99,6 +100,14 @@ def _image_metadata(image: pd.DataFrame) -> pd.DataFrame:
     return image[["ImageNumber", *renames]].rename(columns=renames)
 
 
+def _image_ids(metadata: pd.DataFrame, run: str | None) -> np.ndarray:
+    """``Metadata_ImageID`` of each image, with `run` in it when no plate, well or site tells the runs of several exports apart."""
+    ids = make_image_id(metadata.rename(columns={"ImageNumber": "Metadata_ImageNumber"}))
+    if run is not None and not any(column in metadata for column in _IDENTITY):
+        ids = np.array([f"{run}|{image_id}" for image_id in ids], dtype=object)
+    return ids
+
+
 def _image_table(image: pd.DataFrame, metadata: pd.DataFrame, ids: np.ndarray) -> pd.DataFrame:
     """Per-image quality measurements, object counts and file locations, keyed by ``Metadata_ImageID`` and carrying plate/well/site.
 
@@ -154,7 +163,7 @@ def _table(
     frame = pd.concat([frame, pd.DataFrame(added, index=frame.index)], axis=1)
     frame = frame.rename(columns={key: f"Metadata_{key}" for key in _KEYS})
     numeric = frame.select_dtypes("number").columns
-    identity = [c for c in numeric if c.startswith(f"{obj}_Barcode_")]
+    identity = [c for c in numeric if c.startswith(tuple(f"{obj}_{group}_" for group in IDENTITY_GROUPS))]
     # A table of locations only, as an imported mask gives, keeps them in obs and has no feature.
     kept = identity if measured else [c for c in numeric if not c.startswith("Metadata_")]
     return from_dataframe(
@@ -170,6 +179,7 @@ def _finish(
     sentinels: float | Collection[float] | None = None,
     root: str | None = None,
     omissions: Omissions | None = None,
+    run: str | None = None,
 ) -> dict[str, AnnData]:
     """Turn the tables of an export into one stamped AnnData per object.
 
@@ -231,7 +241,7 @@ def _finish(
     hidden = set(carriers(links, measured))
 
     metadata = _image_metadata(image)
-    ids = make_image_id(metadata.rename(columns={"ImageNumber": "Metadata_ImageNumber"}))
+    ids = _image_ids(metadata, run)
     image_table = _image_table(image, metadata, ids)
     by_number = pd.Series(ids, index=metadata["ImageNumber"].to_numpy())
     result = {}
@@ -358,14 +368,18 @@ def _read_tables(
     channels: Sequence[str] | None = None,
     sentinels: float | Collection[float] | None = None,
     root: str | None = None,
+    omissions: Omissions | None = None,
+    run: str | None = None,
 ) -> dict[str, AnnData]:
     raw = extract_csv(path, files) if kind == "csv" else extract_sqlite(_database(path))
     if not raw.objects:
-        return {"Image": _image_only(raw, channels)}
-    return _finish(raw, relations=relations, channels=channels, sentinels=sentinels, root=root)
+        return {"Image": _image_only(raw, channels, run)}
+    return _finish(
+        raw, relations=relations, channels=channels, sentinels=sentinels, root=root, omissions=omissions, run=run
+    )
 
 
-def _image_only(raw: RawExport, channels: Sequence[str] | None) -> AnnData:
+def _image_only(raw: RawExport, channels: Sequence[str] | None, run: str | None = None) -> AnnData:
     """An export of image measurements only, as one row per image stamped as ``tl.aggregate(by="Metadata_ImageID")`` stamps it."""
     from mantispy.io._profiles import from_dataframe
 
@@ -373,7 +387,7 @@ def _image_only(raw: RawExport, channels: Sequence[str] | None) -> AnnData:
     if empty := [column for column in _IDENTITY if column in image and image[column].isna().all()]:
         image = image.drop(columns=empty)
     metadata = _image_metadata(image)
-    ids = make_image_id(metadata.rename(columns={"ImageNumber": "Metadata_ImageNumber"}))
+    ids = _image_ids(metadata, run)
     dropped = [c for c in image.columns if _is_file_column(c) or (c in metadata and c != "ImageNumber")]
     frame = _prefix(image.drop(columns=dropped), "Image")
     identity = metadata.drop(columns="ImageNumber").assign(Metadata_ImageID=ids)
@@ -408,73 +422,25 @@ def _warn_featureless(root: str | None, kind: str) -> None:
         )
 
 
-def read_cellprofiler(
-    path: str | Path,
+def _profile(
+    tables: dict[str, AnnData],
     *,
-    root: str = "Cells",
-    aggregate: str | Sequence[str] | None = None,
-    platemap: str | Path | pd.DataFrame | None = None,
-    index_columns: Sequence[str] | None = None,
-    channels: Sequence[str] | None = None,
-    sentinels: float | Collection[float] | None = None,
-    relations: Mapping[str, Mapping[str, str]] | None = None,
-    files: Mapping[str, str | Path] | None = None,
-    strict: bool = False,
+    root: str,
+    func: Sequence[str] | None,
+    strict: bool,
+    platemap: str | Path | pd.DataFrame | None,
+    index_columns: Sequence[str] | None,
+    omissions: Omissions | None = None,
 ) -> AnnData:
-    """Read a CellProfiler export into one profile, one row per `root` object.
-
-    `path` is a directory an ``ExportToSpreadsheet`` run wrote or an SQLite database an ``ExportToDatabase`` run wrote; :func:`read_cellprofiler_csv` and :func:`read_cellprofiler_sqlite` describe how each is read.
-    The compartments of `root` (the objects one to one with it, such as the cytoplasm and nucleus of a cell) and its ancestors are joined onto it.
-    Objects of which a root has several, such as the nucleoli of a nucleus, are rolled into it by :func:`~mantispy.tl.aggregate_objects` when `aggregate` is given, and otherwise left out with one warning naming them.
-    Objects not linked to `root` at all, such as the objects of an imported mask, are left out with one warning; their counts per image stay in ``uns["mantispy"]["image_table"]``.
-    So is an object with a link nothing explains, unless it is `root`, whose own links must be explained.
-    A profile without a feature, as an export of locations or of image metadata only gives, is returned with a warning.
-
-    Args:
-        path: The export directory or database.
-        root: The object one row of the profile is.
-        aggregate: The statistics to roll the objects a root has several of into it with, from ``"count"``, ``"mean"``, ``"median"`` and ``"std"``.
-        platemap: A table, or a path to one, with a ``Metadata_Well`` column and optionally ``Metadata_Plate``, left-joined onto ``obs``.
-        index_columns: ``obs`` columns joined with ``:`` into the observation index.
-            Without them the index is the row number.
-        channels: Channel vocabulary passed to the feature-name parser.
-            Read from the image table's ``FileName_`` columns and the intensity features when omitted.
-        sentinels: Values in the feature matrix that stand for missing, replaced with NaN before any statistic is taken.
-        relations: What a link means, by child and then by parent, as for :func:`read_cellprofiler_csv`.
-        files: Object tables under custom file names, by object name, for a spreadsheet export.
-        strict: Raise when a compartment row has no root or a root has no compartment, instead of warning with the count.
-            A compartment row without a root is otherwise left out, and a root without a compartment gets NaN for its features.
-
-    Returns:
-        An object-resolution :class:`~anndata.AnnData` with `root`'s centroid as ``Metadata_Center_X``/``Metadata_Center_Y``, the number of each joined object as ``Metadata_<Object>ObjectNumber``, the image table under ``uns["mantispy"]["image_table"]`` and this call's parameters.
-        CellProfiler's bookkeeping stays in the per-object tables and out of ``obs``: where in a file each image sat (``Metadata_FileLocation``, ``Metadata_Frame``, ``Metadata_Series``, ``Metadata_ChannelNumber``) and each object's own child counts, number, parent links and Z centroid.
-
-    Raises:
-        FileNotFoundError: `path` is not a CellProfiler export.
-        NotImplementedError: `path` is an ExportToSpatialData store or a Cell Painting Gallery plate, which :func:`~mantispy.io.read_plate` reads.
-        ValueError: There is no table for `root`, a link of `root` cannot be classified, a compartment is not one to one with `root`, `strict` is set and an object has no partner, or `aggregate` names an unknown statistic.
-
-    Examples:
-        >>> import mantispy as mt
-        >>> cells = mt.io.read_cellprofiler("analysis/", platemap="platemap.csv")  # doctest: +SKIP
-        >>> cells = mt.io.read_cellprofiler("analysis/", aggregate=("count", "mean"))  # doctest: +SKIP
-    """
+    """One export's tables as one profile: the image-only table without bookkeeping, or every root with its objects joined and rolled up."""
     from mantispy.io._profiles import _join_platemap
-    from mantispy.tl._aggregate_objects import combine, profile_obs, statistics
+    from mantispy.tl._aggregate_objects import combine, profile_obs
 
-    path = Path(path)
-    func = statistics(aggregate) if aggregate is not None else None
-    kind = _kind(path)
-    tables = _read_tables(
-        path, kind, files=files, relations=relations, channels=channels, sentinels=sentinels, root=root
-    )
     if list(tables) == ["Image"]:
         adata = tables["Image"]
         adata.obs = profile_obs(as_frame(adata.obs), "Image")
     else:
-        adata = combine(tables, root, func=func, strict=strict)
-    if not adata.n_vars:
-        _warn_featureless(root if list(tables) != ["Image"] else None, kind)
+        adata = combine(tables, root, func=func, strict=strict, omissions=omissions)
     obs = as_frame(adata.obs)
     if platemap is not None:
         obs = _join_platemap(obs, platemap)
@@ -486,9 +452,99 @@ def read_cellprofiler(
             raise ValueError(f"{list(index_columns)} do not identify observations uniquely")
         obs.index = pd.Index(index.to_numpy())
     adata.obs = obs
-    record_params(
-        adata,
-        "read_cellprofiler",
-        {"path": str(path), "root": root, "aggregate": func, "channels": channels, "strict": strict},
-    )
     return adata
+
+
+def read_cellprofiler(
+    path: str | Path | Sequence[str | Path],
+    *,
+    root: str = "Cells",
+    aggregate: str | Sequence[str] | None = None,
+    platemap: str | Path | pd.DataFrame | None = None,
+    index_columns: Sequence[str] | None = None,
+    channels: Sequence[str] | None = None,
+    sentinels: float | Collection[float] | None = None,
+    relations: Mapping[str, Mapping[str, str]] | None = None,
+    files: Mapping[str, str | Path] | None = None,
+    strict: bool = False,
+    skip_non_exports: bool = False,
+    out: str | Path | None = None,
+) -> AnnData:
+    """Read a CellProfiler export, or several, into one profile, one row per `root` object.
+
+    `path` is a directory an ``ExportToSpreadsheet`` run wrote or an SQLite database an ``ExportToDatabase`` run wrote; :func:`read_cellprofiler_csv` and :func:`read_cellprofiler_sqlite` describe how each is read.
+    The compartments of `root` (the objects one to one with it, such as the cytoplasm and nucleus of a cell) and its ancestors are joined onto it.
+    Objects of which a root has several, such as the nucleoli of a nucleus, are rolled into it by :func:`~mantispy.tl.aggregate_objects` when `aggregate` is given, and otherwise left out with one warning naming them.
+    Objects not linked to `root` at all, such as the objects of an imported mask, are left out with one warning; their counts per image stay in ``uns["mantispy"]["image_table"]``.
+    So is an object with a link nothing explains, unless it is `root`, whose own links must be explained.
+    A profile without a feature, as an export of locations or of image metadata only gives, is returned with a warning.
+
+    Several exports, such as the one directory per site a pooled screen writes, are read one at a time and stacked.
+    Each gives the same columns: a column one export lacks, such as the roll-up of an object it found none of, is a count of 0 there and missing otherwise.
+    An export of image measurements only adds its images to the image table and no row.
+    Without plate, well or site metadata the directory name enters ``Metadata_ImageID``, so the images of different runs never share one; two exports holding the same image raise.
+
+    Args:
+        path: The export directory or database, or a list of them.
+        root: The object one row of the profile is.
+        aggregate: The statistics to roll the objects a root has several of into it with, from ``"count"``, ``"mean"``, ``"median"`` and ``"std"``.
+        platemap: A table, or a path to one, with a ``Metadata_Well`` column and optionally ``Metadata_Plate``, left-joined onto ``obs``.
+        index_columns: ``obs`` columns joined with ``:`` into the observation index.
+            Without them the index is the row number, after the directory name and ``:`` when `path` is a list.
+        channels: Channel vocabulary passed to the feature-name parser.
+            Read from the image table's ``FileName_`` columns and the intensity features when omitted.
+        sentinels: Values in the feature matrix that stand for missing, replaced with NaN before any statistic is taken.
+        relations: What a link means, by child and then by parent, as for :func:`read_cellprofiler_csv`.
+        files: Object tables under custom file names, by object name, for a spreadsheet export.
+        strict: Raise when a compartment row has no root or a root has no compartment, instead of warning with the count.
+            A compartment row without a root is otherwise left out, and a root without a compartment gets NaN for its features.
+        skip_non_exports: Skip the paths of a list that are not CellProfiler exports, with one log line naming them, instead of raising.
+        out: An ``.h5ad`` or ``.zarr`` path to write the profile to, one export at a time, for a screen that does not fit in memory.
+            The profile is then read back from it lazily, as :func:`~mantispy.io.read` with ``lazy=True`` reads it.
+            Needs dask, from ``mantispy[lazy]``.
+
+    Returns:
+        An object-resolution :class:`~anndata.AnnData` with `root`'s centroid as ``Metadata_Center_X``/``Metadata_Center_Y``, the number of each joined object as ``Metadata_<Object>ObjectNumber``, the image table under ``uns["mantispy"]["image_table"]`` and this call's parameters.
+        CellProfiler's bookkeeping stays in the per-object tables and out of ``obs``: where in a file each image sat (``Metadata_FileLocation``, ``Metadata_Frame``, ``Metadata_Series``, ``Metadata_ChannelNumber``) and each object's own child counts, number, parent links and Z centroid.
+
+    Raises:
+        FileNotFoundError: `path` is not a CellProfiler export, or a path of a list is not one and `skip_non_exports` is not set.
+        NotImplementedError: `path` is an ExportToSpatialData store or a Cell Painting Gallery plate, which :func:`~mantispy.io.read_plate` reads.
+        ImportError: `out` is given and dask is not installed.
+        ValueError: There is no table for `root`, a link of `root` cannot be classified, a compartment is not one to one with `root`, `strict` is set and an object has no partner, `aggregate` names an unknown statistic, or two exports hold the same image.
+
+    Examples:
+        >>> import mantispy as mt
+        >>> cells = mt.io.read_cellprofiler("analysis/", platemap="platemap.csv")  # doctest: +SKIP
+        >>> cells = mt.io.read_cellprofiler("analysis/", aggregate=("count", "mean"))  # doctest: +SKIP
+        >>> sites = sorted(Path("analysis").glob("CP257A-Well1-*"))  # doctest: +SKIP
+        >>> cells = mt.io.read_cellprofiler(
+        ...     sites, aggregate="mean", skip_non_exports=True, out="well1.h5ad"
+        ... )  # doctest: +SKIP
+    """
+    from mantispy.io._cp_directories import read_directories
+    from mantispy.tl._aggregate_objects import statistics
+
+    func = statistics(aggregate) if aggregate is not None else None
+    params = {"root": root, "aggregate": func, "channels": channels, "strict": strict}
+    read: dict[str, Any] = {"files": files, "relations": relations, "channels": channels, "sentinels": sentinels}
+    profile: dict[str, Any] = {
+        "root": root,
+        "func": func,
+        "strict": strict,
+        "platemap": platemap,
+        "index_columns": index_columns,
+    }
+    if isinstance(path, str | Path) and out is None:
+        path = Path(path)
+        kind = _kind(path)
+        tables = _read_tables(path, kind, root=root, **read)
+        adata = _profile(tables, **profile)
+        if not adata.n_vars:
+            _warn_featureless(root if list(tables) != ["Image"] else None, kind)
+        record_params(adata, "read_cellprofiler", {"path": str(path), **params})
+        return adata
+    paths = [Path(path)] if isinstance(path, str | Path) else [Path(p) for p in path]
+    return read_directories(
+        paths, read=read, profile=profile, params=params, skip_non_exports=skip_non_exports, out=out
+    )

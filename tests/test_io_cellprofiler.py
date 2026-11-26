@@ -580,3 +580,152 @@ def test_aggregated_areas_are_not_scored_as_cell_areas_and_names_keep_the_statis
         adata[:, ["Cells_AreaShape_Area", "Nucleoli_AreaShape_Area_mean"]], copy=True
     )
     assert list(renamed.var_names) == ["Cells_AreaShape_Area", "Nucleoli_AreaShape_Area_mean"]
+
+
+@pytest.fixture(scope="module")
+def periscope():
+    return mt.io.read_cellprofiler_csv(EXPORTS / "periscope_site21")
+
+
+def test_barcode_calls_roll_up_to_their_most_common_value_per_cell(periscope):
+    """A cell's barcode is the call most of its foci carry, as PERISCOPE's per-cell calls take it."""
+    foci = pd.read_csv(EXPORTS / "periscope_site21" / "Foci.csv")
+    linked = pd.read_csv(EXPORTS / "periscope_site21" / "BarcodeFoci.csv").merge(
+        foci, left_on="Parent_Foci", right_on="ObjectNumber", suffixes=("", "_focus")
+    )
+    linked = linked[linked["Parent_Cells"] > 0]
+    adata = mt.tl.aggregate_objects(periscope, root="Cells", func="count", score="Foci_Barcode_MatchedTo_Score")
+
+    obs = adata.obs.set_index("Metadata_ObjectNumber")
+    calls = linked.groupby("Parent_Cells")["Barcode_MatchedTo_GeneCode"]
+    expected = calls.agg(lambda values: values.value_counts().sort_index().idxmax())
+    column = "Foci_Barcode_MatchedTo_GeneCode"
+    assert obs.loc[expected.index, f"{column}_majority"].astype(str).to_dict() == expected.to_dict()
+    np.testing.assert_allclose(
+        obs.loc[expected.index, f"{column}_fraction"],
+        calls.agg(lambda values: values.value_counts().max() / len(values)),
+    )
+    assert obs.loc[expected.index, f"{column}_n_distinct"].to_list() == calls.nunique().to_list()
+    assert obs[f"{column}_majority_score"].dropna().between(0, 1).all()
+    assert obs["Foci_Barcode_MatchedTo_ID_majority"].dropna().str.isdigit().all()
+    assert not [name for name in adata.var_names if "_Barcode_" in name]
+
+
+def test_a_tie_goes_to_the_smallest_value(periscope):
+    tables = dict(periscope)
+    foci = tables["Foci"].copy()
+    column = "Foci_Barcode_MatchedTo_GeneCode"
+    first = (foci.obs["Metadata_ObjectNumber"] == 1).to_numpy()
+    foci.obs[column] = foci.obs[column].astype(str).where(~first, "ZZZ")
+    tables["Foci"] = foci
+    obs = mt.tl.aggregate_objects(tables, root="Cells", func="count").obs.set_index("Metadata_ObjectNumber")
+    # Cell 3 now holds one focus each of ZZZ, MYO1F and ATP2A1.
+    assert (obs.loc[3, f"{column}_majority"], obs.loc[3, f"{column}_tie"]) == ("ATP2A1", True)
+    assert obs.loc[3, f"{column}_fraction"] == pytest.approx(1 / 3)
+    assert not obs.loc[2, f"{column}_tie"]
+
+
+def test_a_cell_without_foci_has_no_call_and_round_trips(periscope, tmp_path):
+    adata = mt.tl.aggregate_objects(periscope, root="Cells", func="count", score="Foci_Barcode_MatchedTo_Score")
+    column = "Foci_Barcode_MatchedTo_Barcode"
+    mt.io.write(adata, tmp_path / "cells.h5ad")
+    obs = mt.io.read(tmp_path / "cells.h5ad").obs.set_index("Metadata_ObjectNumber")
+    assert pd.isna(obs.loc[1, f"{column}_majority"])
+    assert np.isnan(obs.loc[1, f"{column}_fraction"])
+    assert np.isnan(obs.loc[1, f"{column}_majority_score"])
+    assert obs.loc[1, f"{column}_n_distinct"] == 0
+    assert obs[f"{column}_n_distinct"].dtype == "int64"
+    assert obs[f"{column}_tie"].dtype == "boolean"
+    assert pd.isna(obs.loc[1, f"{column}_tie"])
+    assert obs[f"{column}_fraction"].dtype == "float64"
+
+
+def test_a_score_that_is_no_childs_column_is_refused(periscope):
+    with pytest.raises(KeyError, match="'Barcode_MatchedTo_Score' is not a column"):
+        mt.tl.aggregate_objects(periscope, root="Cells", func="count", score="Barcode_MatchedTo_Score")
+
+
+# --- several exports -----------------------------------------------------------
+
+
+def _site(tmp_path, name, *, site, children=True, source="beginner"):
+    """A copy of an export as another site, optionally without nucleoli."""
+    directory = tmp_path / name
+    shutil.copytree(EXPORTS / source, directory)
+    path = directory / "MyExpt_Image.csv"
+    image = pd.read_csv(path)
+    if site is None:
+        image = image.drop(columns=["Metadata_Plate", "Metadata_Well", "Metadata_Site"])
+    else:
+        image["Metadata_Site"] = site
+    image.to_csv(path, index=False)
+    if not children:
+        for table in ("MyExpt_Nucleoli.csv", "MyExpt_NucleoliChildObjects.csv"):
+            pd.read_csv(directory / table).iloc[:0].to_csv(directory / table, index=False)
+    return directory
+
+
+def test_several_exports_stack_and_a_site_without_children_counts_zero(tmp_path):
+    sites = [_site(tmp_path, "s1", site=1), _site(tmp_path, "s2", site=2, children=False)]
+    adata = mt.io.read_cellprofiler(sites, aggregate=("count", "mean"))
+    one = mt.io.read_cellprofiler(sites[0], aggregate=("count", "mean"))
+
+    second = adata.obs_names.str.startswith("s2:")
+    assert second.sum() == one.n_obs == (~second).sum()
+    assert not adata.obs_names.has_duplicates
+    assert (adata[second, "Nucleoli_count"].X == 0).all()
+    assert np.isnan(adata[second, "Nucleoli_AreaShape_Area_mean"].X).all()
+    np.testing.assert_array_equal(adata[~second].X, one[:, adata.var_names].X)
+    assert not [name for name in adata.var_names if "_Mean_Nucleoli_" in name]
+    assert len(adata.uns["mantispy"]["image_table"]) == 2 * len(one.uns["mantispy"]["image_table"])
+    assert validate(adata).ok, validate(adata).errors
+
+
+def test_several_exports_stream_through_a_file_and_read_back_lazily(tmp_path):
+    sites = [_site(tmp_path, "s1", site=1), _site(tmp_path, "s2", site=2, children=False)]
+    eager = mt.io.read_cellprofiler(sites, aggregate=("count", "mean"))
+    lazy = mt.io.read_cellprofiler(sites, aggregate=("count", "mean"), out=tmp_path / "cells.h5ad")
+
+    assert type(lazy.X).__module__.startswith("dask")
+    assert list(lazy.var_names) == list(eager.var_names)
+    assert list(lazy.obs_names) == list(eager.obs_names)
+    np.testing.assert_array_equal(np.asarray(lazy.X.compute()), eager.X)
+    pd.testing.assert_frame_equal(lazy.uns["mantispy"]["image_table"], eager.uns["mantispy"]["image_table"])
+    assert list(lazy.uns["mantispy"]["params"]["read_cellprofiler"]["path"]) == [str(site) for site in sites]
+    assert not [path.name for path in tmp_path.iterdir() if path.name.startswith(".cells.h5ad")]
+
+
+def test_streaming_needs_dask(tmp_path, monkeypatch):
+    import importlib.util
+
+    find_spec = importlib.util.find_spec
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name, *args: None if name == "dask" else find_spec(name))
+    with pytest.raises(ImportError, match=r"mantispy\[lazy\]"):
+        mt.io.read_cellprofiler([EXPORTS / "beginner"], out=tmp_path / "cells.h5ad")
+
+
+def test_an_image_only_export_adds_images_and_a_non_export_is_named(tmp_path):
+    other = tmp_path / "heatmap"
+    other.mkdir()
+    (other / "heatmap.png").write_bytes(b"")
+    sites = [_site(tmp_path, "s1", site=1), EXPORTS / "qc", other]
+    with pytest.raises(FileNotFoundError, match=r"1 of 3 paths are not CellProfiler exports: \[.*heatmap'\]"):
+        mt.io.read_cellprofiler(sites)
+    adata = mt.io.read_cellprofiler(sites, skip_non_exports=True)
+    assert adata.n_obs == mt.io.read_cellprofiler(sites[0]).n_obs
+    images = adata.uns["mantispy"]["image_table"]
+    assert len(images) == len(mt.io.read_cellprofiler(EXPORTS / "qc").obs) + 2
+    assert validate(adata).ok, validate(adata).errors
+
+
+def test_exports_without_site_metadata_get_the_directory_in_the_image_id(tmp_path):
+    sites = [_site(tmp_path, "run1", site=None), _site(tmp_path, "run2", site=None)]
+    adata = mt.io.read_cellprofiler(sites)
+    assert {image_id.split("|")[0] for image_id in adata.obs["Metadata_ImageID"]} == {"run1", "run2"}
+    assert validate(adata).ok, validate(adata).errors
+
+
+def test_two_exports_of_the_same_image_are_refused(tmp_path):
+    sites = [_site(tmp_path, "a", site=1), _site(tmp_path, "b", site=1)]
+    with pytest.raises(ValueError, match="both hold the image"):
+        mt.io.read_cellprofiler(sites)
