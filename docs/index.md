@@ -1,7 +1,7 @@
 # mantispy - Image-based profiling in Python
 
 mantispy brings Cell Painting and other image-based profiling data into the scverse ecosystem, from reading what a pipeline wrote through quality control, normalization and batch correction to evaluating what survived.
-Everything operates on an `AnnData`, so scanpy’s PCA, neighbors, UMAP and Leiden work on the same object, and {func}`~mantispy.io.read_plate` reads the images behind the profiles as `SpatialData`.
+Everything operates on an `AnnData`, so scanpy’s PCA, neighbors, UMAP and Leiden work on the same object, and {func}`~mantispy.io.read_cellprofiler_gallery` and {func}`~mantispy.io.read_cellprofiler_zarr` read the images behind the profiles as `SpatialData`.
 
 mantispy follows three canonical workflows, and each has its own tutorials:
 
