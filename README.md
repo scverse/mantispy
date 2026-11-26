@@ -44,8 +44,8 @@ mt.pl.hits(wells)
 
 `pp` prepares, `tl` computes, `pl` plots, `metrics` evaluates a correction, `io` reads and
 writes, and `ds` downloads public screens. Everything operates on an `AnnData`, so scanpy’s
-PCA, neighbors, UMAP and Leiden work on the same object. `io.read_plate` reads the images
-behind the profiles as `SpatialData`.
+PCA, neighbors, UMAP and Leiden work on the same object. `io.read_cellprofiler_gallery` and
+`io.read_cellprofiler_zarr` read the images behind the profiles as `SpatialData`.
 
 To start, [From a CellProfiler run][tutorial-1] shows how to read a screen and [Hits, effects and cell
 loss][tutorial-5] how to call hits on it. Neither needs your own data, and `mt.ds.bbbc021()`
@@ -82,12 +82,12 @@ Choose from the options below to install mantispy:
 
    Cloning the repository and running `uv sync` is for contributors, see the [contributing guide](https://mantispy.readthedocs.io/en/latest/contributing.html).
 
-Optional extras add features: `spatial` (reading images as `SpatialData`), `harmony` and
+Optional extras add features: `images` (reading images as `SpatialData`), `harmony` and
 `integration` (batch correction and its scoring), and `interactive` (plotly plots). Install the ones you need, for example:
 
 ```bash
-uv add 'mantispy[spatial]'  # in a uv project
-pip install 'mantispy[spatial]'  # or with pip
+uv add 'mantispy[images]'  # in a uv project
+pip install 'mantispy[images]'  # or with pip
 ```
 
 The [installation guide](https://mantispy.readthedocs.io/en/latest/installation.html) says what
