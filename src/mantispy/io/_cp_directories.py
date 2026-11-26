@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 from anndata import AnnData
 
+from mantispy._core._reduce import get_matrix
 from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy._core.provenance import record_params
@@ -28,7 +29,7 @@ def _conform(adata: AnnData, var: pd.DataFrame, dtypes: Mapping[str, Any]) -> An
     columns = adata.var_names.get_indexer(var.index)
     counts = (var["aggregation"] == "count").to_numpy() if "aggregation" in var else np.zeros(len(var), dtype=bool)
     X = np.where(counts, 0.0, np.nan)[None, :].repeat(adata.n_obs, axis=0)
-    X[:, columns >= 0] = np.asarray(adata.X)[:, columns[columns >= 0]]
+    X[:, columns >= 0] = get_matrix(adata)[:, columns[columns >= 0]]
     obs = as_frame(adata.obs)
     added = {
         column: pd.Series(0 if pd.api.types.is_integer_dtype(dtype) else None, index=obs.index, dtype=dtype)
