@@ -21,7 +21,7 @@ from mantispy._core.plate import normalize_wells
 from mantispy._core.provenance import record_params
 from mantispy._core.schema import make_image_id
 from mantispy.io._cp_export import SQLITE_SUFFIXES, RawExport, export_prefix, extract_csv, extract_sqlite
-from mantispy.io._cp_links import classify
+from mantispy.io._cp_links import carriers, classify
 
 __all__ = ["export_prefix", "read_cellprofiler", "read_cellprofiler_csv", "read_cellprofiler_sqlite"]
 
@@ -179,6 +179,8 @@ def _finish(
         for name, frame in prefixed.items()
     }
     links = classify(tables, measured, raw.pipeline, image, relations)
+    # A copy that only carries a link adds nothing a profile can use, so it is not returned.
+    hidden = set(carriers(links, measured))
 
     metadata = _image_metadata(image)
     ids = make_image_id(metadata.rename(columns={"ImageNumber": "Metadata_ImageNumber"}))
@@ -186,6 +188,8 @@ def _finish(
     by_number = pd.Series(ids, index=metadata["ImageNumber"].to_numpy())
     result = {}
     for name, frame in prefixed.items():
+        if name in hidden:
+            continue
         adata = _table(
             frame, name, metadata, by_number, measured=measured[name], channels=vocabulary, sentinels=sentinels
         )
@@ -245,6 +249,7 @@ def read_cellprofiler_csv(
     ``uns["mantispy"]["links"]`` says what each link means, ``"compartment"``, ``"subset"``, ``"aggregate"`` or ``"carrier"``, as the module that made the object decides it: the pipeline text the export stores is read for it.
     ``uns["mantispy"]["image_table"]`` holds the image quality measurements and the object counts of every image.
     A table that holds only locations, as an imported mask gives, has no feature and keeps its locations in ``obs``.
+    A copy that only carries a link, such as the objects ResizeObjects writes or the children RelateObjects saves, is not returned; the link to it stays in ``obs`` and ``links`` of the tables that have one.
     An export of image measurements only, as a quality-control pipeline writes, gives one ``"Image"`` table of one row per image.
 
     Args:

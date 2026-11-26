@@ -222,14 +222,13 @@ def test_a_compartment_without_a_root_is_kept_in_its_table_and_left_out_of_the_p
 
 
 def test_every_object_table_is_read_with_its_link_kinds():
-    """Beginner: Nucleoli belong to nuclei many to one; NucleoliChildObjects is RelateObjects' saved copy."""
+    """Beginner: Nucleoli belong to nuclei many to one; NucleoliChildObjects, RelateObjects' saved copy, only carries the link."""
     tables = mt.io.read_cellprofiler_csv(EXPORTS / "beginner")
     assert {name: t.uns["mantispy"]["links"] for name, t in tables.items()} == {
         "Cells": {"Nuclei": "compartment"},
         "Cytoplasm": {"Cells": "compartment", "Nuclei": "compartment"},
         "Nuclei": {},
         "Nucleoli": {"Nuclei": "aggregate"},
-        "NucleoliChildObjects": {"Nucleoli": "carrier"},
     }
     nucleoli = pd.read_csv(EXPORTS / "beginner" / "MyExpt_Nucleoli.csv")
     assert tables["Nucleoli"].n_obs == len(nucleoli)
@@ -239,12 +238,12 @@ def test_every_object_table_is_read_with_its_link_kinds():
 
 
 def test_a_table_of_locations_only_is_valid_and_round_trips(tmp_path):
-    """Imported masks and RelateObjects' saved children hold locations and no measurement."""
-    carrier = mt.io.read_cellprofiler_csv(EXPORTS / "beginner")["NucleoliChildObjects"]
-    assert carrier.n_vars == 0
-    assert {"Metadata_Center_X", "NucleoliChildObjects_Location_Center_X"} <= set(carrier.obs.columns)
-    mt.io.write(carrier, tmp_path / "carrier.h5ad")
-    assert mt.io.read(tmp_path / "carrier.h5ad").uns["mantispy"]["links"] == {"Nucleoli": "carrier"}
+    """Translocation measures nothing on its cells, which keep their locations and links."""
+    cells = mt.io.read_cellprofiler_csv(EXPORTS / "translocation")["Cells"]
+    assert cells.n_vars == 0
+    assert {"Metadata_Center_X", "Cells_Location_Center_X"} <= set(cells.obs.columns)
+    mt.io.write(cells, tmp_path / "cells.h5ad")
+    assert mt.io.read(tmp_path / "cells.h5ad").uns["mantispy"]["links"] == {"Nuclei": "compartment"}
 
 
 def test_a_tab_delimited_export_reads_like_the_csv_one():
@@ -354,12 +353,12 @@ def test_calculate_math_features_keep_their_object():
     assert (row["object"], row["feature_group"], row["feature_kind"]) == ("Cytoplasm", "Math", "measurement")
 
 
-def test_periscope_keeps_measured_foci_as_tables_and_only_copies_as_carriers():
+def test_periscope_keeps_measured_foci_as_tables_and_leaves_out_the_copies_that_carry_links():
     """Foci and BarcodeFoci carry barcode calls and intensities; the Resize copies and the pre-mask foci carry links only."""
     tables = mt.io.read_cellprofiler_csv(EXPORTS / "periscope_site21")
+    assert sorted(tables) == ["BarcodeFoci", "Cells", "Cytoplasm", "Foci", "Foci_NonCellEdge", "Nuclei"]
     assert tables["BarcodeFoci"].uns["mantispy"]["links"] == {"Cells": "aggregate", "Foci": "subset"}
     assert tables["Foci"].uns["mantispy"]["links"] == {"Foci_PreMask": "carrier"}
-    assert tables["ResizeCells"].uns["mantispy"]["links"] == {"Cells": "carrier"}
     foci = tables["Foci"]
     assert foci.n_vars > 0
     assert "Foci_Barcode_MatchedTo_Score" in foci.obs
