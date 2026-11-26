@@ -12,6 +12,7 @@ import pandas as pd
 from mantispy._core.logging import get_logger
 from mantispy._core.schema import make_image_id
 from mantispy.io._cellprofiler import _prefix
+from mantispy.io._export import _detect_layout, _require_images
 from mantispy.io._profiles import from_dataframe, read_profiles
 
 if TYPE_CHECKING:
@@ -196,8 +197,8 @@ def _channels(load_data: pd.DataFrame) -> tuple[str, list[str]]:
     raise ValueError(msg)
 
 
-def _image_path(root: Path, batch: str, row: pd.Series, prefix: str, channel: str) -> Path:
-    """Locate a channel of one field under `root`.
+def _image_path(images: Path, batch: str, row: pd.Series, prefix: str, channel: str) -> Path:
+    """Locate a channel of one field under `images`, the source's ``images/`` directory.
 
     Sources record images either as an ``URL_*`` S3 URI or as a ``FileName_*``/``PathName_*`` pair pointing at wherever the images sat when CellProfiler ran.
     Both end in the gallery ``<batch>/images/<acquisition>/Images/`` layout, and that suffix is what is matched.
@@ -211,13 +212,13 @@ def _image_path(root: Path, batch: str, row: pd.Series, prefix: str, channel: st
     if marker not in location:
         msg = f"image location does not follow the gallery layout: {location}"
         raise ValueError(msg)
-    return root / "images" / location[location.index(marker) + 1 :]
+    return images / location[location.index(marker) + 1 :]
 
 
-def _read_fov(root: Path, batch: str, row: pd.Series, prefix: str, channels: Sequence[str]) -> npt.NDArray:
+def _read_fov(images: Path, batch: str, row: pd.Series, prefix: str, channels: Sequence[str]) -> npt.NDArray:
     import imageio.v3 as iio
 
-    return np.stack([iio.imread(_image_path(root, batch, row, prefix, channel)) for channel in channels])
+    return np.stack([iio.imread(_image_path(images, batch, row, prefix, channel)) for channel in channels])
 
 
 def _site_dir(root: Path, batch: str, plate: str, well: str, site: int) -> Path:
@@ -386,37 +387,85 @@ def _cell_table(files: Sequence[Path], masks: Mapping[str, npt.NDArray], channel
     )
 
 
-def read_gallery_plate(
-    root: Path | str,
+def read_cellprofiler_gallery(
+    source: Path | str,
+    *,
     batch: str,
     plate: str,
-    *,
     wells: Sequence[str] | None = None,
     plane: int | None = None,
     profile: str | Path | None = "normalized_feature_select_negcon_batch",
     plate_format: int = 384,
+    image_root: Path | str | None = None,
 ) -> SpatialData:
-    """Read one plate of a Cell Painting Gallery source.
+    """Read one plate of a Cell Painting Gallery source into a :class:`~spatialdata.SpatialData` object.
 
-    See :func:`mantispy.io.read_plate`, which dispatches here, for what the result holds.
+    The fields of view become Images, the CellProfiler Nuclei, Cells and Cytoplasm segmentations become Labels, the wells become Shapes, and the well profiles and cell measurements become the ``wells`` and ``cells`` Tables.
+    The gallery publishes one-pixel outlines, not masks, so the Labels are reconstructed and only unambiguous objects survive.
+    Element names carry the plate barcode, so two plates concatenate without renaming.
+
+    Where the source recorded stage coordinates and a pixel size, every element sits in three coordinate systems, ``{plate}_{well}_s{site}``, ``{plate}_{well}`` and ``{plate}``.
+    Where it did not, each field sits in its own frame.
+    See :doc:`the tutorial </tutorials/data/images>` for what the gallery publishes and what is dropped.
+    Needs the ``images`` extra.
 
     Args:
-        root: Directory holding the ``images/`` and ``workspace/`` trees of one source of one accession.
+        source: Directory holding the ``images/`` and ``workspace/`` trees of one source of one accession.
         batch: Batch name, the directory below ``images/`` and ``workspace/analysis/``.
         plate: Plate barcode.
         wells: Wells to read images and labels for.
+            Defaults to every well whose images are present under `source`, so a partial download reads back as itself.
+            The well table always covers the whole plate.
         plane: Which ``Metadata_PlaneID`` to read where a source imaged a z stack.
-        profile: Variant of the well-level profile, or a path to it, or ``None``.
-        plate_format: Number of wells on the plate.
+            Required in that case: no plane is preferable to another, and picking one silently would hide the rest.
+        profile: Variant of the well-level profile, read as ``workspace/profiles/{batch}/{plate}/{plate}_{profile}.csv.gz``.
+            Sources that publish the profile under another name, ``{plate}.parquet`` among them, take a :class:`~pathlib.Path` instead.
+            Pass ``None`` to leave out the well table and the well shapes.
+        plate_format: Number of wells on the plate, used to place the wells on their nominal grid.
+        image_root: Directory holding the images in place of ``source/images``, laid out as below it.
+            For images kept apart from the ``workspace/`` tree.
 
     Returns:
-        The plate, with Images, Labels, Shapes and the ``wells`` and ``cells`` Tables.
+        The plate.
+        A table or element group is left out when nothing it would hold was read.
+
+    Raises:
+        ImportError: spatialdata is not installed.
+        ValueError: `source` holds no ``workspace/`` tree, the plate mixes pixel sizes, ``load_data.csv`` names its images in an unknown way, or an image does not sit in the gallery layout.
+        FileNotFoundError: ``load_data.csv`` or the requested profile is missing, or no image of the requested wells is present.
+
+    Examples:
+        Read one plate of a gallery source, images and all:
+
+        >>> import mantispy as mt
+        >>> sdata = mt.io.read_cellprofiler_gallery(  # doctest: +SKIP
+        ...     "cpg0000-jump-pilot/source_4",
+        ...     batch="2020_11_04_CPJUMP1",
+        ...     plate="BR00116991",
+        ... )
+
+        Read one well of a plate a source published without a profile of the usual name:
+
+        >>> sdata = mt.io.read_cellprofiler_gallery(  # doctest: +SKIP
+        ...     "cpg0016-jump/source_1",
+        ...     batch="Batch1_20221004",
+        ...     plate="UL001641",
+        ...     wells=["A01"],
+        ...     profile=Path("UL001641.parquet"),
+        ...     plate_format=1536,
+        ... )
     """
+    _require_images("read_cellprofiler_gallery")
     from spatialdata import SpatialData
     from spatialdata.models import Image2DModel, Labels2DModel
     from spatialdata.transformations import Identity, Translation
 
-    root = Path(root)
+    root = Path(source)
+    if (layout := _detect_layout(root)) != "gallery":
+        hint = "; read it with mantispy.io.read_cellprofiler_zarr" if layout == "zarr" else ""
+        msg = f"{root} is not a Cell Painting Gallery source, which holds a 'workspace/' tree{hint}"
+        raise ValueError(msg)
+    images_dir = root / "images" if image_root is None else Path(image_root)
     load_data = _load_data(root, batch, plate)
     if load_data.index.duplicated().any():
         planes = sorted(load_data["Metadata_PlaneID"].unique()) if "Metadata_PlaneID" in load_data else []
@@ -447,14 +496,14 @@ def read_gallery_plate(
         )
 
     present = load_data[
-        [_image_path(root, batch, row, prefix, channels[0]).exists() for _, row in load_data.iterrows()]
+        [_image_path(images_dir, batch, row, prefix, channels[0]).exists() for _, row in load_data.iterrows()]
     ]
     if len(present) < len(load_data):
         get_logger().info(
-            "read_plate: %d of %d field(s) of view are not present under %s",
+            "read_cellprofiler_gallery: %d of %d field(s) of view are not present under %s",
             len(load_data) - len(present),
             len(load_data),
-            root,
+            images_dir,
         )
     requested = None if wells is None else list(wells)
     if requested is not None:
@@ -473,7 +522,7 @@ def read_gallery_plate(
                 transformations[f"{plate}_{well}"] = Translation([offset["well_y"], offset["well_x"]], axes=("y", "x"))
                 transformations[plate] = Translation([offset["plate_y"], offset["plate_x"]], axes=("y", "x"))
             images[f"{fov}_image"] = Image2DModel.parse(
-                _read_fov(root, batch, load_data.loc[(well, site)], prefix, channels),
+                _read_fov(images_dir, batch, load_data.loc[(well, site)], prefix, channels),
                 dims=("c", "y", "x"),
                 c_coords=channels,
                 transformations=transformations,
@@ -493,10 +542,10 @@ def read_gallery_plate(
                 labels[f"{fov}_{name}"] = Labels2DModel.parse(mask, dims=("y", "x"), transformations=transformations)  # type: ignore[arg-type]
 
     if not images:
-        raise FileNotFoundError(f"no images for well(s) {requested or 'on the plate'} of {plate} under {root}")
+        raise FileNotFoundError(f"no images for well(s) {requested or 'on the plate'} of {plate} under {images_dir}")
     if unnamed:
         get_logger().warning(
-            "read_plate: read no labels for %d analysed site(s) whose outline images it could not name (%s)",
+            "read_cellprofiler_gallery: read no labels for %d analysed site(s) whose outline images it could not name (%s)",
             len(unnamed),
             unnamed[0],
         )

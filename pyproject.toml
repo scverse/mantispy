@@ -64,14 +64,7 @@ dependencies = [
   # for debug logging (referenced from the issue template)
   "session-info2",
 ]
-# The integration benchmark (mt.metrics.evaluate_integration) delegates iLISI/cLISI, the
-# silhouettes and kBET to scib-metrics, the ecosystem standard for them.
-optional-dependencies.integration = [ "scib-metrics>=0.5.1" ]
-optional-dependencies.interactive = [ "plotly>=5" ]
-# mt.io.read(path, lazy=True) holds X as a dask array, for screens that do not fit in memory.
-# anndata's own extra, so the dask versions it excludes are excluded here too.
-optional-dependencies.lazy = [ "anndata[dask]>=0.13" ]
-optional-dependencies.spatial = [
+optional-dependencies.images = [
   "dask>=2024.4",
   "geopandas>=1",
   "h5py>=3.10",
@@ -81,6 +74,13 @@ optional-dependencies.spatial = [
   "shapely>=2",
   "spatialdata>=0.3",
 ]
+# The integration benchmark (mt.metrics.evaluate_integration) delegates iLISI/cLISI, the
+# silhouettes and kBET to scib-metrics, the ecosystem standard for them.
+optional-dependencies.integration = [ "scib-metrics>=0.5.1" ]
+optional-dependencies.interactive = [ "plotly>=5" ]
+# mt.io.read(path, lazy=True) holds X as a dask array, for screens that do not fit in memory.
+# anndata's own extra, so the dask versions it excludes are excluded here too.
+optional-dependencies.lazy = [ "anndata[dask]>=0.13" ]
 urls.Changelog = "https://github.com/scverse/mantispy/releases"
 # https://docs.pypi.org/project_metadata/#project-urls
 urls.Documentation = "https://mantispy.readthedocs.io/"
@@ -102,9 +102,9 @@ test = [
   # pl interactive gate returns True only when both are importable
   "ipython",
   "leidenalg",
+  "mantispy[images]",
   # metrics.evaluate_integration delegates to scib-metrics; jaxlib ships cp312-cp315 wheels.
   "mantispy[integration]",
-  "mantispy[spatial]",
   "phate==2",              # PHATE parity
   "plotly>=5",
   "pycytominer==1.7.1",
@@ -115,7 +115,7 @@ test = [
 ]
 doc = [
   "ipython",                       # conf.py enables IPython.sphinxext.ipython_console_highlighting
-  "mantispy[spatial]",             # autodoc imports io._plate
+  "mantispy[images]",              # autodoc imports io._export and io._gallery
   "scverse-doc[full]>=0.4",
   "scverse-misc[sphinx]>=0.1.8",   # scverse_misc.sphinx_ext documents the Settings object
   "sphinx>=8.1",
@@ -144,7 +144,7 @@ typecheck = [
 version.source = "vcs"
 version.raw-options.git_describe_command = "git describe --dirty --tags --long --match v*"
 build.targets.sdist.exclude = [ "/docs", "/tests" ]
-envs.data.features = [ "spatial" ]
+envs.data.features = [ "images" ]
 envs.data.scripts.download = "python .scripts/ci/download_data.py {args}"
 envs.data.scripts.drift-check = "python scripts/check_staged_drift.py {args}"
 envs.default.installer = "uv"

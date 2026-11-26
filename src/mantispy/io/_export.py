@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import anndata as ad
 import numpy as np
@@ -24,6 +24,58 @@ INSTANCE_KEY = "Metadata_ObjectNumber"
 
 # CellProfiler narrows label arrays to the object count, so fields of one plate would otherwise disagree.
 LABEL_DTYPE = np.uint32
+
+Layout = Literal["gallery", "zarr"]
+
+
+def _require_images(reader: str) -> None:
+    """Raise a clear error when the ``images`` extra, which `reader` needs, is not installed."""
+    try:
+        import spatialdata  # noqa: F401
+    except ImportError:
+        msg = f"{reader} needs spatialdata; install it with pip install 'mantispy[images]'"
+        raise ImportError(msg) from None
+
+
+def _detect_layout(path: Path) -> Layout | None:
+    """Tell a Cell Painting Gallery source from an ``ExportForSpatialData`` export by what sits under `path`.
+
+    A gallery source is the one with a ``workspace/`` tree, and that is checked first: a source that has been read once also holds SpatialData zarr stores, which carry a ``tables/`` directory like an export does.
+    An export plate folder has its table in ``tables/`` and is looked for at `path` and one level below it.
+
+    Returns:
+        ``"gallery"``, ``"zarr"``, or ``None`` when `path` holds neither.
+    """
+    if (path / "workspace").is_dir():
+        return "gallery"
+    if is_export_plate_dir(path) or export_plate_dirs(path):
+        return "zarr"
+    return None
+
+
+def _export_plate_dir(root: Path, plate: str | None) -> Path:
+    layout = _detect_layout(root)
+    if layout == "gallery":
+        msg = f"{root} is a Cell Painting Gallery source; read it with mantispy.io.read_cellprofiler_gallery"
+        raise ValueError(msg)
+    if layout is None:
+        msg = f"{root} is not an ExportForSpatialData export, which holds a table under 'tables/' per plate"
+        raise ValueError(msg)
+    if is_export_plate_dir(root):
+        if plate is not None and root.name != plate:
+            msg = f"{root} is the plate folder of {root.name!r}, not of {plate!r}"
+            raise ValueError(msg)
+        return root
+    folders = export_plate_dirs(root)
+    if plate is not None:
+        if (folder := root / plate) in folders:
+            return folder
+        msg = f"no plate {plate!r} under {root}; found {[path.name for path in folders]}"
+        raise FileNotFoundError(msg)
+    if len(folders) > 1:
+        msg = f"{root} holds several plates; pass plate= to choose one of {[path.name for path in folders]}"
+        raise ValueError(msg)
+    return folders[0]
 
 
 def _table_path(plate: Path) -> Path:
@@ -146,23 +198,42 @@ def _read_array(path: Path, *, lazy: bool) -> npt.NDArray | da.Array:
     return da.from_array(dataset, chunks=dataset.hdf5_chunks or "auto", lock=True, name=f"mantispy-h5-{path}")
 
 
-def read_cellprofiler_export(path: Path | str, *, lazy: bool = True) -> SpatialData:
-    """Read one plate folder written by the ``ExportForSpatialData`` CellProfiler module.
+def read_cellprofiler_zarr(
+    path: Path | str, *, plate: str | None = None, lazy: bool = True, image_root: Path | str | None = None
+) -> SpatialData:
+    """Read one plate written by the ``ExportForSpatialData`` CellProfiler module into a :class:`~spatialdata.SpatialData` object.
 
-    See :func:`mantispy.io.read_plate`, which dispatches here, for what the result holds.
+    The plate is read from the manifest in its table's ``uns``, so nothing is reconstructed and a folder that was moved still reads.
+    Images and Labels are the arrays the manifest lists as written, and the ``cells`` Table annotates the Labels.
+    Each field sits in its own coordinate system, named by the field.
+    Label arrays are widened to ``uint32``, since CellProfiler narrows each one to fit its object count.
+    See :doc:`the tutorial </tutorials/data/images>` for what the module writes.
+    Needs the ``images`` extra.
 
     Args:
-        path: A plate folder of an export, the directory holding ``images/``, ``labels/`` and ``tables/``.
+        path: An export root, the ``<prefix>_export`` directory the module wrote, or one of its plate folders.
+        plate: Plate barcode, which picks one of the plate folders of an export root.
+            May be left out when the root holds one plate.
         lazy: Read arrays through dask, one HDF5 dataset per element, instead of loading them into memory.
             Each read reopens the file, so a plate of many fields holds no descriptor per element.
+        image_root: Directory the manifest's ``images/`` and ``labels/`` paths are resolved against, in place of the plate folder.
+            For a table kept apart from its arrays.
 
     Returns:
-        The plate as a :class:`~spatialdata.SpatialData` object, with the Images and Labels the manifest lists as written and a ``cells`` Table annotating them.
+        The plate, with the Images and Labels the manifest lists as written and a ``cells`` Table annotating them.
 
     Raises:
-        FileNotFoundError: No table under ``path/tables``, or the manifest names an array that is not there.
-        ValueError: Several tables under ``path/tables``, or the table carries no element manifest, or it names no label element or no label instance for its rows, or it does not satisfy the schema at object resolution.
+        ImportError: spatialdata is not installed.
+        ValueError: `path` holds no export, or holds a gallery source, or holds several plates and `plate` is left out, or the plate folder carries several tables, no element manifest, no label element or no label instance for its rows, or a table that does not satisfy the schema at object resolution.
+        FileNotFoundError: `plate` is not under `path`, the plate folder has no table under ``tables/``, or the manifest names an array that is not there.
+
+    Examples:
+        Read a plate straight out of a pipeline run:
+
+        >>> import mantispy as mt
+        >>> sdata = mt.io.read_cellprofiler_zarr("run_export", plate="Plate1")  # doctest: +SKIP
     """
+    _require_images("read_cellprofiler_zarr")
     from spatialdata import SpatialData
     from spatialdata.models import Image2DModel, Labels2DModel, TableModel
     from spatialdata.transformations import BaseTransformation, Identity
@@ -171,9 +242,10 @@ def read_cellprofiler_export(path: Path | str, *, lazy: bool = True) -> SpatialD
     from mantispy._core.schema import make_image_id, validate
     from mantispy.io._profiles import stamp
 
-    plate = Path(path)
-    adata = ad.read_h5ad(_table_path(plate))
-    elements, channels = _manifest(adata, plate)
+    folder = _export_plate_dir(Path(path), plate)
+    arrays = folder if image_root is None else Path(image_root)
+    adata = ad.read_h5ad(_table_path(folder))
+    elements, channels = _manifest(adata, folder)
     written = elements[elements["status"] == STATUS_OK]
 
     images: dict[str, Any] = {}
@@ -181,7 +253,7 @@ def read_cellprofiler_export(path: Path | str, *, lazy: bool = True) -> SpatialD
     for row in written.to_dict("records"):
         field = str(row["sample_key"])
         transformations: dict[str, BaseTransformation] = {field: Identity()}
-        array = _read_array(plate / str(row["path"]), lazy=lazy)
+        array = _read_array(arrays / str(row["path"]), lazy=lazy)
         if row["element_type"] == ELEMENT_IMAGE:
             images[f"{field}_image"] = Image2DModel.parse(
                 array, dims=("c", "y", "x"), c_coords=channels, transformations=transformations
@@ -193,7 +265,7 @@ def read_cellprofiler_export(path: Path | str, *, lazy: bool = True) -> SpatialD
 
     tables = {}
     if labels:
-        adata.obs = _link_columns(as_frame(adata.obs), adata.uns.get("spatialdata_attrs"), plate)
+        adata.obs = _link_columns(as_frame(adata.obs), adata.uns.get("spatialdata_attrs"), folder)
         if "Metadata_ImageID" not in adata.obs:
             # The id minted from plate, well and site tags is coarser than the field when the export carries no
             # site or image number; the manifest knows each label element's field, so it refines the id then.

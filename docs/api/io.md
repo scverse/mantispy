@@ -12,7 +12,8 @@ Read profiles, plates and JUMP data into `AnnData` or `SpatialData`, and check t
    :toctree: generated
 
    io.read_profiles
-   io.read_plate
+   io.read_cellprofiler_zarr
+   io.read_cellprofiler_gallery
    io.read_jump
    io.unexpressed_genes
    io.read

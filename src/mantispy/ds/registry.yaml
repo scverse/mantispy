@@ -4608,7 +4608,7 @@ datasets:
 
   jump_plate:
     type: mantispy
-    doc_header: The images, segmentations and load_data of one well of BR00121438, for io.read_plate.
+    doc_header: The images, segmentations and load_data of one well of BR00121438, for io.read_cellprofiler_gallery.
     accession: cpg0016-jump
     plate: BR00121438
     batch: 2021_04_26_Batch1

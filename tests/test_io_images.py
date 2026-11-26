@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 from typing import cast
 
@@ -20,12 +23,12 @@ from mantispy.io._gallery import _fov_offsets, _labels_from_outlines, _parse_wel
 
 @pytest.fixture
 def sdata(gallery: Path) -> sd.SpatialData:
-    return mt.io.read_plate(gallery, PLATE, batch=BATCH, profile="test")
+    return mt.io.read_cellprofiler_gallery(gallery, batch=BATCH, plate=PLATE, profile="test")
 
 
 def test_without_stage_coordinates_each_field_sits_in_its_own_frame(unlocated_gallery: Path) -> None:
     """Without stage coordinates each field keeps its own frame; the reader does not invent a layout."""
-    sdata = mt.io.read_plate(unlocated_gallery, PLATE, batch=BATCH, profile="test")
+    sdata = mt.io.read_cellprofiler_gallery(unlocated_gallery, batch=BATCH, plate=PLATE, profile="test")
 
     assert set(sdata.coordinate_systems) == {f"{PLATE}_{w}_s{s}" for w in ("A01", "B02") for s in (1, 2)}
     assert not sdata.shapes
@@ -37,12 +40,12 @@ def test_a_plate_with_no_images_at_all_raises(gallery: Path) -> None:
         path.unlink()
 
     with pytest.raises(FileNotFoundError, match="no images for well"):
-        mt.io.read_plate(gallery, PLATE, batch=BATCH, wells=["A01"], profile=None)
+        mt.io.read_cellprofiler_gallery(gallery, batch=BATCH, plate=PLATE, wells=["A01"], profile=None)
 
 
 def test_two_plates_concatenate(sdata: sd.SpatialData, gallery: Path) -> None:
     """Element names carry the plate barcode, so two plates merge without renaming."""
-    other = mt.io.read_plate(gallery, OVERLAY_PLATE, batch=BATCH, profile="test")
+    other = mt.io.read_cellprofiler_gallery(gallery, batch=BATCH, plate=OVERLAY_PLATE, profile="test")
     assert not set(sdata.images) & set(other.images)
 
     merged = sd.concatenate([sdata, other], concatenate_tables=True)
@@ -106,7 +109,7 @@ def test_outlines_the_reader_cannot_name_warn(gallery: Path, caplog) -> None:
             path.rename(path.with_name(path.name.replace("A01_s", "A01_site")))
 
     with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
-        sdata = mt.io.read_plate(gallery, PLATE, batch=BATCH, profile="test")
+        sdata = mt.io.read_cellprofiler_gallery(gallery, batch=BATCH, plate=PLATE, profile="test")
     assert "could not name" in caplog.text
 
     assert not sdata.labels
@@ -116,7 +119,7 @@ def test_outlines_the_reader_cannot_name_warn(gallery: Path, caplog) -> None:
 @pytest.mark.parametrize("lazy", [True, False])
 def test_arrays_read_back_the_same_whatever_the_width_or_the_backing(make_export, label_dtype: str, lazy: bool) -> None:
     """CellProfiler narrows its label arrays to fit the object count, so two fields of one plate can disagree."""
-    sdata = mt.io.read_plate(make_export(label_dtype=label_dtype), lazy=lazy)
+    sdata = mt.io.read_cellprofiler_zarr(make_export(label_dtype=label_dtype), lazy=lazy)
 
     assert sdata.labels[f"{FIELDS[0]}__Cells"].dtype == np.uint32
     assert np.asarray(sdata.images[f"{FIELDS[0]}_image"]).shape == (len(CELL_PAINTING_CHANNELS), *EXPORT_SHAPE)
@@ -129,7 +132,7 @@ def test_a_lazy_read_holds_no_file_descriptor(export: Path) -> None:
         pytest.skip("counting open descriptors needs /dev/fd")
     before = len(os.listdir("/dev/fd"))
 
-    sdata = mt.io.read_plate(export, lazy=True)
+    sdata = mt.io.read_cellprofiler_zarr(export, lazy=True)
 
     assert len(os.listdir("/dev/fd")) <= before, "a lazy read must not keep the HDF5 files open"
     assert np.asarray(sdata.images[f"{FIELDS[0]}_image"]).shape == (len(CELL_PAINTING_CHANNELS), *EXPORT_SHAPE)
@@ -150,12 +153,12 @@ def test_a_table_the_reader_cannot_use_says_which_module_writes_one(export: Path
     adata.write_h5ad(path)
 
     with pytest.raises(ValueError, match=match):
-        mt.io.read_plate(export)
+        mt.io.read_cellprofiler_zarr(export)
 
 
 def test_the_export_table_satisfies_the_schema_and_links_by_object_number(export: Path) -> None:
     """The cells table meets schema 2.0 and links to its primary-object labels by region + ObjectNumber (§18, §19)."""
-    cells = mt.io.read_plate(export).tables["cells"]
+    cells = mt.io.read_cellprofiler_zarr(export).tables["cells"]
 
     mt.io.validate(cells, raise_on_error=True)
     assert cells.uns["mantispy"]["resolution"] == "object"
@@ -197,7 +200,7 @@ def test_a_table_in_the_modules_own_layout_links_every_row_to_its_own_instance(e
     }
     adata.write_h5ad(path)
 
-    cells = mt.io.read_plate(export).tables["cells"]
+    cells = mt.io.read_cellprofiler_zarr(export).tables["cells"]
     mt.io.validate(cells, raise_on_error=True)
     read = {
         (str(region), int(number)): float(value)
@@ -211,7 +214,7 @@ def test_a_table_in_the_modules_own_layout_links_every_row_to_its_own_instance(e
 
 def test_region_and_object_number_address_a_real_label_instance(export: Path) -> None:
     """Every row's region + Metadata_ObjectNumber is an instance value present in that label element."""
-    sdata = mt.io.read_plate(export)
+    sdata = mt.io.read_cellprofiler_zarr(export)
     cells = sdata.tables["cells"]
 
     region = f"{FIELDS[0]}__Cells"
@@ -223,30 +226,90 @@ def test_region_and_object_number_address_a_real_label_instance(export: Path) ->
 
 
 def test_an_export_root_is_read_through_its_plate_folders(export: Path, make_export) -> None:
-    assert set(mt.io.read_plate(export.parent).images) == set(mt.io.read_plate(export).images)
+    assert set(mt.io.read_cellprofiler_zarr(export.parent).images) == set(mt.io.read_cellprofiler_zarr(export).images)
 
     root = make_export(plate="BR00000002").parent
     with pytest.raises(ValueError, match="holds several plates"):
-        mt.io.read_plate(root)
-    assert mt.io.read_plate(root, "BR00000002").images
+        mt.io.read_cellprofiler_zarr(root)
+    assert mt.io.read_cellprofiler_zarr(root, plate="BR00000002").images
 
 
-@pytest.mark.parametrize(
-    ("kwargs", "error", "match"),
-    [
-        ({"plate": "nope"}, FileNotFoundError, "no plate 'nope'"),
-        ({"batch": BATCH}, ValueError, "do not apply to a CellProfiler export"),
-    ],
-)
-def test_export_arguments_that_do_not_apply(export: Path, kwargs: dict, error, match: str) -> None:
-    with pytest.raises(error, match=match):
-        mt.io.read_plate(export.parent, **kwargs)
+def test_an_unknown_plate_of_an_export_root_raises(export: Path) -> None:
+    with pytest.raises(FileNotFoundError, match="no plate 'nope'"):
+        mt.io.read_cellprofiler_zarr(export.parent, plate="nope")
 
 
-def test_a_layout_that_cannot_be_read(gallery: Path, tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="needs both a plate and a batch"):
-        mt.io.read_plate(gallery, PLATE)
+def test_each_reader_points_at_the_other_layout(gallery: Path, export: Path, tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="read_cellprofiler_gallery"):
+        mt.io.read_cellprofiler_zarr(gallery)
+    with pytest.raises(ValueError, match="read_cellprofiler_zarr"):
+        mt.io.read_cellprofiler_gallery(export, batch=BATCH, plate=PLATE)
     blank = tmp_path / "blank"
     blank.mkdir()
-    with pytest.raises(ValueError, match="neither a Cell Painting Gallery source"):
-        mt.io.read_plate(blank)
+    with pytest.raises(ValueError, match="not an ExportForSpatialData export"):
+        mt.io.read_cellprofiler_zarr(blank)
+    with pytest.raises(ValueError, match="not a Cell Painting Gallery source"):
+        mt.io.read_cellprofiler_gallery(blank, batch=BATCH, plate=PLATE)
+
+
+def test_image_root_finds_the_arrays_of_a_moved_export(export: Path, tmp_path_factory: pytest.TempPathFactory) -> None:
+    """The table stays behind while its arrays move, so the manifest's relative paths resolve under image_root."""
+    expected = mt.io.read_cellprofiler_zarr(export, lazy=False)
+    moved = tmp_path_factory.mktemp("arrays")
+    for name in ("images", "labels"):
+        shutil.move(export / name, moved / name)
+
+    with pytest.raises(FileNotFoundError):
+        mt.io.read_cellprofiler_zarr(export)
+    sdata = mt.io.read_cellprofiler_zarr(export, lazy=False, image_root=moved)
+
+    assert set(sdata.images) == set(expected.images)
+    assert set(sdata.labels) == set(expected.labels)
+    for name in expected.labels:
+        np.testing.assert_array_equal(np.asarray(sdata.labels[name]), np.asarray(expected.labels[name]))
+    assert sdata.tables["cells"].n_obs == expected.tables["cells"].n_obs
+
+
+def test_image_root_finds_gallery_images_kept_apart(
+    sdata: sd.SpatialData, gallery: Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    moved = tmp_path_factory.mktemp("images") / "images"
+    shutil.move(gallery / "images", moved)
+
+    with pytest.raises(FileNotFoundError, match="no images for well"):
+        mt.io.read_cellprofiler_gallery(gallery, batch=BATCH, plate=PLATE, profile="test")
+    read = mt.io.read_cellprofiler_gallery(gallery, batch=BATCH, plate=PLATE, profile="test", image_root=moved)
+
+    assert set(read.images) == set(sdata.images)
+    assert set(read.labels) == set(sdata.labels)
+    assert read.tables["cells"].n_obs == sdata.tables["cells"].n_obs
+
+
+def test_without_spatialdata_mantispy_imports_and_the_readers_name_the_extra(export: Path) -> None:
+    """Importing mantispy must not need spatialdata, and the readers that do say which extra installs it."""
+    script = f"""
+import importlib.abc
+import sys
+
+
+class Block(importlib.abc.MetaPathFinder):
+    def find_spec(self, name, path=None, target=None):
+        if name.split(".")[0] == "spatialdata":
+            raise ImportError(f"blocked {{name}}")
+
+
+sys.meta_path.insert(0, Block())
+import mantispy as mt
+
+readers = {{mt.io.read_cellprofiler_zarr: {{}}, mt.io.read_cellprofiler_gallery: {{"batch": "b", "plate": "p"}}}}
+for reader, kwargs in readers.items():
+    try:
+        reader({str(export)!r}, **kwargs)
+    except ImportError as error:
+        assert "pip install 'mantispy[images]'" in str(error), error
+    else:
+        raise AssertionError(f"{{reader.__name__}} read without spatialdata")
+assert "spatialdata" not in sys.modules
+"""
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
