@@ -7,8 +7,11 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 
 import pandas as pd
+
+from mantispy._core.logging import get_logger
 
 #: What a link from a child table to a parent object means.
 #: ``compartment``: one child per parent, a region of the same cell (IdentifySecondaryObjects, IdentifyTertiaryObjects, ExpandOrShrinkObjects).
@@ -159,3 +162,51 @@ def link_edges(links: Mapping[str, Mapping[str, str]]) -> Sequence[tuple[str, st
         for parent, kind in parents.items()
         if kind != "carrier"
     )
+
+
+@dataclass
+class Omissions:
+    """What a read left out of the profile, gathered over its objects and logged once, one warning line per kind."""
+
+    root: str
+    #: Objects of which one root has several, left out without ``aggregate=``.
+    several: set[str] = field(default_factory=set)
+    #: Objects with no link to the root.
+    unlinked: set[str] = field(default_factory=set)
+    #: Per object, how many of its rows link to no root, and how many it has.
+    orphans: dict[str, list[int]] = field(default_factory=dict)
+    #: Per compartment, how many roots have none.
+    missing: dict[str, int] = field(default_factory=dict)
+
+    def add_orphans(self, name: str, left_out: int, total: int) -> None:
+        """Count `left_out` of `total` rows of `name` that link to no root."""
+        counts = self.orphans.setdefault(name, [0, 0])
+        counts[0] += left_out
+        counts[1] += total
+
+    def log(self) -> None:
+        """Log what was left out, at warning level."""
+        log = get_logger()
+        if self.several:
+            log.warning(
+                "left out %s, of which one %s can have several; pass aggregate= (for example aggregate='mean') to "
+                "roll them into it",
+                sorted(self.several),
+                self.root,
+            )
+        if self.unlinked:
+            log.warning(
+                "left out %s, which are not linked to %s; their counts per image are in uns['mantispy']['image_table']",
+                sorted(self.unlinked),
+                self.root,
+            )
+        clauses = []
+        if orphans := [f"{left} of {total} {name}" for name, (left, total) in sorted(self.orphans.items()) if left]:
+            clauses.append(f"left out {', '.join(orphans)} object(s), which link to no {self.root}")
+        clauses += [
+            f"{count} {self.root} object(s) have no {name} and get NaN for its features"
+            for name, count in sorted(self.missing.items())
+            if count
+        ]
+        if clauses:
+            log.warning("%s; the per-object readers keep every row", "; ".join(clauses))

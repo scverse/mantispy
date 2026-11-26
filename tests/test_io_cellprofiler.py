@@ -229,7 +229,7 @@ def test_a_compartment_without_a_root_is_kept_in_its_table_and_left_out_of_the_p
     assert tables["Nuclei"].n_obs == len(nuclei)
     with caplog.at_level(logging.INFO, logger="scverse.mantispy"):
         adata = mt.io.read_cellprofiler(directory)
-    assert "1 Nuclei object(s) have no Cells" in caplog.text
+    assert "left out 1 of 24 Nuclei object(s), which link to no Cells; 1 Cells object(s) have no Nuclei" in caplog.text
     assert np.isnan(adata[:, "Nuclei_AreaShape_Area"].X).sum() == 1
     with pytest.raises(ValueError, match="strict=False"):
         mt.io.read_cellprofiler(directory, strict=True)
@@ -478,11 +478,22 @@ def test_a_missing_value_of_a_child_is_skipped(beginner):
 
 
 def test_without_aggregate_children_are_named_in_one_line(caplog):
-    with caplog.at_level(logging.INFO, logger="scverse.mantispy"):
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         adata = mt.io.read_cellprofiler(EXPORTS / "beginner")
     assert "['Nucleoli'], of which one Cells can have several; pass aggregate=" in caplog.text
     assert not [name for name in adata.var_names if name.startswith("Nucleoli_")]
     assert "aggregation" not in adata.var
+
+
+def test_children_linking_to_no_root_are_counted_in_one_warning(caplog):
+    """PERISCOPE: a sixth of the foci lie outside cells; three info lines per site were invisible at the default level."""
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
+        mt.io.read_cellprofiler(EXPORTS / "periscope_site21", aggregate="count")
+    lines = [record.getMessage() for record in caplog.records if "link to no Cells" in record.getMessage()]
+    assert lines == [
+        "left out 3 of 9 BarcodeFoci, 3 of 9 Foci, 3 of 3 Foci_NonCellEdge object(s), which link to no Cells; "
+        "the per-object readers keep every row"
+    ]
 
 
 def test_aggregated_areas_are_not_scored_as_cell_areas_and_names_keep_the_statistic(beginner):

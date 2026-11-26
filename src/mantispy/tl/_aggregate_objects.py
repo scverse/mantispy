@@ -14,10 +14,9 @@ from mantispy._core._numba import MEAN, MEDIAN, STD, group_counts, grouped_stat
 from mantispy._core._reduce import get_matrix
 from mantispy._core.features import _TEXT_COLUMNS, annotation
 from mantispy._core.frames import as_frame, categorize_metadata
-from mantispy._core.logging import get_logger
 from mantispy._core.provenance import record_params
 from mantispy._core.schema import stamp
-from mantispy.io._cp_links import carriers, link_edges
+from mantispy.io._cp_links import Omissions, carriers, link_edges
 
 #: The statistics a child's features are rolled into its root with; ``count`` is the number of children.
 STATISTICS = ("count", "mean", "median", "std")
@@ -51,7 +50,7 @@ def aggregate_objects(
 
     Missing values of a child are skipped; a root with no child has a count of 0 and NaN for every other statistic.
     ``std`` is the sample standard deviation (``ddof=1``), NaN for a single child, and ``median`` averages the two middle values of an even count.
-    Children that link to no root (a parent number of 0) are left out before the statistics, with their number logged.
+    Children that link to no root (a parent number of 0) are left out before the statistics, with one warning giving their number for every child.
 
     Args:
         objects: The per-object tables, keyed by object name, or a SpatialData holding them as its tables.
@@ -198,13 +197,16 @@ def combine(
     func: Sequence[str] | None,
     relations: Mapping[str, Mapping[str, str]] | None = None,
     strict: bool = False,
+    omissions: Omissions | None = None,
 ) -> AnnData:
     """One table per `root` object: compartments and ancestors joined, and children rolled up with `func` when it is given.
+
+    What is left out is added to `omissions`, which the caller logs once; without it, it is logged here.
 
     Raises:
         ValueError: `strict` is set and a compartment row has no root or a root has no compartment, or as :func:`aggregate_objects`.
     """
-    log = get_logger()
+    report = Omissions(root) if omissions is None else omissions
     stats = tuple(func or ())
     links = {name: dict(t.uns.get("mantispy", {}).get("links", {})) for name, t in tables.items()}
     for child, parents in (relations or {}).items():
@@ -220,19 +222,9 @@ def combine(
     state = _resolve(tables, root, edges)
     joined = sorted(name for name, (how, _, _) in state.items() if how == "join" and name != root)
     children = sorted(name for name, (how, _, _) in state.items() if how == "aggregate")
-    if unlinked := sorted(set(tables) - set(state) - skipped):
-        log.info(
-            "left out %s, which are not linked to %s; their counts per image are in uns['mantispy']['image_table']",
-            unlinked,
-            root,
-        )
+    report.unlinked |= set(tables) - set(state) - skipped
     if children and func is None:
-        log.info(
-            "left out %s, of which one %s can have several; pass aggregate= (for example aggregate='mean') to roll "
-            "them into it",
-            children,
-            root,
-        )
+        report.several |= set(children)
         children = []
 
     base = tables[root]
@@ -246,14 +238,13 @@ def combine(
         if one_to_one:
             orphans = table.n_obs - len(np.unique(rows[rows >= 0]))
             missing = int((rows < 0).sum())
-            if orphans or missing:
-                message = (
-                    f"{orphans} {name} object(s) have no {root} and were left out, and {missing} {root} object(s) "
-                    f"have no {name}, so they get NaN for its features"
+            if strict and (orphans or missing):
+                raise ValueError(
+                    f"{orphans} {name} object(s) have no {root}, and {missing} {root} object(s) have no {name}; "
+                    "pass strict=False to leave the first out and give the second NaN for its features"
                 )
-                if strict:
-                    raise ValueError(message + "; pass strict=False to read them so")
-                log.info(message)
+            report.add_orphans(name, orphans, table.n_obs)
+            report.missing[name] = report.missing.get(name, 0) + missing
         blocks.append(_gather(_matrix(table), rows))
         variables.append(as_frame(table.var))
         table_obs = as_frame(table.obs)
@@ -266,8 +257,7 @@ def combine(
         _, rows, _ = state[name]
         table = tables[name]
         linked = rows >= 0
-        if (unlinked_rows := int((~linked).sum())) > 0:
-            log.info("left out %d of %d %s object(s), which link to no %s", unlinked_rows, table.n_obs, name, root)
+        report.add_orphans(name, int((~linked).sum()), table.n_obs)
         codes = rows[linked]
         if "count" in stats:
             blocks.append(group_counts(codes, n_root).astype(np.float64)[:, None])
@@ -316,4 +306,6 @@ def combine(
     store = base.uns.get("mantispy", {})
     if "image_table" in store:
         result.uns["mantispy"]["image_table"] = store["image_table"]
+    if omissions is None:
+        report.log()
     return result

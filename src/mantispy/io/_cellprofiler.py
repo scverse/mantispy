@@ -359,8 +359,8 @@ def read_cellprofiler(
 
     `path` is a directory an ``ExportToSpreadsheet`` run wrote or an SQLite database an ``ExportToDatabase`` run wrote; :func:`read_cellprofiler_csv` and :func:`read_cellprofiler_sqlite` describe how each is read.
     The compartments of `root` (the objects one to one with it, such as the cytoplasm and nucleus of a cell) and its ancestors are joined onto it.
-    Objects of which a root has several, such as the nucleoli of a nucleus, are rolled into it by :func:`~mantispy.tl.aggregate_objects` when `aggregate` is given, and otherwise left out with one log line naming them.
-    Objects not linked to `root` at all, such as the objects of an imported mask, are left out with one log line; their counts per image stay in ``uns["mantispy"]["image_table"]``.
+    Objects of which a root has several, such as the nucleoli of a nucleus, are rolled into it by :func:`~mantispy.tl.aggregate_objects` when `aggregate` is given, and otherwise left out with one warning naming them.
+    Objects not linked to `root` at all, such as the objects of an imported mask, are left out with one warning; their counts per image stay in ``uns["mantispy"]["image_table"]``.
 
     Args:
         path: The export directory or database.
@@ -374,7 +374,7 @@ def read_cellprofiler(
         sentinels: Values in the feature matrix that stand for missing, replaced with NaN before any statistic is taken.
         relations: What a link means, by child and then by parent, as for :func:`read_cellprofiler_csv`.
         files: Object tables under custom file names, by object name, for a spreadsheet export.
-        strict: Raise when a compartment row has no root or a root has no compartment, instead of logging the count.
+        strict: Raise when a compartment row has no root or a root has no compartment, instead of warning with the count.
             A compartment row without a root is otherwise left out, and a root without a compartment gets NaN for its features.
 
     Returns:
