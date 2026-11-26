@@ -485,12 +485,18 @@ def _gallery_sites(source: Path) -> list[Path]:
     """The per-site ExportToSpreadsheet directories of the one plate of a gallery source.
 
     Raises:
-        FileNotFoundError: The plate has no analysis directory.
+        FileNotFoundError: The plate has no analysis directory, or none of its sites holds an ``Image.csv``.
     """
     batch, plate = _gallery_plate(source)
     analysis = source / "workspace/analysis" / batch / plate / "analysis"
     if not analysis.is_dir() or not (sites := sorted(p for p in analysis.iterdir() if p.is_dir())):
         raise FileNotFoundError(f"{source} holds no analysis of plate {plate} under {analysis}")
+    if not any(export_prefix(site) is not None for site in sites):
+        raise FileNotFoundError(
+            f"the analysis directories of plate {plate} in {source} hold no Image.csv, so they are not whole "
+            "ExportToSpreadsheet exports; read the cells from the images and outlines with "
+            "mt.io.read_cellprofiler_gallery"
+        )
     return sites
 
 

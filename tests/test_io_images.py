@@ -267,6 +267,11 @@ def test_read_cellprofiler_reads_a_gallery_plate_from_its_csv_exports_without_im
     assert adata.obs_names[0].startswith(f"{sites[0].name}:")
     mt.io.validate(adata, raise_on_error=True)
     assert mt.io.read_cellprofiler(unlocated_gallery, aggregate="count").n_obs == len(cells)
+    # A source staged without the Image tables cannot take the CSV route, and the error says what can read it.
+    for site in sites:
+        (site / "Image.csv").unlink()
+    with pytest.raises(FileNotFoundError, match="hold no Image.csv.*read_cellprofiler_gallery"):
+        mt.io.read_cellprofiler(unlocated_gallery)
 
 
 def test_read_cellprofiler_profiles_the_cell_table_of_an_export(export: Path, make_export) -> None:
