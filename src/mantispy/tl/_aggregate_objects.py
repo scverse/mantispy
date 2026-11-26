@@ -66,8 +66,7 @@ def aggregate_objects(
         ``obs`` is the root's, with the number of each joined object as ``Metadata_<Object>ObjectNumber``.
 
     Raises:
-        KeyError: There is no table for `root`.
-        ValueError: `func` names an unknown statistic, a compartment is not one to one with its parent, a child links to an object number its parent table lacks, or two result columns share a name.
+        ValueError: There is no table for `root`, `func` names an unknown statistic, a compartment is not one to one with its parent, a child links to an object number its parent table lacks, or two result columns share a name.
 
     Examples:
         >>> import mantispy as mt
@@ -75,11 +74,15 @@ def aggregate_objects(
         >>> cells = mt.tl.aggregate_objects(objects, root="Cells", func=("count", "mean"))  # doctest: +SKIP
     """
     tables = dict(objects.tables) if hasattr(objects, "tables") else dict(objects)
-    if root not in tables:
-        raise KeyError(f"no table for {root!r}; found {sorted(tables)}")
     adata = combine(tables, root, func=statistics(func), relations=relations)
     record_params(adata, "aggregate_objects", {"root": root, "func": list(statistics(func)), "relations": relations})
     return adata
+
+
+def candidate_roots(tables: Mapping[str, AnnData], links: Mapping[str, Mapping[str, str]]) -> list[str]:
+    """The objects worth naming as a root: those with features or with a link to another table, else every object."""
+    linked = {name for edge in link_edges(links) for name in edge[:2]}
+    return sorted(name for name in tables if tables[name].n_vars or name in linked) or sorted(tables)
 
 
 def _take(values: np.ndarray, rows: np.ndarray) -> np.ndarray:
@@ -207,6 +210,8 @@ def combine(
     for child, parents in (relations or {}).items():
         links.setdefault(child, {}).update(parents)
     skipped = set(carriers(links, {name: t.n_vars > 0 for name, t in tables.items()}))
+    if root not in tables:
+        raise ValueError(f"there is no {root!r} table; pass root= one of {candidate_roots(tables, links)}")
     edges = [
         (child, parent, kind)
         for child, parent, kind in link_edges(links)

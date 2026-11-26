@@ -144,12 +144,29 @@ def test_metadata_on_both_the_object_and_image_tables_keeps_the_image_value(tmp_
 
 
 def test_a_missing_root_or_a_path_that_is_no_export_says_why(cellprofiler_dir, tmp_path):
-    with pytest.raises(FileNotFoundError, match="no table for 'Nope'"):
+    with pytest.raises(ValueError, match=r"no 'Nope' table; pass root= one of \['Cells', 'Nuclei'\]"):
         mt.io.read_cellprofiler(cellprofiler_dir, root="Nope")
     (tmp_path / "empty").mkdir()
     (tmp_path / "empty" / "notes.txt").write_text("")
     with pytest.raises(FileNotFoundError, match=r"not a CellProfiler export.*notes.txt"):
         mt.io.read_cellprofiler(tmp_path / "empty")
+
+
+def test_a_missing_root_names_the_objects_that_could_be_one_on_either_route():
+    """The bonus tutorials name their cells CellProfilerCells or RunCellpose; the two routes raised different errors."""
+    objects = mt.io.read_cellprofiler_csv(EXPORTS / "translocation")
+    for read in (
+        lambda: mt.io.read_cellprofiler(EXPORTS / "translocation", root="CellposeCells"),
+        lambda: mt.tl.aggregate_objects(objects, root="CellposeCells"),
+    ):
+        with pytest.raises(ValueError, match=r"pass root= one of \['Cells', 'Cytoplasm', 'Nuclei'\]"):
+            read()
+    unlinked = {name: table for name, table in objects.items() if name != "Cytoplasm"}
+    for table in unlinked.values():
+        table.uns["mantispy"]["links"] = {}
+    unlinked["Nuclei"] = unlinked["Nuclei"][:, []]
+    with pytest.raises(ValueError, match=r"pass root= one of \['Cells', 'Nuclei'\]"):
+        mt.tl.aggregate_objects(unlinked, root="CellposeCells")
 
 
 def test_a_3d_export_is_refused(tmp_path, make_cellprofiler_dir):

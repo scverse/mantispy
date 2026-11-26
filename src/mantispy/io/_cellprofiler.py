@@ -381,9 +381,9 @@ def read_cellprofiler(
         An object-resolution :class:`~anndata.AnnData` with `root`'s centroid as ``Metadata_Center_X``/``Metadata_Center_Y``, the number of each joined object as ``Metadata_<Object>ObjectNumber``, the image table under ``uns["mantispy"]["image_table"]`` and this call's parameters.
 
     Raises:
-        FileNotFoundError: `path` is not a CellProfiler export, or there is no table for `root`.
+        FileNotFoundError: `path` is not a CellProfiler export.
         NotImplementedError: `path` is an ExportToSpatialData store or a Cell Painting Gallery plate, which :func:`~mantispy.io.read_plate` reads.
-        ValueError: A link cannot be classified, a compartment is not one to one with `root`, `strict` is set and an object has no partner, or `aggregate` names an unknown statistic.
+        ValueError: There is no table for `root`, a link cannot be classified, a compartment is not one to one with `root`, `strict` is set and an object has no partner, or `aggregate` names an unknown statistic.
 
     Examples:
         >>> import mantispy as mt
@@ -399,8 +399,6 @@ def read_cellprofiler(
     if list(tables) == ["Image"]:
         adata = tables["Image"]
     else:
-        if root not in tables:
-            raise FileNotFoundError(f"no table for {root!r} in {path}; found {sorted(tables)}")
         adata = combine(tables, root, func=func, strict=strict)
     obs = as_frame(adata.obs)
     if platemap is not None:
