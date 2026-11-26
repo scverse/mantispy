@@ -19,6 +19,7 @@ from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy._core.provenance import record_params
 from mantispy.io._cellprofiler import _kind, _profile, _read_tables
+from mantispy.io._cp_links import Omissions
 
 
 def _conform(adata: AnnData, var: pd.DataFrame, dtypes: Mapping[str, Any]) -> AnnData:
@@ -54,7 +55,7 @@ def read_directories(
     Each export is read and rolled up on its own, and either kept or, with `out`, written to a part file and dropped.
     The parts are then given the same features and ``obs`` columns and stacked once.
     """
-    from mantispy.tl._aggregate_objects import categorical_annotation
+    from mantispy.tl._aggregate_objects import candidate_roots, categorical_annotation
 
     log = get_logger()
     root = profile["root"]
@@ -84,6 +85,9 @@ def read_directories(
     parts: list[AnnData] = []
     image_only: list[AnnData] = []
     without_root: list[str] = []
+    candidates: set[str] = set()
+    # What every export leaves out, logged once for the read rather than once per export.
+    omissions = Omissions(root)
     files: list[Path] = []
     with (
         tempfile.TemporaryDirectory(dir=target.parent, prefix=f".{target.name}.")
@@ -91,7 +95,9 @@ def read_directories(
         else nullcontext(None)
     ) as scratch:
         for path, kind in kinds.items():
-            tables = _read_tables(path, kind, run=path.name if several else None, **read)
+            tables = _read_tables(
+                path, kind, run=path.name if several else None, root=root, omissions=omissions, **read
+            )
             image_table = next(iter(tables.values())).uns["mantispy"]["image_table"]
             for image_id in image_table.index:
                 if (other := seen.setdefault(image_id, path)) != path:
@@ -104,8 +110,10 @@ def read_directories(
                 image_only.append(_profile(tables, **profile))
             elif root not in tables:
                 without_root.append(path.name)
+                links = {name: table.uns["mantispy"]["links"] for name, table in tables.items()}
+                candidates |= set(candidate_roots(tables, links))
             else:
-                part = _profile(tables, **profile)
+                part = _profile(tables, omissions=omissions, **profile)
                 if several and not profile["index_columns"]:
                     part.obs_names = [f"{path.name}:{name}" for name in part.obs_names]
                 if scratch is not None:
@@ -114,15 +122,21 @@ def read_directories(
                     # Only the annotation is kept; the matrix is on disk.
                     part = AnnData(obs=as_frame(part.obs), var=as_frame(part.var), uns=part.uns)
                 parts.append(part)
-        if without_root:
-            log.info("found no %s in %s; their images are in uns['mantispy']['image_table']", root, without_root)
+        omissions.log()
+        if without_root and (parts or image_only):
+            log.warning(
+                "found no %s in %s; their images are in uns['mantispy']['image_table']", root, without_root
+            )
         if parts and image_only:
             log.info(
                 "%d exports measure images only; their images are in uns['mantispy']['image_table']", len(image_only)
             )
         if not parts:
             if not image_only:
-                raise FileNotFoundError(f"no table for {root!r} in any of the {len(kinds)} exports")
+                raise ValueError(
+                    f"there is no {root!r} table in any of the {len(kinds)} exports; pass root= one of "
+                    f"{sorted(candidates)}"
+                )
             parts = image_only
             if scratch is not None:
                 files = [Path(scratch) / f"{position}.h5ad" for position in range(len(parts))]

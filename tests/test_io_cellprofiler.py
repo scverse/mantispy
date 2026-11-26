@@ -683,6 +683,19 @@ def test_several_exports_stack_and_a_site_without_children_counts_zero(tmp_path)
     assert validate(adata).ok, validate(adata).errors
 
 
+def test_several_exports_warn_once_for_the_read_and_name_the_possible_roots(tmp_path, caplog):
+    """PERISCOPE reads 86 sites at once; each logged its own lines about the foci it left out."""
+    sites = [_site(tmp_path, "s1", site=1), _site(tmp_path, "s2", site=2)]
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
+        mt.io.read_cellprofiler(sites)
+    assert [record.getMessage() for record in caplog.records] == [
+        "left out ['Nucleoli'], of which one Cells can have several; pass aggregate= (for example "
+        "aggregate='mean') to roll them into it"
+    ]
+    with pytest.raises(ValueError, match=r"no 'Nope' table in any of the 2 exports; pass root= one of \['Cells'"):
+        mt.io.read_cellprofiler(sites, root="Nope")
+
+
 def test_several_exports_stream_through_a_file_and_read_back_lazily(tmp_path):
     sites = [_site(tmp_path, "s1", site=1), _site(tmp_path, "s2", site=2, children=False)]
     eager = mt.io.read_cellprofiler(sites, aggregate=("count", "mean"))

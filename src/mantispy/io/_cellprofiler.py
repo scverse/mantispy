@@ -409,7 +409,7 @@ def _image_only(raw: RawExport, channels: Sequence[str] | None, run: str | None 
     return adata
 
 
-def _warn_featureless(root: str | None, kind: str) -> None:
+def _warn_featureless(root: str | None, kind: str | None) -> None:
     """Warn that a profile holds no feature, and say where the objects are."""
     if root is None:
         get_logger().warning("the export holds image metadata and no measurement; the metadata is in obs")
@@ -418,7 +418,7 @@ def _warn_featureless(root: str | None, kind: str) -> None:
             "the %s profile holds no feature, as no object joined to it was measured; "
             "mt.io.read_cellprofiler_%s returns every object with its locations in obs",
             root,
-            kind,
+            kind or "csv (or _sqlite)",
         )
 
 
@@ -545,6 +545,9 @@ def read_cellprofiler(
         record_params(adata, "read_cellprofiler", {"path": str(path), **params})
         return adata
     paths = [Path(path)] if isinstance(path, str | Path) else [Path(p) for p in path]
-    return read_directories(
+    adata = read_directories(
         paths, read=read, profile=profile, params=params, skip_non_exports=skip_non_exports, out=out
     )
+    if not adata.n_vars:
+        _warn_featureless(root if adata.uns["mantispy"]["resolution"] == "object" else None, None)
+    return adata
