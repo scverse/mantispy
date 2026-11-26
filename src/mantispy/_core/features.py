@@ -19,7 +19,8 @@ A bare token such as Area is a feature with no group, and the object comes from 
 parse_feature_names(convention=...) selects the grammar.
 An explicit value wins, and None reads the names as cp_measure's when any of them contains __.
 
-Columns that are not measurements (object numbers, parent/child links, locations, file names, metadata) get ``is_feature = False`` so callers can route them somewhere other than ``X``.
+Columns that are not measurements (object numbers, parent/child links, neighbour object numbers, distances to the parent, locations, file names, metadata) get ``is_feature = False`` so callers can route them somewhere other than ``X``.
+RelateObjects writes the per-parent mean of each child column as ``<Parent>_Mean_<Child>_<column>``, and that mean follows the child column's rule: the mean of a location or an object number is not a feature either.
 """
 
 from __future__ import annotations
@@ -74,6 +75,12 @@ NON_FEATURE_GROUPS = frozenset(
         "Width",
         "Height",
         "Threshold",
+        # CallBarcodes' call and its match to the library identify the object; they are not morphology.
+        "Barcode",
+        # NamesAndTypes' channel index of each image.
+        "Channel",
+        # RelateObjects' distance from each child to its parent places the child; it does not measure it.
+        "Distance",
     }
 )
 
@@ -92,10 +99,13 @@ CHANNEL_BEARING_GROUPS = frozenset(
 
 #: Measurement groups that carry no channel in CellProfiler; Slope may carry channels in cp_measure.
 PLAIN_FEATURE_GROUPS = frozenset(
-    {"AreaShape", "SizeShape", "Neighbors", "AreaOccupied", "Zernike", "Skeleton", "ObjectSkeleton", "Slope"}
+    {"AreaShape", "SizeShape", "Neighbors", "AreaOccupied", "Zernike", "Skeleton", "ObjectSkeleton", "Slope", "Math"}
 )
 
-_KNOWN_GROUPS = NON_FEATURE_GROUPS | CHANNEL_BEARING_GROUPS | PLAIN_FEATURE_GROUPS
+#: RelateObjects' per-parent mean of a child column: ``<Parent>_Mean_<Child>_<column>``.
+_PER_PARENT_MEAN = "Mean"
+
+_KNOWN_GROUPS = NON_FEATURE_GROUPS | CHANNEL_BEARING_GROUPS | PLAIN_FEATURE_GROUPS | {_PER_PARENT_MEAN}
 
 #: Adapted from scverse/cell-painting-io (MIT).
 CHANNEL_ALIASES: dict[str, str] = {
@@ -210,11 +220,49 @@ def _extract_channels(rest: list[str], specs: list[list[str]]) -> tuple[list[str
     return found, remaining
 
 
-def _split_object(tokens: list[str]) -> tuple[str | None, str, list[str]]:
-    """Split a token list into ``(object, feature_group, rest)``."""
+def _locates_or_identifies(group: str, rest: list[str]) -> bool:
+    """Whether a column of `group`, followed by the tokens `rest`, places or names an object rather than measuring it.
+
+    MeasureObjectNeighbors writes the number of the closest object as ``Neighbors_FirstClosestObjectNumber_<distance>``,
+    an identifier like any other object number.
+    """
+    return (
+        group in NON_FEATURE_GROUPS
+        or (group == "AreaShape" and bool(rest) and rest[0] in _POSITIONAL_AREASHAPE)
+        or (bool(rest) and rest[0].endswith("ObjectNumber"))
+    )
+
+
+def _mean_of_non_feature(rest: list[str]) -> bool:
+    """Whether a per-parent mean, ``<Child>_<column>`` split into `rest`, averages a column that is no feature of the child.
+
+    The child's name may itself hold an underscore (``Foci_NonCellEdge``), so the column starts at the first known group after the name's first token.
+    """
+    start = next((i for i, token in enumerate(rest) if i > 0 and token in _KNOWN_GROUPS), None)
+    return start is not None and _locates_or_identifies(rest[start], rest[start + 1 :])
+
+
+def _object_specs(names: Sequence[str]) -> list[list[str]]:
+    """The object names holding an underscore (``Foci_NonCellEdge``), split into token runs, longest first.
+
+    Every CellProfiler object table carries ``Number_Object_Number``, so prefixed with its object it names the object whole.
+    A prefix holding a feature group is a per-parent mean of that column (``Nuclei_Mean_Nucleoli``), not an object.
+    """
+    suffix = "_Number_Object_Number"
+    prefixes = {str(name).removesuffix(suffix) for name in names if str(name).endswith(suffix)}
+    objects = [tokens for tokens in (prefix.split("_") for prefix in prefixes) if len(tokens) > 1]
+    return sorted((tokens for tokens in objects if not _KNOWN_GROUPS & set(tokens)), key=len, reverse=True)
+
+
+def _split_object(tokens: list[str], objects: Sequence[list[str]] = ()) -> tuple[str | None, str, list[str]]:
+    """Split a token list into ``(object, feature_group, rest)``, matching the multi-token `objects` first."""
+    for spec in objects:
+        if len(tokens) > len(spec) and tokens[: len(spec)] == spec:
+            return "_".join(spec), tokens[len(spec)], tokens[len(spec) + 1 :]
     if tokens[0] == "Image":
         return "Image", tokens[1], tokens[2:]
-    if tokens[0] in _KNOWN_GROUPS:
+    # A leading Mean_ is ExportToSpreadsheet's per-image mean (Mean_Cells_AreaShape_Area), read like Median_ and StDev_.
+    if tokens[0] in _KNOWN_GROUPS and tokens[0] != _PER_PARENT_MEAN:
         return None, tokens[0], tokens[1:]
     if tokens[1] in _KNOWN_GROUPS or len(tokens) >= 3:
         return tokens[0], tokens[1], tokens[2:]
@@ -271,13 +319,13 @@ def _parse_cp_measure(name: str) -> dict:
     elif group in _CP_MEASURE_SHAPE:
         group, rest = "AreaShape", [group, *rest]
     row["feature_group"] = group
-    if group in NON_FEATURE_GROUPS or (group == "AreaShape" and rest[0] in _POSITIONAL_AREASHAPE):
+    if _locates_or_identifies(group, rest):
         return row
     _read_suffixes(row, rest, group)
     return row
 
 
-def _parse_one(name: str, specs: list[list[str]]) -> dict:
+def _parse_one(name: str, specs: list[list[str]], objects: list[list[str]]) -> dict:
     row: dict = dict.fromkeys(COLUMNS)
     row["is_feature"] = False
 
@@ -285,11 +333,11 @@ def _parse_one(name: str, specs: list[list[str]]) -> dict:
     if name in _BARE_NON_FEATURES or len(tokens) < 2:
         return row
 
-    obj, group, rest = _split_object(tokens)
+    obj, group, rest = _split_object(tokens, objects)
     row["object"] = obj
     row["feature_group"] = group
 
-    if group in NON_FEATURE_GROUPS or (group == "AreaShape" and rest and rest[0] in _POSITIONAL_AREASHAPE):
+    if _locates_or_identifies(group, rest) or (group == _PER_PARENT_MEAN and _mean_of_non_feature(rest)):
         return row
     if not rest:
         row["feature"] = group
@@ -331,6 +379,7 @@ def parse_feature_names(
     """Parse ``names`` into a table of feature annotations indexed by name.
 
     One grammar is read for all of ``names``, because it is a property of the file that wrote them rather than of any one column.
+    An object whose name holds an underscore, such as ``Foci_NonCellEdge``, is read whole when its ``<Object>_Number_Object_Number`` column is among ``names``.
 
     Args:
         names: Column names from a CellProfiler or cp_measure table.
@@ -353,7 +402,8 @@ def parse_feature_names(
     else:
         channel_set = frozenset(channels if channels is not None else _infer_channels(names))
         specs = _channel_specs(channel_set)  # split the vocabulary once, not once per name
-        rows = [_parse_one(str(name), specs) for name in names]
+        objects = _object_specs(names)
+        rows = [_parse_one(str(name), specs, objects) for name in names]
     parsed = pd.DataFrame(rows, index=pd.Index(names), columns=COLUMNS)
     parsed["feature_kind"] = measurement_kind(parsed["is_feature"].fillna(False))
     for column in _TEXT_COLUMNS:

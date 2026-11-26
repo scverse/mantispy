@@ -238,6 +238,7 @@ Requirements:
 - Mantispy does not define a second `Metadata_PlateID` field.
 
 `Metadata_Well` identifies a well within a plate and MUST use the normalized well format already used by mantispy, such as `A01`.
+A well named by its number alone, such as PERISCOPE’s `Well1`, is kept as given and has no plate position, so plate-position tools raise on it. Validation warns about any other well name it cannot parse.
 
 A well is identified by:
 
@@ -728,6 +729,8 @@ It SHOULD preserve:
 - CellProfiler pipeline provenance
 
 The importer MUST NOT place parent, child, neighbour object identifiers, file paths, counts, or other non-measurement numeric metadata into `X`.
+The same holds for barcode calls (`Barcode_*`), image channel indices (`Channel_*`), RelateObjects’ distances from a child to its parent (`Distance_Centroid_<Parent>`, `Distance_Minimum_<Parent>`), and RelateObjects’ per-parent means of such columns (`<Parent>_Mean_<Child>_Location_Center_X`).
+A CalculateMath result (`<Object>_Math_<name>`) is a measurement of its object.
 
 ## 19. SpatialData import and export requirements
 

@@ -17,7 +17,7 @@ from mantispy._core.frames import as_frame
 from mantispy._core.logging import get_logger
 from mantispy._core.masks import reference_mask
 from mantispy._core.mutation import inplace_or_copy
-from mantispy._core.plate import well_col, well_row
+from mantispy._core.plate import unplaced_wells, well_positions
 
 METHODS = ("b_score", "median_polish")
 
@@ -70,7 +70,7 @@ def correct_plate_position(
         Writes ``X`` or ``layers[key_added]``, and the fitted effects per corrected plate to ``uns["mantispy"]["plate_position"]``.
 
     Raises:
-        ValueError: If ``method`` is unknown, a corrected plate holds no reference rows, or ``plates`` names a value absent from ``by``.
+        ValueError: If ``method`` is unknown, a corrected plate holds no reference rows, ``plates`` names a value absent from ``by``, or a well of a corrected plate names no plate row and column (``Well1``).
 
     Notes:
         The polish is fitted on the well grid.
@@ -88,8 +88,6 @@ def correct_plate_position(
             "add the column or read the platemap with mt.io.read_profiles(platemap=...)"
         )
     wells = adata.obs["Metadata_Well"].to_numpy()
-    rows = np.array([well_row(well) for well in wells])
-    columns = np.array([well_col(well) for well in wells])
 
     fit_mask = reference_mask(adata, reference)
     codes, keys = group_codes(adata, by)
@@ -106,22 +104,25 @@ def correct_plate_position(
         if chosen is not None and str(key) not in chosen:
             continue
         selected = np.flatnonzero(codes == group)
-        fit_rows = selected[fit_mask[selected]]
+        fitted = fit_mask[selected]
+        fit_rows = selected[fitted]
         if fit_rows.size == 0:
             raise ValueError(f"no reference rows in group {key!r}")
+        # Positions of this plate's rows only, so a plate left uncorrected may name its wells in any way.
+        rows, columns = well_positions(wells[selected])
 
         # Each plate gets its own extent; a shared or padded grid would fit the effects on empty wells.
-        n_rows, n_columns = rows[selected].max() + 1, columns[selected].max() + 1
+        n_rows, n_columns = rows.max() + 1, columns.max() + 1
 
         # One value per well, so several cells in a well cannot overwrite each other.
-        well_index = rows[fit_rows] * n_columns + columns[fit_rows]
+        well_index = rows[fitted] * n_columns + columns[fitted]
         occupied, codes_in_plate = np.unique(well_index, return_inverse=True)
 
         grid = np.full((n_rows * n_columns, adata.n_vars), np.nan)
         grid[occupied] = grouped_stat(X[fit_rows], codes_in_plate, occupied.size, MEDIAN)
 
         row_effect, column_effect = _median_polish_stack(grid.reshape(n_rows, n_columns, adata.n_vars), max_iter, tol)
-        adjustment = row_effect[rows[selected]] + column_effect[columns[selected]]
+        adjustment = row_effect[rows] + column_effect[columns]
         corrected = X[selected].astype(np.float64) - adjustment
         if method == "b_score":
             # The B-score standardizes the median-polish residual against the plate's own spread.
@@ -294,10 +295,11 @@ def detect_plate_position(
         zero is a decision to skip, not a verdict that the plate is clean, and a real but non-additive or
         weakly-estimated effect can score this way. A plate with too few controls is recorded with missing
         scores and a ``reason``; unscored means unknown, so inspect it rather than read it as negative.
+        So is a plate whose wells have no plate position, such as PERISCOPE's ``Well1``.
 
     Raises:
         KeyError: If ``reference`` names a column that is not present.
-        ValueError: If the reference column has missing values.
+        ValueError: If the reference column has missing values, or no plate has wells with a plate row and column (``Well1``).
         TypeError: If the reference column is not boolean.
 
     Notes:
@@ -314,8 +316,6 @@ def detect_plate_position(
             "add the column or read the platemap with mt.io.read_profiles(platemap=...)"
         )
     wells = adata.obs["Metadata_Well"].to_numpy()
-    all_rows = np.array([well_row(well) for well in wells])
-    all_columns = np.array([well_col(well) for well in wells])
     is_control = reference_mask(adata, reference)
     codes, keys = group_codes(adata, by)
 
@@ -334,14 +334,21 @@ def detect_plate_position(
         table["frac_features_positive"].append(float(frac_positive))
         table["reason"].append(reason)
 
+    placed = False
     for group, key in enumerate(keys):
         selected = np.flatnonzero(codes == group)
-        n_grid_rows = all_rows[selected].max() + 1
-        n_grid_columns = all_columns[selected].max() + 1
-        control = selected[is_control[selected]]
+        if unplaced := unplaced_wells(wells[selected]):
+            record(key, 0, float("nan"), float("nan"), f"wells {unplaced[:5]} have no plate position")
+            continue
+        placed = True
+        plate_rows, plate_columns = well_positions(wells[selected])
+        n_grid_rows = plate_rows.max() + 1
+        n_grid_columns = plate_columns.max() + 1
+        in_control = is_control[selected]
+        control = selected[in_control]
 
         # One grid position per control well, so several cells in a well are not separate observations.
-        linear = all_rows[control] * n_grid_columns + all_columns[control]
+        linear = plate_rows[in_control] * n_grid_columns + plate_columns[in_control]
         positions, inverse = np.unique(linear, return_inverse=True)
         n_controls = positions.size
         well_rows, well_columns = positions // n_grid_columns, positions % n_grid_columns
@@ -396,6 +403,8 @@ def detect_plate_position(
             continue
         record(key, n_controls, float(np.median(cv_r2[scored])), float((cv_r2[scored] > 0).mean()), "")
 
+    if keys.size and not placed:
+        well_positions(wells)  # no plate has a position to score, so raise naming the wells
     adata.uns.setdefault("mantispy", {})[key_added] = pd.DataFrame(table)
     return None
 

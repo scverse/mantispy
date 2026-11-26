@@ -1,6 +1,7 @@
 """Plate and well geometry.
 
-Well names are normalized to the canonical ``A01`` form on read, so every downstream consumer can assume that shape.
+Well names that parse are normalized to the canonical ``A01`` form on read, so every downstream consumer can assume that shape.
+A well named by its number alone, such as PERISCOPE's ``Well1``, is kept as given and has no plate position.
 Rows are 0-based and support the two-letter names used by 1536-well plates (``A`` -> 0, ``AA`` -> 26, ``AF`` -> 31).
 """
 
@@ -8,10 +9,9 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    import pandas as pd
+import numpy as np
+import pandas as pd
 
 #: Standard plate formats, mapped to ``(n_rows, n_columns)``.
 PLATE_FORMATS: dict[int, tuple[int, int]] = {96: (8, 12), 384: (16, 24), 1536: (32, 48)}
@@ -20,6 +20,8 @@ _WELL_RE = re.compile(r"^([A-Za-z]{1,2})[\s_-]?(\d{1,2})$")
 #: ``row/column[/field]``, the spelling CZI's optical-pooled-screen releases use (``A/1/0``). The field is a
 #: site index, not part of the well, so it is matched and discarded.
 _WELL_SLASH_RE = re.compile(r"^([A-Za-z]{1,2})/(\d{1,2})(?:/\d+)?$")
+#: A well named by its number alone, as PERISCOPE writes ``Well1``.
+_NUMBERED_WELL_RE = re.compile(r"^Well\d+$", re.IGNORECASE)
 
 
 def normalize_well(well: str) -> str:
@@ -43,6 +45,61 @@ def normalize_well(well: str) -> str:
     if column < 1:
         raise ValueError(f"cannot parse well name: {well!r}")
     return f"{row}{column:02d}"
+
+
+def unplaced_wells(wells: Iterable[str]) -> list[str]:
+    """The sorted distinct names in `wells` that name no plate row and column, such as PERISCOPE's ``Well1``."""
+    unplaced = set()
+    for well in set(wells):
+        try:
+            normalize_well(well)
+        except ValueError:
+            unplaced.add(str(well))
+    return sorted(unplaced)
+
+
+def is_numbered_well(well: str) -> bool:
+    """Whether `well` names a well by its number alone (``Well1``), which carries no plate position by design."""
+    return _NUMBERED_WELL_RE.match(str(well).strip()) is not None
+
+
+def normalize_wells(wells: pd.Series) -> pd.Series:
+    """Each well of `wells` in canonical ``A01`` form, keeping a well named by its number alone (``Well1``) as given.
+
+    Inventing a position for a well such as ``Well1`` would make plate-position corrections act on a layout the screen never had.
+
+    Args:
+        wells: Well names; missing values stay missing.
+
+    Returns:
+        The wells, normalized, with surrounding whitespace stripped from the ones kept as given.
+
+    Raises:
+        ValueError: A well is neither a plate well nor named by its number alone.
+    """
+    names = wells.dropna().astype(str).unique()
+    mapping = {name: name.strip() if is_numbered_well(name) else normalize_well(name) for name in names}
+    return wells.astype(object).where(wells.isna(), wells.astype(str).map(mapping))
+
+
+def well_positions(wells: Iterable[str]) -> tuple[np.ndarray, np.ndarray]:
+    """0-based plate row and column of each well in `wells`.
+
+    Raises:
+        ValueError: A well is missing, or names no plate row and column, such as PERISCOPE's ``Well1``; the message lists them.
+    """
+    wells = list(wells)
+    if n_missing := sum(bool(pd.isna(well)) for well in wells):
+        raise ValueError(f"Metadata_Well has {n_missing} missing value(s), which have no plate position")
+    if unplaced := unplaced_wells(wells):
+        raise ValueError(
+            f"the wells {unplaced[:5]} name no plate row and column, so they have no plate position. "
+            "Map them onto plate wells such as 'A01' in obs['Metadata_Well'] first."
+        )
+    grid = {well: (well_row(well), well_col(well)) for well in set(wells)}
+    rows = np.array([grid[well][0] for well in wells], dtype=int)
+    columns = np.array([grid[well][1] for well in wells], dtype=int)
+    return rows, columns
 
 
 def well_row(well: str) -> int:

@@ -1,6 +1,8 @@
 """Reading a CellProfiler ExportToSpreadsheet directory through read_profiles."""
 
+import logging
 import warnings
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -8,6 +10,10 @@ import pytest
 
 import mantispy as mt
 from mantispy._core.schema import validate
+
+#: Slices of real exports of the CellProfiler tutorials and of PERISCOPE (cpg0021, plate CP257A, Well1 site 21):
+#: the first images and a few linked objects of each table, with absolute paths scrubbed.
+EXPORTS = Path(__file__).parent / "data" / "cellprofiler"
 
 
 @pytest.mark.parametrize("link_on", ["child", "primary"])
@@ -171,3 +177,33 @@ def test_image_table_joins_one_to_one_on_image_id(cellprofiler_dir):
     assert table.index.name == "Metadata_ImageID"
     assert set(adata.obs["Metadata_ImageID"]) <= set(table.index)
     assert validate(adata).ok, validate(adata).errors
+
+
+# --- real tutorial exports --------------------------------------------------
+
+
+def test_calculate_math_features_keep_their_object_when_every_object_is_read():
+    """objects=None filed Cytoplasm_Math_IntensityRatio as an object-less embedding."""
+    adata = mt.io.read_profiles(EXPORTS / "translocation", objects=None)
+    row = adata.var.loc["Cytoplasm_Math_IntensityRatio"]
+    assert (row["object"], row["feature_group"], row["feature_kind"]) == ("Cytoplasm", "Math", "measurement")
+
+
+def test_a_rowless_well_is_kept_and_round_trips(tmp_path, caplog):
+    """PERISCOPE names its well Well1; the read raised on it, and a plate position must not be invented."""
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
+        adata = mt.io.read_profiles(EXPORTS / "periscope_site21")
+    assert "Well1" not in caplog.text
+    assert set(adata.obs["Metadata_Well"]) == {"Well1"}
+    assert not {"Metadata_Row", "Metadata_Col"} & set(adata.obs.columns)
+    report = validate(adata)
+    assert report.ok, report.errors
+    assert not [warning for warning in report.warnings if "Metadata_Well" in warning], report.warnings
+    mt.io.write(adata, tmp_path / "periscope.h5ad")
+    assert set(mt.io.read(tmp_path / "periscope.h5ad").obs["Metadata_Well"]) == {"Well1"}
+
+
+def test_a_platemap_joins_a_rowless_well():
+    platemap = pd.DataFrame({"Metadata_Well": ["Well1"], "Metadata_Perturbation": ["library"]})
+    adata = mt.io.read_profiles(EXPORTS / "periscope_site21", platemap=platemap)
+    assert set(adata.obs["Metadata_Perturbation"]) == {"library"}

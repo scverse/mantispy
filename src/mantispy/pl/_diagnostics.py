@@ -9,7 +9,7 @@ from mantispy._core._pca import pca_solver
 from mantispy._core._reduce import get_matrix
 from mantispy._core.frames import as_frame
 from mantispy._core.masks import reference_mask
-from mantispy._core.plate import well_col, well_row
+from mantispy._core.plate import well_positions
 from mantispy.pl._common import axes as _axes
 from mantispy.pl._common import maybe_interactive as _maybe_interactive
 from mantispy.pl._common import returned as _returned
@@ -43,15 +43,17 @@ def plate_effects(adata: AnnData, feature: str | None = None, axes: np.ndarray |
 
     Raises:
         KeyError: ``feature`` is not one of ``var_names``, or ``obs`` has no ``Metadata_Plate`` or ``Metadata_Well`` column.
+        ValueError: A well names no plate row and column (``Well1``).
     """
     import matplotlib.pyplot as plt
 
     values = _feature_values(adata, feature)
+    rows, columns = well_positions(adata.obs["Metadata_Well"])
     frame = pd.DataFrame(
         {
             "plate": adata.obs["Metadata_Plate"].astype(str).to_numpy(),
-            "row": [well_row(well) for well in adata.obs["Metadata_Well"]],
-            "col": [well_col(well) for well in adata.obs["Metadata_Well"]],
+            "row": rows,
+            "col": columns,
             "value": values,
         }
     )
