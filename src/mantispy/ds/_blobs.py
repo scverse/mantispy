@@ -87,7 +87,7 @@ def blobs(
     plate: str = "BLOBS01",
     seed: int = 0,
 ) -> SpatialData:
-    """A small synthetic Cell Painting plate, laid out like one :func:`mantispy.io.read_plate` returns.
+    """A small synthetic Cell Painting plate, laid out like one :func:`mantispy.io.read_cellprofiler_gallery` returns.
 
     Round cells with a concentric nucleus are stained in the five Cell Painting channels and measured.
     The result is complete without a download: Images, Labels for the three compartments, well Shapes, and ``cells`` and ``wells`` Tables whose features carry CellProfiler names.

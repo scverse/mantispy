@@ -29,11 +29,11 @@ pip install git+https://github.com/scverse/mantispy.git  # or with pip
 
 ### Images and segmentations
 
-{func}`~mantispy.io.read_plate`, {func}`~mantispy.ds.jump_plate` and {func}`~mantispy.ds.blobs` read images into `SpatialData`:
+{func}`~mantispy.io.read_cellprofiler_zarr`, {func}`~mantispy.io.read_cellprofiler_gallery`, {func}`~mantispy.ds.jump_plate` and {func}`~mantispy.ds.blobs` read images into `SpatialData`:
 
 ```console
-uv add 'mantispy[spatial]'  # in a uv project
-pip install 'mantispy[spatial]'  # or with pip
+uv add 'mantispy[images]'  # in a uv project
+pip install 'mantispy[images]'  # or with pip
 ```
 
 ### Integration metrics

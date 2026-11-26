@@ -1299,14 +1299,14 @@ def jump_plate(cache_dir: str | Path | None = None, **kwargs: Any) -> SpatialDat
     """The images and segmentations behind one well of ``BR00121438``.
 
     Two fields of view of well ``O09``, a compound that changed the cells without killing them: the eight channel images of each field, the CellProfiler outlines they were segmented with, and the plate's ``load_data.csv``.
-    Needs the spatial extra.
+    Needs the images extra.
 
     The cells measured from these fields are in :func:`jump_cells`, and the well-level profiles of the same plate in :func:`jump_target2`.
 
     Args:
         cache_dir: Where to keep the download.
             Defaults to :attr:`mantispy.settings.cache_dir`.
-        kwargs: Passed to :func:`mantispy.io.read_plate`.
+        kwargs: Passed to :func:`mantispy.io.read_cellprofiler_gallery`.
 
     Returns:
         The well, with its fields as Images, the Nuclei, Cells and Cytoplasm segmentations as Labels, and the ``cells`` Table.
@@ -1314,17 +1314,17 @@ def jump_plate(cache_dir: str | Path | None = None, **kwargs: Any) -> SpatialDat
     References:
         :cite:t:`Chandrasekaran_2023`.
     """
-    from mantispy.io._plate import read_plate
+    from mantispy.io._gallery import read_cellprofiler_gallery
 
     entry = _DATASETS["jump_plate"]
     paths = _files("jump_plate", cache_dir)
     # Every file is named by its gallery key, so stripping that key off a downloaded path gives the source tree's root.
     downloaded = Path(str(paths[0]).removesuffix(entry.files[0].name))
     root = downloaded / str(entry.metadata["accession"]) / str(entry.metadata["source"])
-    return read_plate(
+    return read_cellprofiler_gallery(
         root,
-        str(entry.metadata["plate"]),
         batch=str(entry.metadata["batch"]),
+        plate=str(entry.metadata["plate"]),
         wells=[str(entry.metadata["well"])],
         profile=None,
         **kwargs,

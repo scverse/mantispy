@@ -15,7 +15,8 @@ Read CellProfiler exports, profiles, plates and JUMP data into `AnnData` or `Spa
    io.read_cellprofiler_csv
    io.read_cellprofiler_sqlite
    io.read_profiles
-   io.read_plate
+   io.read_cellprofiler_zarr
+   io.read_cellprofiler_gallery
    io.read_jump
    io.unexpressed_genes
    io.read
