@@ -339,11 +339,28 @@ def test_an_image_only_export_gives_one_row_per_image(tmp_path, source):
     assert mt.io.read(tmp_path / "qc.h5ad").n_obs == 3
 
 
-def test_an_export_of_image_metadata_only_reads_as_a_table_without_features(tmp_path):
+def test_an_export_of_image_metadata_only_reads_as_a_table_without_features(tmp_path, caplog):
     """Input-module pipelines measure nothing; their export is a list of images and their metadata."""
-    adata = mt.io.read_cellprofiler(EXPORTS / "im_2d_ex1")
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
+        adata = mt.io.read_cellprofiler(EXPORTS / "im_2d_ex1")
     assert adata.n_vars == 0
     assert validate(adata).ok, validate(adata).errors
+    assert "holds image metadata and no measurement" in caplog.text
+
+
+def test_a_profile_of_locations_only_warns_and_names_the_per_object_reader(tmp_path, caplog):
+    """The bonus tutorials segment with ilastik or Cellpose and measure nothing; the read returned 848 x 0 silently."""
+    directory = tmp_path / "locations"
+    shutil.copytree(EXPORTS / "translocation", directory)
+    for name in ("Cytoplasm", "Nuclei"):
+        table = pd.read_csv(directory / f"MyExpt_{name}.csv")
+        kept = [c for c in table.columns if c in ("ImageNumber", "ObjectNumber") or c.startswith(("Location_", "Parent_"))]
+        table[kept].to_csv(directory / f"MyExpt_{name}.csv", index=False)
+    with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
+        adata = mt.io.read_cellprofiler(directory)
+    assert adata.n_vars == 0
+    assert "the Cells profile holds no feature" in caplog.text
+    assert "mt.io.read_cellprofiler_csv returns every object" in caplog.text
 
 
 def test_an_identity_column_left_empty_is_left_out(tmp_path):

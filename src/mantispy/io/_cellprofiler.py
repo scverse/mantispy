@@ -359,6 +359,19 @@ def _image_only(raw: RawExport, channels: Sequence[str] | None) -> AnnData:
     return adata
 
 
+def _warn_featureless(root: str | None, kind: str) -> None:
+    """Warn that a profile holds no feature, and say where the objects are."""
+    if root is None:
+        get_logger().warning("the export holds image metadata and no measurement; the metadata is in obs")
+    else:
+        get_logger().warning(
+            "the %s profile holds no feature, as no object joined to it was measured; "
+            "mt.io.read_cellprofiler_%s returns every object with its locations in obs",
+            root,
+            kind,
+        )
+
+
 def read_cellprofiler(
     path: str | Path,
     *,
@@ -379,6 +392,7 @@ def read_cellprofiler(
     Objects of which a root has several, such as the nucleoli of a nucleus, are rolled into it by :func:`~mantispy.tl.aggregate_objects` when `aggregate` is given, and otherwise left out with one warning naming them.
     Objects not linked to `root` at all, such as the objects of an imported mask, are left out with one warning; their counts per image stay in ``uns["mantispy"]["image_table"]``.
     So is an object with a link nothing explains, unless it is `root`, whose own links must be explained.
+    A profile without a feature, as an export of locations or of image metadata only gives, is returned with a warning.
 
     Args:
         path: The export directory or database.
@@ -413,13 +427,16 @@ def read_cellprofiler(
 
     path = Path(path)
     func = statistics(aggregate) if aggregate is not None else None
+    kind = _kind(path)
     tables = _read_tables(
-        path, _kind(path), files=files, relations=relations, channels=channels, sentinels=sentinels, root=root
+        path, kind, files=files, relations=relations, channels=channels, sentinels=sentinels, root=root
     )
     if list(tables) == ["Image"]:
         adata = tables["Image"]
     else:
         adata = combine(tables, root, func=func, strict=strict)
+    if not adata.n_vars:
+        _warn_featureless(root if list(tables) != ["Image"] else None, kind)
     obs = as_frame(adata.obs)
     if platemap is not None:
         obs = _join_platemap(obs, platemap)
