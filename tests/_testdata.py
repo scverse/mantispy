@@ -46,6 +46,12 @@ def _write_site(directory: Path, well: str, site: int, *, overlay: bool) -> None
             image[find_boundaries(_truth("Nuclei"), mode="inner")] = (0, 128, 0)
         iio.imwrite(path.with_suffix(".tiff"), image)
 
+    # The Image table the gallery's ExportToSpreadsheet writes beside the objects, which makes the site a CSV export.
+    plate = directory.name.removesuffix(f"-{well}-{site}")
+    pd.DataFrame(
+        {"ImageNumber": [1], "Metadata_Plate": [plate], "Metadata_Well": [well], "Metadata_Site": [site]}
+        | {"Count_Cells": [2], "Count_Nuclei": [2]}
+    ).to_csv(directory / "Image.csv", index=False)
     for kind in ("Cells", "Nuclei"):
         truth = _truth(kind)
         pd.DataFrame(

@@ -252,15 +252,28 @@ def test_each_reader_points_at_the_other_layout(gallery: Path, export: Path, tmp
         mt.io.read_cellprofiler_gallery(blank, batch=BATCH, plate=PLATE)
 
 
-def test_read_cellprofiler_profiles_the_cell_table_of_either_layout(
-    export: Path, unlocated_gallery: Path, make_export
-) -> None:
-    """read_cellprofiler returns the cell table the image readers read, as one AnnData, from a plate folder or its root."""
-    gallery = mt.io.read_cellprofiler_gallery(unlocated_gallery, batch=BATCH, plate=PLATE, profile=None)
+def test_read_cellprofiler_reads_a_gallery_plate_from_its_csv_exports_without_images(unlocated_gallery: Path) -> None:
+    """Every cell of every analysed site, as the CSVs hold them; reading through the masks loaded each image and dropped cells."""
+    shutil.rmtree(unlocated_gallery / "images")
+    sites = sorted((unlocated_gallery / "workspace/analysis" / BATCH / PLATE / "analysis").iterdir())
+    cells = pd.concat([pd.read_csv(site / "Cells.csv") for site in sites], ignore_index=True)
+
+    adata = mt.io.read_cellprofiler(unlocated_gallery)
+    assert adata.n_obs == len(cells)
+    np.testing.assert_array_equal(
+        np.asarray(adata[:, "Cells_AreaShape_Area"].X).ravel(), cells["AreaShape_Area"].to_numpy()
+    )
+    assert set(adata.obs["Metadata_Site"]) == {1, 2}
+    assert adata.obs_names[0].startswith(f"{sites[0].name}:")
+    mt.io.validate(adata, raise_on_error=True)
+    assert mt.io.read_cellprofiler(unlocated_gallery, aggregate="count").n_obs == len(cells)
+
+
+def test_read_cellprofiler_profiles_the_cell_table_of_an_export(export: Path, make_export) -> None:
+    """read_cellprofiler returns the cell table the zarr reader reads, as one AnnData, from a plate folder or its root."""
     cases = {
         export: mt.io.read_cellprofiler_zarr(export),
         export.parent: mt.io.read_cellprofiler_zarr(export),
-        unlocated_gallery: gallery,
     }
     for path, sdata in cases.items():
         adata = mt.io.read_cellprofiler(path)

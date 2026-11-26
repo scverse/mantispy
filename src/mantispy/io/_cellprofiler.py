@@ -277,9 +277,8 @@ def _kind(path: Path) -> str:
     if path.is_dir() and len([p for p in path.iterdir() if p.suffix in SQLITE_SUFFIXES]) == 1:
         return "sqlite"
     if path.is_dir() and (layout := _detect_layout(path)) is not None:
-        raise ValueError(
-            f"{path} is {_LAYOUTS[layout]}, which read_cellprofiler reads on its own, without out=, not in a list"
-        )
+        alone = "on its own, without out=," if layout == "zarr" else "on its own,"
+        raise ValueError(f"{path} is {_LAYOUTS[layout]}, which read_cellprofiler reads {alone} not in a list")
     found = sorted(p.name for p in path.iterdir())[:10] if path.is_dir() else []
     raise FileNotFoundError(
         f"{path} is not a CellProfiler export: no <prefix>Image.csv or Image.txt, and no SQLite database"
@@ -482,27 +481,32 @@ def _gallery_plate(source: Path) -> tuple[str, str]:
     return found[0]
 
 
-def _spatial_profile(path: Path, layout: str, *, root: str, func: Sequence[str] | None) -> AnnData:
-    """The cell table of an ExportForSpatialData export or a gallery source, as the profile."""
-    from mantispy.io._export import export_plate_dirs, is_export_plate_dir
+def _gallery_sites(source: Path) -> list[Path]:
+    """The per-site ExportToSpreadsheet directories of the one plate of a gallery source.
+
+    Raises:
+        FileNotFoundError: The plate has no analysis directory.
+    """
+    batch, plate = _gallery_plate(source)
+    analysis = source / "workspace/analysis" / batch / plate / "analysis"
+    if not analysis.is_dir() or not (sites := sorted(p for p in analysis.iterdir() if p.is_dir())):
+        raise FileNotFoundError(f"{source} holds no analysis of plate {plate} under {analysis}")
+    return sites
+
+
+def _spatial_profile(path: Path, *, root: str, func: Sequence[str] | None) -> AnnData:
+    """The cell table of an ExportForSpatialData export, as the profile."""
+    from mantispy.io._export import export_plate_dirs, is_export_plate_dir, read_cellprofiler_zarr
 
     if root != "Cells":
-        raise ValueError(f"{path} is {_LAYOUTS[layout]}, which holds one table, of Cells; root={root!r} has none")
+        raise ValueError(f"{path} is {_LAYOUTS['zarr']}, which holds one table, of Cells; root={root!r} has none")
     if func is not None:
         raise ValueError(
-            f"{path} is {_LAYOUTS[layout]}, whose Cells table is already joined; aggregate= needs one table per object"
+            f"{path} is {_LAYOUTS['zarr']}, whose Cells table is already joined; aggregate= needs one table per object"
         )
-    if layout == "zarr":
-        from mantispy.io._export import read_cellprofiler_zarr
-
-        if not is_export_plate_dir(path) and len(plates := export_plate_dirs(path)) > 1:
-            raise ValueError(f"{path} holds several plates; pass one plate folder, one of {[p.name for p in plates]}")
-        sdata = read_cellprofiler_zarr(path)
-    else:
-        from mantispy.io._gallery import read_cellprofiler_gallery
-
-        batch, plate = _gallery_plate(path)
-        sdata = read_cellprofiler_gallery(path, batch=batch, plate=plate, profile=None)
+    if not is_export_plate_dir(path) and len(plates := export_plate_dirs(path)) > 1:
+        raise ValueError(f"{path} holds several plates; pass one plate folder, one of {[p.name for p in plates]}")
+    sdata = read_cellprofiler_zarr(path)
     if "cells" not in sdata.tables:
         raise FileNotFoundError(f"no table for {root!r} in {path}: it holds no labelled cells")
     adata = sdata.tables["cells"].copy()
@@ -529,7 +533,8 @@ def read_cellprofiler(
     """Read a CellProfiler export, or several, into one profile, one row per `root` object.
 
     `path` is a directory an ``ExportToSpreadsheet`` run wrote or an SQLite database an ``ExportToDatabase`` run wrote; :func:`read_cellprofiler_csv` and :func:`read_cellprofiler_sqlite` describe how each is read.
-    It can also be one plate of an ``ExportForSpatialData`` run or a Cell Painting Gallery source of one plate, which need the ``images`` extra: the profile is then the cell table :func:`read_cellprofiler_zarr` or :func:`read_cellprofiler_gallery` reads, already joined, so `root` is ``"Cells"`` and `aggregate` is not taken.
+    It can also be a Cell Painting Gallery source of one plate, whose per-site ``ExportToSpreadsheet`` directories under ``workspace/analysis`` are read as a list of exports, without loading an image.
+    Or it can be one plate of an ``ExportForSpatialData`` run, which needs the ``images`` extra: the profile is then the cell table :func:`read_cellprofiler_zarr` reads, already joined, so `root` is ``"Cells"`` and `aggregate` is not taken.
     The compartments of `root` (the objects one to one with it, such as the cytoplasm and nucleus of a cell) and its ancestors are joined onto it.
     Objects of which a root has several, such as the nucleoli of a nucleus, are rolled into it by :func:`~mantispy.tl.aggregate_objects` when `aggregate` is given, and otherwise left out with one warning naming them.
     Objects not linked to `root` at all, such as the objects of an imported mask, are left out with one warning; their counts per image stay in ``uns["mantispy"]["image_table"]``.
@@ -566,9 +571,9 @@ def read_cellprofiler(
         CellProfiler's bookkeeping stays in the per-object tables and out of ``obs``: where in a file each image sat (``Metadata_FileLocation``, ``Metadata_Frame``, ``Metadata_Series``, ``Metadata_ChannelNumber``) and each object's own child counts, number, parent links and Z centroid.
 
     Raises:
-        FileNotFoundError: `path` is not a CellProfiler export, or a path of a list is not one and `skip_non_exports` is not set.
-        ImportError: `out` is given and dask is not installed, or `path` is an ``ExportForSpatialData`` export or a gallery source and spatialdata is not installed.
-        ValueError: `path` is an ``ExportForSpatialData`` export or a gallery source of several plates, given with `root` other than ``"Cells"``, with `aggregate`, with `out` or in a list, there is no table for `root`, a link of `root` cannot be classified, a compartment is not one to one with `root`, `strict` is set and an object has no partner, `aggregate` names an unknown statistic, or two exports hold the same image.
+        FileNotFoundError: `path` is not a CellProfiler export, a path of a list is not one and `skip_non_exports` is not set, or a gallery source holds no analysis of its plate.
+        ImportError: `out` is given and dask is not installed, or `path` is an ``ExportForSpatialData`` export and spatialdata is not installed.
+        ValueError: `path` is an ``ExportForSpatialData`` export given with `root` other than ``"Cells"``, with `aggregate`, with `out` or in a list, a gallery source of several plates or in a list, there is no table for `root`, a link of `root` cannot be classified, a compartment is not one to one with `root`, `strict` is set and an object has no partner, `aggregate` names an unknown statistic, or two exports hold the same image.
 
     Examples:
         >>> import mantispy as mt
@@ -596,14 +601,17 @@ def read_cellprofiler(
         "platemap": platemap,
         "index_columns": index_columns,
     }
-    if isinstance(path, str | Path) and out is None:
-        path = Path(path)
-        if path.is_dir() and (layout := _detect_layout(path)) is not None:
-            adata = _index(
-                _spatial_profile(path, layout, root=root, func=func), platemap=platemap, index_columns=index_columns
-            )
+    if isinstance(path, str | Path) and Path(path).is_dir():
+        layout = _detect_layout(Path(path))
+        if layout == "gallery":
+            path = _gallery_sites(Path(path))
+        elif layout == "zarr" and out is None:
+            adata = _spatial_profile(Path(path), root=root, func=func)
+            adata = _index(adata, platemap=platemap, index_columns=index_columns)
             record_params(adata, "read_cellprofiler", {"path": str(path), **params})
             return adata
+    if isinstance(path, str | Path) and out is None:
+        path = Path(path)
         kind = _kind(path)
         tables = _read_tables(path, kind, root=root, **read)
         adata = _profile(tables, **profile)
