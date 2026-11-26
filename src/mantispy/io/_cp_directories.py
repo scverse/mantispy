@@ -122,7 +122,11 @@ def read_directories(
         if not parts:
             if not image_only:
                 raise FileNotFoundError(f"no table for {root!r} in any of the {len(kinds)} exports")
-            parts, files = image_only, []
+            parts = image_only
+            if scratch is not None:
+                files = [Path(scratch) / f"{position}.h5ad" for position in range(len(parts))]
+                for part, file in zip(parts, files, strict=True):
+                    part.write_h5ad(file)
         if (repeated := pd.Index(np.concatenate([part.obs_names for part in parts])).duplicated()).any():
             raise ValueError(f"{repeated.sum()} observations share an index; pass index_columns that identify them")
 
@@ -141,7 +145,7 @@ def read_directories(
                 dtypes.setdefault(str(column), dtype)
         shell = AnnData(uns={"mantispy": {**parts[0].uns["mantispy"], "image_table": pd.concat(images)}})
         record_params(shell, "read_cellprofiler", {"path": [str(path) for path in kinds], **params})
-        if target is None or not files:
+        if target is None:
             result = ad.concat([_conform(part, var, dtypes) for part in parts], join="inner", merge="same")
             result.uns = shell.uns
             return result

@@ -387,6 +387,8 @@ def test_an_export_of_image_metadata_only_reads_as_a_table_without_features(tmp_
     assert adata.n_vars == 0
     assert validate(adata).ok, validate(adata).errors
     assert "holds image metadata and no measurement" in caplog.text
+    mt.io.write(adata, tmp_path / "images.h5ad")
+    assert list(mt.io.read(tmp_path / "images.h5ad").obs_names) == list(adata.obs_names)
 
 
 def test_a_profile_of_locations_only_warns_and_names_the_per_object_reader(tmp_path, caplog):
@@ -729,3 +731,12 @@ def test_two_exports_of_the_same_image_are_refused(tmp_path):
     sites = [_site(tmp_path, "a", site=1), _site(tmp_path, "b", site=1)]
     with pytest.raises(ValueError, match="both hold the image"):
         mt.io.read_cellprofiler(sites)
+
+
+def test_several_image_only_exports_stream_into_one_table(tmp_path):
+    sites = [_site(tmp_path, "q1", site=1, source="qc"), _site(tmp_path, "q2", site=2, source="qc")]
+    adata = mt.io.read_cellprofiler(sites, out=tmp_path / "images.h5ad")
+    assert (
+        adata.n_obs == len(adata.uns["mantispy"]["image_table"]) == 2 * len(pd.read_csv(sites[0] / "MyExpt_Image.csv"))
+    )
+    assert adata.uns["mantispy"]["resolution"] == "aggregate"
