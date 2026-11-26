@@ -26,6 +26,15 @@ from mantispy.io._cp_links import Omissions, carriers, classify, unexplained_mes
 __all__ = ["export_prefix", "read_cellprofiler", "read_cellprofiler_csv", "read_cellprofiler_sqlite"]
 
 _KEYS = ("ImageNumber", "ObjectNumber")
+#: The columns that say where each image was loaded from; they belong to the image table, not to the objects.
+FILE_PREFIXES = ("FileName_", "PathName_", "URL_")
+
+
+def _is_file_column(column: str) -> bool:
+    """Whether `column` locates an image file, as CellProfiler names it or as LoadData read it back as metadata."""
+    return column.removeprefix("Metadata_Image_").startswith(FILE_PREFIXES)
+
+
 #: Identity columns the Metadata module writes even when it extracted no value for them.
 _IDENTITY = ("Metadata_Plate", "Metadata_Well", "Metadata_Site")
 
@@ -64,23 +73,43 @@ def _prefix(frame: pd.DataFrame, obj: str) -> pd.DataFrame:
     return frame.rename(columns={c: c if c in _KEYS or c.startswith(keep) else f"{obj}_{c}" for c in frame.columns})
 
 
+def _imported_image_columns(image: pd.DataFrame) -> pd.DataFrame:
+    """`image` with the ``Image_`` columns of an earlier export that LoadData read back as metadata under their own names.
+
+    The Advanced tutorial loads the ``Image.csv`` of an earlier run, so its ``Image_Metadata_BROAD_ID`` and ``Image_FileName_OrigER`` come back as ``Metadata_Image_Metadata_BROAD_ID`` and ``Metadata_Image_FileName_OrigER``.
+    A copy of a column the image table already holds with the same values is dropped, and one with other values is kept as it is.
+    """
+    renames: dict[str, str] = {}
+    copies: list[str] = []
+    for column in (c for c in image.columns if c.startswith("Metadata_Image_")):
+        name = column.removeprefix("Metadata_Image_")
+        if name not in image.columns and name not in renames.values():
+            renames[column] = name
+        elif name in image.columns and image[name].astype(str).equals(image[column].astype(str)):
+            copies.append(column)
+    return image.drop(columns=copies).rename(columns=renames)
+
+
 def _image_metadata(image: pd.DataFrame) -> pd.DataFrame:
     """``ImageNumber`` and the image metadata, ``Image_Metadata_`` read as ``Metadata_``."""
     renames = {
         c: "Metadata_" + c.removeprefix("Image_Metadata_") for c in image.columns if c.startswith("Image_Metadata_")
     }
-    renames |= {c: c for c in image.columns if c.startswith("Metadata_")}
+    renames |= {c: c for c in image.columns if c.startswith("Metadata_") and not _is_file_column(c)}
     return image[["ImageNumber", *renames]].rename(columns=renames)
 
 
 def _image_table(image: pd.DataFrame, metadata: pd.DataFrame, ids: np.ndarray) -> pd.DataFrame:
-    """Per-image quality measurements and object counts, keyed by ``Metadata_ImageID`` and carrying plate/well/site.
+    """Per-image quality measurements, object counts and file locations, keyed by ``Metadata_ImageID`` and carrying plate/well/site.
 
     The plate and well columns let :func:`~mantispy.pp.image_qc` threshold per plate instead of pooling every plate together.
     Every image is a row, including those in which no object was found.
     """
-    measured = [c for c in image.columns if "ImageQuality" in c or c.startswith("Count_")]
+    measured = [c for c in image.columns if "ImageQuality" in c or c.startswith("Count_") or _is_file_column(c)]
     table = image[measured].copy()
+    # A location ExportToDatabase left empty reads as None, which h5ad cannot write in an object column.
+    files = [c for c in measured if _is_file_column(c)]
+    table[files] = table[files].astype("str")
     for column in _IDENTITY:
         if column in metadata:
             values = metadata[column].to_numpy()
@@ -152,7 +181,7 @@ def _finish(
     log = get_logger()
     if raw.renamed_image_number:
         log.info("kept the imported Metadata_ImageNumber as Metadata_ImportedImageNumber")
-    image = raw.image
+    image = _imported_image_columns(raw.image)
     if empty := [column for column in _IDENTITY if column in image and image[column].isna().all()]:
         log.info("%s are empty in every image and were left out", empty)
         image = image.drop(columns=empty)
@@ -160,7 +189,12 @@ def _finish(
         if "Location_Center_Z" in frame and (frame["Location_Center_Z"].fillna(0) != 0).any():
             raise ValueError(f"{name} was measured in 3D (Location_Center_Z is not 0); mantispy reads 2D exports only")
 
-    tables = {name: frame for name, frame in raw.objects.items() if len(frame)}
+    # ExportToSpreadsheet can copy each image's file names into the object tables; the image table holds them.
+    tables = {
+        name: frame.drop(columns=[c for c in frame.columns if c.startswith(FILE_PREFIXES) and c in image.columns])
+        for name, frame in raw.objects.items()
+        if len(frame)
+    }
     if empty_tables := sorted(set(raw.objects) - set(tables)):
         log.debug("left out %s, which hold no object", empty_tables)
     unexported: dict[str, list[str]] = {}
@@ -263,7 +297,8 @@ def read_cellprofiler_csv(
     ``uns["mantispy"]["links"]`` says what each link means, ``"compartment"``, ``"subset"``, ``"aggregate"`` or ``"carrier"``, as the module that made the object decides it: the pipeline text the export stores is read for it.
     Without the pipeline, only RelateObjects' columns and the cell, cytoplasm and nucleus compartments with equal counts are read by name.
     A table with a link nothing explains is left out, with one warning naming the link and the `relations` that reads it as the tables suggest.
-    ``uns["mantispy"]["image_table"]`` holds the image quality measurements and the object counts of every image.
+    ``uns["mantispy"]["image_table"]`` holds the image quality measurements, the object counts and the ``FileName_``, ``PathName_`` and ``URL_`` columns of every image, so the objects' ``obs`` does not repeat the file names.
+    The image metadata is in ``obs`` as ``Metadata_<name>``, including the ``Image_Metadata_<name>`` of an earlier run that LoadData read back.
     A table that holds only locations, as an imported mask gives, has no feature and keeps its locations in ``obs``.
     A copy that only carries a link, such as the objects ResizeObjects writes or the children RelateObjects saves, is not returned; the link to it stays in ``obs`` and ``links`` of the tables that have one.
     An export of image measurements only, as a quality-control pipeline writes, gives one ``"Image"`` table of one row per image.
@@ -334,12 +369,13 @@ def _image_only(raw: RawExport, channels: Sequence[str] | None) -> AnnData:
     """An export of image measurements only, as one row per image stamped as ``tl.aggregate(by="Metadata_ImageID")`` stamps it."""
     from mantispy.io._profiles import from_dataframe
 
-    image = raw.image
+    image = _imported_image_columns(raw.image)
     if empty := [column for column in _IDENTITY if column in image and image[column].isna().all()]:
         image = image.drop(columns=empty)
     metadata = _image_metadata(image)
     ids = make_image_id(metadata.rename(columns={"ImageNumber": "Metadata_ImageNumber"}))
-    frame = _prefix(image.drop(columns=[c for c in metadata.columns if c != "ImageNumber"]), "Image")
+    dropped = [c for c in image.columns if _is_file_column(c) or (c in metadata and c != "ImageNumber")]
+    frame = _prefix(image.drop(columns=dropped), "Image")
     identity = metadata.drop(columns="ImageNumber").assign(Metadata_ImageID=ids)
     frame = pd.concat([frame, identity], axis=1).rename(columns={"ImageNumber": "Metadata_ImageNumber"})
     numeric = [c for c in frame.select_dtypes("number").columns if not c.startswith("Metadata_")]
@@ -411,6 +447,7 @@ def read_cellprofiler(
 
     Returns:
         An object-resolution :class:`~anndata.AnnData` with `root`'s centroid as ``Metadata_Center_X``/``Metadata_Center_Y``, the number of each joined object as ``Metadata_<Object>ObjectNumber``, the image table under ``uns["mantispy"]["image_table"]`` and this call's parameters.
+        CellProfiler's bookkeeping stays in the per-object tables and out of ``obs``: where in a file each image sat (``Metadata_FileLocation``, ``Metadata_Frame``, ``Metadata_Series``, ``Metadata_ChannelNumber``) and each object's own child counts, number, parent links and Z centroid.
 
     Raises:
         FileNotFoundError: `path` is not a CellProfiler export.
@@ -423,7 +460,7 @@ def read_cellprofiler(
         >>> cells = mt.io.read_cellprofiler("analysis/", aggregate=("count", "mean"))  # doctest: +SKIP
     """
     from mantispy.io._profiles import _join_platemap
-    from mantispy.tl._aggregate_objects import combine, statistics
+    from mantispy.tl._aggregate_objects import combine, profile_obs, statistics
 
     path = Path(path)
     func = statistics(aggregate) if aggregate is not None else None
@@ -433,6 +470,7 @@ def read_cellprofiler(
     )
     if list(tables) == ["Image"]:
         adata = tables["Image"]
+        adata.obs = profile_obs(as_frame(adata.obs), "Image")
     else:
         adata = combine(tables, root, func=func, strict=strict)
     if not adata.n_vars:

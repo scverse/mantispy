@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -21,6 +22,29 @@ from mantispy.io._cp_links import Omissions, carriers, link_edges
 #: The statistics a child's features are rolled into its root with; ``count`` is the number of children.
 STATISTICS = ("count", "mean", "median", "std")
 _KERNELS = {"mean": MEAN, "median": MEDIAN, "std": STD}
+
+
+#: NamesAndTypes' record of where in a file each image sat, which the per-object tables keep and a profile does not.
+_FILE_BOOKKEEPING = ("Metadata_ChannelNumber", "Metadata_FileLocation", "Metadata_Frame", "Metadata_Series")
+#: CellProfiler's own counts, numbers and links of an object, which the per-object tables keep and a profile does not.
+_OBJECT_BOOKKEEPING = re.compile(r"_(Children_.+_Count|Location_Center_Z|Number_Object_Number|Parent_.+)$")
+
+
+def profile_obs(obs: pd.DataFrame, root: str) -> pd.DataFrame:
+    """`obs` of a profile without CellProfiler's bookkeeping, and without the root's centroid twice.
+
+    The identity the schema asks for (image and object numbers, plate, well, site, centroid, the numbers of joined objects) stays.
+    """
+    duplicates = {f"{root}_Location_Center_X", f"{root}_Location_Center_Y"} if "Metadata_Center_X" in obs else set()
+    return obs.drop(
+        columns=[
+            column
+            for column in obs.columns
+            if column in _FILE_BOOKKEEPING
+            or column in duplicates
+            or (not column.startswith("Metadata_") and _OBJECT_BOOKKEEPING.search(column))
+        ]
+    )
 
 
 def statistics(func: str | Sequence[str]) -> tuple[str, ...]:
@@ -62,7 +86,7 @@ def aggregate_objects(
         An object-resolution :class:`~anndata.AnnData` with the root's features, those of the joined objects, and per child the column ``<Child>_count`` and ``<Child>_<column>_<stat>`` for each of its features and statistics.
         ``var`` keeps the parsed annotation of the child's column and adds ``aggregation``, the statistic, and ``parent``, the root.
         CellProfiler's own ``<Parent>_Mean_<Child>_`` columns are left out for each child rolled up here.
-        ``obs`` is the root's, with the number of each joined object as ``Metadata_<Object>ObjectNumber``.
+        ``obs`` is the root's, with the number of each joined object as ``Metadata_<Object>ObjectNumber`` and without the bookkeeping :func:`~mantispy.io.read_cellprofiler` leaves out.
 
     Raises:
         ValueError: There is no table for `root`, `func` names an unknown statistic, a compartment is not one to one with its parent, a child links to an object number its parent table lacks, or two result columns share a name.
@@ -301,7 +325,7 @@ def combine(
     if var.index.has_duplicates:
         raise ValueError(f"the rolled-up columns repeat names: {sorted(set(var.index[var.index.duplicated()]))[:5]}")
     X = np.hstack(blocks) if blocks else np.empty((n_root, 0))
-    result = ad.AnnData(X=X, obs=categorize_metadata(obs), var=var)
+    result = ad.AnnData(X=X, obs=categorize_metadata(profile_obs(obs, root)), var=var)
     stamp(result, resolution="object")
     store = base.uns.get("mantispy", {})
     if "image_table" in store:

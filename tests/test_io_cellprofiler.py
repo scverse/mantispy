@@ -104,7 +104,7 @@ def test_a_link_nothing_explains_leaves_its_table_out_and_suggests_its_kind(tmp_
         adata = mt.io.read_cellprofiler(directory, aggregate="count")
     assert "Spots" not in tables
     assert "Spots_count" not in adata.var_names
-    assert caplog.text.count(f"left out ['Spots']: cannot tell what the link(s) Spots -> Cells mean") == 2
+    assert caplog.text.count("left out ['Spots']: cannot tell what the link(s) Spots -> Cells mean") == 2
     assert suggestion in caplog.text
     # The root's own links decide what a row is, so they are never guessed.
     with pytest.raises(ValueError, match=re.escape(suggestion)):
@@ -311,6 +311,47 @@ def test_a_single_object_table_with_calculate_math_reads_like_the_csv_one():
     )
 
 
+def test_every_export_of_a_run_gives_the_same_obs_with_file_locations_in_the_image_table():
+    """The tab export copied file names into obs as Cells_FileName_*, LoadData's as Metadata_Image_FileName_*."""
+    beginner = [
+        EXPORTS / "beginner",
+        EXPORTS / "beginner_nulltab",
+        SQLITE / "beginner_db_view.db",
+        SQLITE / "beginner_db_single.db",
+    ]
+    profiles = [mt.io.read_cellprofiler(path) for path in beginner]
+    profiles.append(
+        mt.io.read_cellprofiler(
+            EXPORTS / "beginner_combined", relations={"NucleoliChildObjects": {"Nucleoli": "carrier"}}
+        )
+    )
+    expected = list(profiles[0].obs.columns)
+    for adata in profiles:
+        assert list(adata.obs.columns) == expected
+        assert "FileName_OrigDNA" in adata.uns["mantispy"]["image_table"]
+    assert not [c for c in expected if "FileName" in c or "PathName" in c]
+    assert not {"Metadata_FileLocation", "Metadata_Frame", "Metadata_Series", "Metadata_ChannelNumber"} & set(expected)
+
+    advanced = mt.io.read_cellprofiler(EXPORTS / "advanced")
+    assert list(advanced.obs.columns) == list(mt.io.read_cellprofiler(SQLITE / "advanced_db.db").obs.columns)
+    # LoadData read an earlier run's Image_Metadata_BROAD_ID back as Metadata_Image_Metadata_BROAD_ID.
+    assert {"Metadata_BROAD_ID", "Metadata_Plate", "Metadata_Well", "Metadata_Site"} <= set(advanced.obs.columns)
+    assert not [c for c in advanced.obs.columns if "FileName" in c or "PathName" in c]
+
+
+def test_the_profile_leaves_cellprofilers_bookkeeping_in_the_per_object_tables():
+    """Translocation measures nothing on its cells, whose links, counts and Z centroid filled the profile's obs."""
+    bookkeeping = ["Cells_Children_Cytoplasm_Count", "Cells_Number_Object_Number", "Cells_Location_Center_Z"]
+    cells = mt.io.read_cellprofiler_csv(EXPORTS / "translocation")["Cells"]
+    assert set(bookkeeping) <= set(cells.obs.columns)
+    adata = mt.io.read_cellprofiler(EXPORTS / "translocation")
+    assert not set(bookkeeping) & set(adata.obs.columns)
+    assert not [c for c in adata.obs.columns if c.startswith("Cells_Location_")]
+    identity = ["Metadata_ImageID", "Metadata_ObjectNumber", "Metadata_ImageNumber", "Metadata_Plate", "Metadata_Well"]
+    assert set(identity + ["Metadata_NucleiObjectNumber", "Metadata_Center_X", "Metadata_Dose"]) <= set(adata.obs)
+    assert validate(adata).ok, validate(adata).errors
+
+
 def test_column_names_exportodatabase_shortened_are_restored():
     """BBBC022 as shipped writes no table prefix and shortens names such as ..._FirstClosestObjectNumbr_Expndd."""
     with sqlite3.connect(SQLITE / "advanced_db.db") as connection:
@@ -354,7 +395,9 @@ def test_a_profile_of_locations_only_warns_and_names_the_per_object_reader(tmp_p
     shutil.copytree(EXPORTS / "translocation", directory)
     for name in ("Cytoplasm", "Nuclei"):
         table = pd.read_csv(directory / f"MyExpt_{name}.csv")
-        kept = [c for c in table.columns if c in ("ImageNumber", "ObjectNumber") or c.startswith(("Location_", "Parent_"))]
+        kept = [
+            c for c in table.columns if c in ("ImageNumber", "ObjectNumber") or c.startswith(("Location_", "Parent_"))
+        ]
         table[kept].to_csv(directory / f"MyExpt_{name}.csv", index=False)
     with caplog.at_level(logging.WARNING, logger="scverse.mantispy"):
         adata = mt.io.read_cellprofiler(directory)
