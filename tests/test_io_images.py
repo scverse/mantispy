@@ -252,6 +252,43 @@ def test_each_reader_points_at_the_other_layout(gallery: Path, export: Path, tmp
         mt.io.read_cellprofiler_gallery(blank, batch=BATCH, plate=PLATE)
 
 
+def test_read_cellprofiler_profiles_the_cell_table_of_either_layout(
+    export: Path, unlocated_gallery: Path, make_export
+) -> None:
+    """read_cellprofiler returns the cell table the image readers read, as one AnnData, from a plate folder or its root."""
+    gallery = mt.io.read_cellprofiler_gallery(unlocated_gallery, batch=BATCH, plate=PLATE, profile=None)
+    cases = {
+        export: mt.io.read_cellprofiler_zarr(export),
+        export.parent: mt.io.read_cellprofiler_zarr(export),
+        unlocated_gallery: gallery,
+    }
+    for path, sdata in cases.items():
+        adata = mt.io.read_cellprofiler(path)
+        expected = sdata.tables["cells"]
+        assert isinstance(adata, ad.AnnData)
+        assert list(adata.obs_names) == list(expected.obs_names)
+        assert list(adata.var_names) == list(expected.var_names)
+        np.testing.assert_array_equal(np.asarray(adata.X), np.asarray(expected.X))
+        assert "spatialdata_attrs" not in adata.uns
+        assert adata.uns["mantispy"]["params"]["read_cellprofiler"]["path"] == str(path)
+        mt.io.validate(adata, raise_on_error=True)
+
+    with pytest.raises(ValueError, match="aggregate= needs one table per object"):
+        mt.io.read_cellprofiler(export, aggregate="mean")
+    with pytest.raises(ValueError, match="holds one table, of Cells"):
+        mt.io.read_cellprofiler(export, root="Nuclei")
+    with pytest.raises(ValueError, match="reads on its own"):
+        mt.io.read_cellprofiler([export, export])
+    make_export(plate="BR00000002")
+    with pytest.raises(ValueError, match="pass one plate folder"):
+        mt.io.read_cellprofiler(export.parent)
+
+
+def test_read_cellprofiler_of_a_gallery_of_several_plates_names_them(gallery: Path) -> None:
+    with pytest.raises(ValueError, match=r"holds 2 plates.*read_cellprofiler_gallery"):
+        mt.io.read_cellprofiler(gallery)
+
+
 def test_image_root_finds_the_arrays_of_a_moved_export(export: Path, tmp_path_factory: pytest.TempPathFactory) -> None:
     """The table stays behind while its arrays move, so the manifest's relative paths resolve under image_root."""
     expected = mt.io.read_cellprofiler_zarr(export, lazy=False)
@@ -301,7 +338,11 @@ class Block(importlib.abc.MetaPathFinder):
 sys.meta_path.insert(0, Block())
 import mantispy as mt
 
-readers = {{mt.io.read_cellprofiler_zarr: {{}}, mt.io.read_cellprofiler_gallery: {{"batch": "b", "plate": "p"}}}}
+readers = {{
+    mt.io.read_cellprofiler: {{}},
+    mt.io.read_cellprofiler_zarr: {{}},
+    mt.io.read_cellprofiler_gallery: {{"batch": "b", "plate": "p"}},
+}}
 for reader, kwargs in readers.items():
     try:
         reader({str(export)!r}, **kwargs)

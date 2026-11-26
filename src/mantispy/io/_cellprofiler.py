@@ -263,9 +263,11 @@ def _kind(path: Path) -> str:
     """``"csv"`` or ``"sqlite"``: which export `path` holds.
 
     Raises:
-        NotImplementedError: `path` is an ExportToSpatialData store or a Cell Painting Gallery plate.
-        FileNotFoundError: `path` is neither.
+        ValueError: `path` is an ExportForSpatialData export or a Cell Painting Gallery source, which read_cellprofiler reads only alone.
+        FileNotFoundError: `path` is no export.
     """
+    from mantispy.io._export import _detect_layout
+
     if export_prefix(path) is not None:
         return "csv"
     if path.is_file():
@@ -274,9 +276,9 @@ def _kind(path: Path) -> str:
                 return "sqlite"
     if path.is_dir() and len([p for p in path.iterdir() if p.suffix in SQLITE_SUFFIXES]) == 1:
         return "sqlite"
-    if path.suffix == ".zarr" or (path / "tables").is_dir() or (path / "images").is_dir():
-        raise NotImplementedError(
-            f"{path} looks like an ExportToSpatialData store or a Cell Painting Gallery plate; read it with mt.io.read_plate"
+    if path.is_dir() and (layout := _detect_layout(path)) is not None:
+        raise ValueError(
+            f"{path} is {_LAYOUTS[layout]}, which read_cellprofiler reads on its own, without out=, not in a list"
         )
     found = sorted(p.name for p in path.iterdir())[:10] if path.is_dir() else []
     raise FileNotFoundError(
@@ -436,7 +438,6 @@ def _profile(
     omissions: Omissions | None = None,
 ) -> AnnData:
     """One export's tables as one profile: the image-only table without bookkeeping, or every root with its objects joined and rolled up."""
-    from mantispy.io._profiles import _join_platemap
     from mantispy.tl._aggregate_objects import combine, profile_obs
 
     if list(tables) == ["Image"]:
@@ -444,6 +445,15 @@ def _profile(
         adata.obs = profile_obs(as_frame(adata.obs), "Image")
     else:
         adata = combine(tables, root, func=func, strict=strict, omissions=omissions, score=score)
+    return _index(adata, platemap=platemap, index_columns=index_columns)
+
+
+def _index(
+    adata: AnnData, *, platemap: str | Path | pd.DataFrame | None, index_columns: Sequence[str] | None
+) -> AnnData:
+    """Join `platemap` onto ``obs`` and index it by `index_columns`."""
+    from mantispy.io._profiles import _join_platemap
+
     obs = as_frame(adata.obs)
     if platemap is not None:
         obs = _join_platemap(obs, platemap)
@@ -455,6 +465,48 @@ def _profile(
             raise ValueError(f"{list(index_columns)} do not identify observations uniquely")
         obs.index = pd.Index(index.to_numpy())
     adata.obs = obs
+    return adata
+
+
+_LAYOUTS = {"zarr": "an ExportForSpatialData export", "gallery": "a Cell Painting Gallery source"}
+
+
+def _gallery_plate(source: Path) -> tuple[str, str]:
+    """The one batch and plate of a gallery source, from its ``workspace/load_data_csv`` tree."""
+    found = sorted((p.parent.name, p.name) for p in (source / "workspace/load_data_csv").glob("*/*") if p.is_dir())
+    if len(found) != 1:
+        raise ValueError(
+            f"{source} holds {len(found)} plates ({[f'{b}/{p}' for b, p in found][:10]}); "
+            "read one with mt.io.read_cellprofiler_gallery(source, batch=..., plate=...)"
+        )
+    return found[0]
+
+
+def _spatial_profile(path: Path, layout: str, *, root: str, func: Sequence[str] | None) -> AnnData:
+    """The cell table of an ExportForSpatialData export or a gallery source, as the profile."""
+    from mantispy.io._export import export_plate_dirs, is_export_plate_dir
+
+    if root != "Cells":
+        raise ValueError(f"{path} is {_LAYOUTS[layout]}, which holds one table, of Cells; root={root!r} has none")
+    if func is not None:
+        raise ValueError(
+            f"{path} is {_LAYOUTS[layout]}, whose Cells table is already joined; aggregate= needs one table per object"
+        )
+    if layout == "zarr":
+        from mantispy.io._export import read_cellprofiler_zarr
+
+        if not is_export_plate_dir(path) and len(plates := export_plate_dirs(path)) > 1:
+            raise ValueError(f"{path} holds several plates; pass one plate folder, one of {[p.name for p in plates]}")
+        sdata = read_cellprofiler_zarr(path)
+    else:
+        from mantispy.io._gallery import read_cellprofiler_gallery
+
+        batch, plate = _gallery_plate(path)
+        sdata = read_cellprofiler_gallery(path, batch=batch, plate=plate, profile=None)
+    if "cells" not in sdata.tables:
+        raise FileNotFoundError(f"no table for {root!r} in {path}: it holds no labelled cells")
+    adata = sdata.tables["cells"].copy()
+    adata.uns.pop("spatialdata_attrs", None)
     return adata
 
 
@@ -477,6 +529,7 @@ def read_cellprofiler(
     """Read a CellProfiler export, or several, into one profile, one row per `root` object.
 
     `path` is a directory an ``ExportToSpreadsheet`` run wrote or an SQLite database an ``ExportToDatabase`` run wrote; :func:`read_cellprofiler_csv` and :func:`read_cellprofiler_sqlite` describe how each is read.
+    It can also be one plate of an ``ExportForSpatialData`` run or a Cell Painting Gallery source of one plate, which need the ``images`` extra: the profile is then the cell table :func:`read_cellprofiler_zarr` or :func:`read_cellprofiler_gallery` reads, already joined, so `root` is ``"Cells"`` and `aggregate` is not taken.
     The compartments of `root` (the objects one to one with it, such as the cytoplasm and nucleus of a cell) and its ancestors are joined onto it.
     Objects of which a root has several, such as the nucleoli of a nucleus, are rolled into it by :func:`~mantispy.tl.aggregate_objects` when `aggregate` is given, and otherwise left out with one warning naming them.
     Objects not linked to `root` at all, such as the objects of an imported mask, are left out with one warning; their counts per image stay in ``uns["mantispy"]["image_table"]``.
@@ -514,9 +567,8 @@ def read_cellprofiler(
 
     Raises:
         FileNotFoundError: `path` is not a CellProfiler export, or a path of a list is not one and `skip_non_exports` is not set.
-        NotImplementedError: `path` is an ExportToSpatialData store or a Cell Painting Gallery plate, which :func:`~mantispy.io.read_plate` reads.
-        ImportError: `out` is given and dask is not installed.
-        ValueError: There is no table for `root`, a link of `root` cannot be classified, a compartment is not one to one with `root`, `strict` is set and an object has no partner, `aggregate` names an unknown statistic, or two exports hold the same image.
+        ImportError: `out` is given and dask is not installed, or `path` is an ``ExportForSpatialData`` export or a gallery source and spatialdata is not installed.
+        ValueError: `path` is an ``ExportForSpatialData`` export or a gallery source of several plates, given with `root` other than ``"Cells"``, with `aggregate`, with `out` or in a list, there is no table for `root`, a link of `root` cannot be classified, a compartment is not one to one with `root`, `strict` is set and an object has no partner, `aggregate` names an unknown statistic, or two exports hold the same image.
 
     Examples:
         >>> import mantispy as mt
@@ -528,6 +580,7 @@ def read_cellprofiler(
         ... )  # doctest: +SKIP
     """
     from mantispy.io._cp_directories import read_directories
+    from mantispy.io._export import _detect_layout
     from mantispy.tl._aggregate_objects import statistics
 
     func = statistics(aggregate) if aggregate is not None else None
@@ -545,6 +598,12 @@ def read_cellprofiler(
     }
     if isinstance(path, str | Path) and out is None:
         path = Path(path)
+        if path.is_dir() and (layout := _detect_layout(path)) is not None:
+            adata = _index(
+                _spatial_profile(path, layout, root=root, func=func), platemap=platemap, index_columns=index_columns
+            )
+            record_params(adata, "read_cellprofiler", {"path": str(path), **params})
+            return adata
         kind = _kind(path)
         tables = _read_tables(path, kind, root=root, **read)
         adata = _profile(tables, **profile)
